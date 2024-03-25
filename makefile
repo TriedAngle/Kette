@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Iinclude -std=c11
+CFLAGS=-Iinclude -std=c11 -masm=intel
 SRC_DIR=src
 BUILD_DIR=build
 SOURCES=$(wildcard $(SRC_DIR)/*.c)

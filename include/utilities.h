@@ -1,13 +1,9 @@
 #ifndef UTILITIES_H
 #define UTILITIES_H
 
-typedef struct {
-    int numerator;
-    int denominator;
-} Fraction;
+typedef unsigned char byte;
 
-void print_welcome_message();
-int add(int a, int b);
-double divide(Fraction fraction);
+typedef long long cell;
+#define CELL_SIZE sizeof(cell);
 
-#endif // UTILITIES_H
+#endif
