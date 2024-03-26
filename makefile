@@ -15,4 +15,7 @@ kette: $(OBJECTS)
 clean:
 	rm -f $(BUILD_DIR)/*.o kette
 
+run: kette
+	./kette
+
 .PHONY: clean
