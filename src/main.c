@@ -13,6 +13,7 @@
 
 #define DEFAULT_STACK_SIZE 8192
 #define QUOTE_HEADER 0x20011217
+#define QUOTE_END_HEADER 0x20050801
 
 typedef i64 cell;
 
@@ -24,11 +25,31 @@ typedef struct {
     cell* quotation; // function pointer for builtins not a value pointer
 } Word;
 
+Word* BUILTINS[32] = {};
+
 void print_word(const char* left, Word* word, const char* right) {
     printf("%s%.*s%s", left, word->length, word->name, right);
 }
 
-Word* BUILTINS[32] = {};
+void print_quotation(cell* entry) {
+    assert(*entry == QUOTE_HEADER);
+    while(1) {
+        entry += 1;
+        if(*entry == QUOTE_END_HEADER) break;
+        
+        Word* word = (Word*) *entry;
+        if (word == BUILTINS[0]) {
+            entry += 1;
+            cell num = *entry;
+            print_word("", word, "");
+            printf("(%lld)\n", num);
+        } else {
+            print_word("", word, "\n");
+        }
+    }
+}
+
+
 
 typedef struct {
     cell data_size, retain_size, call_size; 
@@ -111,7 +132,7 @@ void push(VM* vm, cell data) {
     vm->data_stack_pointer++;
 }
 
-cell* data_stack_top(VM* vm) {
+cell* VM_data_stack_top(VM* vm) {
     return vm->data_stack + vm->data_stack_pointer;
 }
 
@@ -215,8 +236,8 @@ void start_quotation(VM* vm) {
 }
 
 void end_quotation(VM* vm) {
-    cell* word = find(vm, (byte*)"return", 6);
-    qpush(vm, (cell)word);
+    qpush(vm, (cell)BUILTINS[1]);
+    qpush(vm, QUOTE_END_HEADER);
 }
 
 cell* alloc_quotation(VM* vm, cell size, cell* body) {
@@ -296,12 +317,13 @@ cell read_number(byte* word, cell length, cell* isNum) {
     return result * sign;
 }
 
-cell* read_until(VM* vm, cell *word_count, byte* ident, cell ident_length) {
+cell read_until(VM* vm, byte* ident, cell ident_length) {
+    cell word_count = 0;
     cell length;
     byte* word;
     cell number;
     cell is_number;
-    cell* start = data_stack_top(vm);
+    
     Word* found_word;
     while(1) {
         word = read_word(vm, &length);
@@ -313,9 +335,9 @@ cell* read_until(VM* vm, cell *word_count, byte* ident, cell ident_length) {
         if (string_eq(ident, ident_length, word, length)) {
             break;
         } else if (is_number) {
-            push(vm, (cell)BUILTINS[13]);
+            push(vm, (cell)BUILTINS[0]);
             push(vm, number);
-            *word_count += 2;
+            word_count += 2;
             continue;
         } 
         
@@ -326,16 +348,20 @@ cell* read_until(VM* vm, cell *word_count, byte* ident, cell ident_length) {
         if (read_nth_bit(found_word->flags, 30)) {
             if (read_nth_bit(found_word->flags, 31)) {
                 VM_execute_builtin(vm, found_word);
+                // this is kind of a hack, maybe find better solution?
+                // essentially this expects every parser word to tell push
+                // how many things they added to the stack
+                word_count += pop(vm); 
                 continue;
             } else {
 
             }
         }
         push(vm, (cell)found_word);
-        *word_count += 1;
+        word_count += 1;
     }
     
-    return start;    
+    return word_count;    
 }
 
 
@@ -346,16 +372,17 @@ void clear_mem(cell* start, cell count) {
 }
 
 void builtin_quot(VM* vm) {
-    byte* end = (byte*)"]";
-    cell word_count = 0;
-    cell* start = read_until(vm, &word_count, end, 1);
+    cell* start = VM_data_stack_top(vm);
+    cell word_count = read_until(vm, (byte*)"]", 1);
     if (start == NULL) {
         // TODO ERROR;
     }
     cell* quot = alloc_quotation(vm, word_count, start);
     clear_mem(start, word_count);
-    vm->call_stack_pointer -= word_count;
+    vm->data_stack_pointer -= word_count;
+    push(vm, (cell)BUILTINS[0]);
     push(vm, (cell)quot);
+    push(vm, (cell)2);
 }
 
 
@@ -368,9 +395,30 @@ void builtin_ret(VM* vm) {
     printf("shouldn't be called");
 }
 
+void builtin_interpret(VM* vm) {
+    while(1) {
+        cell current = VM_next(vm);
+        Word* word = (Word*)current;
+        
+        if(word == BUILTINS[1]) {
+            break;
+        }
+
+        if(read_nth_bit(word->flags, 31)) {
+            VM_execute_builtin(vm, word);
+        }
+    }
+}
+
 void builtin_call(VM* vm) {
-    cell* quot = (cell*)pop(vm);
-    quot += 1;
+    cpush(vm, (cell)vm->current);
+    cell* quot = (cell*) pop(vm);
+    VM_enter(vm, quot);
+
+    builtin_interpret(vm);
+
+    vm->current = (cell*)cpop(vm);
+    vm->next = vm->current + 1;
 }
 
 void builtin_dup(VM* vm) {
@@ -442,6 +490,11 @@ void builtin_print_integer(VM* vm) {
     printf("%lld\n", val);
 }
 
+void builtin_print_quot(VM* vm) {
+    cell val = pop(vm);
+    print_quotation((cell*)val);
+}
+
 void builtin_unsafe_vm(VM* vm) {
     push(vm, (cell) vm);
 }
@@ -461,27 +514,30 @@ void add_parsing_builtin(VM* vm, cell id, const str* name, void* fn) {
 }
 
 void add_builtins(VM* vm) {
-    add_builtin(vm, 0, "dup", builtin_dup);
-    add_builtin(vm, 1, ".", builtin_print_integer);
-    add_builtin(vm, 2, "drop", builtin_drop);
-    add_builtin(vm, 3, "swap", builtin_swap);
-    add_builtin(vm, 4, "rot", builtin_rot);
-    add_builtin(vm, 5, "+", builtin_add);
-    add_parsing_builtin(vm, 6, "[", builtin_quot);
-    add_builtin(vm, 7, "syscall0", builtin_syscall0);
-    add_builtin(vm, 8, "syscall1", builtin_syscall1);
-    add_builtin(vm, 9, "syscall2", builtin_syscall2);
-    add_builtin(vm, 10, "syscall3", builtin_syscall3);
-    add_builtin(vm, 11, "let-me-cook", builtin_unsafe_vm);
-    add_builtin(vm, 12, "call", builtin_call);
-    add_builtin(vm, 13, "LITERAL", builtin_lit);
-    add_builtin(vm, 14, "return", builtin_ret);
+    int c = 0;
+    add_builtin(vm, c++, "LITERAL", builtin_lit);
+    add_builtin(vm, c++, "return", builtin_ret);
+    add_builtin(vm, c++, "call", builtin_call);
+
+    add_builtin(vm, c++, "dup", builtin_dup);
+    add_builtin(vm, c++, ".", builtin_print_integer);
+    add_builtin(vm, c++, ".q", builtin_print_quot);
+    add_builtin(vm, c++, "drop", builtin_drop);
+    add_builtin(vm, c++, "swap", builtin_swap);
+    add_builtin(vm, c++, "rot", builtin_rot);
+    add_builtin(vm, c++, "+", builtin_add);
+    add_parsing_builtin(vm, c++, "[", builtin_quot);
+    add_builtin(vm, c++, "syscall0", builtin_syscall0);
+    add_builtin(vm, c++, "syscall1", builtin_syscall1);
+    add_builtin(vm, c++, "syscall2", builtin_syscall2);
+    add_builtin(vm, c++, "syscall3", builtin_syscall3);
+    add_builtin(vm, c++, "let-me-cook", builtin_unsafe_vm);
 }
 
 cell* VM_read_until_end(VM* vm) {
-    cell word_count = 0;
     cell* quot;
-    cell* start = read_until(vm, &word_count, NULL, -1);
+    cell* start = VM_data_stack_top(vm);
+    cell word_count = read_until(vm, NULL, -1);
     quot = alloc_quotation(vm, word_count, start);
     clear_mem(start, word_count);
     vm->data_stack_pointer -= word_count;
@@ -502,26 +558,15 @@ int main() {
     
     add_builtins(&vm);
 
-    str* stream = "10 3 dup + + .";
+    str* stream = "[ 10 [ 5 + ] call . ] call";
     cell stream_length = strlen(stream);
 
     VM_bind_code(&vm, (byte*)stream, stream_length);
 
     cell* entry = VM_read_until_end(&vm);
-    VM_enter(&vm, entry);
-    
-    while(1) {
-        cell current = VM_next(&vm);
-        Word* word = (Word*)current;
-        
-        if(word == BUILTINS[14]) {
-            break;
-        }
 
-        if(read_nth_bit(word->flags, 31)) {
-            VM_execute_builtin(&vm, word);
-        }
-    }
+    VM_enter(&vm, entry);
+    builtin_interpret(&vm);
 
     VM_deinit(&vm);
 
