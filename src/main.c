@@ -26,7 +26,8 @@ typedef struct {
     cell* quotation; // function pointer for builtins not a value pointer
 } Word;
 
-Word* BUILTINS[48] = {};
+cell BUILTIN_COUNT = 0;
+Word* BUILTINS[64] = {};
 
 void print_word(const char* left, Word* word, const char* right) {
     printf("%s%.*s%s", left, word->length, word->name, right);
@@ -144,9 +145,7 @@ cell pop(VM* vm) {
 }
 
 void push(VM* vm, cell data) {
-    cell* point = vm->data_stack + vm->data_stack_pointer;
-    *point = data;
-    vm->data_stack_pointer++;
+    vm->data_stack[vm->data_stack_pointer++] = data;
 }
 
 cell rpop(VM* vm) {
@@ -154,9 +153,7 @@ cell rpop(VM* vm) {
 }
 
 void rpush(VM* vm, cell data) {
-    cell* point = vm->retain_stack + vm->retain_stack_pointer;
-    *point = data;
-    vm->retain_stack_pointer++;
+    vm->retain_stack[vm->retain_stack_pointer++] = data;
 }
 
 cell cpop(VM* vm) {
@@ -483,10 +480,6 @@ void builtin_interpret(VM* vm) {
 
         push(vm, (cell)word->quotation);
         builtin_call(vm);
-        
-        // push(vm, current);
-        // builtin_word2quot(vm);
-        // builtin_call(vm);
     }
 }
 
@@ -501,14 +494,49 @@ void builtin_call(VM* vm) {
     vm->next = vm->current + 1;
 }
 
+void builtin_load(VM* vm) {
+    cell* address = (cell*)pop(vm);
+    cell value = *address;
+    push(vm, value);
+}
+
+void builtin_store(VM* vm) {
+    cell* address = (cell*)pop(vm);
+    cell value = pop(vm);
+    *address = value;
+}
+
 void builtin_dup(VM* vm) {
     cell val = pop(vm);
     push(vm, val);
     push(vm, val);
 }
 
+void builtin_dupd(VM* vm) {
+    cell top = pop(vm);
+    cell val = pop(vm);
+    push(vm, val);
+    push(vm, val);
+    push(vm, top);
+}
+
+void builtin_2dup(VM* vm) {
+    cell y = pop(vm);
+    cell x = pop(vm);
+    push(vm, x);
+    push(vm, y);
+    push(vm, x);
+    push(vm, y);
+}
+
 void builtin_drop(VM* vm) {
     pop(vm);
+}
+
+void builtin_dropd(VM* vm) {
+    cell y = pop(vm);
+    pop(vm);
+    push(vm, y);
 }
 
 void builtin_swap(VM* vm) {
@@ -518,6 +546,25 @@ void builtin_swap(VM* vm) {
     push(vm, x);
 }
 
+void builtin_swapd(VM* vm) {
+    cell z = pop(vm);
+    cell y = pop(vm);
+    cell x = pop(vm);
+    push(vm, y);
+    push(vm, x);
+    push(vm, z);
+}
+
+void builtin_over(VM* vm) {
+    cell val = vm->data_stack[vm->data_stack_pointer - 2];
+    push(vm, val);
+}
+
+void builtin_pick(VM* vm) {
+    cell val = vm->data_stack[vm->data_stack_pointer - 3];
+    push(vm, val);
+}
+
 void builtin_rot(VM* vm) {
     cell z = pop(vm);
     cell y = pop(vm);
@@ -525,6 +572,26 @@ void builtin_rot(VM* vm) {
     push(vm, y);
     push(vm, z);
     push(vm, x);
+}
+
+void builtin_rrot(VM* vm) {
+    cell z = pop(vm);
+    cell y = pop(vm);
+    cell x = pop(vm);
+    push(vm, z);
+    push(vm, x);
+    push(vm, y);
+}
+
+void builtin_dip(VM* vm) {
+    builtin_swap(vm);
+    rpush(vm, pop(vm));
+    builtin_call(vm);
+    push(vm, rpop(vm));
+}
+
+void builtin_neg(VM* vm) {
+    push(vm, -pop(vm));
 }
 
 void builtin_add(VM* vm) {
@@ -557,29 +624,6 @@ void builtin_mod(VM* vm) {
     push(vm, n1 % n2);
 }
 
-void builtin_int_eq(VM* vm) {
-    cell n2 = pop(vm);
-    cell n1 = pop(vm);
-    push(vm, n1 == n2);
-}
-
-void builtin_dip(VM* vm) {
-    builtin_swap(vm);
-    rpush(vm, pop(vm));
-    builtin_call(vm);
-    push(vm, rpop(vm));
-}
-
-void builtin_keep(VM* vm) {
-    cell quot = pop(vm);
-    cell val = pop(vm);
-    push(vm, val);
-    rpush(vm, val);
-    push(vm, quot);
-    builtin_call(vm);
-    push(vm, rpop(vm));
-}
-
 void builtin_if(VM* vm) {
     cell f = pop(vm);
     cell t = pop(vm);
@@ -590,6 +634,64 @@ void builtin_if(VM* vm) {
         push (vm, f);
     }
     builtin_call(vm);
+}
+
+void builtin_eq(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a == b);
+}
+
+void builtin_and(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a && b);
+}
+
+void builtin_or(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a || b);
+}
+
+void builtin_not(VM* vm) {
+    cell a = pop(vm);
+    push(vm, !a);
+}
+
+void builtin_bitand(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a & b);
+}
+
+void builtin_bitor(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a | b);
+}
+
+void builtin_bitxor(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a ^ b);
+}
+
+void builtin_lshift(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a << b);
+}
+
+void builtin_rshift(VM* vm) {
+    cell b = pop(vm);
+    cell a = pop(vm);
+    push(vm, a >> b);
+}
+
+void builtin_bitnot(VM* vm) {
+    cell a = pop(vm);
+    push(vm, ~a);
 }
 
 void builtin_syscall0(VM* vm) {
@@ -616,6 +718,15 @@ void builtin_syscall3(VM* vm) {
     cell v1 = pop(vm);
     cell id = pop(vm);
     push(vm, syscall(id, v1, v2, v3));
+}
+
+void builtin_syscall4(VM* vm) {
+    cell v4 = pop(vm);
+    cell v3 = pop(vm);
+    cell v2 = pop(vm);
+    cell v1 = pop(vm);
+    cell id = pop(vm);
+    push(vm, syscall(id, v1, v2, v3, v4));
 }
 
 void builtin_print_string(VM* vm) {
@@ -665,34 +776,52 @@ void add_builtins(VM* vm) {
     int c = 0;
     add_builtin(vm, c++, "LITERAL", builtin_lit);
     add_builtin(vm, c++, "return", builtin_ret);
-    add_builtin(vm, c++, "call", builtin_call);
 
-    add_builtin(vm, c++, "dup", builtin_dup);
+    add_parsing_builtin(vm, c++, "[", builtin_quot);
+    add_parsing_builtin(vm, c++, ":", builtin_colon);
+    add_parsing_builtin(vm, c++, "syn:", builtin_syntax);
+    
+    add_builtin(vm, c++, "call", builtin_call);
+    add_builtin(vm, c++, "@", builtin_load);
+    add_builtin(vm, c++, "!", builtin_store);
     add_builtin(vm, c++, ".", builtin_print_integer);
     add_builtin(vm, c++, ".q", builtin_print_quot);
     add_builtin(vm, c++, "drop", builtin_drop);
+    add_builtin(vm, c++, "dropd", builtin_dropd);
+    add_builtin(vm, c++, "dup", builtin_dup);
+    add_builtin(vm, c++, "dupd", builtin_dupd);
+    add_builtin(vm, c++, "over", builtin_over);
     add_builtin(vm, c++, "swap", builtin_swap);
+    add_builtin(vm, c++, "swapd", builtin_swap);
     add_builtin(vm, c++, "rot", builtin_rot);
+    add_builtin(vm, c++, "-rot", builtin_rrot);
+    add_builtin(vm, c++, "dip", builtin_dip);
+    add_builtin(vm, c++, "neg", builtin_neg);
     add_builtin(vm, c++, "+", builtin_add);
     add_builtin(vm, c++, "-", builtin_sub);
     add_builtin(vm, c++, "*", builtin_mul);
     add_builtin(vm, c++, "/", builtin_div);
     add_builtin(vm, c++, "%", builtin_mod);
     add_builtin(vm, c++, "/", builtin_div);
-    add_builtin(vm, c++, "=", builtin_int_eq);
-    add_builtin(vm, c++, "dip", builtin_dip);
-    add_builtin(vm, c++, "keep", builtin_keep);
     add_builtin(vm, c++, "if", builtin_if);
-    add_parsing_builtin(vm, c++, "[", builtin_quot);
-    add_parsing_builtin(vm, c++, ":", builtin_colon);
-    add_parsing_builtin(vm, c++, "syn:", builtin_syntax);
+    add_builtin(vm, c++, "=", builtin_eq);
+    add_builtin(vm, c++, "and", builtin_and);
+    add_builtin(vm, c++, "or", builtin_or);
+    add_builtin(vm, c++, "not", builtin_not);
+    add_builtin(vm, c++, "bit&", builtin_bitand);
+    add_builtin(vm, c++, "bit|", builtin_bitor);
+    add_builtin(vm, c++, "bit^", builtin_bitxor);
+    add_builtin(vm, c++, "bit<<", builtin_lshift);
+    add_builtin(vm, c++, "bit>>", builtin_rshift);
+    add_builtin(vm, c++, "bit~", builtin_bitnot);
     add_builtin(vm, c++, "syscall0", builtin_syscall0);
     add_builtin(vm, c++, "syscall1", builtin_syscall1);
     add_builtin(vm, c++, "syscall2", builtin_syscall2);
     add_builtin(vm, c++, "syscall3", builtin_syscall3);
+    add_builtin(vm, c++, "syscall4", builtin_syscall4);
     add_builtin(vm, c++, "let-me-cook", builtin_unsafe_vm);
-    add_builtin(vm, c++, "LATEST", builtin_LATEST);
-    add_builtin(vm, c++, "word>quot", builtin_word2quot);
+    add_builtin(vm, c++, "LATEST", builtin_LATEST); // todo impl in lang
+    add_builtin(vm, c++, "word>quot", builtin_word2quot); // todo impl in lang
 }
 
 cell* VM_compile(VM* vm) {
