@@ -57,6 +57,7 @@ void print_quotation(cell* entry) {
 typedef struct {
     cell data_size, retain_size, call_size; 
     cell quotation_size, dictionary_size;
+    cell strings_size;
 } VMInitConfig;
 
 typedef struct {
@@ -85,7 +86,11 @@ typedef struct {
     cell code_length;
     cell code_offset;
 
-    cell sate;
+    byte* strings;
+    cell strings_offset;
+    cell strings_size;
+
+    cell state;
     cell* current;
     cell* next;
 } VM;
@@ -113,6 +118,10 @@ void VM_init(VM* vm, VMInitConfig config) {
     vm->dictionary = mmap(NULL, config.dictionary_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     vm->dictionary_pointer = 0;
     vm->latest_word = NULL;
+
+    vm->strings_size = config.strings_size;
+    vm->strings = mmap(NULL, config.strings_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    vm->strings_offset = 0;
 }
 
 
@@ -123,6 +132,7 @@ void VM_deinit(VM* vm) {
 
     munmap(vm->dictionary, vm->dictionary_size);
     munmap(vm->quotations, vm->quotation_size);
+    munmap(vm->strings, vm->strings_size);
 }
 
 cell* VM_data_stack_top(VM* vm) {
@@ -187,7 +197,8 @@ cell VM_next(VM* vm) {
 
 
 void VM_enter(VM* vm, cell* quot) {
-    // cpush(vm, vm->current);
+    // lol this is needed because VM_next could deref segment fault error otherwise
+    vm->current = quot; 
     vm->next = quot;
     VM_next(vm);
     cell val = VM_next(vm);
@@ -205,6 +216,17 @@ int string_eq(const byte* str1, i32 length1, const byte* str2, i32 length2) {
     return 1;
 }
 
+byte* alloc_string(VM* vm, byte* string, cell length) {
+    byte* location = vm->strings + vm->strings_offset;
+    for(int i = 0; i<length; i++) {
+        location[i] = string[i];
+    }
+    location[length] = '\0';
+    vm->strings_offset += length + 1;
+    return location;
+}
+
+
 Word* alloc_word(VM* vm, byte* name, i32 length, i32 flags, cell* quotation) {
     Word* word = vm->dictionary + vm->dictionary_pointer;
     word->link = vm->latest_word;
@@ -216,25 +238,6 @@ Word* alloc_word(VM* vm, byte* name, i32 length, i32 flags, cell* quotation) {
     vm->dictionary_pointer++;
     return word;
 }
-
-// out: pointer to start of word (at link) (0 if no word)
-// in: pointer utf8 name of word
-// in: length in bytes of name
-cell* find(VM* vm, byte* name, cell length) {
-    Word* word = (Word*) vm->latest_word;
-    while(!string_eq(word->name, word->length, name, length)) {
-        if (word == NULL) {
-            return 0;
-        }
-        word = (Word*) word->link;
-    }
-    return (cell*) word;
-}
-
-void builtin_quot(VM*);
-void builtin_ret(VM*);
-void builtin_quot_end(VM*);
-void builtin_lit(VM*);
 
 void start_quotation(VM* vm) {
     qpush(vm, QUOTE_HEADER);
@@ -254,6 +257,30 @@ cell* alloc_quotation(VM* vm, cell size, cell* body) {
     end_quotation(vm);
     return start;
 }
+
+// out: pointer to start of word (at link) (0 if no word)
+// in: pointer utf8 name of word
+// in: length in bytes of name
+cell* find(VM* vm, byte* name, cell length) {
+    Word* word = (Word*) vm->latest_word;
+    for(;;) {
+        if (word == NULL) {
+            return NULL;
+        }
+        if (string_eq(word->name, word->length, name, length)) {
+            break;
+        }
+        word = (Word*) word->link;
+    }
+    return (cell*) word;
+}
+
+void builtin_quot(VM*);
+void builtin_ret(VM*);
+void builtin_quot_end(VM*);
+void builtin_lit(VM*);
+void builtin_call(VM*);
+void builtin_word2quot(VM*);
 
 byte* read_word(VM* vm, cell* length) {
     byte* stream = vm->code;
@@ -285,61 +312,50 @@ byte* read_word(VM* vm, cell* length) {
     return result;
 }
 
-cell read_number(byte* word, cell length, cell* isNum) {
+// like read_word but doesn't consume the word
+byte* peek_word(VM* vm, cell* length) {
+    cell offset = vm->code_offset;
+    byte* word = read_word(vm, length);
+    vm->code_offset = offset;
+    return word;
+}
+
+cell read_number(byte* word, cell length) {
     cell result = 0;
-    int sign = 1;
-    cell i = 0;
-
-    *isNum = 0;
-    if (length == 0) {
-        return 0;
-    }
-
-    if(word[0] == '-') {
-        sign = -1;
-        i = 1;
-    } else if(word[0] == '+') {
-        i = 1;
-    }
-
-    if(i == 1 && length == 1) {
-        return 0;
-    }
-
-    for (; i < length; i++) {
-        if (word[i] == '_') {
+    
+    for (int i = 0; i < length; ++i) {
+        if (word[i] >= '0' && word[i] <= '9') {
+            result = result * 10 + (word[i] - '0');
+        } else if (word[i] == '_') {
             continue;
+        } else {
+            return -1;
         }
-        if (word[i] < '0' || word[i] > '9') {
-            return 0;
-        }
-        if (result > LLONG_MAX / 10 || (result == LLONG_MAX / 10 && (word[i] - '0') > LLONG_MAX % 10)) {
-            return (sign == 1) ? LLONG_MAX : LLONG_MIN;
-        }
-        result = result * 10 + (word[i] - '0');
     }
-    *isNum = 1;
-    return result * sign;
+    
+    return result;
 }
 
 cell read_until(VM* vm, byte* ident, cell ident_length) {
     cell word_count = 0;
     cell length;
     byte* word;
-    cell number;
-    cell is_number;
     
     Word* found_word;
     while(1) {
         word = read_word(vm, &length);
+        
         if (word == NULL) {
             break;
         }
 
-        number = read_number(word, length, &is_number);
         if (string_eq(ident, ident_length, word, length)) {
             break;
-        } else if (is_number) {
+        }
+
+        cell number = read_number(word, length);
+
+        if (number != -1) {
             push(vm, (cell)BUILTINS[0]);
             push(vm, number);
             word_count += 2;
@@ -347,7 +363,9 @@ cell read_until(VM* vm, byte* ident, cell ident_length) {
         } 
         
         found_word = (Word*)find(vm, word, length);
+        
         if (found_word == NULL) {
+
             // TODO HANDLE ERROR
         }
         if (read_nth_bit(found_word->flags, 30)) {
@@ -359,7 +377,10 @@ cell read_until(VM* vm, byte* ident, cell ident_length) {
                 word_count += pop(vm); 
                 continue;
             } else {
-
+                push(vm, (cell)found_word->quotation);
+                builtin_call(vm);
+                word_count += pop(vm); 
+                continue;
             }
         }
         push(vm, (cell)found_word);
@@ -390,6 +411,52 @@ void builtin_quot(VM* vm) {
     push(vm, (cell)2);
 }
 
+void parse_stack_effect(VM* vm) {
+    // let's just ignore stack effects for now lol
+    cell paren_length;
+    byte* paren_name = read_word(vm, &paren_length);
+    assert(string_eq(paren_name, paren_length, (byte*)"(", 1));
+
+    cell length;
+    byte* word;
+    while(1) {
+        word = read_word(vm, &length);
+        if (string_eq(word, length, (byte*)")", 1)) {
+            break;
+        }
+    }
+}
+
+void builtin_colon(VM* vm) {
+    cell name_length;
+    byte* name_read = read_word(vm, &name_length);
+    byte* name = alloc_string(vm, name_read, name_length);
+    cell maybe_se_length;
+    byte* maybe_se = peek_word(vm, &maybe_se_length);
+    if(string_eq(maybe_se, maybe_se_length, (byte*)"(", 1)) {
+        parse_stack_effect(vm);
+    }
+
+    cell* start = VM_data_stack_top(vm);
+    cell word_count = read_until(vm, (byte*)";", 1);
+    if (start == NULL) {
+        // TODO ERROR;
+    }
+    cell* quot = alloc_quotation(vm, word_count, start);
+    alloc_word(vm, name, name_length, 0, quot);
+
+    clear_mem(start, word_count);
+    vm->data_stack_pointer -= word_count;
+    
+    push(vm, 0);
+}
+
+void builtin_syntax(VM* vm) {
+    builtin_colon(vm);
+    Word* word = (Word*)vm->latest_word;
+    word->flags = (i32)set_nth_bit(word->flags, 30, 1);
+}
+
 
 void builtin_lit(VM* vm) {
     cell value = VM_next(vm);
@@ -404,14 +471,22 @@ void builtin_interpret(VM* vm) {
     while(1) {
         cell current = VM_next(vm);
         Word* word = (Word*)current;
-        
+
         if(word == BUILTINS[1]) {
             break;
         }
 
-        if(read_nth_bit(word->flags, 31)) {
+        if(read_nth_bit(word->flags, 31) == 1) {
             VM_execute_builtin(vm, word);
+            continue;
         }
+
+        push(vm, (cell)word->quotation);
+        builtin_call(vm);
+        
+        // push(vm, current);
+        // builtin_word2quot(vm);
+        // builtin_call(vm);
     }
 }
 
@@ -563,6 +638,15 @@ void builtin_unsafe_vm(VM* vm) {
     push(vm, (cell) vm);
 }
 
+void builtin_LATEST(VM* vm) {
+    push(vm, (cell)vm->latest_word);
+}
+
+void builtin_word2quot(VM* vm) {
+    Word* word = (Word*)pop(vm);
+    push(vm, (cell)word->quotation);
+}
+
 void add_builtin(VM* vm, cell id, const str* name, void* fn) {
     i32 length = strlen(name);
     i32 flags = (i32)set_nth_bit(0, 31, 1);
@@ -600,11 +684,15 @@ void add_builtins(VM* vm) {
     add_builtin(vm, c++, "keep", builtin_keep);
     add_builtin(vm, c++, "if", builtin_if);
     add_parsing_builtin(vm, c++, "[", builtin_quot);
+    add_parsing_builtin(vm, c++, ":", builtin_colon);
+    add_parsing_builtin(vm, c++, "syn:", builtin_syntax);
     add_builtin(vm, c++, "syscall0", builtin_syscall0);
     add_builtin(vm, c++, "syscall1", builtin_syscall1);
     add_builtin(vm, c++, "syscall2", builtin_syscall2);
     add_builtin(vm, c++, "syscall3", builtin_syscall3);
     add_builtin(vm, c++, "let-me-cook", builtin_unsafe_vm);
+    add_builtin(vm, c++, "LATEST", builtin_LATEST);
+    add_builtin(vm, c++, "word>quot", builtin_word2quot);
 }
 
 cell* VM_compile(VM* vm) {
@@ -625,6 +713,7 @@ int main(int argc, char* argv[]) {
         .call_size = DEFAULT_STACK_SIZE,
         .dictionary_size = DEFAULT_STACK_SIZE * 4,
         .quotation_size = DEFAULT_STACK_SIZE * 4,
+        .strings_size = DEFAULT_STACK_SIZE * 4,
     };
     VM_init(&vm, vm_config);
     
