@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -33,6 +34,7 @@ void print_word(const char* left, Word* word, const char* right) {
 
 void print_quotation(cell* entry) {
     assert(*entry == QUOTE_HEADER);
+    printf("[");
     while(1) {
         entry += 1;
         if(*entry == QUOTE_END_HEADER) break;
@@ -41,12 +43,13 @@ void print_quotation(cell* entry) {
         if (word == BUILTINS[0]) {
             entry += 1;
             cell num = *entry;
-            print_word("", word, "");
-            printf("(%lld)\n", num);
+            print_word(" ", word, "");
+            printf("(%lld)", num);
         } else {
-            print_word("", word, "\n");
+            print_word(" ", word, "");
         }
     }
+    printf(" ]\n");
 }
 
 
@@ -534,18 +537,17 @@ void add_builtins(VM* vm) {
     add_builtin(vm, c++, "let-me-cook", builtin_unsafe_vm);
 }
 
-cell* VM_read_until_end(VM* vm) {
+cell* VM_compile(VM* vm) {
     cell* quot;
     cell* start = VM_data_stack_top(vm);
     cell word_count = read_until(vm, NULL, -1);
     quot = alloc_quotation(vm, word_count, start);
     clear_mem(start, word_count);
     vm->data_stack_pointer -= word_count;
-    push(vm, (cell)quot);
     return quot;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     VM vm;
     VMInitConfig vm_config = {
         .data_size = DEFAULT_STACK_SIZE,
@@ -558,17 +560,46 @@ int main() {
     
     add_builtins(&vm);
 
-    str* stream = "[ 10 [ 5 + ] call . ] call";
-    cell stream_length = strlen(stream);
+    int mode = 0;
+    // TODO: files
+    // byte buffer[100] = {};
 
-    VM_bind_code(&vm, (byte*)stream, stream_length);
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--manual") == 0) {
+            mode = 1;
+        }
+    }
 
-    cell* entry = VM_read_until_end(&vm);
 
-    VM_enter(&vm, entry);
-    builtin_interpret(&vm);
+    if (mode == 1) {
+        str* stream = "[ 10 [ 5 + ] call . ] dup .q call";
+        cell stream_length = strlen(stream);
+
+        VM_bind_code(&vm, (byte*)stream, stream_length);
+        cell* entry = VM_compile(&vm);
+
+        VM_enter(&vm, entry);
+        builtin_interpret(&vm);
+
+        
+    } else {
+        str* input_buffer = (str*)malloc(1000 * sizeof(str)); 
+        cell input_size = 0;
+        while(1) {
+            printf("> ");
+            fgets(input_buffer, 1000, stdin);
+            if (strcmp(input_buffer, "quit\n") == 0) {
+                break;
+            }
+            
+            input_size = strlen(input_buffer);
+            VM_bind_code(&vm, (byte*)input_buffer, input_size);
+            cell* entry = VM_compile(&vm);
+            VM_enter(&vm, entry);
+            builtin_interpret(&vm);
+        }
+    }
 
     VM_deinit(&vm);
-
     return 0;
 }
