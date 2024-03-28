@@ -482,6 +482,12 @@ void builtin_mod(VM* vm) {
     push(vm, n1 % n2);
 }
 
+void builtin_int_eq(VM* vm) {
+    cell n2 = pop(vm);
+    cell n1 = pop(vm);
+    push(vm, n1 == n2);
+}
+
 void builtin_dip(VM* vm) {
     builtin_swap(vm);
     rpush(vm, pop(vm));
@@ -497,6 +503,18 @@ void builtin_keep(VM* vm) {
     push(vm, quot);
     builtin_call(vm);
     push(vm, rpop(vm));
+}
+
+void builtin_if(VM* vm) {
+    cell f = pop(vm);
+    cell t = pop(vm);
+    cell b = pop(vm);
+    if(b) {
+        push(vm, t);
+    } else {
+        push (vm, f);
+    }
+    builtin_call(vm);
 }
 
 void builtin_syscall0(VM* vm) {
@@ -577,8 +595,10 @@ void add_builtins(VM* vm) {
     add_builtin(vm, c++, "/", builtin_div);
     add_builtin(vm, c++, "%", builtin_mod);
     add_builtin(vm, c++, "/", builtin_div);
+    add_builtin(vm, c++, "=", builtin_int_eq);
     add_builtin(vm, c++, "dip", builtin_dip);
     add_builtin(vm, c++, "keep", builtin_keep);
+    add_builtin(vm, c++, "if", builtin_if);
     add_parsing_builtin(vm, c++, "[", builtin_quot);
     add_builtin(vm, c++, "syscall0", builtin_syscall0);
     add_builtin(vm, c++, "syscall1", builtin_syscall1);
