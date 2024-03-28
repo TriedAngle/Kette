@@ -26,7 +26,7 @@ typedef struct {
     cell* quotation; // function pointer for builtins not a value pointer
 } Word;
 
-Word* BUILTINS[32] = {};
+Word* BUILTINS[48] = {};
 
 void print_word(const char* left, Word* word, const char* right) {
     printf("%s%.*s%s", left, word->length, word->name, right);
@@ -125,6 +125,10 @@ void VM_deinit(VM* vm) {
     munmap(vm->quotations, vm->quotation_size);
 }
 
+cell* VM_data_stack_top(VM* vm) {
+    return vm->data_stack + vm->data_stack_pointer;
+}
+
 cell pop(VM* vm) {
     return vm->data_stack[--(vm->data_stack_pointer)];
 }
@@ -135,16 +139,14 @@ void push(VM* vm, cell data) {
     vm->data_stack_pointer++;
 }
 
-cell* VM_data_stack_top(VM* vm) {
-    return vm->data_stack + vm->data_stack_pointer;
-}
-
 cell rpop(VM* vm) {
     return vm->retain_stack[--(vm->retain_stack_pointer)];
 }
 
 void rpush(VM* vm, cell data) {
-    vm->retain_stack[(vm->retain_stack_pointer)++] = data;
+    cell* point = vm->retain_stack + vm->retain_stack_pointer;
+    *point = data;
+    vm->retain_stack_pointer++;
 }
 
 cell cpop(VM* vm) {
@@ -456,6 +458,47 @@ void builtin_add(VM* vm) {
     push(vm, n1 + n2);
 }
 
+void builtin_sub(VM* vm) {
+    cell n2 = pop(vm);
+    cell n1 = pop(vm);
+    push(vm, n1 - n2);
+}
+
+void builtin_mul(VM* vm) {
+    cell n2 = pop(vm);
+    cell n1 = pop(vm);
+    push(vm, n1 * n2);
+}
+
+void builtin_div(VM* vm) {
+    cell n2 = pop(vm);
+    cell n1 = pop(vm);
+    push(vm, n1 / n2);
+}
+
+void builtin_mod(VM* vm) {
+    cell n2 = pop(vm);
+    cell n1 = pop(vm);
+    push(vm, n1 % n2);
+}
+
+void builtin_dip(VM* vm) {
+    builtin_swap(vm);
+    rpush(vm, pop(vm));
+    builtin_call(vm);
+    push(vm, rpop(vm));
+}
+
+void builtin_keep(VM* vm) {
+    cell quot = pop(vm);
+    cell val = pop(vm);
+    push(vm, val);
+    rpush(vm, val);
+    push(vm, quot);
+    builtin_call(vm);
+    push(vm, rpop(vm));
+}
+
 void builtin_syscall0(VM* vm) {
     cell id = pop(vm);
     push(vm, syscall(id));
@@ -529,6 +572,13 @@ void add_builtins(VM* vm) {
     add_builtin(vm, c++, "swap", builtin_swap);
     add_builtin(vm, c++, "rot", builtin_rot);
     add_builtin(vm, c++, "+", builtin_add);
+    add_builtin(vm, c++, "-", builtin_sub);
+    add_builtin(vm, c++, "*", builtin_mul);
+    add_builtin(vm, c++, "/", builtin_div);
+    add_builtin(vm, c++, "%", builtin_mod);
+    add_builtin(vm, c++, "/", builtin_div);
+    add_builtin(vm, c++, "dip", builtin_dip);
+    add_builtin(vm, c++, "keep", builtin_keep);
     add_parsing_builtin(vm, c++, "[", builtin_quot);
     add_builtin(vm, c++, "syscall0", builtin_syscall0);
     add_builtin(vm, c++, "syscall1", builtin_syscall1);
