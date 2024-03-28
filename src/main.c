@@ -12,6 +12,7 @@
 #include "tryangle.h"
 
 #define DEFAULT_STACK_SIZE 8192
+#define QUOTE_HEADER 0x20011217
 
 typedef i64 cell;
 
@@ -22,6 +23,12 @@ typedef struct {
     i32 flags;
     cell* quotation; // function pointer for builtins not a value pointer
 } Word;
+
+void print_word(const char* left, Word* word, const char* right) {
+    printf("%s%.*s%s", left, word->length, word->name, right);
+}
+
+Word* BUILTINS[32] = {};
 
 typedef struct {
     cell data_size, retain_size, call_size; 
@@ -53,6 +60,10 @@ typedef struct {
     byte* code;
     cell code_length;
     cell code_offset;
+
+    cell sate;
+    cell* current;
+    cell* next;
 } VM;
 
 typedef void (*VM_FUN)(VM*);
@@ -90,17 +101,6 @@ void VM_deinit(VM* vm) {
     munmap(vm->quotations, vm->quotation_size);
 }
 
-void VM_bind_code(VM* vm, byte* code, cell length) {
-    vm->code = code;
-    vm->code_length = length;
-    vm->code_offset = 0;
-}
-
-void VM_execute(VM* vm, Word* word) {
-    VM_FUN fun = (VM_FUN) word->quotation;
-    fun(vm);
-}
-
 cell pop(VM* vm) {
     return vm->data_stack[--(vm->data_stack_pointer)];
 }
@@ -135,6 +135,40 @@ void qpush(VM* vm, cell data) {
     vm->quotations[(vm->quotations_pointer)++] = data;
 }
 
+
+void VM_bind_code(VM* vm, byte* code, cell length) {
+    vm->code = code;
+    vm->code_length = length;
+    vm->code_offset = 0;
+}
+
+void VM_execute_builtin(VM* vm, Word* word) {
+    VM_FUN fun = (VM_FUN) word->quotation;
+    fun(vm);
+}
+
+void VM_return(VM* vm) {
+    cpop(vm);
+    // TODO implement
+}
+
+cell VM_next(VM* vm) {
+    cell value = *vm->current;
+    vm->current = vm->next;
+    vm->next += 1;
+    return value;
+}
+
+
+void VM_enter(VM* vm, cell* quot) {
+    // cpush(vm, vm->current);
+    vm->next = quot;
+    VM_next(vm);
+    cell val = VM_next(vm);
+    assert(val == QUOTE_HEADER);
+}
+
+
 int string_eq(const byte* str1, i32 length1, const byte* str2, i32 length2) {
     if (length1 != length2) return 0;
     for (int i = 0; i < length1; i++) {
@@ -145,7 +179,7 @@ int string_eq(const byte* str1, i32 length1, const byte* str2, i32 length2) {
     return 1;
 }
 
-void alloc_word(VM* vm, byte* name, i32 length, i32 flags, cell* quotation) {
+Word* alloc_word(VM* vm, byte* name, i32 length, i32 flags, cell* quotation) {
     Word* word = vm->dictionary + vm->dictionary_pointer;
     word->link = vm->latest_word;
     word->name = name; 
@@ -154,6 +188,7 @@ void alloc_word(VM* vm, byte* name, i32 length, i32 flags, cell* quotation) {
     word->quotation = quotation;
     vm->latest_word = (cell*) word;
     vm->dictionary_pointer++;
+    return word;
 }
 
 // out: pointer to start of word (at link) (0 if no word)
@@ -176,13 +211,12 @@ void builtin_quot_end(VM*);
 void builtin_lit(VM*);
 
 void start_quotation(VM* vm) {
-    cell ptr = (cell)set_pointer_tag_bit(builtin_quot, 63);
-    qpush(vm, ptr);
+    qpush(vm, QUOTE_HEADER);
 }
 
 void end_quotation(VM* vm) {
-    cell ptr = (cell)set_pointer_tag_bit(builtin_ret, 63);
-    qpush(vm, ptr);
+    cell* word = find(vm, (byte*)"return", 6);
+    qpush(vm, (cell)word);
 }
 
 cell* alloc_quotation(VM* vm, cell size, cell* body) {
@@ -191,9 +225,6 @@ cell* alloc_quotation(VM* vm, cell size, cell* body) {
     for(cell i = 0; i < size; i++) {
         qpush(vm, body[i]);
     }
-    // cell* location = vm->quotations + vm->quotations_pointer;
-    // memcpy(location, body, size);
-    // vm->quotations_pointer += size;
     end_quotation(vm);
     return start;
 }
@@ -271,40 +302,37 @@ cell* read_until(VM* vm, cell *word_count, byte* ident, cell ident_length) {
     cell number;
     cell is_number;
     cell* start = data_stack_top(vm);
+    Word* found_word;
     while(1) {
         word = read_word(vm, &length);
         if (word == NULL) {
             break;
-        } 
+        }
+
         number = read_number(word, length, &is_number);
         if (string_eq(ident, ident_length, word, length)) {
             break;
         } else if (is_number) {
-            cell ptr = (cell)set_pointer_tag_bit(builtin_lit, 63);
-            push(vm, ptr);
+            push(vm, (cell)BUILTINS[13]);
             push(vm, number);
             *word_count += 2;
             continue;
         } 
         
-        Word* found_word = (Word*)find(vm, word, length);
-        if (word == NULL) {
+        found_word = (Word*)find(vm, word, length);
+        if (found_word == NULL) {
             // TODO HANDLE ERROR
         }
         if (read_nth_bit(found_word->flags, 30)) {
             if (read_nth_bit(found_word->flags, 31)) {
-                VM_execute(vm, found_word);
+                VM_execute_builtin(vm, found_word);
                 continue;
             } else {
 
             }
         }
-        if (read_nth_bit(found_word->flags, 31)) {
-            cell ptr = (cell)set_pointer_tag_bit(found_word->quotation, 63);
-            push(vm, ptr);
-            *word_count += 1;
-            continue;
-        }
+        push(vm, (cell)found_word);
+        *word_count += 1;
     }
     
     return start;    
@@ -320,7 +348,7 @@ void clear_mem(cell* start, cell count) {
 void builtin_quot(VM* vm) {
     byte* end = (byte*)"]";
     cell word_count = 0;
-    cell* start = read_until(vm, &word_count, end, 2);
+    cell* start = read_until(vm, &word_count, end, 1);
     if (start == NULL) {
         // TODO ERROR;
     }
@@ -332,7 +360,8 @@ void builtin_quot(VM* vm) {
 
 
 void builtin_lit(VM* vm) {
-    printf("shouldn't be called");
+    cell value = VM_next(vm);
+    push(vm, value);
 }
 
 void builtin_ret(VM* vm) {
@@ -417,33 +446,36 @@ void builtin_unsafe_vm(VM* vm) {
     push(vm, (cell) vm);
 }
 
-void add_builtin(VM* vm, const str* name, void* fn) {
+void add_builtin(VM* vm, cell id, const str* name, void* fn) {
     i32 length = strlen(name);
     i32 flags = (i32)set_nth_bit(0, 31, 1);
-    alloc_word(vm, (byte*)name, length, flags, (cell*)fn);
+    Word* word = alloc_word(vm, (byte*)name, length, flags, (cell*)fn);
+    BUILTINS[id] = word;
 }
 
-void add_parsing_builtin(VM* vm, const str* name, void* fn) {
+void add_parsing_builtin(VM* vm, cell id, const str* name, void* fn) {
     i32 length = strlen(name);
     i32 flags = (i32)set_nth_bit(set_nth_bit(0, 31, 1), 30, 1);
-    alloc_word(vm, (byte*)name, length, flags, (cell*)fn);
+    Word* word = alloc_word(vm, (byte*)name, length, flags, (cell*)fn);
+    BUILTINS[id] = word;
 }
 
 void add_builtins(VM* vm) {
-    add_parsing_builtin(vm, "[", builtin_quot);
-
-    add_builtin(vm, "dup", builtin_dup);
-    add_builtin(vm, ".", builtin_print_integer);
-    add_builtin(vm, "drop", builtin_drop);
-    add_builtin(vm, "swap", builtin_swap);
-    add_builtin(vm, "rot", builtin_rot);
-    add_builtin(vm, "+", builtin_add);
-    add_builtin(vm, "syscall0", builtin_syscall0);
-    add_builtin(vm, "syscall1", builtin_syscall1);
-    add_builtin(vm, "syscall2", builtin_syscall2);
-    add_builtin(vm, "syscall3", builtin_syscall3);
-    add_builtin(vm, "let-me-cook", builtin_unsafe_vm);
-    add_builtin(vm, "call", builtin_call);
+    add_builtin(vm, 0, "dup", builtin_dup);
+    add_builtin(vm, 1, ".", builtin_print_integer);
+    add_builtin(vm, 2, "drop", builtin_drop);
+    add_builtin(vm, 3, "swap", builtin_swap);
+    add_builtin(vm, 4, "rot", builtin_rot);
+    add_builtin(vm, 5, "+", builtin_add);
+    add_parsing_builtin(vm, 6, "[", builtin_quot);
+    add_builtin(vm, 7, "syscall0", builtin_syscall0);
+    add_builtin(vm, 8, "syscall1", builtin_syscall1);
+    add_builtin(vm, 9, "syscall2", builtin_syscall2);
+    add_builtin(vm, 10, "syscall3", builtin_syscall3);
+    add_builtin(vm, 11, "let-me-cook", builtin_unsafe_vm);
+    add_builtin(vm, 12, "call", builtin_call);
+    add_builtin(vm, 13, "LITERAL", builtin_lit);
+    add_builtin(vm, 14, "return", builtin_ret);
 }
 
 cell* VM_read_until_end(VM* vm) {
@@ -476,29 +508,18 @@ int main() {
     VM_bind_code(&vm, (byte*)stream, stream_length);
 
     cell* entry = VM_read_until_end(&vm);
-    assert((cell)clear_pointer_tags((void*)*entry) == (cell)builtin_quot);
+    VM_enter(&vm, entry);
+    
     while(1) {
-        entry += 1;
-        void* word = (void*)*entry;
-        if (read_nth_bit((usize)word, 63)) {
-            VM_FUN fun = clear_pointer_tags(word);
-            if(fun == (VM_FUN)builtin_lit) {
-                entry += 1;
-                cell num = *entry;
-                push(&vm, num);
-                continue;
-            } else if(fun == (VM_FUN)builtin_ret) {
-                if(vm.call_stack_pointer == 0) {
-                    break;
-                } else {
-                    // TODO handle scope
-                }
-            } else {
-                fun(&vm);
-                continue;
-            }
-        } else {
-            // TODO handle user funs
+        cell current = VM_next(&vm);
+        Word* word = (Word*)current;
+        
+        if(word == BUILTINS[14]) {
+            break;
+        }
+
+        if(read_nth_bit(word->flags, 31)) {
+            VM_execute_builtin(&vm, word);
         }
     }
 
