@@ -19,7 +19,8 @@ typedef u64 (*RESIZE_FN)(void* allocator, void** buffer, usize length, u8 align,
 typedef void (*FREE_FN)(void* allocator, void* buffer, usize length, u8 align, usize retAddr);
 
 usize alignForward(usize value, usize alignment);
-i32 findFirstBit(i64 bitset[4]);
+i32 bitsetfindFirst1Bit(i64 bitset[4]);
+void bitsetToggleNthBit(i64 bitset[4], i32 nth);
 
 typedef struct {
     void* ptr; // allocator implementation

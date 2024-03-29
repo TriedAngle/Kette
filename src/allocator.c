@@ -4,7 +4,7 @@ usize alignForward(usize value, usize alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-i32 findFirstBit(i64 bitset[4]) {
+i32 bitsetfindFirst1Bit(i64 bitset[4]) {
     #ifdef SIMD
     __m256i data = _mm256_loadu_si256((__m256i*)bitset);
 
@@ -42,6 +42,12 @@ i32 findFirstBit(i64 bitset[4]) {
     }
     return -1;
     #endif
+}
+
+void bitsetToggleNthBit(i64 bitset[4], i32 nth) {
+    i32 arrayIdx = nth / 64;
+    i32 bitIdx = nth % 64;
+    bitset[arrayIdx] ^= (1LL << bitIdx);
 }
 
 void* pageAlloc(void* allocator, usize length, u8 align, usize retAddr) {
@@ -159,6 +165,16 @@ Allocator allocatorFromArenaAllocator(ArenaAllocator* allocator) {
 }
 
 
+i32 bucketFreeIndex(Bucket* bucket) {
+    i32 index = bitsetfindFirst1Bit(bucket->freelist);
+    if (index == -1) return -1;
+    if (index > bucket->blockCount) return -1;
+    return index;
+}
+
+void bucketToggleFree(Bucket* bucket, i32 index) {
+    bitsetToggleNthBit(bucket->freelist, index);
+}
 
 Bucket newEmptyBucket(i32 blockSize, i32 blockCount) {
     Bucket bucket = {
@@ -168,17 +184,6 @@ Bucket newEmptyBucket(i32 blockSize, i32 blockCount) {
     };
     return bucket;
 }
-
-// Bucket newBucket(i32 blockSize, i32 blockCount, Allocator allocator) {
-//     void* allocation = allocator.alloc((void*)&allocator, pages * PAGE_SIZE, blockSize, 0);
-//     Bucket bucket = {
-//         .blockSize = blockSize,
-//         .blockCount = blockCount,
-//         .allocation = allocation,
-//     };
-//     return bucket;
-// }
-
 
 GeneralAllocator initGeneralAllocator() {
     PageAllocator pageAllocator = initPageAllocator();
@@ -212,7 +217,14 @@ Bucket* findBucketCategory(GeneralAllocator* allocator, i32 size) {
     return NULL;
 }
 
+// Bucket* findAvailableBucket(GeneralAllocator* allocator, i32 size) {
+//     Bucket* bucket = findBucketCategory(allocator, size);
+//     if (bucket == NULL) {
+//         return NULL;
+//     }
 
+//     do {
 
+//     } while(bucket != NULL)
 
-// 16 32 64 128 256 512 1024 2048
+// }

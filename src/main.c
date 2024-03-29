@@ -845,68 +845,71 @@ cell* VM_compile(VM* vm) {
     return quot;
 }
 
-int main() {
-    i64 arr[4] = {0};
-    arr[3] = 1LL << 21;
-    int index = findFirstBit(arr);
-    printf("First 1 bit is at position: %d\n", index);
-    return 0; 
-}
+// int main() {
+//     i64 arr[4] = {0};
+//     arr[3] = 1LL << 21;
+//     int index = bitsetfindFirst1Bit(arr);
+//     printf("First 1 bit is at position: %d\n", index);
+//     return 0; 
+// }
 
-// int main(int argc, char* argv[]) {
-//     VM vm;
-//     VMInitConfig vm_config = {
-//         .data_size = DEFAULT_STACK_SIZE,
-//         .retain_size = DEFAULT_STACK_SIZE,
-//         .call_size = DEFAULT_STACK_SIZE,
-//         .dictionary_size = DEFAULT_STACK_SIZE * 4,
-//         .quotation_size = DEFAULT_STACK_SIZE * 4,
-//         .strings_size = DEFAULT_STACK_SIZE * 4,
-//     };
-//     VM_init(&vm, vm_config);
+int main(int argc, char* argv[]) {
+    VM vm;
+    VMInitConfig vm_config = {
+        .data_size = DEFAULT_STACK_SIZE,
+        .retain_size = DEFAULT_STACK_SIZE,
+        .call_size = DEFAULT_STACK_SIZE,
+        .dictionary_size = DEFAULT_STACK_SIZE * 4,
+        .quotation_size = DEFAULT_STACK_SIZE * 4,
+        .strings_size = DEFAULT_STACK_SIZE * 4,
+    };
+    VM_init(&vm, vm_config);
     
-//     add_builtins(&vm);
+    add_builtins(&vm);
 
-//     int mode = 0;
-//     // TODO: files
-//     // byte buffer[100] = {};
+    int mode = 0;
+    // TODO: files
+    // byte buffer[100] = {};
 
-//     for (int i = 1; i < argc; i++) {
-//         if (strcmp(argv[i], "--manual") == 0) {
-//             mode = 1;
-//         }
-//     }
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--manual") == 0) {
+            mode = 1;
+        }
+    }
 
 
-//     if (mode == 1) {
-//         str* stream = "[ 10 [ 5 + ] call . ] dup .q call";
-//         cell stream_length = strlen(stream);
+    if (mode == 1) {
+        str* stream = "[ 10 [ 5 + ] call . ] dup .q call";
+        cell stream_length = strlen(stream);
 
-//         VM_bind_code(&vm, (byte*)stream, stream_length);
-//         cell* entry = VM_compile(&vm);
+        VM_bind_code(&vm, (byte*)stream, stream_length);
+        cell* entry = VM_compile(&vm);
 
-//         VM_enter(&vm, entry);
-//         builtin_interpret(&vm);
+        VM_enter(&vm, entry);
+        builtin_interpret(&vm);
 
         
-//     } else {
-//         str* input_buffer = (str*)malloc(1000 * sizeof(str)); 
-//         cell input_size = 0;
-//         while(1) {
-//             printf("> ");
-//             fgets(input_buffer, 1000, stdin);
-//             if (strcmp(input_buffer, "quit\n") == 0) {
-//                 break;
-//             }
+    } else {
+        str* input_buffer = (str*)malloc(1000 * sizeof(str)); 
+        cell input_size = 0;
+        while(1) {
+            printf("> ");
+            if(!fgets(input_buffer, 1000, stdin)) {
+                printf("ERROR!\n");
+                break;
+            }
+            if (strcmp(input_buffer, "quit\n") == 0) {
+                break;
+            }
             
-//             input_size = strlen(input_buffer);
-//             VM_bind_code(&vm, (byte*)input_buffer, input_size);
-//             cell* entry = VM_compile(&vm);
-//             VM_enter(&vm, entry);
-//             builtin_interpret(&vm);
-//         }
-//     }
+            input_size = strlen(input_buffer);
+            VM_bind_code(&vm, (byte*)input_buffer, input_size);
+            cell* entry = VM_compile(&vm);
+            VM_enter(&vm, entry);
+            builtin_interpret(&vm);
+        }
+    }
 
-//     VM_deinit(&vm);
-//     return 0;
-// }
+    VM_deinit(&vm);
+    return 0;
+}
