@@ -4,6 +4,8 @@
 #include "defaults.h"
 #include <stdio.h>
 #include <string.h>
+#include <threads.h>
+
 #ifdef LINUX
     #define PAGE_SIZE 4096
 #elif WINDOWS
@@ -14,9 +16,9 @@
     #include <immintrin.h>
 #endif
 
-typedef void* (*ALLOCATE_FN)(void* allocator, usize length, u8 align, usize retAddr);
-typedef u64 (*RESIZE_FN)(void* allocator, void** buffer, usize length, u8 align, usize newLength, usize retAddr);
-typedef void (*FREE_FN)(void* allocator, void* buffer, usize length, u8 align, usize retAddr);
+typedef void* (*ALLOCATE_FN)(void* allocator, usize length,i32 align, usize retAddr);
+typedef u64 (*RESIZE_FN)(void* allocator, void** buffer, usize length, i32 align, usize newLength, usize retAddr);
+typedef void (*FREE_FN)(void* allocator, void* buffer, usize length, i32 align, usize retAddr);
 
 usize alignForward(usize value, usize alignment);
 i32 bitsetfindFirst1Bit(i64 bitset[4]);
@@ -28,6 +30,13 @@ typedef struct {
     RESIZE_FN resize;
     FREE_FN free;
 } Allocator;
+
+void* tcreate(Allocator* allocator, usize size);
+void tdelete(Allocator* allocator, void* buffer, usize size);
+
+void* talloc(Allocator* allocator, usize length, i32 align);
+u64 tresize(Allocator* allocator, void** buffer, usize length, usize newLength, i32 align);
+void tfree(Allocator* allocator, void* buffer, usize length, i32 align);
 
 typedef struct {
     
@@ -51,17 +60,24 @@ typedef struct Bucket {
     struct Bucket* next;
     i32 blockSize;
     i32 blockCount;
+    u32 freeCount;
     i64 freelist[4];
     void* allocation;
 } Bucket;
 
 typedef struct {
+    i32 zeroMem;
+} GeneralAllocatorConfig;
+
+typedef struct {
     PageAllocator pageAllocator;
     ArenaAllocator arenaAllocator;
+    GeneralAllocatorConfig config;
     Bucket buckets[8];
+    mtx_t locks[8];
 } GeneralAllocator;
 
-GeneralAllocator initGeneralAllocator();
+GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config);
 
 Allocator allocatorFromGeneralAllocator(GeneralAllocator* allocator);
 

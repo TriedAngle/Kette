@@ -2,17 +2,13 @@
 #define INTEGERS_H
 
 #define __USE_GNU
-#ifdef __linux__
-    #define LINUX
+#ifdef LINUX
     #include <sys/mman.h>
     #include <sys/syscall.h>
-#elif _WIN32
-    #define WINDOWS
+#elif WINDOWS
     #include <windows.h>
-#elif __ANDROID__
-    #define ANDROID
-#elif __APPLE__
-    #define APPLE
+#elif ANDROID
+#elif DARWIN
 #endif
 
 #ifdef __x86_64__
