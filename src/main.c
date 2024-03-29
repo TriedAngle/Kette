@@ -850,7 +850,6 @@ int main() {
     arr[3] = 1LL << 21;
     int index = findFirstBit(arr);
     printf("First 1 bit is at position: %d\n", index);
-    printf("");
     return 0; 
 }
 

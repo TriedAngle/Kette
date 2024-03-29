@@ -18,6 +18,9 @@ typedef void* (*ALLOCATE_FN)(void* allocator, usize length, u8 align, usize retA
 typedef u64 (*RESIZE_FN)(void* allocator, void** buffer, usize length, u8 align, usize newLength, usize retAddr);
 typedef void (*FREE_FN)(void* allocator, void* buffer, usize length, u8 align, usize retAddr);
 
+usize alignForward(usize value, usize alignment);
+i32 findFirstBit(i64 bitset[4]);
+
 typedef struct {
     void* ptr; // allocator implementation
     ALLOCATE_FN alloc;
@@ -27,21 +30,39 @@ typedef struct {
 
 typedef struct {
     
-} PageAlloctor ;
+} PageAllocator ;
+PageAllocator initPageAllocator();
 
-Allocator allocatorFromPageAllocator(PageAlloctor* allocator);
+Allocator allocatorFromPageAllocator(PageAllocator* allocator);
 
-usize alignForward(usize value, usize alignment);
+
+typedef struct {
+    Allocator allocator;
+    void* allocation;
+    i32 capacity;
+    i32 length;
+} ArenaAllocator;
+
+ArenaAllocator initArenaAllocator(Allocator allocator, i32 capacity);
+Allocator allocatorFromArenaAllocator(ArenaAllocator* allocator);
 
 typedef struct Bucket {
     struct Bucket* next;
-    usize block_size;
+    i32 blockSize;
+    i32 blockCount;
+    i64 freelist[4];
+    void* allocation;
 } Bucket;
 
 typedef struct {
-    Allocator backing;
+    PageAllocator pageAllocator;
+    ArenaAllocator arenaAllocator;
+    Bucket buckets[8];
 } GeneralAllocator;
 
-i32 findFirstBit(i64 bitset[4]);
+GeneralAllocator initGeneralAllocator();
+
+Allocator allocatorFromGeneralAllocator(GeneralAllocator* allocator);
+
 
 #endif
