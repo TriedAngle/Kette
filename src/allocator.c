@@ -138,7 +138,7 @@ ArenaAllocator initArenaAllocator(Allocator allocator, i32 capacity) {
 }
 
 void* arenaAlloc(void* allocator, usize length, i32 align, usize retAddr) {
-    ArenaAllocator* alloc = (ArenaAllocator*) alloc;
+    ArenaAllocator* alloc = (ArenaAllocator*) allocator;
     i32 alignedLength = alignForward(length, align);
     Allocator inner = alloc->allocator;
     void* allocation;
@@ -221,24 +221,37 @@ Bucket newEmptyBucket(i32 blockSize, i32 blockCount) {
 }
 
 GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config) {
-    PageAllocator pageAllocator = initPageAllocator();
-    Allocator pageAlloc = allocatorFromPageAllocator(&pageAllocator);
-    ArenaAllocator arenaAllocator = initArenaAllocator(pageAlloc, PAGE_SIZE);
-    
-    GeneralAllocator ga = {
-        .pageAllocator = pageAllocator,
-        .arenaAllocator = arenaAllocator,
-        .config = config,
-    };
-    
-    ga.buckets[0] = newEmptyBucket(16, 256); // 1 page
-    ga.buckets[1] = newEmptyBucket(32, 256); // 2 pages
-    ga.buckets[2] = newEmptyBucket(64, 256); // 4 pages
-    ga.buckets[3] = newEmptyBucket(128, 128); // 4 pages
-    ga.buckets[4] = newEmptyBucket(256, 64); // 4 pages
-    ga.buckets[5] = newEmptyBucket(512, 32); // 4 pages
-    ga.buckets[6] = newEmptyBucket(1024, 16); // 4 pages
-    ga.buckets[7] = newEmptyBucket(2048, 4); // 4 pages
+    GeneralAllocator ga;
+    ga.pageAllocator = initPageAllocator();
+    Allocator pageAlloc = allocatorFromPageAllocator(&ga.pageAllocator);
+    ga.arenaAllocator = initArenaAllocator(pageAlloc, PAGE_SIZE);
+
+    ga.buckets[0] = NULL;
+    ga.buckets[1] = NULL;
+    ga.buckets[2] = NULL;
+    ga.buckets[3] = NULL;
+    ga.buckets[4] = NULL;
+    ga.buckets[5] = NULL;
+    ga.buckets[6] = NULL;
+    ga.buckets[7] = NULL;
+
+    ga.blockSizes[0] = 16;
+    ga.blockSizes[1] = 32;
+    ga.blockSizes[2] = 64;
+    ga.blockSizes[3] = 128;
+    ga.blockSizes[4] = 256;
+    ga.blockSizes[5] = 512;
+    ga.blockSizes[6] = 1024;
+    ga.blockSizes[7] = 2048;
+
+    ga.blockCounts[0] = 256;
+    ga.blockCounts[1] = 256;
+    ga.blockCounts[2] = 256;
+    ga.blockCounts[3] = 128;
+    ga.blockCounts[4] = 64;
+    ga.blockCounts[5] = 32;
+    ga.blockCounts[6] = 16;
+    ga.blockCounts[7] = 4;
 
     mtx_init(&ga.locks[0], mtx_plain);
     mtx_init(&ga.locks[1], mtx_plain);
@@ -252,47 +265,62 @@ GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config) {
     return ga;
 }
 
-Bucket* allocateGABucket(GeneralAllocator* ga, Bucket* last) {
+void allocateBucketMemory(GeneralAllocator* ga, Bucket* bucket) {
+    usize allocSize = bucket->blockSize * bucket->blockCount;
+    bucket->allocation = pageAlloc((void*)&ga->pageAllocator, allocSize, PAGE_SIZE, 0);
+    if(ga->config.zeroMem) {
+        memset(bucket->allocation, 0, allocSize);
+    }
+}
+
+Bucket* allocateGABucket(GeneralAllocator* ga, u32 category) {
     Bucket* bucket = arenaAlloc((void*)&ga->arenaAllocator, sizeof(Bucket), sizeof(Bucket), 0);
-    last->next = bucket;
-    bucket->blockSize = last->blockSize;
-    bucket->blockCount = last->blockCount;
+    bucket->blockSize = ga->blockSizes[category];
+    bucket->blockCount = ga->blockCounts[category];
     bucket->freeCount = bucket->blockCount;
     bucket->freelist[0] = -1;
     bucket->freelist[1] = -1;
     bucket->freelist[2] = -1;
     bucket->freelist[3] = -1;
-    usize allocSize = last->blockSize * last->blockCount;
-    bucket->allocation = pageAlloc((void*)&ga->pageAllocator, allocSize, PAGE_SIZE, 0);
-    if(ga->config.zeroMem) {
-        memset(bucket->allocation, 0, allocSize);
-    }
+    allocateBucketMemory(ga, bucket);
     return bucket;
 }
 
 
-Bucket* findBucketCategory(GeneralAllocator* ga, i32 size, i32* category) {
-    for (int i = 0; i < 8; i++) {
-        if (size <= ga->buckets[i].blockSize) {
-            *category = i;
-            return &ga->buckets[i];
-        }
+u32 findBucketCategory(GeneralAllocator* ga, i32 size) {
+    if (size <= ga->blockSizes[0]) {
+        return 0;
+    } else if (size <= ga->blockSizes[1]) {
+        return 1;
+    } else if (size <= ga->blockSizes[2]) {
+        return 2;
+    } else if (size <= ga->blockSizes[3]) {
+        return 3;
+    } else if (size <= ga->blockSizes[4]) {
+        return 4;
+    } else if (size <= ga->blockSizes[5]) {
+        return 5;
+    } else if (size <= ga->blockSizes[6]) {
+        return 6;
+    } else if (size <= ga->blockSizes[7]) {
+        return 7;
     }
-    return NULL;
+    return 8;
 }
 
-Bucket* findAvailableBucket(GeneralAllocator* ga, i32 size, Bucket* start) {
-    Bucket* bucket = start;
+Bucket* findAvailableBucket(GeneralAllocator* ga, i32 size, u32 category) {
+    Bucket* bucket = ga->buckets[category];
     if (bucket == NULL) {
-        return NULL;
+        bucket = allocateGABucket(ga, category);
+        ga->buckets[category] = bucket;
     }
-
     for(;;) {
         if (bucket->freeCount > 0) {
             break;
         }
         if (bucket->next == NULL) {
-            Bucket* new = allocateGABucket(ga, bucket);
+            Bucket* new = allocateGABucket(ga, category);
+            bucket->next = new;
             bucket = new;
             break;
         }
@@ -302,27 +330,24 @@ Bucket* findAvailableBucket(GeneralAllocator* ga, i32 size, Bucket* start) {
 }
 
 void* generalAlloc(void* allocator, usize length, i32 align, usize retAddr) {
-    printf("LEL1\n");
     GeneralAllocator* ga = (GeneralAllocator*) allocator;
     usize size = alignForward(length, align);
 
-    i32 category;
-    Bucket* start = findBucketCategory(ga, size, &category);
-    if (start == NULL) {
-        // TODO HANDLE ERROR
+    u32 category = findBucketCategory(ga, size);
+    if (category > 7) {
+        // TODO HANDLE LARGER ALLOCATIONS
         exit(1);
     }
 
     mtx_lock(&ga->locks[category]);
-
-    Bucket* bucket = findAvailableBucket(ga, size, start);
+    Bucket* bucket = findAvailableBucket(ga, size, category);
     if (bucket == NULL) {
         // TODO HANDLE ERROR
         exit(1);
     }
     i32 index = bucketFreeIndex(bucket);
+    index = bucketFreeIndex(bucket);
     bucketToggleFree(bucket, index);
-
     mtx_unlock(&ga->locks[category]);
 
     return bucketPtrFromIndex(bucket, index);
@@ -332,13 +357,13 @@ void generalFree(void* allocator, void* buffer, usize length, i32 align, usize r
     GeneralAllocator* ga = (GeneralAllocator*) allocator;
     usize size = alignForward(length, align);
 
-    i32 category;
-    Bucket* bucket = findBucketCategory(ga, size, &category);
-    if (bucket == NULL) {
-        // TODO HANDLE ERROR
+    u32 category = findBucketCategory(ga, size);
+    if (category > 7) {
+        // TODO HANDLE LARGER ALLOCATIONS
         return;
     }
 
+    Bucket* bucket = ga->buckets[category];
     usize addr = (usize)buffer;
     usize minAddr;
     usize maxAddr;

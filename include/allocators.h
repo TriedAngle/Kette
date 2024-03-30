@@ -73,8 +73,10 @@ typedef struct {
     PageAllocator pageAllocator;
     ArenaAllocator arenaAllocator;
     GeneralAllocatorConfig config;
-    Bucket buckets[8];
+    Bucket* buckets[8];
     mtx_t locks[8];
+    u16 blockSizes[8];
+    u16 blockCounts[8];
 } GeneralAllocator;
 
 GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config);

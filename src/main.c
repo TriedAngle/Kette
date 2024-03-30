@@ -853,13 +853,13 @@ int main() {
     Allocator allocator = allocatorFromGeneralAllocator(&ga);
 
     Word* word = (Word*)tcreate(&allocator, sizeof(Word));
-    // word->length = 16;
+    word->length = 16;
 
-    // Word* words = (Word*)tcreate(&allocator, sizeof(Word) * 8);
-    // words[5].flags = 0x00FF00;
+    Word* words = (Word*)tcreate(&allocator, sizeof(Word) * 8);
+    words[5].flags = 0x00FF00;
 
-    // tdelete(&allocator, word, sizeof(Word));
-    // tdelete(&allocator, words, sizeof(Word) * 8);
+    tdelete(&allocator, word, sizeof(Word));
+    tdelete(&allocator, words, sizeof(Word) * 8);
 }
 
 // int main(int argc, char* argv[]) {
