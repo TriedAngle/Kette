@@ -2,13 +2,12 @@
 #define ALLOCATORS_H
 
 #include "defaults.h"
-#include <stdio.h>
-#include <string.h>
-#include <threads.h>
 
 #ifdef LINUX
+    #include <sys/mman.h>
     #define PAGE_SIZE 4096
 #elif WINDOWS
+    #include <windows.h>
     #define PAGE_SIZE 4096
 #endif
 

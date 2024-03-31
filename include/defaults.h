@@ -1,12 +1,8 @@
 #ifndef INTEGERS_H
 #define INTEGERS_H
 
-#define __USE_GNU
 #ifdef LINUX
-    #include <sys/mman.h>
-    #include <sys/syscall.h>
 #elif WINDOWS
-    #include <windows.h>
 #elif ANDROID
 #elif DARWIN
 #endif
@@ -17,8 +13,10 @@
     #define A64
 #endif
 
-#include <stdlib.h>
 #include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <threads.h>
 
 typedef unsigned char byte;
 typedef char str;
@@ -34,5 +32,9 @@ typedef i64 isize;
 typedef u64 usize;
 
 typedef i64 cell;
+
+
+int string_eq(const byte* str1, i32 length1, const byte* str2, i32 length2);
+
 
 #endif

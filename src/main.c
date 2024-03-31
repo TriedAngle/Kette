@@ -1,15 +1,12 @@
 #include <stdio.h>
 
-#include <string.h>
 #include <unistd.h>
 
-#include <limits.h>
-#include <stddef.h>
 #include <assert.h>
 
-// #include "utilities.h"
 #include "defaults.h"
 #include "allocators.h"
+#include "hashmap.h"
 
 #define DEFAULT_STACK_SIZE 8192
 #define QUOTE_HEADER 0x20011217
@@ -214,15 +211,7 @@ void VM_enter(VM* vm, cell* quot) {
 }
 
 
-int string_eq(const byte* str1, i32 length1, const byte* str2, i32 length2) {
-    if (length1 != length2) return 0;
-    for (int i = 0; i < length1; i++) {
-        if (str1[i] != str2[i]) {
-            return 0;
-        }
-    }
-    return 1;
-}
+
 
 byte* alloc_string(VM* vm, byte* string, cell length) {
     byte* location = vm->strings + vm->strings_offset;
@@ -845,80 +834,80 @@ cell* VM_compile(VM* vm) {
     return quot;
 }
 
-int main() {
-    GeneralAllocatorConfig gac = {
-        .zeroMem = 1,
-    };
-    GeneralAllocator ga = initGeneralAllocator(gac);
-    Allocator allocator = allocatorFromGeneralAllocator(&ga);
-
-    Word* word = (Word*)tcreate(&allocator, sizeof(Word));
-    word->length = 16;
-
-    Word* words = (Word*)tcreate(&allocator, sizeof(Word) * 8);
-    words[5].flags = 0x00FF00;
-
-    tdelete(&allocator, word, sizeof(Word));
-    tdelete(&allocator, words, sizeof(Word) * 8);
-}
-
-// int main(int argc, char* argv[]) {
-//     VM vm;
-//     VMInitConfig vm_config = {
-//         .data_size = DEFAULT_STACK_SIZE,
-//         .retain_size = DEFAULT_STACK_SIZE,
-//         .call_size = DEFAULT_STACK_SIZE,
-//         .dictionary_size = DEFAULT_STACK_SIZE * 4,
-//         .quotation_size = DEFAULT_STACK_SIZE * 4,
-//         .strings_size = DEFAULT_STACK_SIZE * 4,
+// int main() {
+//     GeneralAllocatorConfig gac = {
+//         .zeroMem = 1,
 //     };
-//     VM_init(&vm, vm_config);
+//     GeneralAllocator ga = initGeneralAllocator(gac);
+//     Allocator allocator = allocatorFromGeneralAllocator(&ga);
+
+//     Word* word = (Word*)tcreate(&allocator, sizeof(Word));
+//     word->length = 16;
+
+//     Word* words = (Word*)tcreate(&allocator, sizeof(Word) * 8);
+//     words[5].flags = 0x00FF00;
+
+//     tdelete(&allocator, word, sizeof(Word));
+//     tdelete(&allocator, words, sizeof(Word) * 8);
+// }
+
+int main(int argc, char* argv[]) {
+    VM vm;
+    VMInitConfig vm_config = {
+        .data_size = DEFAULT_STACK_SIZE,
+        .retain_size = DEFAULT_STACK_SIZE,
+        .call_size = DEFAULT_STACK_SIZE,
+        .dictionary_size = DEFAULT_STACK_SIZE * 4,
+        .quotation_size = DEFAULT_STACK_SIZE * 4,
+        .strings_size = DEFAULT_STACK_SIZE * 4,
+    };
+    VM_init(&vm, vm_config);
     
-//     add_builtins(&vm);
+    add_builtins(&vm);
 
-//     int mode = 0;
-//     // TODO: files
-//     // byte buffer[100] = {};
+    int mode = 0;
+    // TODO: files
+    // byte buffer[100] = {};
 
-//     for (int i = 1; i < argc; i++) {
-//         if (strcmp(argv[i], "--manual") == 0) {
-//             mode = 1;
-//         }
-//     }
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--manual") == 0) {
+            mode = 1;
+        }
+    }
 
 
-//     if (mode == 1) {
-//         str* stream = "[ 10 [ 5 + ] call . ] dup .q call";
-//         cell stream_length = strlen(stream);
+    if (mode == 1) {
+        str* stream = "[ 10 [ 5 + ] call . ] dup .q call";
+        cell stream_length = strlen(stream);
 
-//         VM_bind_code(&vm, (byte*)stream, stream_length);
-//         cell* entry = VM_compile(&vm);
+        VM_bind_code(&vm, (byte*)stream, stream_length);
+        cell* entry = VM_compile(&vm);
 
-//         VM_enter(&vm, entry);
-//         builtin_interpret(&vm);
+        VM_enter(&vm, entry);
+        builtin_interpret(&vm);
 
         
-//     } else {
-//         str* input_buffer = (str*)malloc(1000 * sizeof(str)); 
-//         cell input_size = 0;
-//         while(1) {
-//             printf("> ");
-//             if(!fgets(input_buffer, 1000, stdin)) {
-//                 printf("ERROR!\n");
-//                 break;
-//             }
-//             if (strcmp(input_buffer, "quit\n") == 0) {
-//                 break;
-//             }
+    } else {
+        str* input_buffer = (str*)malloc(1000 * sizeof(str)); 
+        cell input_size = 0;
+        while(1) {
+            printf("> ");
+            if(!fgets(input_buffer, 1000, stdin)) {
+                printf("ERROR!\n");
+                break;
+            }
+            if (strcmp(input_buffer, "quit\n") == 0) {
+                break;
+            }
             
-//             input_size = strlen(input_buffer);
-//             VM_bind_code(&vm, (byte*)input_buffer, input_size);
-//             cell* entry = VM_compile(&vm);
-//             VM_enter(&vm, entry);
-//             builtin_interpret(&vm);
-//         }
-//     }
+            input_size = strlen(input_buffer);
+            VM_bind_code(&vm, (byte*)input_buffer, input_size);
+            cell* entry = VM_compile(&vm);
+            VM_enter(&vm, entry);
+            builtin_interpret(&vm);
+        }
+    }
 
-//     VM_deinit(&vm);
-//     return 0;
-// }
+    VM_deinit(&vm);
+    return 0;
+}
