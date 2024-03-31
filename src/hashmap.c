@@ -27,14 +27,14 @@ HashMap initHashMap(Allocator allocator, u32 size) {
     map.decreaseDelta100 = DECREASE_DELTA100;
     map.expandFactor = EXPAND_FACTOR;
     map.shrinkFactor = SHRINK_FACTOR;
-    map.items = (HashItem*) tcreate(&map.allocator, sizeof(HashItem) * size);
+    map.items = (HashItem*) tcreate(&map.allocator, size * sizeof(HashItem));
     map.size = size;
     map.count = 0;
     return map;
 }
 
 void deinitHashMap(HashMap* map) {
-    tdelete(map->allocator.ptr, (void*)map->items, map->size);
+    tdelete(&map->allocator, (void*)map->items, map->size * sizeof(HashItem));
 }
 
 void hmInsert(HashMap* map, byte* key, i32 length, cell value) {
@@ -87,7 +87,7 @@ cell hmDelete(HashMap* map, byte* key, i32 length) {
             map->items[index].state = DELETED;
             map->count--;
             cell value = map->items[index].value;
-            
+
             if ((map->size > map->sizeMin) && (map->count / map->size < map->decreaseDelta100)) {
                 hmResize(map, map->size / map->shrinkFactor);
             }

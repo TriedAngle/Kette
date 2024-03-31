@@ -834,24 +834,23 @@ cell* VM_compile(VM* vm) {
     return quot;
 }
 
-// int main() {
-//     GeneralAllocatorConfig gac = {
-//         .zeroMem = 1,
-//     };
-//     GeneralAllocator ga = initGeneralAllocator(gac);
-//     Allocator allocator = allocatorFromGeneralAllocator(&ga);
-
-//     Word* word = (Word*)tcreate(&allocator, sizeof(Word));
-//     word->length = 16;
-
-//     Word* words = (Word*)tcreate(&allocator, sizeof(Word) * 8);
-//     words[5].flags = 0x00FF00;
-
-//     tdelete(&allocator, word, sizeof(Word));
-//     tdelete(&allocator, words, sizeof(Word) * 8);
-// }
 
 int main(int argc, char* argv[]) {
+    GeneralAllocatorConfig gaConf = {.zeroMem = 1};
+    GeneralAllocator ga = initGeneralAllocator(gaConf);
+    Allocator allocator = allocatorFromGeneralAllocator(&ga);
+
+    HashMap map = initHashMap(allocator, 16);
+
+    char* key = "testing";
+    i32 length = strlen(key);
+    hmInsert(&map, (byte*)key, length, 333);
+    assert(hmGet(&map, (byte*)key, length) == 333);
+    assert(hmDelete(&map, (byte*)key, length) == 333);
+
+    deinitHashMap(&map);
+    deinitGeneralAllocator(&ga);
+
     VM vm;
     VMInitConfig vm_config = {
         .data_size = DEFAULT_STACK_SIZE,

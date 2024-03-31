@@ -40,8 +40,8 @@ void tfree(Allocator* allocator, void* buffer, usize length, i32 align);
 typedef struct {
     
 } PageAllocator ;
-PageAllocator initPageAllocator();
 
+PageAllocator initPageAllocator();
 Allocator allocatorFromPageAllocator(PageAllocator* allocator);
 
 
@@ -53,6 +53,7 @@ typedef struct {
 } ArenaAllocator;
 
 ArenaAllocator initArenaAllocator(Allocator allocator, i32 capacity);
+void deinitArenaAllocator(ArenaAllocator* allocator);
 Allocator allocatorFromArenaAllocator(ArenaAllocator* allocator);
 
 typedef struct Bucket {
@@ -64,21 +65,32 @@ typedef struct Bucket {
     void* allocation;
 } Bucket;
 
+typedef struct LargeAllocation {
+    struct LargeAllocation* next;
+    struct LargeAllocation* prior;
+    i32 size;
+    i32 explicitPadding; 
+    byte data[];
+} LargeAllocation;
+
 typedef struct {
     i32 zeroMem;
 } GeneralAllocatorConfig;
 
 typedef struct {
+    GeneralAllocatorConfig config;
     PageAllocator pageAllocator;
     ArenaAllocator arenaAllocator;
-    GeneralAllocatorConfig config;
     Bucket* buckets[8];
     mtx_t locks[8];
     u16 blockSizes[8];
     u16 blockCounts[8];
+    LargeAllocation* larges;
+    mtx_t large_lock;
 } GeneralAllocator;
 
 GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config);
+void deinitGeneralAllocator(GeneralAllocator* allocator);
 
 Allocator allocatorFromGeneralAllocator(GeneralAllocator* allocator);
 
