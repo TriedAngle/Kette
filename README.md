@@ -53,7 +53,7 @@ Quotations are a powerful concept. They are basically lamdas or anonymous functi
 Quotations just contain normal code or other quotations. Quotations can be called with `call` or other words like `dip` and `keep`. Quotations after being defined just leave a pointer on the stack where they are defined.
 ```
 // prints 1 as `3 5 +` and 8 are equal
-3 5 + 8 = [ 0 . ] [ 1 . ] if 
+3 5 + 8 = [ 1 . ] [ 0 . ] if 
 
 // prints 7 as 1 is taken from the stack 
 // 2 3 * is executed, 1 is added back to the stack and 6 1 + is executed
