@@ -6,7 +6,7 @@
 #define TAG_MASK 0b111LL
 
 typedef enum TAG {
-    FIXNUM_TAG,
+    FIXNUM_TAG, // fixnum 0 is the only false, everything else true
     FLOAT_TAG,
     QUOTATION_TAG,
     BIGNUM_TAG, // TODO implement this, probably use library
@@ -88,6 +88,7 @@ typedef struct {
     // ALLOCATED DATA AFTER STRUCT
     byte data[];
 } bytearray;
+
 
 typedef struct {
     // TAGGED POINTER

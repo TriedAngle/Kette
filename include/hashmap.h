@@ -6,6 +6,7 @@
 
 u64 hashFunction(byte* str, i32 length);
 
+// TODO change to bytearray
 typedef struct {
     byte* key;
     i32 length;
