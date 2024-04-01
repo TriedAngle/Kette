@@ -21,8 +21,8 @@ cell tag_value(cell value, TAG tag);
 TAG read_tag(cell tagged);
 cell remove_tag(cell tagged);
 
-cell untag_fixnum(cell fixnum);
-cell tag_fixnum(cell fixnum);
+cell tag_num(i64 fixnum);
+i64 untag_num(cell fixnum);
 
 
 // hypothetically special objects don't require parent pointers
