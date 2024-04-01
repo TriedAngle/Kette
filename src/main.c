@@ -802,7 +802,6 @@ void add_builtins(VM* vm) {
     add_builtin(vm, c++, "*", builtin_mul);
     add_builtin(vm, c++, "/", builtin_div);
     add_builtin(vm, c++, "%", builtin_mod);
-    add_builtin(vm, c++, "/", builtin_div);
     add_builtin(vm, c++, "if", builtin_if);
     add_builtin(vm, c++, "=", builtin_eq);
     add_builtin(vm, c++, "and", builtin_and);
