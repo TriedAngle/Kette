@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-Iinclude -std=gnu11 -masm=intel -Wall -Werror -O2
 SRC_DIR=src
 BUILD_DIR=build
-SOURCES=$(wildcard $(SRC_DIR)/*.c)
+SOURCES=$(shell find $(SRC_DIR) -type f -name '*.c')
 OBJECTS=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 DEPS=$(wildcard include/*.h)
 

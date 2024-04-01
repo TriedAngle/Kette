@@ -44,7 +44,6 @@ typedef struct {
 PageAllocator initPageAllocator();
 Allocator allocatorFromPageAllocator(PageAllocator* allocator);
 
-
 typedef struct {
     Allocator allocator;
     void* allocation;

@@ -30,6 +30,9 @@ typedef long long i64;
 typedef unsigned long long u64;
 typedef i64 isize;
 typedef u64 usize;
+typedef float f32;
+typedef double f64;
+
 
 typedef i64 cell;
 
