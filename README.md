@@ -69,7 +69,7 @@ Quotations just contain normal code or other quotations. Quotations can be calle
 : dupd ( a b -- a a b )
 : over ( a b -- a b a )
 : swap ( a b -- b a )
-: swaped ( a b c -- b a c )
+: swapd ( a b c -- b a c )
 : rot ( a b c -- b c a )
 : -rot ( a b c -- c a b )
 : dip ( ... a q -- a ) // takes a from the stack, executes q (quotation) and puts a at the top of the stack
