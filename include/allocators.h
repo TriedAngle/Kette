@@ -94,4 +94,18 @@ void deinitGeneralAllocator(GeneralAllocator* allocator);
 Allocator allocatorFromGeneralAllocator(GeneralAllocator* allocator);
 
 
+typedef struct {
+    Allocator ac;
+    void* allocation;
+    i32 capacity;
+    i32 length; 
+    i32 elementSize;
+} GrowableArray;
+
+GrowableArray initGrowableArray(Allocator ac, i32 initCapacity, i32 elementSize);
+void deinitGrowableArray(GrowableArray* ga);
+i32 push(GrowableArray* ga, void* element);
+void* pop(GrowableArray* ga);
+void* at(GrowableArray* ga, i32 index);
+
 #endif
