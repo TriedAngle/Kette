@@ -11,11 +11,10 @@ typedef enum TAG {
     QUOTATION_TAG,
     BIGNUM_TAG, // TODO implement this, probably use library
     ARRAY_TAG,
-    BYTE_ARRAY_TAG,
+    BYTEARRAY_TAG,
     WRAPPER_TAG,
     OBJECT_TAG,
 } TAG;
-
 
 cell tag_value(cell value, TAG tag);
 TAG read_tag(cell tagged);
@@ -24,6 +23,10 @@ cell remove_tag(cell tagged);
 cell tag_num(i64 fixnum);
 i64 untag_num(cell fixnum);
 
+cell fixnum_eq(cell fn1, cell fn2);
+cell bytearray_eq(cell ba1, cell ba2);
+
+cell generic_eq(cell a, cell b);
 
 // hypothetically special objects don't require parent pointers
 // but to keep it unified we add them
@@ -88,7 +91,6 @@ typedef struct {
     // ALLOCATED DATA AFTER STRUCT
     byte data[];
 } bytearray;
-
 
 typedef struct {
     // TAGGED POINTER

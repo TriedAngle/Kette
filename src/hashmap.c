@@ -19,6 +19,34 @@ u64 hashFunction(byte* str, i32 length) {
     return hash;
 }
 
+u64 hashByteArray(bytearray* ba) {
+    return hashFunction(ba->data, ba->size);
+}
+
+u64 hashGeneric(cell value) {
+    u64 hash;
+    if(read_tag(value) == FIXNUM_TAG) {
+        hash = hashFixnum(remove_tag(value));
+    } else {
+        bytearray* ba = (bytearray*)remove_tag(value); 
+        hash = hashByteArray(ba);
+    }
+    return hash;
+}
+
+// no idea how good this is chatgpt gave me this
+// TODO: benchmark this
+u64 hashFixnum(cell val) {
+    val = (~val) + (val << 21);
+    val = val ^ (val >> 24);
+    val = (val + (val << 3)) + (val << 8);
+    val = val ^ (val >> 14);
+    val = (val + (val << 2)) + (val << 4);
+    val = val ^ (val >> 28);
+    val = val + (val << 31);
+    return val;
+}
+
 HashMap initHashMap(Allocator allocator, u32 size) {
     HashMap map;
     map.allocator = allocator;
@@ -37,33 +65,50 @@ void deinitHashMap(HashMap* map) {
     tdelete(&map->allocator, (void*)map->items, map->size * sizeof(HashItem));
 }
 
-void hmInsert(HashMap* map, byte* key, i32 length, cell value) {
+void hmResize(HashMap* map, u32 newSize) {
+    HashItem* old = map->items;
+    u32 oldSize = map->size;
+
+    map->items = (HashItem*) tcreate(&map->allocator, sizeof(HashItem) * newSize);
+    map->size = newSize;
+    map->count = 0;
+
+    for (int i = 0; i < oldSize; i++) {
+        if(old[i].state == USED) {
+            hmInsert(map, old[i].key, old[i].value);
+        }
+    }
+
+    tdelete(&map->allocator, (void*)old, sizeof(HashItem) * oldSize);
+}
+
+
+void hmInsert(HashMap* map, cell key, cell value) {
     if((map->count / map->size) >= map->increaseDelta100) {
         hmResize(map, map->size * map->expandFactor);
     }
 
-    u64 index = hashFunction(key, length) % map->size;
+    u64 hash = hashGeneric(key);
+    u64 index = hash % map->size;
     while(map->items[index].state == USED) {
-        if(string_eq(map->items[index].key, map->items[index].length, key, length)) {
+        if(generic_eq(key, map->items[index].key)) {
             break;
         }
         index = (index + 1) % map->size;
     }
     map->items[index].key = key;
-    map->items[index].length = length;
     map->items[index].value = value;
     map->items[index].state = USED;
     map->count++;
 }
 
-cell hmGet(HashMap* map, byte* key, i32 length) {
-    u64 index = hashFunction(key, length) % map->size;
+cell hmGet(HashMap* map, cell key) {
+    u64 hash = hashGeneric(key);
+    u64 index = hash % map->size;
     u64 startIndex = index;
 
     while(map->items[index].state != EMPTY) {
-        if(map->items[index].state == USED &&
-            string_eq(map->items[index].key, map->items[index].length, key, length)
-        ) {
+        if(map->items[index].state == USED && generic_eq(key, map->items[index].key)) {
             return map->items[index].value;
         }
 
@@ -76,14 +121,13 @@ cell hmGet(HashMap* map, byte* key, i32 length) {
 }
 
 
-cell hmDelete(HashMap* map, byte* key, i32 length) {
-    u64 index = hashFunction(key, length) % map->size;
+cell hmDelete(HashMap* map, cell key) {
+    u64 hash = hashGeneric(key);
+    u64 index = hash % map->size;
     u64 startIndex = index;
 
     while(map->items[index].state != EMPTY) {
-        if(map->items[index].state == USED && 
-            string_eq(map->items[index].key, map->items[index].length, key, length)
-        ) {
+        if(map->items[index].state == USED && generic_eq(key, map->items[index].key)) {
             map->items[index].state = DELETED;
             map->count--;
             cell value = map->items[index].value;
@@ -100,22 +144,3 @@ cell hmDelete(HashMap* map, byte* key, i32 length) {
     }
     return -1;
 }
-
-
-void hmResize(HashMap* map, u32 newSize) {
-    HashItem* old = map->items;
-    u32 oldSize = map->size;
-
-    map->items = (HashItem*) tcreate(&map->allocator, sizeof(HashItem) * newSize);
-    map->size = newSize;
-    map->count = 0;
-
-    for (int i = 0; i < oldSize; i++) {
-        if(old[i].state == USED) {
-            hmInsert(map, old[i].key, old[i].length, old[i].value);
-        }
-    }
-
-    tdelete(&map->allocator, (void*)old, sizeof(HashItem) * oldSize);
-}
-

@@ -3,13 +3,16 @@
 
 #include "defaults.h"
 #include "allocators.h"
+#include "objects.h"
 
 u64 hashFunction(byte* str, i32 length);
 
+u64 hashByteArray(bytearray* ba);
+u64 hashFixnum(cell fixnum);
+
 // TODO change to bytearray
 typedef struct {
-    byte* key;
-    i32 length;
+    cell key; // bytearray or fixnum (tagged)
     i32 state;
     cell value;
 } HashItem;
@@ -28,11 +31,11 @@ typedef struct {
 
 HashMap initHashMap(Allocator allocator, u32 size);
 void deinitHashMap(HashMap* map);
-void hmInsert(HashMap* map, byte* key, i32 length, cell value);
-cell hmGet(HashMap* map, byte* key, i32 length);
-cell hmDelete(HashMap* map, byte* key, i32 length);
 void hmResize(HashMap* map, u32 newSize);
 
-
+// automatically checks for fixnum or bytearray
+void hmInsert(HashMap* map, cell key, cell value);
+cell hmGet(HashMap* map, cell key);
+cell hmDelete(HashMap* map, cell key);
 
 #endif

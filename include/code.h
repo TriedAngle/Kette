@@ -16,4 +16,6 @@ typedef enum BYTECODE {
     bcReturn, // return from a word or quotation
 } BYTECODE ;
 
+
+
 #endif

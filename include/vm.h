@@ -5,6 +5,7 @@
 #include "allocators.h"
 #include "hashmap.h"
 #include "objects.h"
+#include "code.h"
 
 typedef struct {
     cell* owner; // word or quotation
@@ -112,9 +113,7 @@ cell primitiveFixnumBitLShift(VM* vm, cell n1, cell n2);
 cell primitiveFixnumBitRShift(VM* vm, cell n1, cell n2);
 cell primitiveFixnumBitNot(VM* vm, cell n1);
 
-
 void primitiveFixnumPrint(VM* vm, cell n1);
-
 
 cell primitiveEq(VM* vm, cell n1, cell n2);
 cell primitiveFixnumLT(VM* vm, cell n1, cell n2);

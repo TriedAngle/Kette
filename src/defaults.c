@@ -9,3 +9,4 @@ int string_eq(const byte* str1, i32 length1, const byte* str2, i32 length2) {
     }
     return 1;
 }
+

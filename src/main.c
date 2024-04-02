@@ -841,12 +841,24 @@ int main(int argc, char* argv[]) {
 
     HashMap map = initHashMap(allocator, 16);
 
-    char* key = "testing";
-    i32 length = strlen(key);
-    hmInsert(&map, (byte*)key, length, 333);
-    assert(hmGet(&map, (byte*)key, length) == 333);
-    assert(hmDelete(&map, (byte*)key, length) == 333);
+    char* test = "testing";
+    cell length = strlen(test);
+    bytearray* ba1 = tcreate(&allocator, sizeof(bytearray) + length);
+    ba1->size = length;
+    memcpy(ba1->data, test, length);
+    cell ba = tag_value((cell)ba1, BYTEARRAY_TAG);
 
+    cell lol = tag_num(234234); 
+
+    printf("lol\n");
+    hmInsert(&map, ba, 333);
+    hmInsert(&map, lol, 69);
+    assert(hmGet(&map, ba) == 333);
+    assert(hmGet(&map, lol) == 69);
+    assert(hmDelete(&map, ba) == 333);
+    assert(hmDelete(&map, lol) == 69);
+
+    tdelete(&allocator, ba1, sizeof(bytearray) + length);
     deinitHashMap(&map);
     deinitGeneralAllocator(&ga);
 
