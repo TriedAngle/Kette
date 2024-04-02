@@ -524,7 +524,7 @@ void deinitGrowableArray(GrowableArray* ga) {
     tdelete(&ga->ac, ga->allocation, ga->capacity * ga->elementSize);
 }
 
-i32 push(GrowableArray* ga, void* element) {
+i32 gaPush(GrowableArray* ga, void* element) {
     if (ga->length == ga->capacity) {
         tresize(&ga->ac, &ga->allocation, ga->capacity * ga->elementSize, ga->capacity * ga->elementSize * 2, 8);
         ga->capacity *= 2;
@@ -533,11 +533,11 @@ i32 push(GrowableArray* ga, void* element) {
     return ga->length++;
 }
 
-void* pop(GrowableArray* ga) {
+void* gaPop(GrowableArray* ga) {
     assert(ga->length > 0);
     return ga->allocation + ((ga->length--) * ga->elementSize);
 };
 
-void* at(GrowableArray* ga, i32 index) {
+void* gaAt(GrowableArray* ga, i32 index) {
     return ga->allocation + (ga->length * ga->elementSize);
 }

@@ -14,6 +14,7 @@ typedef enum BYTECODE {
     bcSendDelegate, // specific parent
     bcEnter, // enter a word or quotation
     bcReturn, // return from a word or quotation
+    bcPrimitive,
 } BYTECODE ;
 
 

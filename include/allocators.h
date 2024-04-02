@@ -104,8 +104,8 @@ typedef struct {
 
 GrowableArray initGrowableArray(Allocator ac, i32 initCapacity, i32 elementSize);
 void deinitGrowableArray(GrowableArray* ga);
-i32 push(GrowableArray* ga, void* element);
-void* pop(GrowableArray* ga);
-void* at(GrowableArray* ga, i32 index);
+i32 gaPush(GrowableArray* ga, void* element);
+void* gaPop(GrowableArray* ga);
+void* gaAt(GrowableArray* ga, i32 index);
 
 #endif
