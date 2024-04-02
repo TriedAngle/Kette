@@ -3,30 +3,15 @@
 
 #include "defaults.h"
 
-#define TAG_MASK 0b111LL
+#define TAG_MASK 0b11LL
 
-typedef enum TAG {
+typedef enum {
     FIXNUM_TAG, // fixnum 0 is the only false, everything else true
     FLOAT_TAG,
-    QUOTATION_TAG,
-    BIGNUM_TAG, // TODO implement this, probably use library
-    ARRAY_TAG,
-    BYTEARRAY_TAG,
-    WRAPPER_TAG,
     OBJECT_TAG,
+    BYTEARRAY_TAG,
 } TAG;
 
-cell tag_value(cell value, TAG tag);
-TAG read_tag(cell tagged);
-cell remove_tag(cell tagged);
-
-cell tag_num(i64 fixnum);
-i64 untag_num(cell fixnum);
-
-cell fixnum_eq(cell fn1, cell fn2);
-cell bytearray_eq(cell ba1, cell ba2);
-
-cell generic_eq(cell a, cell b);
 
 // hypothetically special objects don't require parent pointers
 // but to keep it unified we add them
@@ -98,5 +83,31 @@ typedef struct {
     // TAGGED POINTER
     cell object;
 } wrapper;
+
+typedef struct {
+    // TAGGED POINTER
+    cell parent;
+    // TAGGED FIXNUM
+    cell expired;
+    // TAGGED POINTER
+    cell base;
+    // TAGGED POINTER
+    cell displacement; // if -1, base is absolute address
+} alien;
+
+cell tag_value(cell value, TAG tag);
+TAG read_tag(cell tagged);
+cell remove_tag(cell tagged);
+
+cell tag_num(i64 fixnum);
+i64 untag_num(cell fixnum);
+
+cell tag_float(f64 num);
+f64 untag_float(cell num);
+
+cell tag_object(cell obj);
+cell tag_bytearray(bytearray* ba);
+
+cell generic_eq(cell a, cell b);
 
 #endif

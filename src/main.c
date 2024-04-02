@@ -1,4 +1,5 @@
 #include "vm.h"
+#include <math.h>
 
 int main() {
     VM vm = initVM((VMConfig){

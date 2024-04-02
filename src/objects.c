@@ -14,15 +14,27 @@ cell remove_tag(cell tagged) {
 }
 
 cell tag_num(i64 num) {
-    return tag_value((cell)(num << 3), FIXNUM_TAG);
+    return tag_value((cell)(num << 2), FIXNUM_TAG);
 }
 
 i64 untag_num(cell fixnum) {
-    return (i64)(fixnum >> 3);
+    return (i64)(fixnum >> 2);
 }
 
-cell fixnum_eq(cell fn1, cell fn2) {
-    return fn1 == fn2;
+cell tag_float(f64 num) {
+    return tag_value((cell)num, FLOAT_TAG);
+}
+
+f64 untag_float(cell num) {
+    return (f64)remove_tag(num);
+}
+
+cell tag_object(cell obj) {
+    return tag_value(obj, OBJECT_TAG);
+}
+
+cell tag_bytearray(bytearray* ba) {
+    return tag_value((cell)ba, BYTEARRAY_TAG);
 }
 
 cell bytearray_eq(cell bytearray1, cell bytearray2) {
@@ -41,7 +53,9 @@ cell generic_eq(cell a, cell b) {
     if (read_tag(a) == OBJECT_TAG && read_tag(b) == OBJECT_TAG) {
         return a == b; 
     } else if (read_tag(a) == FIXNUM_TAG && read_tag(b) == FIXNUM_TAG) {
-        return fixnum_eq(a, b);
+        return a == b;
+    } else if (read_tag(a) == FLOAT_TAG && read_tag(b) == FLOAT_TAG) {
+        return a == b;
     } else if (read_tag(a) == BYTEARRAY_TAG && read_tag(b) == BYTEARRAY_TAG) {
         return bytearray_eq(a, b);
     }
