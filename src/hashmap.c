@@ -144,3 +144,22 @@ cell hmDelete(HashMap* map, cell key) {
     }
     return -1;
 }
+
+HashMapIterator hmintoIterator(HashMap* map) {
+    HashMapIterator hmi;
+    hmi.map = map;
+    hmi.offset = 0;
+    hmi.max = map->size;
+    return hmi;
+}
+
+HashItem* hmNext(HashMapIterator* hmi) {
+    while(hmi->offset < hmi->max) {
+        if(hmi->map->items[hmi->offset].state == USED) {
+            HashItem* item = hmi->map->items + (hmi->offset++);
+            return item;
+        }
+        hmi->offset++;
+    }
+    return NULL;
+}

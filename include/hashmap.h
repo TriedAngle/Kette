@@ -38,4 +38,13 @@ void hmInsert(HashMap* map, cell key, cell value);
 cell hmGet(HashMap* map, cell key);
 cell hmDelete(HashMap* map, cell key);
 
+typedef struct {
+    HashMap* map;
+    u32 offset;
+    u32 max;
+} HashMapIterator;
+
+HashMapIterator hmintoIterator(HashMap* map);
+HashItem* hmNext(HashMapIterator* hmi);
+
 #endif
