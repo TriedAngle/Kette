@@ -14,12 +14,12 @@ typedef struct {
 } CodeBlock;
 
 typedef struct {
-    GeneralAllocator ga;
+    Allocator ga;
     HashMap code;
     HashMap compiled;
 } CodeHeap;
 
-CodeHeap initCodeHeap();
+CodeHeap initCodeHeap(Allocator allocator);
 void deinitCodeHeap(CodeHeap* ch);
 
 void chCompile(CodeHeap* ch, word* word);
@@ -27,8 +27,10 @@ void chFree(CodeHeap* ch, word* word);
 
 // must be kept in sync
 typedef struct {
-    PageAllocator pa;
-    GeneralAllocator ga;
+    PageAllocator pageAllocator;
+    GeneralAllocator generalAllocator;
+    Allocator pa;
+    Allocator ga;
 
     // pointers not tagged, but tagged for VM
     cell* dataStack;
@@ -46,7 +48,7 @@ typedef struct {
     HashMap dictionary;
     word* lastWord;
 
-    CodeHeap code;
+    CodeHeap codeHeap;
 
     // this is only for initializing vm
     // maybe remove them later or remove them once images are there

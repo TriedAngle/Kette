@@ -474,7 +474,17 @@ GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config) {
     return ga;
 }
 
+// TODO implement this
+i64* findAllocations(GeneralAllocator* ga) {
+    return NULL;
+}
+
 void deinitGeneralAllocator(GeneralAllocator* ga) {
+    i64* unfreed = findAllocations(ga);
+    if (unfreed != NULL) {
+        // TODO handle this
+    }
+
     LargeAllocation* la = ga->larges;
     for(;;) {
         if (la == NULL) {
