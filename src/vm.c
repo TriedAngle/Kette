@@ -1,5 +1,7 @@
 #include "vm.h"
 
+
+
 VM initVM(VMConfig config) {
     VM vm;
     vm.pageAllocator = initPageAllocator();
@@ -8,6 +10,7 @@ VM initVM(VMConfig config) {
     vm.ga = allocatorFromGeneralAllocator(&vm.generalAllocator);
     
     vm.dataStack = (cell*)tcreate(&vm.pa, config.dataStackSize);
+    vm.dataStackTop = vm.dataStack;
     vm.retainStack = (cell*)tcreate(&vm.pa, config.retainStackSize);
     vm.callStack = (cell*)tcreate(&vm.pa, config.callStackSize);
     
@@ -34,4 +37,42 @@ void deinitVM(VM* vm) {
     tdelete(&vm->pa, vm->retainStack, vm->retainStackSize);
     tdelete(&vm->pa, vm->dataStack, vm->dataStackSize);
     deinitGeneralAllocator(&vm->generalAllocator);
+}
+
+void vmPush(VM* vm, cell value) {
+    if (vm->dataStackIndex >= vm->dataStackSize) {
+        // TODO handle this
+    }
+    vm->dataStackIndex++;
+    *(vm->dataStackTop++) = value;
+}
+
+cell vmPop(VM* vm) {
+    if (vm->dataStackTop == vm->dataStack) {
+        // TODO handle this
+    }
+    vm->dataStackIndex--;
+    return *(--vm->dataStackTop);
+}
+
+
+bytearray* vmAllocateBytearray(VM* vm, cell size) {
+    bytearray* ba = tcreate(&vm->ga, sizeof(bytearray) + size);
+    ba->parent = 0;
+    ba->size = tag_num(size);
+    return ba;
+}
+
+bytearray* vmAllocateString(VM* vm, byte* ptr, cell size) {
+    bytearray* ba = vmAllocateBytearray(vm, size);
+    memcpy(&ba->data, ptr, size);
+    return ba;
+}
+
+word* vmAllocateWord(VM* vm, cell name, cell vocab) {
+    word* word = tcreate(&vm->ga, sizeof(word));
+    word->name = name;
+    word->vocabulary = vocab;
+    word->flags = 0;
+    return word;
 }

@@ -1,5 +1,4 @@
 #include "vm.h"
-#include <math.h>
 
 int main() {
     VM vm = initVM((VMConfig){
@@ -8,7 +7,21 @@ int main() {
         .callStackSize = PAGE_SIZE,
     });
 
-    deinitVM(&vm);
+    vmAllocatePrimitives(&vm);
+
+    cell key = tag_num(22);
+    CodeBlock* block = chAllocateCodeBlock(&vm.codeHeap, key);
+    bcPushInteger(block, 666);
+    bcPushInteger(block, 333);
+    bcPushPrimitive(block, 0, codeCreateInOut(2, 1));
+    bcPushPrimitive(block, 1, codeCreateInOut(1, 1));
+    bcPushSendReturn(block);
+    printCodeBlock(block);
+
+    chDeallocateCodeBlock(&vm.codeHeap, key);
+
+    // somehow this segafautlts
+    // deinitVM(&vm);
 }
 
 

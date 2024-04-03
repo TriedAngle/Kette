@@ -97,15 +97,15 @@ Allocator allocatorFromGeneralAllocator(GeneralAllocator* allocator);
 typedef struct {
     Allocator ac;
     void* allocation;
-    i32 capacity;
-    i32 length; 
-    i32 elementSize;
+    cell capacity;
+    cell length; 
+    cell elementSize;
 } GrowableArray;
 
-GrowableArray initGrowableArray(Allocator ac, i32 initCapacity, i32 elementSize);
+GrowableArray initGrowableArray(Allocator ac, cell initCapacity, cell elementSize);
 void deinitGrowableArray(GrowableArray* ga);
-i32 gaPush(GrowableArray* ga, void* element);
+cell gaPush(GrowableArray* ga, void* element);
 void* gaPop(GrowableArray* ga);
-void* gaAt(GrowableArray* ga, i32 index);
+void* gaAt(GrowableArray* ga, cell index);
 
 #endif

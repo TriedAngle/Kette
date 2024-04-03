@@ -5,25 +5,7 @@
 #include "allocators.h"
 #include "hashmap.h"
 #include "objects.h"
-#include "code.h"
-
-typedef struct {
-    cell* owner; // word or quotation
-    cell* parameters;
-    cell* compiled;
-} CodeBlock;
-
-typedef struct {
-    Allocator ga;
-    HashMap code;
-    HashMap compiled;
-} CodeHeap;
-
-CodeHeap initCodeHeap(Allocator allocator);
-void deinitCodeHeap(CodeHeap* ch);
-
-void chCompile(CodeHeap* ch, word* word);
-void chFree(CodeHeap* ch, word* word);
+#include "code.h" 
 
 // must be kept in sync
 typedef struct {
@@ -36,6 +18,7 @@ typedef struct {
     cell* dataStack;
     cell dataStackIndex;
     cell dataStackSize;
+    cell* dataStackTop;
 
     cell* retainStack;
     cell retainStackIndex;
@@ -57,6 +40,8 @@ typedef struct {
     cell activeStreamOffset;
 } VM;
 
+
+
 typedef struct {
     cell dataStackSize;
     cell retainStackSize;
@@ -69,8 +54,18 @@ void deinitVM(VM* vm);
 void vmPush(VM* vm, cell value);
 cell vmPop(VM* vm);
 
+bytearray* vmAllocateBytearray(VM* vm, cell size);
+bytearray* vmAllocateString(VM* vm, byte* ptr, cell size);
+void vmDeallocateBytearray(VM* vm, bytearray* ba);
 
 word* vmAllocateWord(VM* vm, cell name, cell vocab);
+word* vmAllocatePrimitiveWord(VM* vm, cell isParse, i16 in, i16 out, char* word_name, void* ptr);
+void vmAllocatePrimitives(VM* vm);
+
+void* GET_PRIMITIVE_FN(cell index);
+word* GET_PRIMITIVE_WORD(cell index);
+i32 GET_PRIMITIVE_INOUTS(cell index);
+
 word* vmFindWord(VM* vm, cell name, cell vocab);
 word* vmChangeWordVocab(VM* vm, cell word, cell newVocab);
 
@@ -81,6 +76,7 @@ cell vmReadNumber(VM* vm, byte* word, cell length);
 cell vmPeekWord(VM* vm, byte** word);
 cell vmReadWord(VM* vm, byte** word);
 cell vmReadUntil(VM* vm, byte* ident, cell identLength);
+void vmDefineWord(VM* vm, byte* ident, cell length);
 void vmReadStackEffect(VM* vm);
 void vmReadWordDef(VM* vm);
 

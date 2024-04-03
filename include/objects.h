@@ -7,7 +7,7 @@
 
 typedef enum {
     FIXNUM_TAG, // fixnum 0 is the only false, everything else true
-    FLOAT_TAG,
+    FLOAT_TAG, // uhm akschaully you are breaking IEEE754 :nerd:
     OBJECT_TAG,
     BYTEARRAY_TAG,
 } TAG;
@@ -25,11 +25,16 @@ typedef struct {
     // TAGGED POINTER
     cell vocabulary; // vocabulary, probably just hashmap
     // TAGGED POINTER
+    // this is basically properties but some special ones
+    // properties must also contain the flags
+    // the VM can deduce some important properties way faster with this.
+    cell flags;
+    // TAGGED POINTER
     cell properties; // array
     // TAGGED POINTER
     cell effect; // effect
     // TAGGED POINTER
-    cell definition;
+    cell definition; 
     // TAGGED POINTER
     cell entry;
 } word;

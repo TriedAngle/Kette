@@ -433,14 +433,11 @@ GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config) {
     Allocator pageAlloc = allocatorFromPageAllocator(&ga.pageAllocator);
     ga.arenaAllocator = initArenaAllocator(pageAlloc, PAGE_SIZE);
 
-    ga.buckets[0] = NULL;
-    ga.buckets[1] = NULL;
-    ga.buckets[2] = NULL;
-    ga.buckets[3] = NULL;
-    ga.buckets[4] = NULL;
-    ga.buckets[5] = NULL;
-    ga.buckets[6] = NULL;
-    ga.buckets[7] = NULL;
+    for (i32 i = 0; i < 8; i++) {
+        ga.buckets[i] = NULL;
+        ga.locks[i] = (mtx_t){ 0L };
+    }
+    ga.large_lock = (mtx_t){ 0L };
 
     ga.blockSizes[0] = 16;
     ga.blockSizes[1] = 32;
@@ -459,6 +456,7 @@ GeneralAllocator initGeneralAllocator(GeneralAllocatorConfig config) {
     ga.blockCounts[5] = 32;
     ga.blockCounts[6] = 16;
     ga.blockCounts[7] = 4;
+
 
     mtx_init(&ga.locks[0], mtx_plain);
     mtx_init(&ga.locks[1], mtx_plain);
@@ -507,7 +505,7 @@ void deinitGeneralAllocator(GeneralAllocator* ga) {
     mtx_destroy(&ga->large_lock);
 }
 
-GrowableArray initGrowableArray(Allocator ac, i32 initCapacity, i32 elementSize) {
+GrowableArray initGrowableArray(Allocator ac, cell initCapacity, cell elementSize) {
     assert(elementSize != 0);
     GrowableArray ga;
     ga.ac = ac;
@@ -515,7 +513,9 @@ GrowableArray initGrowableArray(Allocator ac, i32 initCapacity, i32 elementSize)
     ga.length = 0;
     ga.elementSize = elementSize;
     if (initCapacity != 0) {
-        tcreate(&ac, initCapacity * elementSize);
+        ga.allocation = tcreate(&ac, initCapacity * elementSize);
+    } else {
+        ga.allocation = tcreate(&ac, 8 * elementSize);
     }
     return ga;
 }
@@ -524,7 +524,7 @@ void deinitGrowableArray(GrowableArray* ga) {
     tdelete(&ga->ac, ga->allocation, ga->capacity * ga->elementSize);
 }
 
-i32 gaPush(GrowableArray* ga, void* element) {
+cell gaPush(GrowableArray* ga, void* element) {
     if (ga->length == ga->capacity) {
         tresize(&ga->ac, &ga->allocation, ga->capacity * ga->elementSize, ga->capacity * ga->elementSize * 2, 8);
         ga->capacity *= 2;
@@ -538,6 +538,6 @@ void* gaPop(GrowableArray* ga) {
     return ga->allocation + ((ga->length--) * ga->elementSize);
 };
 
-void* gaAt(GrowableArray* ga, i32 index) {
+void* gaAt(GrowableArray* ga, cell index) {
     return ga->allocation + (ga->length * ga->elementSize);
 }
