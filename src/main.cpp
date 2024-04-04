@@ -1,3 +1,4 @@
+#include "sanity.h"
 #include "vm.h"
 #include "test.h"
 #include <format>
@@ -5,9 +6,10 @@
 
 int main() {
     std::string name = "John";
-    int age = 30;
+    i32 age = 30;
 
-    std::string message = std::format("Name: {}, Age: {}", name, age);
+    auto lol = age * age / 3;
+    std::string message = std::format("Name: {}, Age: {}", name, lol);
 
     std::cout << message << std::endl;
     

@@ -5,7 +5,7 @@
             "name": "GDB",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/kette",
+            "program": "${workspaceFolder}/kette_debug",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -20,8 +20,8 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "gdb",
-            "postDebugTask": "clean" // Optional: cleans up after debugging
+            "preLaunchTask": "gdb"
+            // "postDebugTask": "clean" // Optional: cleans up after debugging
         }
     ]
 }

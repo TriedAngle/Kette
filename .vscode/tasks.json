@@ -51,7 +51,7 @@
         {
             "label": "gdb",
             "type": "shell",
-            "command": "make gdbbuild",
+            "command": "make debug",
             "group": "test",
             "problemMatcher": [],
             "presentation": {
