@@ -1,47 +1,36 @@
-CC=gcc
-CFLAGS=-Iinclude -std=gnu11 -masm=intel -Wall -Werror -O2
+CXX=clang++-18
+CXXFLAGS= -std=c++20 -Wall -Werror -O2
+LDFLAGS = -pthread
 SRC_DIR=src
 BUILD_DIR=build
-SOURCES=$(shell find $(SRC_DIR) -type f -name '*.c')
-OBJECTS=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
-DEPS=$(wildcard include/*.h)
+INCLUDE_DIR = include
+SOURCES=$(wildcard $(SRC_DIR)/*.cpp)
+OBJECTS=$(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SOURCES))
+EXECUTABLE = kette
 
-# run with make AVX2=1
-# clean before changing
-ifdef AVX2
-CFLAGS += -mavx2 -D SIMD
-endif
 
-# Detect operating system
-# link platform specific libraries
+
 ifeq ($(OS),Windows_NT)
-    CFLAGS += -D WINDOWS
-    ifeq ($(CC),gcc)
-        LDFLAGS += -lpthread
-    endif
-else
-    UNAME_S := $(shell uname -s)
-    ifeq ($(UNAME_S),Linux)
-        CFLAGS += -D LINUX
-        LDFLAGS += -pthread
-    endif
-	ifeq ($(UNAME_S),Darwin) 
-        CFLAGS += -D DARWIN
-        LDFLAGS += -pthread
-    endif
+    LDFLAGS = -lpthread
 endif
 
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(DEPS)
-	$(CC) -c -o $@ $< $(CFLAGS)
+$(EXECUTABLE): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -I$(INCLUDE_DIR) -o $@ $^ $(LDFLAGS)
 
-kette: $(OBJECTS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+run: $(EXECUTABLE)
+	./$(EXECUTABLE)
+
+valgrind: $(EXECUTABLE)
+	valgrind ./$(EXECUTABLE)
 
 clean:
-	rm -f $(BUILD_DIR)/*.o kette
+	rm -rf $(BUILD_DIR) $(EXECUTABLE)
 
-run: kette
-	./kette
-
-.PHONY: clean
+.PHONY: all run valgrind clean
