@@ -14,7 +14,6 @@ ifeq ($(OS),Windows_NT)
     LDFLAGS = -lpthread
 endif
 
-
 $(EXECUTABLE): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -I$(INCLUDE_DIR) -o $@ $^ $(LDFLAGS)
 
@@ -24,13 +23,19 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $@
 
+gdbbuild: CXXFLAGS += -g
+gdbbuild: $(EXECUTABLE)
+
 run: $(EXECUTABLE)
 	./$(EXECUTABLE)
 
 valgrind: $(EXECUTABLE)
 	valgrind ./$(EXECUTABLE)
 
+gdbrun: gdbbuild
+	gdb ./$(EXECUTABLE)
+
 clean:
 	rm -rf $(BUILD_DIR) $(EXECUTABLE)
 
-.PHONY: all run valgrind clean
+.PHONY: all run gdb valgrind clean

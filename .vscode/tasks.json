@@ -1,0 +1,63 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "-j4" // Adjust the number according to your CPU for parallel build
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "clean",
+            "type":"shell",
+            "command": "make clean"
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "command": "./kette",
+            "dependsOn": "Build",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always"
+            }
+        },
+        {
+            "label": "valgrind",
+            "type": "shell",
+            "command": "make valgrind",
+            "group": "test",
+            "dependsOn": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "gdb",
+            "type": "shell",
+            "command": "make gdbbuild",
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}
