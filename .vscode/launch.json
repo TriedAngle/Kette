@@ -2,6 +2,20 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Release",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/kette",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "",
+            "miDebuggerPath": "",
+            "preLaunchTask": "build"
+        },
+        {
             "name": "GDB",
             "type": "cppdbg",
             "request": "launch",
@@ -21,7 +35,6 @@
                 }
             ],
             "preLaunchTask": "gdb"
-            // "postDebugTask": "clean" // Optional: cleans up after debugging
         }
     ]
 }
