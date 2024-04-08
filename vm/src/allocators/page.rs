@@ -2,6 +2,8 @@ use std::{ffi, mem, ptr};
 
 use super::IntoAllocator;
 
+pub const PAGE_SIZE: usize = 4096;
+
 #[cfg(target_os = "windows")]
 extern "C" {
     fn VirtualAlloc(
@@ -96,6 +98,28 @@ impl PageAllocator {
         let allocator = backing as *mut PageAllocator;
         unsafe { (*allocator).free(ptr, size) }
     }
+
+    fn page_realloc(
+        backing: *mut (),
+        old: *mut (),
+        size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> *mut () {
+        if (super::align_forward(size, PAGE_SIZE) == super::align_forward(new_size, PAGE_SIZE)) {
+            return old;
+        }
+
+        let mut new = Self::page_alloc(backing, new_size, align);
+
+        unsafe {
+            ptr::copy_nonoverlapping(old as *mut u8, new as *mut u8, size);
+        }
+
+        Self::page_free(backing, old, size);
+
+        new
+    }
 }
 
 impl IntoAllocator for PageAllocator {
@@ -104,6 +128,7 @@ impl IntoAllocator for PageAllocator {
             backing: self as *const Self as *mut Self as *mut (),
             alloc_fn: Self::page_alloc,
             free_fn: Self::page_free,
+            realloc_fn: Self::page_realloc,
         }
     }
 }
@@ -123,6 +148,23 @@ mod tests {
         assert_eq!(objects[2], 0);
         assert_eq!(objects[3], 333);
         assert_eq!(objects[4], 0);
+        allocator.destroy(&mut objects)
+    }
+
+    #[test]
+    fn realloc_allocator() {
+        let page_allocator = PageAllocator::new();
+        let allocator = page_allocator.allocator();
+        let mut objects = allocator.create::<i64>(16);
+        objects[3] = 333;
+        assert_eq!(objects[3], 333);
+
+        allocator.resize(&mut objects, 1000);
+
+        assert_eq!(objects[2], 0);
+        assert_eq!(objects[3], 333);
+        assert_eq!(objects[1], 0);
+
         allocator.destroy(&mut objects)
     }
 }
