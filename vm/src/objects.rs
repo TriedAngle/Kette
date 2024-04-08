@@ -1,7 +1,6 @@
 use core::slice;
-use std::ptr;
 use std::mem;
-
+use std::ptr;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -14,7 +13,9 @@ unsafe impl Sync for Object {}
 
 impl Object {
     const fn from_i64(value: i64) -> Self {
-        return Self { pointer: unsafe { mem::transmute::<_,_>(value) } }
+        return Self {
+            pointer: unsafe { mem::transmute::<_, _>(value) },
+        };
     }
 
     const fn from_raw(pointer: *mut ()) -> Self {
@@ -22,9 +23,10 @@ impl Object {
     }
 
     const fn null() -> Self {
-        return Self{ pointer: ptr::null::<()>() as *mut _ }
+        return Self {
+            pointer: ptr::null::<()>() as *mut _,
+        };
     }
-
 
     fn is_integer(&self) -> bool {
         (self.pointer as usize & 1) == 1
@@ -35,7 +37,7 @@ impl Object {
 
     fn as_integer(&self) -> Option<i64> {
         if self.is_integer() {
-            Some(unsafe { mem::transmute::<_, _>(self.pointer)})
+            Some(unsafe { mem::transmute::<_, _>(self.pointer) })
         } else {
             None
         }
@@ -43,7 +45,7 @@ impl Object {
 
     fn as_float(&self) -> Option<f64> {
         if self.is_float() {
-            Some(unsafe { mem::transmute::<_, _>(self.pointer)})
+            Some(unsafe { mem::transmute::<_, _>(self.pointer) })
         } else {
             None
         }
@@ -68,11 +70,11 @@ impl Object {
 
 trait ToObject {
     fn to_object(&self) -> Object {
-        unsafe { Object::from_raw(mem::transmute(self as *const Self as *const ()))}
+        unsafe { Object::from_raw(mem::transmute(self as *const Self as *const ())) }
     }
 
     fn to_object_mut(&mut self) -> Object {
-        unsafe { Object::from_raw(mem::transmute(self as *mut Self as *mut ()))}
+        unsafe { Object::from_raw(mem::transmute(self as *mut Self as *mut ())) }
     }
 }
 
@@ -92,7 +94,10 @@ struct ObjectHeader {
 
 impl ObjectHeader {
     pub const fn empty() -> Self {
-        return Self { meta: 0, parent: Object::null() }
+        return Self {
+            meta: 0,
+            parent: Object::null(),
+        };
     }
 
     pub const fn parent_int(self, parent: i64) -> Self {
@@ -113,13 +118,15 @@ impl Integer {
         return Self {
             header: ObjectHeader::empty().parent_int(1),
             value,
-        }
+        };
     }
 
     pub fn set_from_ptr(ptr: *mut Integer, value: i64) {
         let pointer = ptr as *mut i64;
-        let pointer = unsafe { pointer.add(2) };  
-        unsafe { ptr::write(pointer, value); }
+        let pointer = unsafe { pointer.add(2) };
+        unsafe {
+            ptr::write(pointer, value);
+        }
     }
 
     pub fn get_from_ptr(ptr: *const Integer) -> i64 {
@@ -138,14 +145,14 @@ impl Float {
         return Self {
             header: ObjectHeader::empty().parent_int(2),
             value,
-        }
+        };
     }
 }
 
 #[repr(C)]
 pub struct Alien {
     header: ObjectHeader,
-    base: *mut (), // if LSB is tagged to 1, this is aboslute address 
+    base: *mut (), // if LSB is tagged to 1, this is aboslute address
     offset: usize,
 }
 
@@ -176,7 +183,6 @@ impl Array {
         unsafe { ptr.add(offest) as *mut Object }
     }
 }
-
 
 #[repr(C)]
 pub struct ByteArray {
@@ -223,25 +229,21 @@ impl VMString {
     }
 }
 
-
 #[repr(C)]
 pub struct Quotation {
     header: ObjectHeader,
     definition: Object, // Array
-    effect: Object, // inferred effect 
+    effect: Object,     // inferred effect
 }
-
 
 #[repr(C)]
 pub struct Word {
     header: ObjectHeader,
     name: Object,
-    body: Object, // quotation
-    effect: Object, // declared effect
+    body: Object,       // quotation
+    effect: Object,     // declared effect
     properties: Object, // array
 }
-
-
 
 //-- HELPERS --//
 

@@ -3,24 +3,22 @@ use std::mem;
 // I might switch to register VM later, I just want working code for now :)
 // stack bytecode and vm is so little effort it really doesn't matter tbh
 
-
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
-    NoOp, // so we see no 0 in opcode
-    PushSelf, // pushes current objects pointer in methods
-    PushInt, // pushes integer (autoconverts to boxed)
-    PushFloat, // pushes float (autoconverts to boxed)
-    PushObject, // pushes any object
-    Load, // reinterpret this as a pointer (autoboxes)
-    Store, // reinterpret this as a pointer (autounboxes)
-    Send, // sends word to objct and autopops according to stack effect
-    SendSelf, // sends self ignore parents
-    SendSuper, // ignore self go to parent
+    NoOp,         // so we see no 0 in opcode
+    PushSelf,     // pushes current objects pointer in methods
+    PushInt,      // pushes integer (autoconverts to boxed)
+    PushFloat,    // pushes float (autoconverts to boxed)
+    PushObject,   // pushes any object
+    Load,         // reinterpret this as a pointer (autoboxes)
+    Store,        // reinterpret this as a pointer (autounboxes)
+    Send,         // sends word to objct and autopops according to stack effect
+    SendSelf,     // sends self ignore parents
+    SendSuper,    // ignore self go to parent
     SendDelegate, // go to specific parent
-    SendReturn, // pop callstack and return
+    SendReturn,   // pop callstack and return
 }
-
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -34,7 +32,7 @@ pub union BytecodeValue {
 
 impl BytecodeValue {
     pub fn as_i64(self) -> i64 {
-        unsafe { mem::transmute::<_, i64>(self)}
+        unsafe { mem::transmute::<_, i64>(self) }
     }
 }
 
@@ -45,7 +43,7 @@ unsafe impl Sync for BytecodeValue {}
 #[derive(Clone, Copy)]
 pub struct Bytecode {
     pub instr: Instruction,
-    pub value: BytecodeValue
+    pub value: BytecodeValue,
 }
 
 unsafe impl Send for Bytecode {}
@@ -53,44 +51,80 @@ unsafe impl Sync for Bytecode {}
 
 impl Bytecode {
     pub const fn noop() -> Bytecode {
-        Bytecode { instr: Instruction::NoOp, value: BytecodeValue{ int: 0 }}
+        Bytecode {
+            instr: Instruction::NoOp,
+            value: BytecodeValue { int: 0 },
+        }
     }
     pub const fn push_self() -> Bytecode {
-        Bytecode { instr: Instruction::PushSelf, value: BytecodeValue{ int: 0 }}
+        Bytecode {
+            instr: Instruction::PushSelf,
+            value: BytecodeValue { int: 0 },
+        }
     }
     pub const fn push_int(int: i64) -> Bytecode {
-        Bytecode { instr: Instruction::PushInt, value: BytecodeValue{ int }}
+        Bytecode {
+            instr: Instruction::PushInt,
+            value: BytecodeValue { int },
+        }
     }
     pub const fn push_float(float: f64) -> Bytecode {
-        Bytecode { instr: Instruction::PushFloat, value: BytecodeValue{ float }}
+        Bytecode {
+            instr: Instruction::PushFloat,
+            value: BytecodeValue { float },
+        }
     }
     pub const fn push_object(object: Object) -> Bytecode {
-        Bytecode { instr: Instruction::PushObject, value: BytecodeValue{ object }}
+        Bytecode {
+            instr: Instruction::PushObject,
+            value: BytecodeValue { object },
+        }
     }
     pub const fn load(pointer: usize) -> Bytecode {
-        Bytecode { instr: Instruction::Load, value: BytecodeValue{ pointer }}
+        Bytecode {
+            instr: Instruction::Load,
+            value: BytecodeValue { pointer },
+        }
     }
     pub const fn store(pointer: usize) -> Bytecode {
-        Bytecode { instr: Instruction::Store, value: BytecodeValue{ pointer }}
+        Bytecode {
+            instr: Instruction::Store,
+            value: BytecodeValue { pointer },
+        }
     }
     pub const fn send(word: *const Word) -> Bytecode {
-        Bytecode { instr: Instruction::Send, value: BytecodeValue{ word }}
+        Bytecode {
+            instr: Instruction::Send,
+            value: BytecodeValue { word },
+        }
     }
     pub const fn send_self(word: *const Word) -> Bytecode {
-        Bytecode { instr: Instruction::Send, value: BytecodeValue{ word }}
+        Bytecode {
+            instr: Instruction::Send,
+            value: BytecodeValue { word },
+        }
     }
     pub const fn send_super(word: *const Word) -> Bytecode {
-        Bytecode { instr: Instruction::Send, value: BytecodeValue{ word }}
+        Bytecode {
+            instr: Instruction::Send,
+            value: BytecodeValue { word },
+        }
     }
     pub const fn send_delegate(word: *const Word) -> Bytecode {
-        Bytecode { instr: Instruction::Send, value: BytecodeValue{ word }}
+        Bytecode {
+            instr: Instruction::Send,
+            value: BytecodeValue { word },
+        }
     }
     pub const fn send_return() -> Bytecode {
-        Bytecode { instr: Instruction::SendReturn, value: BytecodeValue{ int: 0 }}
+        Bytecode {
+            instr: Instruction::SendReturn,
+            value: BytecodeValue { int: 0 },
+        }
     }
 }
 
-struct Code {
+pub struct Code {
     data: *const Bytecode,
     top: *mut Bytecode,
     limit: *const Bytecode,
@@ -120,12 +154,10 @@ impl Code {
     }
 }
 
-
 pub struct CodeIterator {
     current: *const Bytecode,
     limit: *const Bytecode,
 }
-
 
 impl Code {
     pub fn iter(&self) -> CodeIterator {
@@ -152,7 +184,6 @@ impl Iterator for CodeIterator {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::ptr;
@@ -174,8 +205,7 @@ mod tests {
         let _res = code.push(Bytecode::store(0));
 
         for bc in code.iter() {
-            println!("Instruction: {:?}, {:?}", bc.instr, bc.value.as_i64() );
+            println!("Instruction: {:?}, {:?}", bc.instr, bc.value.as_i64());
         }
     }
-
 }
