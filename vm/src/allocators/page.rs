@@ -72,63 +72,63 @@ unsafe fn burn(address: *mut ffi::c_void, size: usize) {
     }
 }
 
-struct PageAllocator {}
+pub struct PageAllocator {}
 
 impl PageAllocator {
     pub fn new() -> Self {
         Self {}
     }
 
-    pub fn alloc(&self, size: usize) -> *mut () {
+    pub fn alloc(&self, size: usize) -> *mut u8 {
         let allocation = unsafe { memory(size) as *mut _ };
         unsafe { ptr::write_bytes(allocation, 0, size) }
         allocation
     }
 
-    pub fn free(&self, ptr: *mut (), size: usize) {
+    pub fn free(&self, ptr: *mut u8, size: usize) {
         unsafe { burn(ptr as *mut _, size) }
     }
 
-    fn page_alloc(backing: *mut (), size: usize, _align: usize) -> *mut () {
+    fn generic_alloc(backing: *mut (), size: usize, _align: usize) -> *mut u8 {
         let allocator = backing as *mut PageAllocator;
         unsafe { (*allocator).alloc(size) }
     }
 
-    fn page_free(backing: *mut (), ptr: *mut (), size: usize) {
+    fn generic_free(backing: *mut (), ptr: *mut u8, size: usize) {
         let allocator = backing as *mut PageAllocator;
         unsafe { (*allocator).free(ptr, size) }
     }
 
-    fn page_realloc(
+    fn generic_realloc(
         backing: *mut (),
-        old: *mut (),
+        old: *mut u8,
         size: usize,
         new_size: usize,
         align: usize,
-    ) -> *mut () {
+    ) -> *mut u8 {
         if (super::align_forward(size, PAGE_SIZE) == super::align_forward(new_size, PAGE_SIZE)) {
             return old;
         }
 
-        let mut new = Self::page_alloc(backing, new_size, align);
+        let mut new = Self::generic_alloc(backing, new_size, align);
 
         unsafe {
-            ptr::copy_nonoverlapping(old as *mut u8, new as *mut u8, size);
+            ptr::copy_nonoverlapping(old, new, size);
         }
 
-        Self::page_free(backing, old, size);
+        Self::generic_free(backing, old, size);
 
         new
     }
 }
 
 impl IntoAllocator for PageAllocator {
-    fn allocator(&self) -> super::Allocator {
+    fn allocator(&mut self) -> super::Allocator {
         super::Allocator {
-            backing: self as *const Self as *mut Self as *mut (),
-            alloc_fn: Self::page_alloc,
-            free_fn: Self::page_free,
-            realloc_fn: Self::page_realloc,
+            backing: self as *mut Self as *mut (),
+            alloc_fn: Self::generic_alloc,
+            free_fn: Self::generic_free,
+            realloc_fn: Self::generic_realloc,
         }
     }
 }
@@ -138,8 +138,8 @@ mod tests {
     use super::*;
     #[test]
     fn page_allocator() {
-        let page_allocator = PageAllocator::new();
-        let allocator = page_allocator.allocator();
+        let mut page_allocator = PageAllocator::new();
+        let mut allocator = page_allocator.allocator();
         let mut objects = allocator.create::<i64>(16);
         objects[3] = 333;
 
@@ -153,8 +153,8 @@ mod tests {
 
     #[test]
     fn realloc_allocator() {
-        let page_allocator = PageAllocator::new();
-        let allocator = page_allocator.allocator();
+        let mut page_allocator = PageAllocator::new();
+        let mut allocator = page_allocator.allocator();
         let mut objects = allocator.create::<i64>(16);
         objects[3] = 333;
         assert_eq!(objects[3], 333);

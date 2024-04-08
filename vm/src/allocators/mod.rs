@@ -1,14 +1,19 @@
 use std::{mem, ptr};
 
-use self::vec::LeakyVec;
-
+mod arena;
+mod leaky;
 mod page;
-mod vec;
 
-type AllocFn = fn(backing: *mut (), size: usize, align: usize) -> *mut ();
-type FreeFn = fn(backing: *mut (), ptr: *mut (), size: usize);
+pub use arena::ArenaAllocator;
+pub use leaky::LeakyVec;
+pub use page::{PageAllocator, PAGE_SIZE};
+
+use self::leaky::LeakyBox;
+
+type AllocFn = fn(backing: *mut (), size: usize, align: usize) -> *mut u8;
+type FreeFn = fn(backing: *mut (), ptr: *mut u8, size: usize);
 type ReallocFn =
-    fn(backing: *mut (), ptr: *mut (), size: usize, new_size: usize, align: usize) -> *mut ();
+    fn(backing: *mut (), ptr: *mut u8, size: usize, new_size: usize, align: usize) -> *mut u8;
 
 pub const fn is_power_of_two(x: usize) -> bool {
     x & (x - 1) == 0
@@ -20,7 +25,7 @@ pub const fn align_forward(mut ptr: usize, align: usize) -> usize {
 }
 
 pub trait IntoAllocator {
-    fn allocator(&self) -> Allocator;
+    fn allocator(&mut self) -> Allocator;
 }
 
 pub struct Allocator {
@@ -45,22 +50,22 @@ impl Allocator {
         }
     }
 
-    pub fn create<T: Clone>(&self, size: usize) -> LeakyVec<T> {
+    pub fn create<T: Clone>(&mut self, size: usize) -> LeakyVec<T> {
         let allocation = self.alloc::<T>(size);
         let vec = LeakyVec::new(allocation, size).unwrap();
         vec
     }
 
-    pub fn make<T>(&self) -> Box<T> {
+    pub fn make<T>(&mut self) -> LeakyBox<T> {
         let allocation = self.alloc::<T>(1);
-        unsafe { Box::from_raw(allocation) }
+        unsafe { LeakyBox::new(allocation) }
     }
 
-    pub fn destroy<T>(&self, vec: &mut LeakyVec<T>) {
+    pub fn destroy<T>(&mut self, vec: &mut LeakyVec<T>) {
         self.free(vec.ptr.as_ptr(), vec.size);
     }
 
-    pub fn resize<T>(&self, vec: &mut LeakyVec<T>, new_size: usize) {
+    pub fn resize<T>(&mut self, vec: &mut LeakyVec<T>, new_size: usize) {
         if (vec.size == new_size) {
             return;
         }
@@ -71,18 +76,18 @@ impl Allocator {
         vec.size = new_size;
     }
 
-    pub fn alloc<T>(&self, count: usize) -> *mut T {
+    pub fn alloc<T>(&mut self, count: usize) -> *mut T {
         let size = mem::size_of::<T>() * count;
         let align = mem::align_of::<T>();
         (self.alloc_fn)(self.backing, size, align) as *mut T
     }
 
-    pub fn free<T>(&self, ptr: *mut T, count: usize) {
+    pub fn free<T>(&mut self, ptr: *mut T, count: usize) {
         let size = mem::size_of::<T>() * count;
         (self.free_fn)(self.backing, ptr as *mut _, size)
     }
 
-    pub fn realloc<T>(&self, ptr: *mut T, count: usize, new_count: usize) -> *mut T {
+    pub fn realloc<T>(&mut self, ptr: *mut T, count: usize, new_count: usize) -> *mut T {
         let size = mem::size_of::<T>() * count;
         let new_size = mem::size_of::<T>() * new_count;
         let align = mem::align_of::<T>();

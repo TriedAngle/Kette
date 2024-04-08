@@ -1,5 +1,5 @@
 use std::{
-    ops::{Index, IndexMut},
+    ops::{Deref, DerefMut, Index, IndexMut},
     ptr, slice,
 };
 
@@ -36,4 +36,37 @@ impl<T> IndexMut<usize> for LeakyVec<T> {
         assert!(index < self.size, "Index out of bounds");
         unsafe { &mut *self.ptr.as_ptr().add(index) }
     }
+}
+
+pub struct LeakyBox<T> {
+    pub ptr: ptr::NonNull<T>,
+}
+
+impl<T> LeakyBox<T> {
+    pub unsafe fn new(ptr: *mut T) -> Self {
+        Self {
+            ptr: ptr::NonNull::new(ptr).unwrap(),
+        }
+    }
+}
+
+impl<T> Deref for LeakyBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl<T> DerefMut for LeakyBox<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.ptr.as_mut() }
+    }
+}
+
+impl<T> Drop for LeakyVec<T> {
+    fn drop(&mut self) {}
+}
+impl<T> Drop for LeakyBox<T> {
+    fn drop(&mut self) {}
 }
