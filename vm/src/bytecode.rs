@@ -8,16 +8,16 @@ use std::mem;
 pub enum Instruction {
     NoOp,         // so we see no 0 in opcode
     PushSelf,     // pushes current objects pointer in methods
-    PushInt,      // pushes integer (autoconverts to boxed)
-    PushFloat,    // pushes float (autoconverts to boxed)
+    PushInt,      // pushes integer (auto-converts to boxed)
+    PushFloat,    // pushes float (auto-converts to boxed)
     PushObject,   // pushes any object
-    Load,         // reinterpret this as a pointer (autoboxes)
-    Store,        // reinterpret this as a pointer (autounboxes)
+    Load,         // deref pointer (auto-boxes)
+    Store,        // store value at pointer (auto-unboxes)
     Send,         // sends word to objct and autopops according to stack effect
     SendSelf,     // sends self ignore parents
     SendSuper,    // ignore self go to parent
     SendDelegate, // go to specific parent
-    SendReturn,   // pop callstack and return
+    Return,       // pop callstack and return
 }
 
 #[repr(C)]
@@ -118,7 +118,7 @@ impl Bytecode {
     }
     pub const fn send_return() -> Bytecode {
         Bytecode {
-            instr: Instruction::SendReturn,
+            instr: Instruction::Return,
             value: BytecodeValue { int: 0 },
         }
     }

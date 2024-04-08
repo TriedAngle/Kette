@@ -1,8 +1,10 @@
 use std::{mem, ptr};
 
 mod arena;
+mod freelist;
 mod leaky;
 mod page;
+mod pool;
 
 pub use arena::ArenaAllocator;
 pub use leaky::LeakyVec;
@@ -56,11 +58,6 @@ impl Allocator {
         vec
     }
 
-    pub fn make<T>(&mut self) -> LeakyBox<T> {
-        let allocation = self.alloc::<T>(1);
-        unsafe { LeakyBox::new(allocation) }
-    }
-
     pub fn destroy<T>(&mut self, vec: &mut LeakyVec<T>) {
         self.free(vec.ptr.as_ptr(), vec.size);
     }
@@ -74,6 +71,15 @@ impl Allocator {
         let new = self.realloc(old, vec.size, new_size);
         vec.ptr = ptr::NonNull::new(new).unwrap();
         vec.size = new_size;
+    }
+
+    pub fn make<T>(&mut self) -> LeakyBox<T> {
+        let allocation = self.alloc::<T>(1);
+        unsafe { LeakyBox::new(allocation) }
+    }
+
+    pub fn unmake<T>(&mut self, boxx: &mut LeakyBox<T>) {
+        self.free(boxx.ptr.as_ptr(), 1);
     }
 
     pub fn alloc<T>(&mut self, count: usize) -> *mut T {

@@ -14,4 +14,6 @@ struct CodeHeap {
     pub compiled: HashMap<*const Word, Code>,
 }
 
-struct VM {}
+struct VM {
+    code: CodeHeap,
+}

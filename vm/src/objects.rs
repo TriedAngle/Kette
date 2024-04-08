@@ -239,7 +239,7 @@ pub struct Quotation {
 #[repr(C)]
 pub struct Word {
     header: ObjectHeader,
-    name: Object,
+    name: Object,       // string
     body: Object,       // quotation
     effect: Object,     // declared effect
     properties: Object, // array
