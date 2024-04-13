@@ -1,10 +1,11 @@
 use std::{mem, ptr};
 
 mod arena;
+mod chunk;
 mod freelist;
 mod leaky;
 mod page;
-mod pool;
+mod pools;
 
 pub use arena::ArenaAllocator;
 pub use leaky::LeakyVec;
@@ -13,7 +14,7 @@ pub use page::{PageAllocator, PAGE_SIZE};
 use self::leaky::LeakyBox;
 
 type AllocFn = fn(backing: *mut (), size: usize, align: usize) -> *mut u8;
-type FreeFn = fn(backing: *mut (), ptr: *mut u8, size: usize);
+type FreeFn = fn(backing: *mut (), ptr: *mut u8, size: usize, align: usize);
 type ReallocFn =
     fn(backing: *mut (), ptr: *mut u8, size: usize, new_size: usize, align: usize) -> *mut u8;
 
@@ -21,7 +22,7 @@ pub const fn is_power_of_two(x: usize) -> bool {
     x & (x - 1) == 0
 }
 
-pub const fn align_forward(mut ptr: usize, align: usize) -> usize {
+pub const fn align_forward(ptr: usize, align: usize) -> usize {
     assert!(is_power_of_two(align));
     (ptr + align - 1) & !(align - 1)
 }
@@ -90,7 +91,7 @@ impl Allocator {
 
     pub fn free<T>(&mut self, ptr: *mut T, count: usize) {
         let size = mem::size_of::<T>() * count;
-        (self.free_fn)(self.backing, ptr as *mut _, size)
+        (self.free_fn)(self.backing, ptr as *mut _, size, mem::align_of::<T>())
     }
 
     pub fn realloc<T>(&mut self, ptr: *mut T, count: usize, new_count: usize) -> *mut T {

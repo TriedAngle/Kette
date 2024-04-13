@@ -94,7 +94,7 @@ impl PageAllocator {
         unsafe { (*allocator).alloc(size) }
     }
 
-    fn generic_free(backing: *mut (), ptr: *mut u8, size: usize) {
+    fn generic_free(backing: *mut (), ptr: *mut u8, size: usize, _align: usize) {
         let allocator = backing as *mut PageAllocator;
         unsafe { (*allocator).free(ptr, size) }
     }
@@ -116,7 +116,7 @@ impl PageAllocator {
             ptr::copy_nonoverlapping(old, new, size);
         }
 
-        Self::generic_free(backing, old, size);
+        Self::generic_free(backing, old, size, align);
 
         new
     }

@@ -42,7 +42,7 @@ impl ArenaAllocator {
         let relative = aligned - (self.allocation as usize);
 
         if (self.size < relative + size) {
-            self.resize(self.size * 2);
+            return ptr::null_mut();
         }
 
         let pointer = unsafe { self.allocation.add(relative) };
@@ -58,7 +58,7 @@ impl ArenaAllocator {
         unsafe { (*arena).alloc(size, align) }
     }
 
-    pub fn generic_free(_backing: *mut (), _ptr: *mut u8, _size: usize) {}
+    pub fn generic_free(_backing: *mut (), _ptr: *mut u8, _size: usize, _align: usize) {}
 
     pub fn generic_realloc(
         _backing: *mut (),
