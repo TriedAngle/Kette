@@ -2,16 +2,16 @@ use std::{mem, ptr};
 
 use super::{align_forward, Allocator, IntoAllocator};
 
-struct FreeHeader {
+pub struct FreeHeader {
     size: usize,
     next: *mut FreeHeader,
 }
 
 pub struct FreeListAllocator {
-    backing: Allocator,
-    allocation: *mut u8,
-    size: usize,
-    head: *mut FreeHeader,
+    pub(super) backing: Allocator,
+    pub(super) allocation: *mut u8,
+    pub(super) size: usize,
+    pub(super) head: *mut FreeHeader,
 }
 
 impl FreeListAllocator {
@@ -38,7 +38,7 @@ impl FreeListAllocator {
         freelist
     }
 
-    fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
+    pub fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
         let aligned_header_size =
             align_forward(mem::size_of::<FreeHeader>(), mem::align_of::<FreeHeader>());
         let aligned_size = align_forward(size, align);
@@ -95,7 +95,7 @@ impl FreeListAllocator {
         allocation
     }
 
-    fn free(&mut self, pointer: *mut u8, align: usize) {
+    pub fn free(&mut self, pointer: *mut u8, align: usize) {
         let header = unsafe { Self::get_header_from_allocation(pointer, align) };
         let block_size = unsafe { (*header).size };
 
@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use crate::allocators::{page::PAGE_SIZE, PageAllocator};
     #[test]
-    fn arena_allocator() {
+    fn freelist_allocator() {
         let mut page_allocator = PageAllocator::new();
         let mut pa = page_allocator.allocator();
         let mut freelist = FreeListAllocator::new_with_capacity(pa, PAGE_SIZE);

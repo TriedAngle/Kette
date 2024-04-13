@@ -31,6 +31,7 @@ pub trait IntoAllocator {
     fn allocator(&mut self) -> Allocator;
 }
 
+#[derive(Clone, Copy)]
 pub struct Allocator {
     backing: *mut (),
     alloc_fn: AllocFn,
