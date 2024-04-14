@@ -8,10 +8,9 @@ mod page;
 mod pools;
 
 pub use arena::ArenaAllocator;
-pub use leaky::LeakyVec;
+pub use leaky::{LeakyBox, LeakyVec};
 pub use page::{PageAllocator, PAGE_SIZE};
-
-use self::leaky::LeakyBox;
+pub use pools::{ChunkPool, FreeListPool};
 
 type AllocFn = fn(backing: *mut (), size: usize, align: usize) -> *mut u8;
 type FreeFn = fn(backing: *mut (), ptr: *mut u8, size: usize, align: usize);

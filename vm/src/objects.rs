@@ -2,6 +2,8 @@ use core::slice;
 use std::mem;
 use std::ptr;
 
+use crate::allocators::LeakyBox;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Object {
@@ -18,24 +20,24 @@ impl Object {
         };
     }
 
-    const fn from_raw(pointer: *mut ()) -> Self {
+    pub const fn from_raw(pointer: *mut ()) -> Self {
         Self { pointer }
     }
 
-    const fn null() -> Self {
+    pub const fn null() -> Self {
         return Self {
             pointer: ptr::null::<()>() as *mut _,
         };
     }
 
-    fn is_integer(&self) -> bool {
+    pub fn is_integer(&self) -> bool {
         (self.pointer as usize & 1) == 1
     }
-    fn is_float(&self) -> bool {
+    pub fn is_float(&self) -> bool {
         (self.pointer as usize & 2) == 2
     }
 
-    fn as_integer(&self) -> Option<i64> {
+    pub fn as_integer(&self) -> Option<i64> {
         if self.is_integer() {
             Some(unsafe { mem::transmute::<_, _>(self.pointer) })
         } else {
@@ -43,7 +45,7 @@ impl Object {
         }
     }
 
-    fn as_float(&self) -> Option<f64> {
+    pub fn as_float(&self) -> Option<f64> {
         if self.is_float() {
             Some(unsafe { mem::transmute::<_, _>(self.pointer) })
         } else {
@@ -51,24 +53,24 @@ impl Object {
         }
     }
 
-    fn as_ptr<T>(&self) -> *const T {
+    pub fn as_ptr<T>(&self) -> *const T {
         self.pointer as *const _
     }
 
-    fn as_ptr_mut<T>(&self) -> *mut T {
+    pub fn as_ptr_mut<T>(&self) -> *mut T {
         self.pointer as *mut T
     }
 
-    fn deref<T>(&self) -> &T {
+    pub fn deref<T>(&self) -> &T {
         unsafe { &*(self.pointer as *const T) }
     }
 
-    fn deref_mut<T>(&mut self) -> &mut T {
+    pub fn deref_mut<T>(&mut self) -> &mut T {
         unsafe { &mut *(self.pointer as *mut T) }
     }
 }
 
-trait ToObject {
+pub trait ToObject {
     fn to_object(&self) -> Object {
         unsafe { Object::from_raw(mem::transmute(self as *const Self as *const ())) }
     }
@@ -85,11 +87,12 @@ impl ToObject for Array {}
 impl ToObject for ByteArray {}
 impl ToObject for Quotation {}
 impl ToObject for Word {}
+impl ToObject for VMString {}
 
 #[repr(C)]
-struct ObjectHeader {
-    meta: usize,
-    parent: Object,
+pub struct ObjectHeader {
+    pub meta: usize,
+    pub parent: Object,
 }
 
 impl ObjectHeader {
@@ -109,8 +112,8 @@ impl ObjectHeader {
 
 #[repr(C)]
 pub struct Integer {
-    header: ObjectHeader,
-    value: i64,
+    pub header: ObjectHeader,
+    pub value: i64,
 }
 
 impl Integer {
@@ -136,8 +139,8 @@ impl Integer {
 
 #[repr(C)]
 pub struct Float {
-    header: ObjectHeader,
-    value: f64,
+    pub header: ObjectHeader,
+    pub value: f64,
 }
 
 impl Float {
@@ -151,23 +154,23 @@ impl Float {
 
 #[repr(C)]
 pub struct Alien {
-    header: ObjectHeader,
-    base: *mut (), // if LSB is tagged to 1, this is aboslute address
-    offset: usize,
+    pub header: ObjectHeader,
+    pub base: *mut (), // if LSB is tagged to 1, this is aboslute address
+    pub offset: usize,
 }
 
 // mainly used for words
 #[repr(C)]
 pub struct Wrapper {
-    header: ObjectHeader,
-    value: Object,
+    pub header: ObjectHeader,
+    pub value: Object,
 }
 
 #[repr(C)]
 pub struct Array {
-    header: ObjectHeader,
-    capacity: i64,
-    length: i64,
+    pub header: ObjectHeader,
+    pub capacity: i64,
+    pub length: i64,
 }
 
 impl Array {
@@ -186,9 +189,9 @@ impl Array {
 
 #[repr(C)]
 pub struct ByteArray {
-    header: ObjectHeader,
-    length: i64,
-    capacity: i64,
+    pub header: ObjectHeader,
+    pub length: i64,
+    pub capacity: i64,
 }
 
 impl ByteArray {
@@ -208,9 +211,9 @@ impl ByteArray {
 // utf8 strings
 #[repr(C)]
 pub struct VMString {
-    header: ObjectHeader,
-    length: i64,
-    data: Object, // backing data count be a cptr too (would be tagged then (probably?))
+    pub header: ObjectHeader,
+    pub length: i64,
+    pub data: Object, // backing data count be a cptr too (would be tagged then (probably?))
 }
 
 impl VMString {
@@ -231,18 +234,19 @@ impl VMString {
 
 #[repr(C)]
 pub struct Quotation {
-    header: ObjectHeader,
-    definition: Object, // Array
-    effect: Object,     // inferred effect
+    pub header: ObjectHeader,
+    pub definition: Object, // Array
+    pub effect: Object,     // inferred effect
+    pub entry: Object,      // code entrypoint
 }
 
 #[repr(C)]
 pub struct Word {
-    header: ObjectHeader,
-    name: Object,       // string
-    body: Object,       // quotation
-    effect: Object,     // declared effect
-    properties: Object, // array
+    pub header: ObjectHeader,
+    pub name: Object,       // string
+    pub body: Object,       // quotation
+    pub effect: Object,     // declared effect
+    pub properties: Object, // array
 }
 
 //-- HELPERS --//
@@ -286,6 +290,12 @@ impl VMString {
             let slice = slice::from_raw_parts(data, len);
             std::str::from_utf8(slice).map(|s| s.to_owned())
         }
+    }
+}
+
+impl<T: ToObject> LeakyBox<T> {
+    pub fn to_object(&mut self) -> Object {
+        unsafe { self.ptr.as_mut() }.to_object()
     }
 }
 

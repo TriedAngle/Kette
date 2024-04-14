@@ -1,15 +1,9 @@
 use std::ptr;
 
 use super::{
-    align_forward, freelist::FreeListAllocator, Allocator, ArenaAllocator, IntoAllocator,
-    PageAllocator, PAGE_SIZE,
+    align_forward, chunk::ChunkAllocator, freelist::FreeListAllocator, Allocator, ArenaAllocator,
+    IntoAllocator, PageAllocator, PAGE_SIZE,
 };
-
-struct Allocation {
-    size: usize,
-    from: *mut u8,
-    to: *mut u8,
-}
 
 struct FreeList {
     freelist: FreeListAllocator,
@@ -19,7 +13,7 @@ struct FreeList {
 
 // TODO make this transparent to the language
 // I don't care about that right now so I use rust vec
-struct FreeListPool {
+pub struct FreeListPool {
     backing: Allocator,
     lists: Vec<FreeList>,
 }
@@ -81,17 +75,104 @@ impl FreeListPool {
     }
 
     pub fn generic_realloc(
-        _backing: *mut (),
+        backing: *mut (),
         ptr: *mut u8,
-        _size: usize,
-        _new_size: usize,
-        _align: usize,
+        size: usize,
+        new_size: usize,
+        align: usize,
     ) -> *mut u8 {
-        return ptr;
+        let new = Self::generic_alloc(backing, new_size, align);
+        let copy_size = if new_size > size { new_size } else { size };
+        unsafe { ptr::copy_nonoverlapping(ptr, new, copy_size) };
+        Self::generic_free(backing, ptr, size, align);
+        return new;
     }
 }
 
 impl IntoAllocator for FreeListPool {
+    fn allocator(&mut self) -> Allocator {
+        Allocator {
+            backing: self as *mut Self as *mut (),
+            alloc_fn: Self::generic_alloc,
+            free_fn: Self::generic_free,
+            realloc_fn: Self::generic_realloc,
+        }
+    }
+}
+
+struct Chunk {
+    chunk: ChunkAllocator,
+    from: *mut u8,
+    to: *mut u8,
+}
+
+// TODO make this transparent to the language
+// I don't care about that right now so I use rust vec
+pub struct ChunkPool {
+    backing: Allocator,
+    chunks: Vec<Chunk>,
+}
+
+impl ChunkPool {
+    pub fn new(backing: Allocator) -> Self {
+        Self {
+            backing,
+            chunks: Vec::new(),
+        }
+    }
+
+    pub fn alloc(&mut self) -> *mut u8 {
+        for chunk in &mut self.chunks {
+            let a = chunk.chunk.alloc();
+            if (!a.is_null()) {
+                return a;
+            }
+        }
+
+        let mut chunk = ChunkAllocator::new_with_capacity(self.backing, 64, 8, PAGE_SIZE * 8);
+        let allocation = chunk.alloc();
+        let from = chunk.allocation;
+        let to = unsafe { chunk.allocation.add(PAGE_SIZE * 8) };
+        let chunky = Chunk { chunk, from, to };
+        self.chunks.push(chunky);
+        allocation
+    }
+
+    pub fn free(&mut self, pointer: *mut u8) {
+        for chunk in &mut self.chunks {
+            if chunk.from < pointer && pointer < chunk.to {
+                chunk.chunk.free(pointer);
+                break;
+            }
+        }
+    }
+
+    pub fn generic_alloc(backing: *mut (), _size: usize, _align: usize) -> *mut u8 {
+        let mut pool = backing as *mut ChunkPool;
+        unsafe { (*pool).alloc() }
+    }
+
+    pub fn generic_free(backing: *mut (), ptr: *mut u8, _size: usize, align: usize) {
+        let mut pool = backing as *mut ChunkPool;
+        unsafe { (*pool).free(ptr) }
+    }
+
+    pub fn generic_realloc(
+        backing: *mut (),
+        ptr: *mut u8,
+        size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> *mut u8 {
+        let new = Self::generic_alloc(backing, new_size, align);
+        let copy_size = if new_size > size { new_size } else { size };
+        unsafe { ptr::copy_nonoverlapping(ptr, new, copy_size) };
+        Self::generic_free(backing, ptr, size, align);
+        return new;
+    }
+}
+
+impl IntoAllocator for ChunkPool {
     fn allocator(&mut self) -> Allocator {
         Allocator {
             backing: self as *mut Self as *mut (),
