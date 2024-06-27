@@ -12,27 +12,24 @@ stack oriented language for modern systems
 - erlang inspired threading/process model (will take a while)
 - most of the language written within the language (parsing words)
 
-## Status (mostly ordered)
-- small demo interpreter repl that can define new words and use builtin words but it can't do much else (lacks object system)
-- [x] allocators
+## Status (in order)
 - [x] objects
+- [x] garbage collector
+- [ ] repl
+- [ ] declare custom syntax and new objects
+- [ ] standard library and external library support
 - [ ] bytecode compiler
-- [ ] rewrite VM for new object and allocator system
-- [ ] interprete bytecode
 - [ ] inlining and tail-call optimization
+- [ ] rewrite garbage collector (one that supports threads, maybe allow different allocators and manual memory managemed?)
 - [ ] images
-- [ ] "selfhost"
 - [ ] variables
 - [ ] gradual typing
-- [ ] proceses
-- [ ] jit compile bytecode
+- [ ] processes
+- [ ] "selfhost"
+- [ ] jit compilation
 
 ## Building
-Only requirement is the c11 gnu standard (including "threads.h") and make (nmake on windows).
-Operating system is automatically detected (TODO crosscompile)
-- building: `make`
-- building with avx2: `make AVX2=1` (if you build normally before, clean first `make clean`)
-- build and run `make run` (or `make && ./kette`)
+`cargo build`
 
 ## Basics
 The language is stack based (variables will be supported) so expressions are written in reverse polish notation.
