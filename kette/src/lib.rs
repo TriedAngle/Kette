@@ -131,6 +131,8 @@ impl VM {
             if self.is_syntax_word() {
                 let word = self.pop().as_word();
                 self.execute_word(word);
+                let accum = self.pop();
+                vec.push(accum);
                 continue;
             }
             let word = self.pop();
@@ -173,7 +175,6 @@ impl VM {
             self.dup();
             if self.is_syntax_word() {
                 let word = self.pop().as_word();
-                println!("syntax! {:?}", (*word).name());
                 self.execute_word(word);
                 let accum = self.pop();
                 vec.push(accum);
