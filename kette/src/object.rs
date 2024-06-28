@@ -2,8 +2,12 @@ use std::{mem, ptr, slice};
 
 pub struct SpecialObjects {
     pub map_map: *mut Map,
+    pub word_map: *mut Map,
+    pub quotation_map: *mut Map,
     pub fixnum_map: *mut Map,
     pub fixfloat_map: *mut Map,
+    pub box_map: *mut Map,
+    pub array_map: *mut Map,
     pub bytearray_map: *mut Map,
     pub alien_map: *mut Map,
 
@@ -16,14 +20,18 @@ pub struct SpecialObjects {
 
 impl Default for SpecialObjects {
     fn default() -> Self {
-        Self { 
-            map_map: ptr::null_mut(), 
-            fixnum_map: ptr::null_mut(), 
-            fixfloat_map: ptr::null_mut(), 
-            bytearray_map: ptr::null_mut(), 
-            alien_map: ptr::null_mut(), 
+        Self {
+            map_map: ptr::null_mut(),
+            word_map: ptr::null_mut(),
+            quotation_map: ptr::null_mut(),
+            fixnum_map: ptr::null_mut(),
+            fixfloat_map: ptr::null_mut(),
+            box_map: ptr::null_mut(),
+            array_map: ptr::null_mut(),
+            bytearray_map: ptr::null_mut(),
+            alien_map: ptr::null_mut(),
 
-            false_object: ptr::null_mut(), 
+            false_object: ptr::null_mut(),
             true_object: ptr::null_mut(),
 
             input: ptr::null_mut(),
@@ -72,6 +80,10 @@ impl ObjectRef {
         Self::new(map as *mut Object)
     }
 
+    pub const fn from_word(word: *mut WordObject) -> Self {
+        Self::new(word as *mut Object)
+    }
+
     pub fn from_fn(fun: unsafe fn(vm: *mut crate::VM)) -> Self {
         Self(unsafe { mem::transmute(fun) })
     }
@@ -92,12 +104,24 @@ impl ObjectRef {
         unsafe { (*self.0).header.map.0 as *const Map }
     }
 
+    pub fn get_map_mut(&self) -> *mut Map {
+        unsafe { (*self.0).header.map.0 as *mut Map }
+    }
+
     pub const fn as_map(&self) -> *const Map {
         self.0 as *const Map
     }
 
     pub const fn as_map_mut(&self) -> *mut Map {
         self.0 as *mut Map
+    }
+
+    pub const fn as_box(&self) -> *const BoxObject {
+        self.0 as *const BoxObject
+    }
+
+    pub const fn as_box_mut(&self) -> *mut BoxObject {
+        self.0 as *mut BoxObject
     }
 
     pub const fn as_byte_array(&self) -> *const ByteArrayObject {
@@ -144,8 +168,21 @@ impl ObjectRef {
         self.0 as *mut WordObject
     }
 
+    pub const fn as_quotation(&self) -> *const QuotationObject {
+        self.0 as *const QuotationObject
+    }
+
+    pub const fn as_quotation_mut(&self) -> *mut QuotationObject {
+        self.0 as *mut QuotationObject
+    }
+
     pub unsafe fn get_field(&self, index: usize) -> ObjectRef {
-        *(self.0.add(1).add(index) as *const ObjectRef)
+        *(self.0.add(1).add(index) as *mut ObjectRef)
+    }
+
+    pub unsafe fn set_field(&self, index: usize, value: ObjectRef) {
+        let field = (self.0.add(1).add(index) as *mut ObjectRef);
+        *field = value;
     }
 }
 
@@ -167,8 +204,8 @@ pub struct FixfloatObject {
 #[derive(Debug)]
 pub struct ArrayObject {
     pub header: ObjectHeader,
-    pub capacity: usize, // array capacity
-                         // data here
+    pub size: usize, // array capacity
+                     // data here
 }
 
 impl ArrayObject {
@@ -181,13 +218,13 @@ impl ArrayObject {
     pub unsafe fn data(&self) -> &[ObjectRef] {
         let self_ptr = self as *const Self;
         let data_ptr = self_ptr.add(1) as *const ObjectRef;
-        slice::from_raw_parts(data_ptr, self.capacity)
+        slice::from_raw_parts(data_ptr, self.size)
     }
 
     pub unsafe fn data_mut(&mut self) -> &mut [ObjectRef] {
         let self_ptr = self as *mut Self;
         let data_ptr = self_ptr.add(1) as *mut ObjectRef;
-        slice::from_raw_parts_mut(data_ptr, self.capacity)
+        slice::from_raw_parts_mut(data_ptr, self.size)
     }
 }
 
@@ -254,17 +291,17 @@ impl ByteArrayObject {
 #[repr(C)]
 #[derive(Debug)]
 pub struct BoxObject {
-    header: ObjectHeader,
-    value: ObjectRef,
+    pub header: ObjectHeader,
+    pub boxed: ObjectRef,
 }
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct AlienObject {
-    header: ObjectHeader,
-    base: usize,
-    offset: usize,
-    expired: usize,
+    pub header: ObjectHeader,
+    pub base: usize,
+    pub offset: usize,
+    pub expired: usize,
 }
 
 #[repr(C)]
@@ -276,15 +313,60 @@ pub struct QuotationObject {
     pub entry: ObjectRef,
 }
 
+impl QuotationObject {
+    pub unsafe fn body(&self) -> &[ObjectRef] {
+        (*self.body.as_array()).data()
+    }
+
+    pub unsafe fn print(&self, vm: &crate::VM) {
+        let body = self.body();
+        print!("[ ");
+        for o in body {
+            let map = o.get_map();
+            if map == vm.special_objects.fixnum_map {
+                print!("{:?}", (*o.as_fixnum()).value);
+            } else if map == vm.special_objects.word_map {
+                print!("{:?}", (*o.as_word()).name());
+            } else if map == vm.special_objects.quotation_map {
+                (*o.as_quotation()).print(vm);
+            } else if map == vm.special_objects.box_map {
+                let inner = (*o.as_box()).boxed;
+                let inner_map = inner.get_map();
+                print!("<[");
+                if inner_map == vm.special_objects.fixnum_map {
+                    print!("{:?}", (*inner.as_fixnum()).value);
+                } else if inner_map == vm.special_objects.word_map {
+                    print!("{:?}", (*inner.as_word()).name());
+                } else if inner_map == vm.special_objects.quotation_map {
+                    (*o.as_quotation()).print(vm);
+                }
+                print!("]>");
+            }
+            print!(" ");
+        }
+        print!("]");
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct WordObject {
     pub header: ObjectHeader,
     pub name: ObjectRef,
     pub primitive: usize, // true => body rust function
-    pub body: ObjectRef,  // quotation
-    pub effect: ObjectRef,
+    pub syntax: usize,
+    pub body: ObjectRef, // quotation
     pub flags: ObjectRef,
+}
+
+impl WordObject {
+    pub unsafe fn name<'a>(&'a self) -> &'a str {
+        let arr = self.name.as_byte_array();
+        (*arr).as_str().unwrap()
+    }
+    pub unsafe fn quotation(&self) -> *const QuotationObject {
+        self.body.0 as *const QuotationObject
+    }
 }
 
 pub const SLOT_CONSTANT: usize = 0;
@@ -321,6 +403,11 @@ pub struct Map {
 }
 
 impl Map {
+    pub unsafe fn name<'a>(&'a self) -> &'a str {
+        let arr = self.name.as_byte_array();
+        (*arr).as_str().unwrap()
+    }
+
     pub unsafe fn slots(&self) -> &[Slot] {
         let self_ptr = self as *const Map;
         let slots_ptr = self_ptr.add(1) as *const Slot;

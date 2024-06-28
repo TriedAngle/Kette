@@ -41,6 +41,10 @@ impl VM {
         self.stack.pop().unwrap()
     }
 
+    pub fn peek(&mut self) -> object::ObjectRef {
+        *self.stack.last().unwrap()
+    }
+
     pub fn retain_push(&mut self, obj: object::ObjectRef) {
         self.retainstack.push(obj)
     }
@@ -57,7 +61,7 @@ impl VM {
         self.callstack.pop().unwrap()
     }
 
-    pub fn execute_primitive(&mut self, word: *const object::WordObject) {
+    pub unsafe fn execute_primitive(&mut self, word: *const object::WordObject) {
         let fun: fn(vm: *mut VM) = unsafe {
             assert_eq!((*word).primitive, 1);
             mem::transmute((*word).body.0)
@@ -67,13 +71,161 @@ impl VM {
         fun(vm);
     }
 
+    pub unsafe fn execute_quotation(&mut self, quotation: *const object::QuotationObject) {
+        for obj in (*quotation).body() {
+            let map = obj.get_map();
+
+            if map == self.special_objects.word_map {
+                self.execute_word(obj.as_word());
+                continue;
+            }
+
+            let copy = self.clone_object(*obj);
+
+            self.push(copy)
+        }
+    }
+
+    pub unsafe fn execute_word(&mut self, word: *const object::WordObject) {
+        if (*word).primitive == 1 {
+            self.execute_primitive(word);
+            return;
+        }
+        let quotation = (*word).quotation();
+        let body = (*quotation).body();
+
+        for quot_word in body {
+            self.execute_word(quot_word.as_word());
+        }
+    }
+
+    // ( end -- array )
+    pub unsafe fn parse_until(&mut self) {
+        let mut vec = Vec::<object::ObjectRef>::new();
+        let end_obj = self.pop().as_box();
+        let end_word = (*end_obj).boxed;
+        loop {
+            self.read_word();
+            let word = self.peek();
+            self.dup();
+            if self.is_false() {
+                self.drop();
+                break; // TODO HANDLE ERROR
+            }
+            self.dup();
+            self.try_parse_number();
+            self.dup();
+            if self.is_true() {
+                let num = self.pop();
+                self.drop();
+                vec.push(num);
+                continue;
+            }
+            self.drop();
+            self.lookup_word();
+            self.dup();
+            if self.is_false() {
+                // TODO HANDLE ERROR
+            }
+            self.dup();
+            if self.is_syntax_word() {
+                let word = self.pop().as_word();
+                self.execute_word(word);
+                continue;
+            }
+            let word = self.pop();
+            if word == end_word {
+                break;
+            }
+            vec.push(word);
+        }
+        let arr = self.allocate_array_from_slice(&vec);
+        self.push(arr);
+    }
+
+    // returns a quotation
+    pub unsafe fn parse_string(&mut self, s: &str) -> object::ObjectRef {
+        self.bind_input(s);
+        let mut vec = Vec::<object::ObjectRef>::new();
+
+        loop {
+            self.read_word();
+            self.dup();
+            if self.is_false() {
+                self.drop();
+                break;
+            }
+            self.dup();
+            self.try_parse_number();
+            self.dup();
+            if self.is_true() {
+                let num = self.pop();
+                self.drop();
+                vec.push(num);
+                continue;
+            }
+            self.drop();
+            self.lookup_word();
+            self.dup();
+            if self.is_false() {
+                // TODO HANDLE ERROR
+            }
+            self.dup();
+            if self.is_syntax_word() {
+                let word = self.pop().as_word();
+                println!("syntax! {:?}", (*word).name());
+                self.execute_word(word);
+                let accum = self.pop();
+                vec.push(accum);
+                continue;
+            }
+            let word = self.pop();
+
+            vec.push(word);
+        }
+
+        let arr = self.allocate_array_from_slice(&vec);
+        self.push(arr);
+        primitives::primitive_array_to_quotation(self as *mut Self);
+        self.pop()
+    }
+
+    // ( name -- word/f )
+    pub unsafe fn lookup_word(&mut self) {
+        let word_name = self.pop().as_byte_array();
+        let word = self.words.get((*word_name).as_str().unwrap());
+        if let Some(word) = word {
+            self.push(object::ObjectRef::from_word(*word))
+        } else {
+            self.push_false();
+        }
+    }
+
+    // ( word -- ? )
+    pub unsafe fn is_primitive_word(&mut self) -> bool {
+        let word = self.pop().as_word();
+        (*word).primitive == 1
+    }
+
+    // ( word -- ? )
+    pub unsafe fn is_syntax_word(&mut self) -> bool {
+        let word = self.pop().as_word();
+        (*word).syntax == 1
+    }
+
     pub fn init(&mut self) {
         self.gc.link_vm(self as *const VM);
+        self.init_primitive_maps();
+        self.add_primitives();
     }
 
     pub fn bind_input(&mut self, input: &str) {
-        self.gc.unset_object_root(object::ObjectRef(self.special_objects.input as *mut object::Object));
-        self.gc.unset_object_root(object::ObjectRef(self.special_objects.input_offset as *mut object::Object));
+        self.gc.unset_object_root(object::ObjectRef(
+            self.special_objects.input as *mut object::Object,
+        ));
+        self.gc.unset_object_root(object::ObjectRef(
+            self.special_objects.input_offset as *mut object::Object,
+        ));
 
         let input_object = self.allocate_string(input);
         self.gc.set_object_root(input_object);
@@ -89,7 +241,9 @@ impl VM {
     }
 
     pub fn push_input_stream_offset(&mut self) {
-        self.push(object::ObjectRef(self.special_objects.input_offset as *mut Object));
+        self.push(object::ObjectRef(
+            self.special_objects.input_offset as *mut Object,
+        ));
     }
 
     pub fn read_word(&mut self) {
@@ -102,10 +256,12 @@ impl VM {
         while offset < input.len() && input.as_bytes()[offset].is_ascii_whitespace() {
             offset += 1;
         }
-        
+
         if offset >= input.len() {
             self.push_false();
-            unsafe { (*inoffseto).value = offset; }
+            unsafe {
+                (*inoffseto).value = offset;
+            }
             return;
         }
 
@@ -115,7 +271,9 @@ impl VM {
             offset += 1;
         }
 
-        unsafe { (*inoffseto).value = offset; }
+        unsafe {
+            (*inoffseto).value = offset;
+        }
 
         let word = &input[start..offset];
         let word_obj = self.allocate_string(word);
@@ -209,7 +367,7 @@ impl<'a> SlotDescriptor<'a> {
             index: 0,
             read_only: 0,
         }
-    } 
+    }
 }
 
 impl<'a> Default for SlotDescriptor<'a> {
@@ -242,12 +400,24 @@ impl VM {
         obj
     }
 
+    pub fn allocate_array_from_slice(&mut self, slice: &[object::ObjectRef]) -> object::ObjectRef {
+        let array_obj = self.allocate_array(slice.len());
+        let array = array_obj.as_array_mut();
+        unsafe {
+            for (i, field) in (*array).data_mut().iter_mut().enumerate() {
+                *field = slice[i];
+            }
+        }
+
+        array_obj
+    }
+
     pub fn allocate_array(&mut self, capacity: usize) -> object::ObjectRef {
         let required_size = object::ArrayObject::required_size(capacity);
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
         unsafe {
             let arr = obj.as_array_mut();
-            (*arr).capacity = capacity;
+            (*arr).size = capacity;
         }
 
         obj
@@ -314,7 +484,31 @@ impl VM {
         obj
     }
 
-
+    pub unsafe fn clone_object(&mut self, obj: object::ObjectRef) -> object::ObjectRef {
+        let map = obj.get_map_mut();
+        if map == self.special_objects.fixnum_map {
+            let num = obj.as_fixnum();
+            self.allocate_fixnum((*num).value)
+        } else if map == self.special_objects.array_map {
+            let orig = obj.as_array();
+            let size = (*orig).size;
+            let data = (*orig).data();
+            let copy = self.allocate_array(size);
+            let copy_data = (*copy.as_array_mut()).data_mut();
+            for (od, cd) in data.iter().zip(copy_data) {
+                *cd = self.clone_object(*cd);
+            }
+            copy
+        } else if map == self.special_objects.bytearray_map {
+            let orig = obj.as_byte_array();
+            let copy = self.gc.allocate((*orig).capacity, 8, false).unwrap();
+            // TODO finish this lol
+            copy
+        } else {
+            // TODO check map for custom clone
+            obj
+        }
+    }
 
     pub fn allocate_fixnum(&mut self, value: usize) -> object::ObjectRef {
         let map = *self.maps.get("fixnum").unwrap();
@@ -326,7 +520,7 @@ impl VM {
         object
     }
 
-    pub fn initialize_primitive_maps(&mut self) {
+    pub fn init_primitive_maps(&mut self) {
         let map_map = self.allocate_map("map", &[]);
         unsafe {
             self.special_objects.map_map = map_map.as_map_mut();
@@ -486,6 +680,8 @@ impl VM {
             ],
         );
 
+        self.special_objects.array_map = array_map.as_map_mut();
+
         let quotation_traits = self.allocate_map("quotation-traits", &[]);
 
         let quotation_map = self.allocate_map(
@@ -519,15 +715,11 @@ impl VM {
                     index: 2,
                     read_only: 0,
                 },
-                SlotDescriptor {
-                    name: "call",
-                    kind: object::SLOT_WORD,
-                    value_type: object::ObjectRef::null(),
-                    index: 0,
-                    read_only: 0,
-                },
+                SlotDescriptor::word("array>quotation"),
+                SlotDescriptor::word("call"),
             ],
         );
+        self.special_objects.quotation_map = quotation_map.as_map_mut();
 
         let word_traits = self.allocate_map("word-traits", &[]);
 
@@ -579,36 +771,74 @@ impl VM {
             ],
         );
 
+        self.special_objects.word_map = word_map.as_map_mut();
+
         let false_traits = self.allocate_map("false-traits", &[]);
         let true_traits = self.allocate_map("true-traits", &[]);
 
-        let false_map = self.allocate_map("f", &[
-            SlotDescriptor {
-                name: "parent",
-                kind: object::SLOT_PARENT,
-                value_type: false_traits,
-                index: 0,
-                read_only: 0,
-            },
-            SlotDescriptor::word("f"),
-        ]);
+        let false_map = self.allocate_map(
+            "f",
+            &[
+                SlotDescriptor {
+                    name: "parent",
+                    kind: object::SLOT_PARENT,
+                    value_type: false_traits,
+                    index: 0,
+                    read_only: 0,
+                },
+                SlotDescriptor::word("f"),
+            ],
+        );
 
-        let true_map = self.allocate_map("t", &[
-            SlotDescriptor {
-                name: "parent",
-                kind: object::SLOT_PARENT,
-                value_type: true_traits,
-                index: 0,
-                read_only: 0,
-            },
-            SlotDescriptor::word("t"),
-        ]);
+        let true_map = self.allocate_map(
+            "t",
+            &[
+                SlotDescriptor {
+                    name: "parent",
+                    kind: object::SLOT_PARENT,
+                    value_type: true_traits,
+                    index: 0,
+                    read_only: 0,
+                },
+                SlotDescriptor::word("t"),
+            ],
+        );
 
         let false_object = self.allocate_object(false_map);
         let true_object = self.allocate_object(true_map);
         self.gc.set_object_root(false_object);
         self.gc.set_object_root(true_object);
 
+        let box_map = self.allocate_map(
+            "box",
+            &[SlotDescriptor {
+                name: "boxed",
+                kind: object::SLOT_DATA,
+                value_type: object::ObjectRef::null(),
+                index: 0,
+                read_only: 1,
+            }],
+        );
+        self.special_objects.box_map = box_map.as_map_mut();
 
+        let globals = self.allocate_map(
+            "globals",
+            &[
+                SlotDescriptor::word(">box"),
+                SlotDescriptor::word("\\"),
+                SlotDescriptor::word("["),
+                SlotDescriptor::word("]"),
+                SlotDescriptor::word(":"),
+                SlotDescriptor::word(";"),
+            ],
+        );
+    }
+
+    pub fn print_quotation(&self, obj: object::ObjectRef) {
+        unsafe {
+            let quot = obj.as_quotation().as_ref().unwrap();
+            quot.print(self);
+            println!();
+        }
     }
 }
