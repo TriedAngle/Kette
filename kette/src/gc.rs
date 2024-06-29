@@ -314,6 +314,17 @@ impl MarkAndSweep {
         }
     }
 
+    pub fn deallocate_all(&mut self) {
+        let allocations = self
+            .allocations
+            .iter()
+            .map(|(k, _v)| *k)
+            .collect::<Vec<_>>();
+        allocations
+            .iter()
+            .for_each(|obj| self.deallocate(*obj).unwrap());
+    }
+
     pub fn set_object_root(&mut self, obj: object::ObjectRef) {
         if let Some(allocation) = self.allocations.get_mut(&obj) {
             allocation.root();

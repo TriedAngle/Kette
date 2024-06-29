@@ -12,6 +12,7 @@ impl VM {
         (*word).name = word_name;
         (*word).primitive = 1;
         (*word).syntax = if syntax { 1 } else { 0 };
+        (*word).properties = object::ObjectRef::null();
         (*word).body = object::ObjectRef::from_fn(fun);
 
         self.words.insert(name.to_string(), word);
@@ -96,6 +97,9 @@ unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> obje
     let word = word_object.as_word_mut();
     (*word).name = name;
     (*word).primitive = 0;
+    (*word).syntax = 0;
+    (*word).properties = object::ObjectRef::null();
+    (*word).body = object::ObjectRef::null();
 
     // TODO: implement global vocabulary
     let word_name = (*name.as_byte_array()).as_str().unwrap().to_string();

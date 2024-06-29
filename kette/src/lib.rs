@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::mem;
-// use std::ptr;
+use std::ptr;
 
 use object::Object;
 
@@ -226,6 +226,10 @@ impl VM {
         self.add_primitives();
     }
 
+    pub fn deinit(&mut self) {
+        self.gc.deallocate_all();
+    }
+
     pub fn bind_input(&mut self, input: &str) {
         self.gc.unset_object_root(object::ObjectRef(
             self.special_objects.input as *mut object::Object,
@@ -389,7 +393,8 @@ impl VM {
             }
 
             (*ba).set_size(s.len());
-            (*ba).copy_rust_string(s);
+
+            ptr::copy(s.as_ptr(), (*ba).data_ptr_mut(), s.len());
         }
 
         obj
@@ -457,7 +462,7 @@ impl VM {
                 let slot = (*map).get_slot_mut(index);
                 slot.name = slot_name;
                 slot.kind = desc.kind;
-                slot.read_only = slot.read_only;
+                slot.read_only = desc.read_only;
                 slot.value_type = desc.value_type;
                 slot.index = desc.index;
             }

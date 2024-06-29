@@ -269,15 +269,15 @@ impl ByteArrayObject {
         self.data() == other.as_bytes()
     }
 
-    pub unsafe fn copy_rust_string(&mut self, data: &str) {
-        assert!(
-            self.capacity >= data.len(),
-            "Not enough capacity in ByteArrayObject"
-        );
-        let self_ptr = self as *mut Self as *mut u8;
-        let data_ptr = self_ptr.add(mem::size_of::<ObjectHeader>() + mem::size_of::<usize>());
-        ptr::copy_nonoverlapping(data.as_ptr(), data_ptr, data.len());
-    }
+    // pub unsafe fn copy_rust_string(&mut self, data: &str) {
+    //     assert!(
+    //         self.capacity >= data.len(),
+    //         "Not enough capacity in ByteArrayObject"
+    //     );
+    //     let self_ptr = self as *mut Self as *mut u8;
+    //     let data_ptr = self_ptr.add(mem::size_of::<ObjectHeader>() + mem::size_of::<usize>());
+
+    // }
 
     pub unsafe fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
         let data_ptr = (self as *const Self as *const u8)
