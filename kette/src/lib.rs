@@ -11,12 +11,12 @@ pub mod system;
 
 pub struct VM {
     pub gc: gc::MarkAndSweep,
+    pub special_objects: object::SpecialObjects,
     pub stack: Vec<object::ObjectRef>,
     pub retainstack: Vec<object::ObjectRef>,
     pub callstack: Vec<object::ObjectRef>,
     pub maps: HashMap<String, *mut object::Map>,
     pub words: HashMap<String, *mut object::WordObject>,
-    pub special_objects: object::SpecialObjects,
 }
 
 impl VM {
@@ -26,9 +26,9 @@ impl VM {
             stack: Vec::new(),
             retainstack: Vec::new(),
             callstack: Vec::new(),
+            special_objects: Default::default(),
             maps: HashMap::new(),
             words: HashMap::new(),
-            special_objects: Default::default(),
         }
     }
 
@@ -262,7 +262,7 @@ impl VM {
         let inoffseto = self.special_objects.input_offset;
 
         let input = unsafe { (*ino).as_str().unwrap() };
-        let mut offset = unsafe { (*inoffseto).value };
+        let mut offset = unsafe { (*inoffseto).value } as usize;
 
         while offset < input.len() && input.as_bytes()[offset].is_ascii_whitespace() {
             offset += 1;
@@ -271,7 +271,7 @@ impl VM {
         if offset >= input.len() {
             self.push_false();
             unsafe {
-                (*inoffseto).value = offset;
+                (*inoffseto).value = offset as isize;
             }
             return;
         }
@@ -283,7 +283,7 @@ impl VM {
         }
 
         unsafe {
-            (*inoffseto).value = offset;
+            (*inoffseto).value = offset as isize;
         }
 
         let word = &input[start..offset];
@@ -302,7 +302,7 @@ impl VM {
         let ba = obj.as_byte_array();
         let string = unsafe { (*ba).as_str().unwrap() };
         if let Ok(num) = str::parse::<usize>(string) {
-            let num_obj = self.allocate_fixnum(num);
+            let num_obj = self.allocate_fixnum(num as isize);
             self.push(num_obj);
         } else {
             self.push_false();
@@ -337,7 +337,7 @@ impl VM {
         self.push(object::ObjectRef(self.special_objects.false_object));
     }
 
-    pub fn push_fixnum(&mut self, fixnum: usize) {
+    pub fn push_fixnum(&mut self, fixnum: isize) {
         let obj = self.allocate_fixnum(fixnum);
         self.push(obj);
     }
@@ -382,19 +382,57 @@ impl<'a> Default for SlotDescriptor<'a> {
 }
 
 impl VM {
-    pub fn allocate_string<'a>(&mut self, s: &'a str) -> object::ObjectRef {
-        let required_size = object::ByteArrayObject::required_string_size(s);
+    pub fn allocate_object(&mut self, map: object::ObjectRef) -> object::ObjectRef {
+        let map = map.as_map_mut();
+        let required_size = unsafe { object::Object::required_size(&*map) };
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
+        unsafe {
+            let object = obj.object_mut();
+            (*object).set_map(map);
+        }
+        obj
+    }
 
+    pub fn allocate_fixnum(&mut self, value: isize) -> object::ObjectRef {
+        let map = self.special_objects.fixnum_map;
+        let object = self.allocate_object(object::ObjectRef::from_map(map));
+        let num = object.as_fixnum_mut();
+        unsafe {
+            (*num).value = value;
+        }
+        object
+    }
+
+    pub fn allocate_fixfloat(&mut self, value: f64) -> object::ObjectRef {
+        let map = self.special_objects.fixfloat_map;
+        let object = self.allocate_object(object::ObjectRef::from_map(map));
+        let num = object.as_fixfloat_mut();
+        unsafe {
+            (*num).value = value;
+        }
+        object
+    }
+
+    pub fn allocate_string<'a>(&mut self, s: &'a str) -> object::ObjectRef {
+        let obj = self.allocate_bytearray(s.len());
         unsafe {
             let ba = obj.as_byte_array_mut();
-            if !self.special_objects.bytearray_map.is_null() {
-                (*ba).header.map = object::ObjectRef::from_map(self.special_objects.bytearray_map);
-            }
-
-            (*ba).set_size(s.len());
-
             ptr::copy(s.as_ptr(), (*ba).data_ptr_mut(), s.len());
+        }
+        obj
+    }
+
+    pub fn allocate_bytearray<'a>(&mut self, size: usize) -> object::ObjectRef {
+        let ba_size = mem::size_of::<object::ByteArrayObject>();
+        let obj = self.gc.allocate(ba_size + size, 8, false).unwrap();
+        let ba = obj.as_byte_array_mut();
+        unsafe {
+            (*ba).header = object::ObjectHeader {
+                meta: 0,
+                map: object::ObjectRef::from_map(self.special_objects.bytearray_map),
+            };
+            (*ba).capacity = size;
+            ptr::write_bytes((*ba).data_ptr_mut(), 0, size);
         }
 
         obj
@@ -408,7 +446,6 @@ impl VM {
                 *field = slice[i];
             }
         }
-
         array_obj
     }
 
@@ -419,7 +456,6 @@ impl VM {
             let arr = obj.as_array_mut();
             (*arr).size = capacity;
         }
-
         obj
     }
 
@@ -473,22 +509,14 @@ impl VM {
         map_obj
     }
 
-    pub fn allocate_object(&mut self, map: object::ObjectRef) -> object::ObjectRef {
-        let map = map.as_map_mut();
-        let required_size = unsafe { object::Object::required_size(&*map) };
-        let obj = self.gc.allocate(required_size, 8, false).unwrap();
-        unsafe {
-            let object = obj.object_mut();
-            (*object).set_map(map);
-        }
-        obj
-    }
-
     pub unsafe fn clone_object(&mut self, obj: object::ObjectRef) -> object::ObjectRef {
         let map = obj.get_map_mut();
         if map == self.special_objects.fixnum_map {
             let num = obj.as_fixnum();
             self.allocate_fixnum((*num).value)
+        } else if map == self.special_objects.fixfloat_map {
+            let num = obj.as_fixfloat();
+            self.allocate_fixfloat((*num).value)
         } else if map == self.special_objects.array_map {
             let orig = obj.as_array();
             let size = (*orig).size;
@@ -500,26 +528,15 @@ impl VM {
             }
             copy
         } else if map == self.special_objects.bytearray_map {
-            // let orig = obj.as_byte_array();
-            // let copy = self.gc.allocate((*orig).capacity, 8, false).unwrap();
-            // let new = copy.as_byte_array_mut();
-            // (*new).capacity = (*orig).capacity;
-            // ptr::copy_nonoverlapping((*orig).data_ptr(), (*new).data_ptr_mut(), (*new).capacity);
-            obj
+            let orig = obj.as_byte_array();
+            let new_obj = self.allocate_bytearray((*orig).capacity);
+            let new = new_obj.as_byte_array_mut();
+            ptr::copy_nonoverlapping((*orig).data_ptr(), (*new).data_ptr_mut(), (*new).capacity);
+            new_obj
         } else {
             // TODO check map for custom clone
             obj
         }
-    }
-
-    pub fn allocate_fixnum(&mut self, value: usize) -> object::ObjectRef {
-        let map = *self.maps.get("fixnum").unwrap();
-        let object = self.allocate_object(object::ObjectRef::from_map(map));
-        let num = object.as_fixnum_mut();
-        unsafe {
-            (*num).value = value;
-        }
-        object
     }
 
     pub fn init_primitive_maps(&mut self) {
@@ -529,6 +546,7 @@ impl VM {
             let map = map_map.as_map_mut();
             (*map).header.map = map_map;
         }
+        self.special_objects.map_map = map_map.as_map_mut();
 
         let bytearray_traits = self.allocate_map("bytearray-traits", &[]);
 
@@ -579,9 +597,7 @@ impl VM {
             }
         }
 
-        let integer_traits = self.allocate_map("integer-traits", &[]);
-
-        let float_traits = self.allocate_map("float-traits", &[]);
+        let number_traits = self.allocate_map("number-traits", &[]);
 
         let fixnum_map = self.allocate_map(
             "fixnum",
@@ -589,7 +605,7 @@ impl VM {
                 SlotDescriptor {
                     name: "parent",
                     kind: object::SLOT_PARENT,
-                    value_type: integer_traits,
+                    value_type: number_traits,
                     ..Default::default()
                 },
                 SlotDescriptor {
@@ -607,7 +623,7 @@ impl VM {
                 SlotDescriptor {
                     name: "parent",
                     kind: object::SLOT_PARENT,
-                    value_type: float_traits,
+                    value_type: number_traits,
                     ..Default::default()
                 },
                 SlotDescriptor {
@@ -797,6 +813,66 @@ impl VM {
             }],
         );
         self.special_objects.box_map = box_map.as_map_mut();
+
+        let context_map = self.allocate_map(
+            "context",
+            &[
+                SlotDescriptor {
+                    name: "garbage-collector",
+                    kind: object::SLOT_DATA,
+                    value_type: fixnum_map,
+                    index: 0,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "special-objects",
+                    kind: object::SLOT_DATA,
+                    value_type: fixnum_map,
+                    index: 1,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "data-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: fixnum_map,
+                    index: 2,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "retain-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: fixnum_map,
+                    index: 3,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "call-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: fixnum_map,
+                    index: 4,
+                    read_only: 0,
+                },
+            ],
+        );
+        self.special_objects.context_map = context_map.as_map_mut();
+
+        let context_object = self.allocate_object(context_map);
+        unsafe {
+            let sp = self as *mut Self;
+            let gc = self.allocate_fixnum(&mut (*sp).gc as *mut _ as isize);
+            let special_objects =
+                self.allocate_fixnum(&mut (*sp).special_objects as *mut _ as isize);
+            let stack = self.allocate_fixnum(&self.stack as *const _ as isize);
+            let retainstack = self.allocate_fixnum(&self.retainstack as *const _ as isize);
+            let callstack = self.allocate_fixnum(&self.callstack as *const _ as isize);
+
+            context_object.set_field(0, gc);
+            context_object.set_field(1, special_objects);
+            context_object.set_field(2, stack);
+            context_object.set_field(3, retainstack);
+            context_object.set_field(4, callstack);
+        }
+        self.special_objects.context_object = context_object;
     }
 
     pub fn print_quotation(&self, obj: object::ObjectRef) {

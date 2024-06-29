@@ -10,6 +10,8 @@ pub struct SpecialObjects {
     pub array_map: *mut Map,
     pub bytearray_map: *mut Map,
     pub alien_map: *mut Map,
+    pub context_map: *mut Map,
+    pub context_object: ObjectRef,
 
     pub false_object: *mut Object,
     pub true_object: *mut Object,
@@ -30,7 +32,8 @@ impl Default for SpecialObjects {
             array_map: ptr::null_mut(),
             bytearray_map: ptr::null_mut(),
             alien_map: ptr::null_mut(),
-
+            context_map: ptr::null_mut(),
+            context_object: ObjectRef::null(),
             false_object: ptr::null_mut(),
             true_object: ptr::null_mut(),
 
@@ -190,7 +193,7 @@ impl ObjectRef {
 #[derive(Debug)]
 pub struct FixnumObject {
     pub header: ObjectHeader,
-    pub value: usize,
+    pub value: isize,
 }
 
 #[repr(C)]
@@ -238,8 +241,8 @@ pub struct ByteArrayObject {
 
 impl ByteArrayObject {
     pub unsafe fn data_ptr_mut(&mut self) -> *mut u8 {
-        let self_ptr = self as *mut Self as *mut u8;
-        let data_ptr = self_ptr.add(mem::size_of::<Self>());
+        let self_ptr = self as *mut Self;
+        let data_ptr = self_ptr.add(1) as *mut u8;
         data_ptr
     }
 
@@ -287,16 +290,6 @@ impl ByteArrayObject {
             .unwrap_or(self.capacity);
         let data_slice = slice::from_raw_parts(data_ptr, length);
         std::str::from_utf8(data_slice)
-    }
-
-    pub fn required_string_size(s: &str) -> usize {
-        let object_size = mem::size_of::<ObjectHeader>() + mem::size_of::<usize>();
-        let data_size = s.len();
-        object_size + data_size
-    }
-
-    pub unsafe fn set_size(&mut self, size: usize) {
-        self.capacity = size;
     }
 }
 

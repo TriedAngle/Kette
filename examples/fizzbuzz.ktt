@@ -1,0 +1,14 @@
+: -1 ( a -- a-1 ) 1 - ;
+: n| ( a n -- ? ) % 0 = ;
+: !n| ( a n -- ? ) n| not ;
+
+: fizzbuzz ( num -- )
+    dup 15 n| [ s" FizzBuzz" utf8. ] [
+        dup 3 n| [ s" Fizz" utf8. ] when
+        dup 5 n| [ s" Buzz" utf8. ] when
+    ] if
+
+    dup [ 3 !n| ] keep 5 !n| and [ dup . ] when
+    dup 0 > [ -1 fizzbuzz ] [ drop ] if ;
+
+15 fizzbuzz

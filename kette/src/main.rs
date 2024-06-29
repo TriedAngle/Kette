@@ -5,6 +5,8 @@ fn main() {
     let mut vm = VM::new();
     vm.init();
 
+    // accessing vm special objects example: let-me-cook 1 slot 8 + get^ ^object 0 slot utf8. -> prints "world"
+
     let preload = r#"
         : + ( a b -- c ) fixnum+ ;
         : - ( a b -- c ) fixnum- ;
@@ -14,12 +16,21 @@ fn main() {
         : % ( a b -- c ) fixnum% ;
         : > ( a b -- ? ) fixnum> ;
         : >= ( a b -- ? ) fixnum>= ;
-        : -1 ( a -- a-1 ) 1 - ;
-        
-        : n| ( a n -- ? ) % 0 = ;
-        : !n| ( a n -- ? ) n| not ;
+
+        : 2dup ( a b -- a b a b ) dup [ dupd swap ] dip ; 
+        : 2dip ( ... a b q -- ... a b ... ) swap [ dip ] dip ;
+        : 2keep ( ... a b q -- ... a b ) [ 2dup ] dip 2dip ;
+        : 2drop ( a b -- ) drop drop ;
+
+        : ^object ( ptr -- obj ) 0 slot ;
 
         : when ( ... ? q -- ... ) swap [ call ] [ drop ] if ;
+        : unless ( ... ? q -- ... ) swap [ drop ] [ call ] if ;
+
+        : loop ( ... q -- ... ) [ call ] keep swap [ loop ] when ;
+
+        : while ( ... cond body -- ... ) [ [ call ] keep ] dip rot 
+            [ [ dropd call ] 2keep while ] [ 2drop ] if ;
     "#;
 
     unsafe {
@@ -63,14 +74,3 @@ fn main() {
 
     vm.deinit();
 }
-
-// : fizzbuzz ( num -- )
-// dup 15 n| [ s" FizzBuzz" utf8. ] [
-//     dup 3 n| [ s" Fizz" utf8. ] when
-//     dup 5 n| [ s" Buzz" utf8. ] when
-// ] if
-
-// dup [ 3 !n| ] keep 5 !n| and [ dup . ] when
-// dup 0 > [ -1 fizzbuzz ] [ drop ] if ;
-
-// 15 fizzbuzz

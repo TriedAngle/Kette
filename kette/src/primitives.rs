@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::object;
 use crate::VM;
 
@@ -66,7 +68,7 @@ unsafe fn primitive_string(vm: *mut VM) {
     let inoffsetto = v.special_objects.input_offset;
 
     let input = (*ino).as_str().unwrap();
-    let mut offset = (*inoffsetto).value;
+    let mut offset = (*inoffsetto).value as usize;
     let start = offset;
 
     while offset < input.len() {
@@ -77,7 +79,7 @@ unsafe fn primitive_string(vm: *mut VM) {
     }
 
     // TODO: handle error
-    (*inoffsetto).value = offset + 1;
+    (*inoffsetto).value = (offset + 1) as isize;
     let string = &input[start + 1..offset];
     let string_obj = v.allocate_string(string);
     v.push(string_obj);
@@ -87,7 +89,7 @@ unsafe fn primitive_print_string(vm: *mut VM) {
     let obj = (*vm).pop();
     let ba = obj.as_byte_array();
     let s = (*ba).as_str().unwrap();
-    println!("{}", s);
+    println!("{:?}", s);
 }
 
 unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
@@ -137,10 +139,6 @@ unsafe fn primitive_define_word(vm: *mut VM) {
 unsafe fn primitive_define_word_end(vm: *mut VM) {
     (*vm).push_false();
 }
-
-// unsafe fn get_map(vm: *mut VM) {
-//     let
-// }
 
 // ( a -- a a )
 unsafe fn primitive_dup(vm: *mut VM) {
@@ -297,6 +295,42 @@ unsafe fn primitive_print_quotation(vm: *mut VM) {
     (*vm).print_quotation(quot);
 }
 
+unsafe fn primitive_context(vm: *mut VM) {
+    (*vm).push((*vm).special_objects.context_object);
+}
+
+unsafe fn primitive_get_map(vm: *mut VM) {
+    let obj = (*vm).pop();
+    (*vm).push(object::ObjectRef::from_map(obj.get_map_mut()));
+}
+
+unsafe fn primitive_slot(vm: *mut VM) {
+    let index = (*vm).pop().as_fixnum();
+    let obj = (*vm).pop();
+    let slot = obj.get_field((*index).value as usize);
+    (*vm).push(slot);
+}
+
+unsafe fn primitive_set_slot(vm: *mut VM) {
+    let index = (*vm).pop().as_fixnum();
+    let obj = (*vm).pop();
+    let value = (*vm).pop();
+    obj.set_field((*index).value as usize, value);
+}
+
+unsafe fn primitive_ptr_get(vm: *mut VM) {
+    let address = (*(*vm).pop().as_fixnum()).value as usize;
+    let ptr = address as *mut isize;
+    (*vm).push_fixnum(*ptr);
+}
+
+unsafe fn primitive_ptr_set(vm: *mut VM) {
+    let address = (*(*vm).pop().as_fixnum()).value;
+    let value = (*(*vm).pop().as_fixnum()).value;
+    let ptr: *mut isize = mem::transmute(address);
+    *ptr = value;
+}
+
 impl VM {
     unsafe fn add_globals_primitives(&mut self) {
         self.add_primitive(">box", primitive_box, false);
@@ -324,6 +358,14 @@ impl VM {
 
         self.add_primitive("t", primitive_push_true, false);
         self.add_primitive("f", primitive_push_false, false);
+
+        self.add_primitive("let-me-cook", primitive_context, false);
+        self.add_primitive(">map", primitive_get_map, false);
+        self.add_primitive("slot", primitive_slot, false);
+        self.add_primitive("set-slot", primitive_set_slot, false);
+
+        self.add_primitive("get^", primitive_ptr_get, false);
+        self.add_primitive("set^", primitive_ptr_set, false);
 
         self.add_primitive("if", primitive_if, false);
         self.add_primitive("and", primitive_and, false);
