@@ -186,6 +186,13 @@ impl MarkAndSweep {
                 self.worklist.push(*root);
             }
         }
+        for root in vm.words.values() {
+            let obj = object::ObjectRef::from_word(*root);
+            if let Some(allocation) = self.allocations.get_mut(&obj) {
+                allocation.mark();
+                self.worklist.push(obj);
+            }
+        }
         for (key, obj) in self.allocations.iter_mut() {
             if obj.is_root() {
                 obj.mark();
@@ -250,15 +257,15 @@ impl MarkAndSweep {
         let unmarked = self
             .allocations
             .iter()
-            .filter(|(k, v)| !v.is_marked())
-            .map(|(k, v)| *k)
+            .filter(|(_k, v)| !v.is_marked())
+            .map(|(k, _v)| *k)
             .collect::<Vec<_>>();
 
         unmarked
             .iter()
             .for_each(|obj| self.deallocate(*obj).unwrap());
 
-        self.allocations.iter_mut().for_each(|(k, v)| v.unmark());
+        self.allocations.iter_mut().for_each(|(_k, v)| v.unmark());
     }
 
     pub fn pause(&mut self) {
@@ -279,7 +286,7 @@ impl MarkAndSweep {
 
     pub fn print_all_objects(&self) {
         unsafe {
-            for (key, alloc) in self.allocations.iter() {
+            for (key, _alloc) in self.allocations.iter() {
                 println!("----");
                 println!("address: {:?}", key);
                 let map = key.get_map();

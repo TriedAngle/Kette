@@ -1,4 +1,4 @@
-use std::{ffi, mem, ptr};
+use std::{ffi, ptr};
 pub const PAGE_SIZE: usize = 4096;
 
 #[cfg(target_os = "windows")]

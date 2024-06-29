@@ -181,7 +181,7 @@ impl ObjectRef {
     }
 
     pub unsafe fn set_field(&self, index: usize, value: ObjectRef) {
-        let field = (self.0.add(1).add(index) as *mut ObjectRef);
+        let field = self.0.add(1).add(index) as *mut ObjectRef;
         *field = value;
     }
 }
@@ -237,9 +237,21 @@ pub struct ByteArrayObject {
 }
 
 impl ByteArrayObject {
+    pub unsafe fn data_ptr_mut(&mut self) -> *mut u8 {
+        let self_ptr = self as *mut Self as *mut u8;
+        let data_ptr = self_ptr.add(mem::size_of::<Self>());
+        data_ptr
+    }
+
+    pub unsafe fn data_ptr(&self) -> *const u8 {
+        let self_ptr = self as *const Self as *const u8;
+        let data_ptr = self_ptr.add(mem::size_of::<Self>());
+        data_ptr
+    }
+
     unsafe fn data(&self) -> &[u8] {
         let self_ptr = self as *const Self as *const u8;
-        let data_ptr = self_ptr.add(mem::size_of::<ObjectHeader>() + mem::size_of::<usize>());
+        let data_ptr = self_ptr.add(mem::size_of::<Self>());
         slice::from_raw_parts(data_ptr, self.capacity)
     }
 
@@ -326,21 +338,23 @@ impl QuotationObject {
             if map == vm.special_objects.fixnum_map {
                 print!("{:?}", (*o.as_fixnum()).value);
             } else if map == vm.special_objects.word_map {
-                print!("{:?}", (*o.as_word()).name());
+                print!("{}", (*o.as_word()).name());
             } else if map == vm.special_objects.quotation_map {
                 (*o.as_quotation()).print(vm);
             } else if map == vm.special_objects.box_map {
                 let inner = (*o.as_box()).boxed;
                 let inner_map = inner.get_map();
-                print!("<[");
+                print!("\\ ");
                 if inner_map == vm.special_objects.fixnum_map {
                     print!("{:?}", (*inner.as_fixnum()).value);
                 } else if inner_map == vm.special_objects.word_map {
-                    print!("{:?}", (*inner.as_word()).name());
+                    print!("{}", (*inner.as_word()).name());
                 } else if inner_map == vm.special_objects.quotation_map {
                     (*o.as_quotation()).print(vm);
                 }
-                print!("]>");
+            } else {
+                let map_name = (*map).name();
+                print!("T{{{}}}", map_name)
             }
             print!(" ");
         }
@@ -355,8 +369,8 @@ pub struct WordObject {
     pub name: ObjectRef,
     pub primitive: usize, // true => body rust function
     pub syntax: usize,
+    pub properties: ObjectRef,
     pub body: ObjectRef, // quotation
-    pub flags: ObjectRef,
 }
 
 impl WordObject {

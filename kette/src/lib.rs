@@ -1,7 +1,6 @@
-#![allow(unused)]
-
 use std::collections::HashMap;
-use std::{mem, ptr};
+use std::mem;
+// use std::ptr;
 
 use object::Object;
 
@@ -53,6 +52,16 @@ impl VM {
         self.retainstack.pop().unwrap()
     }
 
+    pub fn pop_retain_push(&mut self) {
+        let x = self.pop();
+        self.retain_push(x);
+    }
+
+    pub fn retain_pop_push(&mut self) {
+        let x = self.retain_pop();
+        self.push(x);
+    }
+
     pub fn call_push(&mut self, obj: object::ObjectRef) {
         self.callstack.push(obj)
     }
@@ -91,12 +100,8 @@ impl VM {
             self.execute_primitive(word);
             return;
         }
-        let quotation = (*word).quotation();
-        let body = (*quotation).body();
-
-        for quot_word in body {
-            self.execute_word(quot_word.as_word());
-        }
+        let body = (*word).quotation();
+        self.execute_quotation(body);
     }
 
     // ( end -- array )
@@ -106,7 +111,6 @@ impl VM {
         let end_word = (*end_obj).boxed;
         loop {
             self.read_word();
-            let word = self.peek();
             self.dup();
             if self.is_false() {
                 self.drop();
@@ -146,7 +150,7 @@ impl VM {
     }
 
     // returns a quotation
-    pub unsafe fn parse_string(&mut self, s: &str) -> object::ObjectRef {
+    pub unsafe fn compile_string(&mut self, s: &str) -> object::ObjectRef {
         self.bind_input(s);
         let mut vec = Vec::<object::ObjectRef>::new();
 
@@ -177,7 +181,9 @@ impl VM {
                 let word = self.pop().as_word();
                 self.execute_word(word);
                 let accum = self.pop();
-                vec.push(accum);
+                if accum.object_mut() != self.special_objects.true_object {
+                    vec.push(accum);
+                }
                 continue;
             }
             let word = self.pop();
@@ -359,18 +365,6 @@ pub struct SlotDescriptor<'a> {
     pub read_only: usize, // 0/null/f => false
 }
 
-impl<'a> SlotDescriptor<'a> {
-    const fn word(name: &'a str) -> Self {
-        Self {
-            name,
-            kind: object::SLOT_WORD,
-            value_type: object::ObjectRef::null(),
-            index: 0,
-            read_only: 0,
-        }
-    }
-}
-
 impl<'a> Default for SlotDescriptor<'a> {
     fn default() -> Self {
         Self {
@@ -497,14 +491,16 @@ impl VM {
             let copy = self.allocate_array(size);
             let copy_data = (*copy.as_array_mut()).data_mut();
             for (od, cd) in data.iter().zip(copy_data) {
-                *cd = self.clone_object(*cd);
+                *cd = self.clone_object(*od);
             }
             copy
         } else if map == self.special_objects.bytearray_map {
-            let orig = obj.as_byte_array();
-            let copy = self.gc.allocate((*orig).capacity, 8, false).unwrap();
-            // TODO finish this lol
-            copy
+            // let orig = obj.as_byte_array();
+            // let copy = self.gc.allocate((*orig).capacity, 8, false).unwrap();
+            // let new = copy.as_byte_array_mut();
+            // (*new).capacity = (*orig).capacity;
+            // ptr::copy_nonoverlapping((*orig).data_ptr(), (*new).data_ptr_mut(), (*new).capacity);
+            obj
         } else {
             // TODO check map for custom clone
             obj
@@ -553,7 +549,6 @@ impl VM {
                     index: 1,
                     read_only: 0,
                 },
-                SlotDescriptor::word("utf8print"),
             ],
         );
 
@@ -598,19 +593,6 @@ impl VM {
                     value_type: object::ObjectRef::null(),
                     ..Default::default()
                 },
-                SlotDescriptor::word("fixnum+"),
-                SlotDescriptor::word("fixnum-"),
-                SlotDescriptor::word("fixnum*"),
-                SlotDescriptor::word("fixnum/"),
-                SlotDescriptor::word("fixnum%"),
-                SlotDescriptor::word("fixnum."),
-                SlotDescriptor::word("fixnum<"),
-                SlotDescriptor::word("fixnum>"),
-                SlotDescriptor::word("fixnum<="),
-                SlotDescriptor::word("fixnum>="),
-                SlotDescriptor::word("fixnum-bitand"),
-                SlotDescriptor::word("fixnum-bitor"),
-                SlotDescriptor::word("fixnum-bitnot"),
             ],
         );
 
@@ -629,11 +611,6 @@ impl VM {
                     value_type: object::ObjectRef::null(),
                     ..Default::default()
                 },
-                SlotDescriptor::word("fixfloat+"),
-                SlotDescriptor::word("fixfloat-"),
-                SlotDescriptor::word("fixfloat*"),
-                SlotDescriptor::word("fixfloat/"),
-                SlotDescriptor::word("fixfloat."),
             ],
         );
 
@@ -716,8 +693,6 @@ impl VM {
                     index: 2,
                     read_only: 0,
                 },
-                SlotDescriptor::word("array>quotation"),
-                SlotDescriptor::word("call"),
             ],
         );
         self.special_objects.quotation_map = quotation_map.as_map_mut();
@@ -744,28 +719,28 @@ impl VM {
                 SlotDescriptor {
                     name: "primitive?",
                     kind: object::SLOT_DATA,
-                    value_type: fixfloat_map,
+                    value_type: fixnum_map,
                     index: 1,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "body",
+                    name: "syntax?",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: fixnum_map,
                     index: 2,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "effect",
+                    name: "properties",
                     kind: object::SLOT_DATA,
                     value_type: object::ObjectRef::null(),
                     index: 3,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "flags",
+                    name: "body",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: quotation_map,
                     index: 4,
                     read_only: 0,
                 },
@@ -779,36 +754,32 @@ impl VM {
 
         let false_map = self.allocate_map(
             "f",
-            &[
-                SlotDescriptor {
-                    name: "parent",
-                    kind: object::SLOT_PARENT,
-                    value_type: false_traits,
-                    index: 0,
-                    read_only: 0,
-                },
-                SlotDescriptor::word("f"),
-            ],
+            &[SlotDescriptor {
+                name: "parent",
+                kind: object::SLOT_PARENT,
+                value_type: false_traits,
+                index: 0,
+                read_only: 0,
+            }],
         );
 
         let true_map = self.allocate_map(
             "t",
-            &[
-                SlotDescriptor {
-                    name: "parent",
-                    kind: object::SLOT_PARENT,
-                    value_type: true_traits,
-                    index: 0,
-                    read_only: 0,
-                },
-                SlotDescriptor::word("t"),
-            ],
+            &[SlotDescriptor {
+                name: "parent",
+                kind: object::SLOT_PARENT,
+                value_type: true_traits,
+                index: 0,
+                read_only: 0,
+            }],
         );
 
         let false_object = self.allocate_object(false_map);
         let true_object = self.allocate_object(true_map);
         self.gc.set_object_root(false_object);
         self.gc.set_object_root(true_object);
+        self.special_objects.false_object = false_object.0;
+        self.special_objects.true_object = true_object.0;
 
         let box_map = self.allocate_map(
             "box",
@@ -821,18 +792,6 @@ impl VM {
             }],
         );
         self.special_objects.box_map = box_map.as_map_mut();
-
-        let globals = self.allocate_map(
-            "globals",
-            &[
-                SlotDescriptor::word(">box"),
-                SlotDescriptor::word("\\"),
-                SlotDescriptor::word("["),
-                SlotDescriptor::word("]"),
-                SlotDescriptor::word(":"),
-                SlotDescriptor::word(";"),
-            ],
-        );
     }
 
     pub fn print_quotation(&self, obj: object::ObjectRef) {
