@@ -65,10 +65,14 @@ impl Object {
         self.header.map = ObjectRef::new(map as *mut Object);
     }
     pub unsafe fn get_field(&mut self, index: usize) -> ObjectRef {
-        *((self as *mut Self).add(1) as *mut ObjectRef).add(index)
+        let self_ptr = self as *mut Self;
+        let fields_ptr = self_ptr.add(1) as *mut ObjectRef;
+        *fields_ptr.add(index)
     }
     pub unsafe fn set_field(&mut self, index: usize, value: ObjectRef) {
-        let field = ((self as *mut Self).add(1) as *mut ObjectRef).add(index);
+        let self_ptr = self as *mut Self;
+        let fields_ptr = self_ptr.add(1) as *mut ObjectRef;
+        let field = fields_ptr.add(index);
         *field = value;
     }
 }
@@ -78,6 +82,14 @@ impl Object {
 pub struct ObjectRef(pub *mut Object);
 
 impl ObjectRef {
+    pub unsafe fn get_field(&self, index: usize) -> ObjectRef {
+        (*self.0).get_field(index)
+    }
+
+    pub unsafe fn set_field(&self, index: usize, value: ObjectRef) {
+        (*self.0).set_field(index, value)
+    }
+
     pub const fn new(ptr: *mut Object) -> Self {
         Self(ptr)
     }
@@ -188,14 +200,6 @@ impl ObjectRef {
 
     pub const fn as_quotation_mut(&self) -> *mut QuotationObject {
         self.0 as *mut QuotationObject
-    }
-
-    pub unsafe fn get_field(&self, index: usize) -> ObjectRef {
-        (*self.0).get_field(index)
-    }
-
-    pub unsafe fn set_field(&self, index: usize, value: ObjectRef) {
-        (*self.0).set_field(index, value)
     }
 }
 
@@ -376,10 +380,10 @@ impl QuotationObject {
 pub struct WordObject {
     pub header: ObjectHeader,
     pub name: ObjectRef,
+    pub body: ObjectRef, // quotation
+    pub properties: ObjectRef,
     pub primitive: usize, // true => body rust function
     pub syntax: usize,
-    pub properties: ObjectRef,
-    pub body: ObjectRef, // quotation
 }
 
 impl WordObject {
@@ -398,6 +402,8 @@ pub const SLOT_DATA: usize = 2;
 pub const SLOT_ASSIGNMENT: usize = 3;
 pub const SLOT_WORD: usize = 4;
 pub const SLOT_VARIABLE_DATA: usize = 5;
+// TODO: probably get rid of embedded data or handle fixnums&floats always diff?
+pub const SLOT_EMBEDDED_DATA: usize = 6;
 
 #[repr(C)]
 #[derive(Debug)]

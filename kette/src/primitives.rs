@@ -47,8 +47,37 @@ unsafe fn primitive_next_token(vm: *mut VM) {
     (*vm).read_word();
 }
 
+unsafe fn primitive_parse_until(vm: *mut VM) {
+    (*vm).parse_until();
+}
+
 unsafe fn primitive_link_token(vm: *mut VM) {
     (*vm).lookup_word();
+}
+
+unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
+    let word_map = (*vm).special_objects.word_map;
+    let word_object = (*vm).allocate_object(object::ObjectRef::from_map(word_map));
+
+    let word = word_object.as_word_mut();
+    (*word).name = name;
+    (*word).primitive = 0;
+    (*word).syntax = 0;
+    (*word).properties = object::ObjectRef::null();
+    (*word).body = object::ObjectRef::null();
+
+    // TODO: implement global vocabulary
+    let word_name = (*name.as_byte_array()).as_str().unwrap().to_string();
+    (*vm).words.insert(word_name, word);
+
+    word_object
+}
+
+unsafe fn primitive_create_empty_global_word(vm: *mut VM) {
+    let name = (*vm).pop();
+    let word = create_empty_global_word(vm, name);
+
+    (*vm).push(word);
 }
 
 unsafe fn primitive_quotation_start(vm: *mut VM) {
@@ -93,28 +122,17 @@ unsafe fn primitive_print_string(vm: *mut VM) {
     println!("{:?}", s);
 }
 
-unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
-    let word_map = (*vm).special_objects.word_map;
-    let word_object = (*vm).allocate_object(object::ObjectRef::from_map(word_map));
-
-    let word = word_object.as_word_mut();
-    (*word).name = name;
-    (*word).primitive = 0;
-    (*word).syntax = 0;
-    (*word).properties = object::ObjectRef::null();
-    (*word).body = object::ObjectRef::null();
-
-    // TODO: implement global vocabulary
-    let word_name = (*name.as_byte_array()).as_str().unwrap().to_string();
-    (*vm).words.insert(word_name, word);
-
-    word_object
-}
-
 unsafe fn parse_stack_effect(vm: *mut VM) {
+    (*vm).read_word();
+    _ = (*vm).pop();
     loop {
         (*vm).read_word();
         let word = (*vm).pop().as_byte_array();
+        if (*word).is_eq_rust("(") {
+            parse_stack_effect(vm);
+            println!("lol");
+            continue;
+        }
         if (*word).is_eq_rust(")") {
             break;
         }
@@ -152,6 +170,14 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
     (*word).syntax = 1;
     (*vm).push_true();
 }
+
+// unsafe fn primitive_define_tuple(vm: *mut VM) {
+
+// }
+
+// unsafe fn primitive_instantiate_tuple(vm: *mut VM) {
+
+// }
 
 unsafe fn primitive_define_end(vm: *mut VM) {
     (*vm).push_false();
@@ -325,16 +351,18 @@ unsafe fn primitive_get_map(vm: *mut VM) {
 unsafe fn primitive_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
-    // let map = obj.get_map();
-    // let slots = (*map).slots();
-    // let slot_info = slots.iter().find(|s| s.kind == object::SLOT_DATA && s.index == (*index).value as usize);
     let slot = obj.get_field((*index).value as usize);
 
-    // if let Some(info) = slot_info {
-    //     if info.value_type.as_map() == (*vm).special_objects.fixnum_map {
-    //         slot = (*vm).allocate_fixnum(slot.as_isize());
-    //     }
-    // }
+    if let Some(map) = obj.get_map().as_ref() {
+        if let Some(desc) = map
+            .slots()
+            .iter()
+            .find(|s| s.index == (*index).value as usize && s.kind == object::SLOT_EMBEDDED_DATA)
+        {
+            (*vm).push_fixnum(slot.as_isize());
+            return;
+        }
+    }
 
     (*vm).push(slot);
 }
@@ -343,6 +371,19 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
     let value = (*vm).pop();
+
+    if let Some(map) = obj.get_map().as_ref() {
+        if let Some(desc) = map
+            .slots()
+            .iter()
+            .find(|s| s.index == (*index).value as usize && s.kind == object::SLOT_EMBEDDED_DATA)
+        {
+            let num = (*value.as_fixnum()).value;
+            let val = mem::transmute(num);
+            obj.set_field((*index).value as usize, object::ObjectRef::from_usize(val));
+        }
+    }
+
     obj.set_field((*index).value as usize, value);
 }
 
@@ -359,6 +400,7 @@ unsafe fn primitive_ptr_set(vm: *mut VM) {
     *ptr = value;
 }
 
+// ( size default-value -- array )
 unsafe fn primitive_create_array(vm: *mut VM) {
     let initial = (*vm).pop();
     let size = (*vm).pop().as_fixnum();
@@ -378,13 +420,54 @@ unsafe fn primitive_create_bytearray(vm: *mut VM) {
     (*vm).push(ba);
 }
 
+// ( size old -- new )
+unsafe fn primitive_resize_array(vm: *mut VM) {
+    let old = (*vm).pop();
+    (*vm).push_false();
+    primitive_create_array(vm);
+    let new = (*vm).peek();
+    let old_arr = old.as_array();
+    let new_arr = new.as_array_mut();
+    println!("new: {:?}", (*new_arr));
+    let old_data = (*old_arr).data();
+    let new_data = (*new_arr).data_mut();
+
+    let shorter = usize::min(old_data.len(), new_data.len());
+    let longer = usize::max(old_data.len(), new_data.len());
+    let remaining = longer - shorter;
+
+    for idx in 0..shorter {
+        new_data[idx] = old_data[idx];
+    }
+
+    let ff = (*vm).special_objects.false_object;
+    let f = object::ObjectRef(ff);
+
+    for idx in remaining..longer {
+        new_data[idx] = f;
+    }
+
+    for (idx, elem) in old_data.iter().enumerate() {
+        new_data[idx] = *elem;
+    }
+}
+
 impl VM {
     unsafe fn add_globals_primitives(&mut self) {
+        self.add_primitive("@vm-resize-array", primitive_resize_array, false);
+
+        self.add_primitive("@vm-next-token", primitive_next_token, false);
+        self.add_primitive("@vm-parse-until", primitive_parse_until, false);
+        self.add_primitive("@vm-link-token", primitive_link_token, false);
+        self.add_primitive(
+            "@vm-define-empty-global-word",
+            primitive_create_empty_global_word,
+            false,
+        );
+        // self.add_primitive("@vm-define-")
+
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);
-        self.add_primitive("@vm-next-token", primitive_next_token, false);
-        self.add_primitive("@vm-link-token", primitive_link_token, false);
-
         self.add_primitive("[", primitive_quotation_start, true);
         self.add_primitive("]", primitive_quotation_end, false);
         self.add_primitive(":", primitive_define_word, true);

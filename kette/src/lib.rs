@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::collections::HashMap;
 use std::mem;
 use std::ptr;
@@ -138,7 +139,9 @@ impl VM {
                 let word = self.pop().as_word();
                 self.execute_word(word);
                 let accum = self.pop();
-                vec.push(accum);
+                if accum.object_mut() != self.special_objects.true_object {
+                    vec.push(accum);
+                }
                 continue;
             }
             let word = self.pop();
@@ -485,7 +488,7 @@ impl VM {
 
         let mut object_size = 2;
         for slot in slots {
-            if slot.kind == object::SLOT_DATA {
+            if slot.kind == object::SLOT_DATA || slot.kind == object::SLOT_EMBEDDED_DATA {
                 object_size += 1;
             }
         }
@@ -559,14 +562,14 @@ impl VM {
                 },
                 SlotDescriptor {
                     name: "object_size",
-                    kind: object::SLOT_DATA,
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: object::ObjectRef::null(),
                     index: 1,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "slot_count",
-                    kind: object::SLOT_DATA,
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: object::ObjectRef::null(),
                     index: 2,
                     read_only: 0,
@@ -642,7 +645,7 @@ impl VM {
                 },
                 SlotDescriptor {
                     name: "value",
-                    kind: object::SLOT_DATA,
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: object::ObjectRef::null(),
                     ..Default::default()
                 },
@@ -689,7 +692,7 @@ impl VM {
                 },
                 SlotDescriptor {
                     name: "size",
-                    kind: object::SLOT_DATA,
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: fixnum_map,
                     index: 0,
                     read_only: 0,
@@ -763,30 +766,30 @@ impl VM {
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "primitive?",
+                    name: "body",
                     kind: object::SLOT_DATA,
-                    value_type: fixnum_map,
+                    value_type: quotation_map,
                     index: 1,
-                    read_only: 0,
-                },
-                SlotDescriptor {
-                    name: "syntax?",
-                    kind: object::SLOT_DATA,
-                    value_type: fixnum_map,
-                    index: 2,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "properties",
                     kind: object::SLOT_DATA,
                     value_type: object::ObjectRef::null(),
+                    index: 2,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "primitive?",
+                    kind: object::SLOT_EMBEDDED_DATA,
+                    value_type: fixnum_map,
                     index: 3,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "body",
-                    kind: object::SLOT_DATA,
-                    value_type: quotation_map,
+                    name: "syntax?",
+                    kind: object::SLOT_EMBEDDED_DATA,
+                    value_type: fixnum_map,
                     index: 4,
                     read_only: 0,
                 },

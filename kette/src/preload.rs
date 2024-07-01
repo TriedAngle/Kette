@@ -2,6 +2,14 @@ pub const PRELOAD: &str = r#"
 
 @: \ @vm-next-token @vm-link-token >box ;
 
+
+: set-word-body ( word body -- ) swap 1 set-slot ;
+
+@: ?: @vm-next-token @vm-define-empty-global-word dup >box 1 swap <array> array>quotation set-word-body t ;
+
+@: !/ \ !/ @vm-parse-until drop t ;
+
+!/  Hello this is a comment looool   !/
 : + ( a b -- c ) fixnum+ ;
 : - ( a b -- c ) fixnum- ;
 : . ( a -- ) fixnum. ;
@@ -10,7 +18,8 @@ pub const PRELOAD: &str = r#"
 : % ( a b -- c ) fixnum% ;
 : > ( a b -- ? ) fixnum> ;
 : >= ( a b -- ? ) fixnum>= ;
-
+: < ( a b -- ? ) fixnum> ;
+: <= ( a b -- ? ) fixnum<= ;
 
 : 2dup ( x y -- x y x y ) dup [ dupd swap ] dip ;
 : 2dip ( x y q -- x y ) swap [ dip ] dip ;
@@ -33,6 +42,28 @@ pub const PRELOAD: &str = r#"
 : bi* ( x y p q -- ) [ dip ] dip call ;
 : bi@ ( x y p -- ) dup bi* ;
 
+: array-size ( arr -- n ) 0 slot ;
+: array-nth ( n array -- val ) swap 1 + slot ;
+: set-array-nth ( val n array -- ) swap 1 + set-slot ;
+: 1array ( x -- arr ) 1 swap <array> ;
+: 2array ( x y -- arr ) 2 f <array> [ [ ] dip array-set-nth ] [ 2 ] bi* ;
+
+
+: array-copy ( src dst start-src start-dst count -- ) 
+    [ 0 ] dip [ <= ] [
+        
+        [ 1 - ] dip
+    ] while ;
+
+: array-push-front ( obj arr -- arr ) dup array-size 1 + swap @vm-array-resize  ;
+
+: array-push-end ( obj arr -- arr ) ;
+
+: curry-inplace ( obj quot -- ) ;
+
+
+
+
 
 
 : ^object ( ptr -- obj ) 0 slot ;
@@ -45,9 +76,7 @@ pub const PRELOAD: &str = r#"
 : while ( ... cond body -- ... ) [ [ call ] keep ] dip rot 
     [ [ dropd call ] 2keep while ] [ 2drop ] if ;
 
-: array-nth ( n array -- val ) swap 1 + slot ;
-: set-array-nth ( val n array -- ) swap 1 + set-slot ;
-: array-size ( arr -- n ) 0 slot ;
+
 
 
 
