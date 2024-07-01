@@ -1,0 +1,11 @@
+[package]
+name = "kette_terminal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kette = { path = "../kette", version = "*" }
+crossterm = "0.27"
+ratatui = "0.27"
+tui-textarea = "0.4.0"
+unicode-width = "0.1.13"

@@ -64,6 +64,13 @@ impl Object {
     pub fn set_map(&mut self, map: *mut Map) {
         self.header.map = ObjectRef::new(map as *mut Object);
     }
+    pub unsafe fn get_field(&mut self, index: usize) -> ObjectRef {
+        *((self as *mut Self).add(1) as *mut ObjectRef).add(index)
+    }
+    pub unsafe fn set_field(&mut self, index: usize, value: ObjectRef) {
+        let field = ((self as *mut Self).add(1) as *mut ObjectRef).add(index);
+        *field = value;
+    }
 }
 
 #[repr(C)]
@@ -93,6 +100,10 @@ impl ObjectRef {
 
     pub fn as_usize(self) -> usize {
         self.0 as usize
+    }
+
+    pub fn as_isize(self) -> isize {
+        self.0 as isize
     }
 
     pub const fn null() -> Self {
@@ -180,12 +191,11 @@ impl ObjectRef {
     }
 
     pub unsafe fn get_field(&self, index: usize) -> ObjectRef {
-        *(self.0.add(1).add(index) as *mut ObjectRef)
+        (*self.0).get_field(index)
     }
 
     pub unsafe fn set_field(&self, index: usize, value: ObjectRef) {
-        let field = self.0.add(1).add(index) as *mut ObjectRef;
-        *field = value;
+        (*self.0).set_field(index, value)
     }
 }
 
@@ -212,22 +222,28 @@ pub struct ArrayObject {
 }
 
 impl ArrayObject {
-    pub fn required_size(capacity: usize) -> usize {
+    pub unsafe fn data_ptr(&self) -> *const u8 {
+        (self as *const Self).add(1) as *const u8
+    }
+
+    pub unsafe fn data_ptr_mut(&mut self) -> *mut u8 {
+        (self as *mut Self).add(1) as *mut u8
+    }
+
+    pub fn required_size(size: usize) -> usize {
         let object_size = mem::size_of::<Self>();
-        let data_size = mem::size_of::<ObjectRef>() * capacity;
+        let data_size = mem::size_of::<ObjectRef>() * size;
         object_size + data_size
     }
 
     pub unsafe fn data(&self) -> &[ObjectRef] {
-        let self_ptr = self as *const Self;
-        let data_ptr = self_ptr.add(1) as *const ObjectRef;
-        slice::from_raw_parts(data_ptr, self.size)
+        let p = self.data_ptr() as *const ObjectRef;
+        slice::from_raw_parts(p, self.size)
     }
 
     pub unsafe fn data_mut(&mut self) -> &mut [ObjectRef] {
-        let self_ptr = self as *mut Self;
-        let data_ptr = self_ptr.add(1) as *mut ObjectRef;
-        slice::from_raw_parts_mut(data_ptr, self.size)
+        let p = self.data_ptr_mut() as *mut ObjectRef;
+        slice::from_raw_parts_mut(p, self.size)
     }
 }
 
@@ -240,15 +256,15 @@ pub struct ByteArrayObject {
 }
 
 impl ByteArrayObject {
-    pub unsafe fn data_ptr_mut(&mut self) -> *mut u8 {
-        let self_ptr = self as *mut Self;
-        let data_ptr = self_ptr.add(1) as *mut u8;
-        data_ptr
-    }
-
     pub unsafe fn data_ptr(&self) -> *const u8 {
         let self_ptr = self as *const Self as *const u8;
         let data_ptr = self_ptr.add(mem::size_of::<Self>());
+        data_ptr
+    }
+
+    pub unsafe fn data_ptr_mut(&mut self) -> *mut u8 {
+        let self_ptr = self as *mut Self;
+        let data_ptr = self_ptr.add(1) as *mut u8;
         data_ptr
     }
 

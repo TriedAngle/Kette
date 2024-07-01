@@ -43,11 +43,12 @@ unsafe fn primitive_unbox(vm: *mut VM) {
     (*vm).push(boxed);
 }
 
-unsafe fn primitive_place_word(vm: *mut VM) {
-    let v = vm.as_mut().unwrap();
-    v.read_word();
-    v.lookup_word();
-    primitive_box(vm);
+unsafe fn primitive_next_token(vm: *mut VM) {
+    (*vm).read_word();
+}
+
+unsafe fn primitive_link_token(vm: *mut VM) {
+    (*vm).lookup_word();
 }
 
 unsafe fn primitive_quotation_start(vm: *mut VM) {
@@ -136,7 +137,23 @@ unsafe fn primitive_define_word(vm: *mut VM) {
     (*vm).push_true();
 }
 
-unsafe fn primitive_define_word_end(vm: *mut VM) {
+unsafe fn primitive_define_syntax(vm: *mut VM) {
+    (*vm).read_word();
+    let name = (*vm).pop();
+    let word_obj = create_empty_global_word(vm, name);
+    let word = word_obj.as_word_mut();
+    let word_end = (*vm).words.get(";").unwrap();
+    (*vm).push(object::ObjectRef::from_word(*word_end));
+    primitive_box(vm);
+    (*vm).parse_until();
+    primitive_array_to_quotation(vm);
+    let quotation = (*vm).pop();
+    (*word).body = quotation;
+    (*word).syntax = 1;
+    (*vm).push_true();
+}
+
+unsafe fn primitive_define_end(vm: *mut VM) {
     (*vm).push_false();
 }
 
@@ -195,9 +212,9 @@ unsafe fn primitive_neg_rot(vm: *mut VM) {
     let c = (*vm).pop();
     let b = (*vm).pop();
     let a = (*vm).pop();
-    (*vm).push(b);
     (*vm).push(c);
     (*vm).push(a);
+    (*vm).push(b);
 }
 
 // ( x q -- x )
@@ -301,13 +318,24 @@ unsafe fn primitive_context(vm: *mut VM) {
 
 unsafe fn primitive_get_map(vm: *mut VM) {
     let obj = (*vm).pop();
-    (*vm).push(object::ObjectRef::from_map(obj.get_map_mut()));
+    let map = obj.get_map_mut();
+    (*vm).push(object::ObjectRef::from_map(map));
 }
 
 unsafe fn primitive_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
+    // let map = obj.get_map();
+    // let slots = (*map).slots();
+    // let slot_info = slots.iter().find(|s| s.kind == object::SLOT_DATA && s.index == (*index).value as usize);
     let slot = obj.get_field((*index).value as usize);
+
+    // if let Some(info) = slot_info {
+    //     if info.value_type.as_map() == (*vm).special_objects.fixnum_map {
+    //         slot = (*vm).allocate_fixnum(slot.as_isize());
+    //     }
+    // }
+
     (*vm).push(slot);
 }
 
@@ -331,16 +359,37 @@ unsafe fn primitive_ptr_set(vm: *mut VM) {
     *ptr = value;
 }
 
+unsafe fn primitive_create_array(vm: *mut VM) {
+    let initial = (*vm).pop();
+    let size = (*vm).pop().as_fixnum();
+    let obj = (*vm).allocate_array((*size).value as usize);
+
+    let arr = obj.as_array_mut();
+    let fields = (*arr).data_mut();
+    for field in fields {
+        *field = initial;
+    }
+    (*vm).push(obj);
+}
+
+unsafe fn primitive_create_bytearray(vm: *mut VM) {
+    let size = (*vm).pop().as_fixnum();
+    let ba = (*vm).allocate_bytearray((*size).value as usize);
+    (*vm).push(ba);
+}
+
 impl VM {
     unsafe fn add_globals_primitives(&mut self) {
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);
-        self.add_primitive("\\", primitive_place_word, true);
+        self.add_primitive("@vm-next-token", primitive_next_token, false);
+        self.add_primitive("@vm-link-token", primitive_link_token, false);
 
         self.add_primitive("[", primitive_quotation_start, true);
         self.add_primitive("]", primitive_quotation_end, false);
         self.add_primitive(":", primitive_define_word, true);
-        self.add_primitive(";", primitive_define_word_end, false);
+        self.add_primitive("@:", primitive_define_syntax, true);
+        self.add_primitive(";", primitive_define_end, false);
 
         self.add_primitive("s\"", primitive_string, true);
         self.add_primitive("utf8.", primitive_print_string, false);
@@ -376,6 +425,8 @@ impl VM {
         self.add_primitive("call", primitive_call_quotation, false);
         self.add_primitive("word>quotation", primitive_word_to_quotation, false);
         self.add_primitive("quotation.", primitive_print_quotation, false);
+        self.add_primitive("<array>", primitive_create_array, false);
+        self.add_primitive("<bytearray>", primitive_create_bytearray, false);
     }
 }
 

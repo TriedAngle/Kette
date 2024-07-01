@@ -1,3 +1,4 @@
+use kette::PRELOAD;
 use kette::VM;
 use std::io::{self, Write};
 
@@ -7,34 +8,28 @@ fn main() {
 
     // accessing vm special objects example: let-me-cook 1 slot 8 + get^ ^object 0 slot utf8. -> prints "world"
 
-    let preload = r#"
-        : + ( a b -- c ) fixnum+ ;
-        : - ( a b -- c ) fixnum- ;
-        : . ( a -- ) fixnum. ;
-        : / ( a -- ) fixnum/ ;
-        : = ( a b -- ? ) fixnum= ;
-        : % ( a b -- c ) fixnum% ;
-        : > ( a b -- ? ) fixnum> ;
-        : >= ( a b -- ? ) fixnum>= ;
-
-        : 2dup ( a b -- a b a b ) dup [ dupd swap ] dip ; 
-        : 2dip ( ... a b q -- ... a b ... ) swap [ dip ] dip ;
-        : 2keep ( ... a b q -- ... a b ) [ 2dup ] dip 2dip ;
-        : 2drop ( a b -- ) drop drop ;
-
-        : ^object ( ptr -- obj ) 0 slot ;
-
-        : when ( ... ? q -- ... ) swap [ call ] [ drop ] if ;
-        : unless ( ... ? q -- ... ) swap [ drop ] [ call ] if ;
-
-        : loop ( ... q -- ... ) [ call ] keep swap [ loop ] when ;
-
-        : while ( ... cond body -- ... ) [ [ call ] keep ] dip rot 
-            [ [ dropd call ] 2keep while ] [ 2drop ] if ;
-    "#;
-
     unsafe {
-        let quot = vm.compile_string(preload);
+        let quot = vm.compile_string(PRELOAD);
+        vm.execute_quotation(quot.as_quotation());
+    }
+
+    let testing = r#"
+    : -1 ( a -- a-1 ) 1 - ;
+    : n| ( a n -- ? ) % 0 = ;
+    : !n| ( a n -- ? ) n| not ;
+
+
+    : fizzbuzz ( num -- )
+        dup 15 n| [ s" FizzBuzz" utf8. ] [
+            dup 3 n| [ s" Fizz" utf8. ] when
+            dup 5 n| [ s" Buzz" utf8. ] when
+        ] if
+
+        dup [ 3 !n| ] [ 5 !n| ] bi and [ dup . ] when
+        dup 0 > [ 1 -  fizzbuzz ] [ drop ] if ;
+"#;
+    unsafe {
+        let quot = vm.compile_string(testing);
         vm.execute_quotation(quot.as_quotation());
     }
 

@@ -6,8 +6,10 @@ use object::Object;
 
 pub mod gc;
 pub mod object;
+mod preload;
 pub mod primitives;
 pub mod system;
+pub use preload::PRELOAD;
 
 pub struct VM {
     pub gc: gc::MarkAndSweep,
@@ -449,12 +451,17 @@ impl VM {
         array_obj
     }
 
-    pub fn allocate_array(&mut self, capacity: usize) -> object::ObjectRef {
-        let required_size = object::ArrayObject::required_size(capacity);
+    pub fn allocate_array(&mut self, size: usize) -> object::ObjectRef {
+        let required_size = object::ArrayObject::required_size(size);
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
+        let arr = obj.as_array_mut();
         unsafe {
-            let arr = obj.as_array_mut();
-            (*arr).size = capacity;
+            (*arr).header = object::ObjectHeader {
+                meta: 0,
+                map: object::ObjectRef::from_map(self.special_objects.array_map),
+            };
+            (*arr).size = size;
+            ptr::write_bytes((*arr).data_ptr_mut(), 0, size);
         }
         obj
     }
@@ -540,7 +547,32 @@ impl VM {
     }
 
     pub fn init_primitive_maps(&mut self) {
-        let map_map = self.allocate_map("map", &[]);
+        let map_map = self.allocate_map(
+            "map",
+            &[
+                SlotDescriptor {
+                    name: "name",
+                    kind: object::SLOT_DATA,
+                    value_type: object::ObjectRef::null(),
+                    index: 0,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "object_size",
+                    kind: object::SLOT_DATA,
+                    value_type: object::ObjectRef::null(),
+                    index: 1,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "slot_count",
+                    kind: object::SLOT_DATA,
+                    value_type: object::ObjectRef::null(),
+                    index: 2,
+                    read_only: 0,
+                },
+            ],
+        );
         unsafe {
             self.special_objects.map_map = map_map.as_map_mut();
             let map = map_map.as_map_mut();
@@ -656,17 +688,10 @@ impl VM {
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "capacity",
-                    kind: object::SLOT_DATA,
-                    value_type: fixnum_map,
-                    index: 0,
-                    read_only: 0,
-                },
-                SlotDescriptor {
                     name: "size",
                     kind: object::SLOT_DATA,
                     value_type: fixnum_map,
-                    index: 1,
+                    index: 0,
                     read_only: 0,
                 },
                 SlotDescriptor {
