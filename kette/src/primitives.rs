@@ -214,25 +214,67 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
     let slot_data = (*arr).data();
 
-    let required_size = object::Map::required_size(slot_data.len());
-
     let mut object_size = 2 + slot_data.len();
-    let map_obj = (*vm).gc.allocate(required_size, 8, true).unwrap();
+    let map_obj = (*vm)
+        .gc
+        .allocate(mem::size_of::<object::Map>(), 8, true)
+        .unwrap();
 
     let map = map_obj.as_map_mut();
+
+    // * 3 so we have space for accessors get and set and (+ 1 for parent TODO)
+    let slots = (*vm).allocate_array(slot_data.len() * 3);
 
     (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
     (*map).name = name;
     (*map).object_size = object_size;
     (*map).slot_count = slot_data.len();
+    (*map).slots = slots;
 
+    let slot_array = slots.as_array_mut();
     for (index, slot_name) in slot_data.iter().enumerate() {
-        let slot = (*map).get_slot_mut(index);
-        slot.name = *slot_name;
-        slot.kind = object::SLOT_DATA;
-        slot.value_type = object::ObjectRef::null();
-        slot.index = index;
-        slot.read_only = 0;
+        let slot_obj =
+            (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
+        (*slot_array).data_mut()[index] = slot_obj;
+
+        let slot = slot_obj.as_slot_mut();
+        (*slot).name = *slot_name;
+        (*slot).kind = object::SLOT_DATA;
+        (*slot).value_type = object::ObjectRef::null();
+        (*slot).index = index;
+        (*slot).read_only = 0;
+
+        let field_name = (*slot_name.as_byte_array()).as_str().unwrap();
+
+        // getter name>>
+        let getter_name = format!("{}>>", field_name);
+        let getter_name_obj = (*vm).allocate_string(&getter_name);
+
+        let slot_obj =
+            (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
+        (*slot_array).data_mut()[index + slot_data.len()] = slot_obj;
+
+        let slot = slot_obj.as_slot_mut();
+        (*slot).name = getter_name_obj;
+        (*slot).kind = object::SLOT_ACCESSOR;
+        (*slot).value_type = object::ObjectRef::null();
+        (*slot).index = index;
+        (*slot).read_only = 0;
+
+        // setter name<<
+        let setter_name = format!("{}<<", field_name);
+        let setter_name_obj = (*vm).allocate_string(&setter_name);
+
+        let slot_obj =
+            (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
+        (*slot_array).data_mut()[index + slot_data.len() * 2] = slot_obj;
+
+        let slot = slot_obj.as_slot_mut();
+        (*slot).name = setter_name_obj;
+        (*slot).kind = object::SLOT_ACCESSOR;
+        (*slot).value_type = object::ObjectRef::from_map((*vm).special_objects.word_map);
+        (*slot).index = index;
+        (*slot).read_only = 0;
     }
 
     let map_name = (*name.as_byte_array()).as_str().unwrap();

@@ -14,17 +14,14 @@ fn main() {
     }
 
     let testing = r#"
-            !/ 10 { 
-                { [ 0 > ] [ s" positive" utf8. ] }
-            } switch !/
+        tuple: pos x y ;
 
-            10 { 
-                { [ 0 > ] [ s" positive" utf8. ] }
-                { [ 0 < ] [ s" negative" utf8. ] }
-                { [ 5 > ] [ s" greater 5" utf8. ] }
-                { [ 2 n| ] [ s" divisible by 2" utf8. ] }
-                { [ 0 = ] [ s" zero" utf8. ] }
-            } match
+        : map>> ( obj -- map ) 1 neg slot ;
+        : slots>> ( map -- slots ) 3 slot ;
+
+        : lookup-accessor ( name obj -- index ) 
+            map>> ;
+
 
         "#;
     unsafe {

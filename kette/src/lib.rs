@@ -479,7 +479,7 @@ impl VM {
         name: &str,
         slots: &[SlotDescriptor<'a>],
     ) -> object::ObjectRef {
-        let required_size = object::Map::required_size(slots.len());
+        let array = self.allocate_array(slots.len());
 
         let map_name = self.allocate_string(name);
 
@@ -498,9 +498,13 @@ impl VM {
             }
         }
 
-        let map_obj = self.gc.allocate(required_size, 8, true).unwrap();
+        let map_obj = self
+            .gc
+            .allocate(mem::size_of::<object::Map>(), 8, true)
+            .unwrap();
         unsafe {
             let map = map_obj.as_map_mut();
+
             (*map).header.map = if self.special_objects.map_map.is_null() {
                 object::ObjectRef::null()
             } else {
@@ -509,15 +513,23 @@ impl VM {
             (*map).name = map_name;
             (*map).object_size = object_size;
             (*map).slot_count = slots.len();
-            for (index, (desc, slot_name)) in slots.iter().zip(slot_name_objects).enumerate() {
-                let slot = (*map).get_slot_mut(index);
-                slot.name = slot_name;
-                slot.kind = desc.kind;
-                slot.read_only = desc.read_only;
-                slot.value_type = desc.value_type;
-                slot.index = desc.index;
-            }
+            (*map).slots = array;
 
+            let slot_array = array.as_array_mut();
+            for (index, (desc, slot_name)) in slots.iter().zip(slot_name_objects).enumerate() {
+                let slot_obj = self
+                    .gc
+                    .allocate(mem::size_of::<object::SlotObject>(), 8, false)
+                    .unwrap();
+                (*slot_array).data_mut()[index] = slot_obj;
+
+                let slot = slot_obj.as_slot_mut();
+                (*slot).name = slot_name;
+                (*slot).kind = desc.kind;
+                (*slot).read_only = desc.read_only;
+                (*slot).value_type = desc.value_type;
+                (*slot).index = desc.index;
+            }
             self.maps.insert(name.to_string(), map);
         }
 
@@ -566,39 +578,47 @@ impl VM {
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "object_size",
+                    name: "object-size",
                     kind: object::SLOT_EMBEDDED_DATA,
                     value_type: object::ObjectRef::null(),
                     index: 1,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "slot_count",
+                    name: "slot-count",
                     kind: object::SLOT_EMBEDDED_DATA,
                     value_type: object::ObjectRef::null(),
                     index: 2,
                     read_only: 0,
                 },
+                SlotDescriptor {
+                    name: "slots",
+                    kind: object::SLOT_DATA,
+                    value_type: object::ObjectRef::null(),
+                    index: 3,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "default-instance",
+                    kind: object::SLOT_DATA,
+                    value_type: object::ObjectRef::null(),
+                    index: 4,
+                    read_only: 0,
+                },
             ],
         );
+
         unsafe {
             self.special_objects.map_map = map_map.as_map_mut();
             let map = map_map.as_map_mut();
             (*map).header.map = map_map;
         }
-        self.special_objects.map_map = map_map.as_map_mut();
 
-        let bytearray_traits = self.allocate_map("bytearray-traits", &[]);
+        self.special_objects.map_map = map_map.as_map_mut();
 
         let bytearray_map = self.allocate_map(
             "bytearray",
             &[
-                SlotDescriptor {
-                    name: "parent",
-                    kind: object::SLOT_PARENT,
-                    value_type: bytearray_traits,
-                    ..Default::default()
-                },
                 SlotDescriptor {
                     name: "capacity",
                     kind: object::SLOT_DATA,
@@ -618,10 +638,6 @@ impl VM {
         unsafe {
             let map_map = map_map.as_map_mut();
             let name = (*map_map).name.as_byte_array_mut();
-            (*name).header.map = bytearray_map;
-
-            let map_traits = bytearray_traits.as_map_mut();
-            let name = (*map_traits).name.as_byte_array_mut();
             (*name).header.map = bytearray_map;
 
             let map = bytearray_map.as_map_mut();
@@ -713,6 +729,28 @@ impl VM {
         );
 
         self.special_objects.array_map = array_map.as_map_mut();
+
+        unsafe {
+            (*(*self.special_objects.map_map).slots.as_array_mut())
+                .header
+                .map = array_map;
+            (*(*self.special_objects.bytearray_map).slots.as_array_mut())
+                .header
+                .map = array_map;
+            (*(*self.special_objects.fixnum_map).slots.as_array_mut())
+                .header
+                .map = array_map;
+            (*(*self.special_objects.fixfloat_map).slots.as_array_mut())
+                .header
+                .map = array_map;
+            (*(*self.special_objects.array_map).slots.as_array_mut())
+                .header
+                .map = array_map;
+
+            (*(*array_traits.as_map()).slots.as_array_mut()).header.map = array_map;
+
+            (*(*number_traits.as_map()).slots.as_array_mut()).header.map = array_map;
+        }
 
         let quotation_traits = self.allocate_map("quotation-traits", &[]);
 
@@ -847,6 +885,49 @@ impl VM {
         );
         self.special_objects.box_map = box_map.as_map_mut();
 
+        let slot_map = self.allocate_map(
+            "slot",
+            &[
+                SlotDescriptor {
+                    name: "name",
+                    kind: object::SLOT_DATA,
+                    value_type: bytearray_map,
+                    index: 0,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "kind",
+                    kind: object::SLOT_EMBEDDED_DATA,
+                    value_type: quotation_map,
+                    index: 1,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "type",
+                    kind: object::SLOT_DATA,
+                    value_type: object::ObjectRef::null(),
+                    index: 2,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "index",
+                    kind: object::SLOT_EMBEDDED_DATA,
+                    value_type: fixnum_map,
+                    index: 3,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "read-only?",
+                    kind: object::SLOT_EMBEDDED_DATA,
+                    value_type: fixnum_map,
+                    index: 4,
+                    read_only: 0,
+                },
+            ],
+        );
+
+        self.special_objects.slot_map = slot_map.as_map_mut();
+
         let context_map = self.allocate_map(
             "context",
             &[
@@ -906,6 +987,16 @@ impl VM {
             context_object.set_field(4, callstack);
         }
         self.special_objects.context_object = context_object;
+
+        unsafe {
+            for map in self.maps.values() {
+                let map = map.as_mut().unwrap();
+                let slots = map.slots_mut();
+                for slot in slots {
+                    slot.header.map = slot_map;
+                }
+            }
+        }
     }
 
     pub fn print_array(&self, obj: object::ObjectRef) {

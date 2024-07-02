@@ -2,6 +2,7 @@ use std::{mem, ptr, slice};
 
 pub struct SpecialObjects {
     pub map_map: *mut Map,
+    pub slot_map: *mut Map,
     pub word_map: *mut Map,
     pub quotation_map: *mut Map,
     pub fixnum_map: *mut Map,
@@ -24,6 +25,7 @@ impl Default for SpecialObjects {
     fn default() -> Self {
         Self {
             map_map: ptr::null_mut(),
+            slot_map: ptr::null_mut(),
             word_map: ptr::null_mut(),
             quotation_map: ptr::null_mut(),
             fixnum_map: ptr::null_mut(),
@@ -201,6 +203,14 @@ impl ObjectRef {
     pub const fn as_quotation_mut(&self) -> *mut QuotationObject {
         self.0 as *mut QuotationObject
     }
+
+    pub const fn as_slot(&self) -> *const SlotObject {
+        self.0 as *const SlotObject
+    }
+
+    pub const fn as_slot_mut(&self) -> *mut SlotObject {
+        self.0 as *mut SlotObject
+    }
 }
 
 #[repr(C)]
@@ -292,16 +302,6 @@ impl ByteArrayObject {
         self.data() == other.as_bytes()
     }
 
-    // pub unsafe fn copy_rust_string(&mut self, data: &str) {
-    //     assert!(
-    //         self.capacity >= data.len(),
-    //         "Not enough capacity in ByteArrayObject"
-    //     );
-    //     let self_ptr = self as *mut Self as *mut u8;
-    //     let data_ptr = self_ptr.add(mem::size_of::<ObjectHeader>() + mem::size_of::<usize>());
-
-    // }
-
     pub unsafe fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
         let data_ptr = (self as *const Self as *const u8)
             .add(std::mem::size_of::<ObjectHeader>() + std::mem::size_of::<usize>());
@@ -369,14 +369,16 @@ pub const SLOT_CONSTANT: usize = 0;
 pub const SLOT_PARENT: usize = 1;
 pub const SLOT_DATA: usize = 2;
 pub const SLOT_ASSIGNMENT: usize = 3;
-pub const SLOT_WORD: usize = 4;
-pub const SLOT_VARIABLE_DATA: usize = 5;
+pub const SLOT_METHOD: usize = 4;
+pub const SLOT_ACCESSOR: usize = 5;
+pub const SLOT_VARIABLE_DATA: usize = 6;
 // TODO: probably get rid of embedded data or handle fixnums&floats always diff?
-pub const SLOT_EMBEDDED_DATA: usize = 6;
+pub const SLOT_EMBEDDED_DATA: usize = 7;
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct Slot {
+pub struct SlotObject {
+    pub header: ObjectHeader,
     pub name: ObjectRef,       // String
     pub kind: usize, // 0: data, 1: variable data 2: constant, 3: parent, 4: assignent, 5: word
     pub value_type: ObjectRef, // null for untyped, parent => parent
@@ -384,7 +386,7 @@ pub struct Slot {
     pub read_only: usize, // 0/null/f => false
 }
 
-impl Slot {
+impl SlotObject {
     pub fn reference_objects(&self) -> [ObjectRef; 2] {
         [self.name, self.value_type]
     }
@@ -397,7 +399,8 @@ pub struct Map {
     pub name: ObjectRef,
     pub object_size: usize, // size of the object (indcluding header) in slot count
     pub slot_count: usize,  // slot count
-                            // slots here
+    pub slots: ObjectRef,
+    pub default_object: ObjectRef,
 }
 
 impl Map {
@@ -406,65 +409,70 @@ impl Map {
         (*arr).as_str().unwrap()
     }
 
-    pub unsafe fn slots(&self) -> &[Slot] {
-        let self_ptr = self as *const Map;
-        let slots_ptr = self_ptr.add(1) as *const Slot;
-        slice::from_raw_parts(slots_ptr, self.slot_count)
+    pub unsafe fn slot_array(&self) -> *mut ArrayObject {
+        self.slots.0 as *mut ArrayObject
     }
 
-    pub unsafe fn slots_mut(&mut self) -> &mut [Slot] {
-        let self_ptr = self as *mut Map;
-        let slots_ptr = self_ptr.add(1) as *mut Slot;
-        slice::from_raw_parts_mut(slots_ptr, self.slot_count)
+    pub unsafe fn slots(&self) -> &[&SlotObject] {
+        let array = self.slot_array();
+        let data = (*array).data();
+        let slots = mem::transmute(data);
+        slots
     }
 
-    pub unsafe fn find_slot(&self, name: *const ByteArrayObject) -> Option<&Slot> {
-        let slots = unsafe { self.slots() };
+    pub unsafe fn slots_mut(&self) -> &mut [&mut SlotObject] {
+        let array = self.slot_array();
+        let data = (*array).data_mut();
+        let slots = mem::transmute(data);
+        slots
+    }
+
+    pub unsafe fn find_slot(&self, name: *const ByteArrayObject) -> Option<&SlotObject> {
+        let array = self.slot_array();
+        let slots = (*array).data();
         slots
             .iter()
+            .map(|obj| obj.as_slot().as_ref().unwrap())
             .find(|s| (*s.name.as_byte_array()).is_eq(&*name))
     }
 
-    pub unsafe fn find_slot_rust(&self, name: &str) -> Option<&Slot> {
-        let slots = unsafe { self.slots() };
+    pub unsafe fn find_slot_rust(&self, name: &str) -> Option<&SlotObject> {
+        let array = self.slot_array();
+        let slots = (*array).data();
         slots
             .iter()
+            .map(|obj| obj.as_slot().as_ref().unwrap())
             .find(|s| (*s.name.as_byte_array()).is_eq_rust(name))
     }
 
-    pub unsafe fn find_slot_mut(&mut self, name: *const ByteArrayObject) -> Option<&mut Slot> {
-        let slots = unsafe { self.slots_mut() };
+    pub unsafe fn find_slot_mut(
+        &mut self,
+        name: *const ByteArrayObject,
+    ) -> Option<&mut SlotObject> {
+        let array = self.slot_array();
+        let slots = (*array).data();
         slots
-            .iter_mut()
+            .iter()
+            .map(|obj| obj.as_slot_mut().as_mut().unwrap())
             .find(|s| (*s.name.as_byte_array()).is_eq(&*name))
     }
 
-    pub unsafe fn find_slot_rust_mut(&mut self, name: &str) -> Option<&mut Slot> {
-        let slots = unsafe { self.slots_mut() };
+    pub unsafe fn find_slot_rust_mut(&mut self, name: &str) -> Option<&mut SlotObject> {
+        let array = self.slot_array();
+        let slots = (*array).data();
         slots
-            .iter_mut()
+            .iter()
+            .map(|obj| obj.as_slot_mut().as_mut().unwrap())
             .find(|s| (*s.name.as_byte_array()).is_eq_rust(name))
     }
 
-    pub unsafe fn get_slot(&self, index: usize) -> &Slot {
+    pub unsafe fn get_slot(&self, index: usize) -> &SlotObject {
         assert!(index < self.slot_count, "Index out of bounds");
-
-        let self_ptr = self as *const Map;
-        let slots_ptr = self_ptr.add(1) as *const Slot;
-        &*slots_ptr.add(index)
+        self.slots()[index]
     }
 
-    pub unsafe fn get_slot_mut(&mut self, index: usize) -> &mut Slot {
+    pub unsafe fn get_slot_mut(&mut self, index: usize) -> &mut SlotObject {
         assert!(index < self.slot_count, "Index out of bounds");
-
-        let self_ptr = self as *mut Map;
-        let slots_ptr = self_ptr.add(1) as *mut Slot;
-        &mut *slots_ptr.add(index)
-    }
-
-    pub fn required_size(slot_count: usize) -> usize {
-        let header_size = mem::size_of::<Map>();
-        let slots_size = slot_count * mem::size_of::<Slot>();
-        header_size + slots_size
+        self.slots_mut()[index]
     }
 }

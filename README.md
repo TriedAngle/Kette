@@ -16,8 +16,10 @@ stack oriented language for modern systems
 - [x] objects
 - [x] garbage collector
 - [x] repl
-- [x] declare custom syntax (arrays comments classes)
+- [x] declare custom syntax/macros
+- [x] implement arrays, comments, classes classes via macros
 - [ ] single dispatch (or already multiple?)
+- [ ] alien interface (c and rust wrapping)
 - [ ] standard library and external library support
 - [ ] bytecode compiler
 - [ ] inlining and tail-call optimization

@@ -105,8 +105,7 @@ pub const PRELOAD: &str = r#"
 : 2th ( seq -- val ) 1 swap array-nth ;
 : 3th ( seq -- val ) 2 swap array-nth ;
 
-@: ():  @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
-
+@: tuple:  @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
 
 
 !/ src dst ss sd l c - src dst ss sd l - src dst ss+ sd+ - src dst !/
@@ -128,8 +127,7 @@ pub const PRELOAD: &str = r#"
 : curry ( obj quot -- curried ) [ 0 slot array-push-front ] keep [ 0 set-slot ] keep ;
 
 
-
-(): array-counter array start stop ;
+tuple: array-counter array start stop ;
 
 : array-counter-default ( array -- self ) dup array-size 0 swap array-counter tuple-boa ;
 
