@@ -51,6 +51,44 @@ unsafe fn primitive_parse_until(vm: *mut VM) {
     (*vm).parse_until();
 }
 
+unsafe fn primitive_skip_until(vm: *mut VM) {
+    let mut vec = Vec::<object::ObjectRef>::new();
+    let end_obj = (*vm).pop().as_box();
+    let end_word = (*end_obj).boxed;
+    loop {
+        (*vm).read_word();
+        (*vm).dup();
+        if (*vm).is_false() {
+            (*vm).drop();
+            break; // TODO HANDLE ERROR
+        }
+        (*vm).dup();
+        (*vm).try_parse_number();
+        (*vm).dup();
+        if (*vm).is_true() {
+            (*vm).drop();
+            (*vm).drop();
+            continue;
+        }
+        (*vm).drop();
+        let name = (*vm).peek();
+        (*vm).lookup_word();
+        (*vm).dup();
+        if (*vm).is_false() {
+            vec.push(name);
+            (*vm).drop();
+            continue;
+        }
+        let word = (*vm).pop();
+        if word == end_word {
+            break;
+        }
+        vec.push(name);
+    }
+    let arr = (*vm).allocate_array_from_slice(&vec);
+    (*vm).push(arr);
+}
+
 unsafe fn primitive_link_token(vm: *mut VM) {
     (*vm).lookup_word();
 }
@@ -130,7 +168,6 @@ unsafe fn parse_stack_effect(vm: *mut VM) {
         let word = (*vm).pop().as_byte_array();
         if (*word).is_eq_rust("(") {
             parse_stack_effect(vm);
-            println!("lol");
             continue;
         }
         if (*word).is_eq_rust(")") {
@@ -171,13 +208,54 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
     (*vm).push_true();
 }
 
-// unsafe fn primitive_define_tuple(vm: *mut VM) {
+unsafe fn primitive_define_tuple(vm: *mut VM) {
+    let arr = (*vm).pop().as_array();
+    let name = (*vm).pop();
 
-// }
+    let slot_data = (*arr).data();
 
-// unsafe fn primitive_instantiate_tuple(vm: *mut VM) {
+    let required_size = object::Map::required_size(slot_data.len());
 
-// }
+    let mut object_size = 2 + slot_data.len();
+    let map_obj = (*vm).gc.allocate(required_size, 8, true).unwrap();
+
+    let map = map_obj.as_map_mut();
+
+    (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
+    (*map).name = name;
+    (*map).object_size = object_size;
+    (*map).slot_count = slot_data.len();
+
+    for (index, slot_name) in slot_data.iter().enumerate() {
+        let slot = (*map).get_slot_mut(index);
+        slot.name = *slot_name;
+        slot.kind = object::SLOT_DATA;
+        slot.value_type = object::ObjectRef::null();
+        slot.index = index;
+        slot.read_only = 0;
+    }
+
+    let map_name = (*name.as_byte_array()).as_str().unwrap();
+    (*vm).maps.insert(map_name.to_owned(), map);
+    (*vm).push(map_obj);
+}
+
+unsafe fn primitive_clone(vm: *mut VM) {}
+
+unsafe fn primitive_tuple_new(vm: *mut VM) {
+    let map = (*vm).pop();
+    let obj = (*vm).allocate_object(map);
+    let slot_count = (*map.as_map()).slot_count;
+    for i in (0..slot_count).rev() {
+        obj.set_field(i, (*vm).pop());
+    }
+    (*vm).push(obj);
+}
+
+unsafe fn primitive_vm_stack(vm: *mut VM) {
+    let stack = (*vm).allocate_array_from_slice(&(*vm).stack);
+    (*vm).push(stack);
+}
 
 unsafe fn primitive_define_end(vm: *mut VM) {
     (*vm).push_false();
@@ -328,7 +406,7 @@ unsafe fn primitive_call_quotation(vm: *mut VM) {
 }
 
 unsafe fn primitive_word_to_quotation(vm: *mut VM) {
-    let word = (*vm).pop().as_word();
+    let word = (*vm).pop().as_quotation();
     let body = (*word).body;
     (*vm).push(body);
 }
@@ -336,6 +414,11 @@ unsafe fn primitive_word_to_quotation(vm: *mut VM) {
 unsafe fn primitive_print_quotation(vm: *mut VM) {
     let quot = (*vm).pop();
     (*vm).print_quotation(quot);
+}
+
+unsafe fn primitive_print_array(vm: *mut VM) {
+    let arr = (*vm).pop();
+    (*vm).print_array(arr);
 }
 
 unsafe fn primitive_context(vm: *mut VM) {
@@ -348,6 +431,7 @@ unsafe fn primitive_get_map(vm: *mut VM) {
     (*vm).push(object::ObjectRef::from_map(map));
 }
 
+// ( object index -- value )
 unsafe fn primitive_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
@@ -367,6 +451,7 @@ unsafe fn primitive_slot(vm: *mut VM) {
     (*vm).push(slot);
 }
 
+// ( value object index -- value )
 unsafe fn primitive_set_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
@@ -420,6 +505,17 @@ unsafe fn primitive_create_bytearray(vm: *mut VM) {
     (*vm).push(ba);
 }
 
+unsafe fn primitive_bytearray_eq(vm: *mut VM) {
+    let b = (*vm).pop().as_byte_array();
+    let a = (*vm).pop().as_byte_array();
+
+    if (*a).is_eq(b.as_ref().unwrap()) {
+        (*vm).push_true();
+    } else {
+        (*vm).push_false();
+    }
+}
+
 // ( size old -- new )
 unsafe fn primitive_resize_array(vm: *mut VM) {
     let old = (*vm).pop();
@@ -428,7 +524,6 @@ unsafe fn primitive_resize_array(vm: *mut VM) {
     let new = (*vm).peek();
     let old_arr = old.as_array();
     let new_arr = new.as_array_mut();
-    println!("new: {:?}", (*new_arr));
     let old_data = (*old_arr).data();
     let new_data = (*new_arr).data_mut();
 
@@ -454,17 +549,19 @@ unsafe fn primitive_resize_array(vm: *mut VM) {
 
 impl VM {
     unsafe fn add_globals_primitives(&mut self) {
-        self.add_primitive("@vm-resize-array", primitive_resize_array, false);
-
         self.add_primitive("@vm-next-token", primitive_next_token, false);
         self.add_primitive("@vm-parse-until", primitive_parse_until, false);
+        self.add_primitive("@vm-skip-until", primitive_skip_until, false);
         self.add_primitive("@vm-link-token", primitive_link_token, false);
         self.add_primitive(
             "@vm-define-empty-global-word",
             primitive_create_empty_global_word,
             false,
         );
-        // self.add_primitive("@vm-define-")
+        self.add_primitive("@vm-stack", primitive_vm_stack, false);
+        self.add_primitive("@vm-define-tuple", primitive_define_tuple, false);
+        self.add_primitive("@vm-clone", primitive_clone, false);
+        self.add_primitive("tuple-boa", primitive_tuple_new, false);
 
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);
@@ -475,7 +572,6 @@ impl VM {
         self.add_primitive(";", primitive_define_end, false);
 
         self.add_primitive("s\"", primitive_string, true);
-        self.add_primitive("utf8.", primitive_print_string, false);
 
         self.add_primitive("dup", primitive_dup, false);
         self.add_primitive("dupd", primitive_dupd, false);
@@ -507,10 +603,19 @@ impl VM {
         self.add_primitive("array>quotation", primitive_array_to_quotation, false);
         self.add_primitive("call", primitive_call_quotation, false);
         self.add_primitive("word>quotation", primitive_word_to_quotation, false);
-        self.add_primitive("quotation.", primitive_print_quotation, false);
         self.add_primitive("<array>", primitive_create_array, false);
         self.add_primitive("<bytearray>", primitive_create_bytearray, false);
+        self.add_primitive("bytearray=", primitive_bytearray_eq, false);
+
+        self.add_primitive("utf8.", primitive_print_string, false);
+        self.add_primitive("quotation.", primitive_print_quotation, false);
+        self.add_primitive("array.", primitive_print_array, false);
     }
+}
+
+unsafe fn primitive_fixnum_neg(vm: *mut VM) {
+    let a = (*vm).pop().as_fixnum();
+    (*vm).push_fixnum(-(*a).value);
 }
 
 unsafe fn primitive_fixnum_add(vm: *mut VM) {
@@ -647,6 +752,7 @@ unsafe fn primitive_fixnum_shift_right(vm: *mut VM) {
 
 impl VM {
     unsafe fn add_fixnum_primitives(&mut self) {
+        self.add_primitive("fixnum-neg", primitive_fixnum_neg, false);
         self.add_primitive("fixnum+", primitive_fixnum_add, false);
         self.add_primitive("fixnum-", primitive_fixnum_sub, false);
         self.add_primitive("fixnum*", primitive_fixnum_mul, false);

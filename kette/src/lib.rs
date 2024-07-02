@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ptr;
 
+use object::ArrayObject;
 use object::Object;
 
 pub mod gc;
@@ -10,6 +11,7 @@ pub mod object;
 mod preload;
 pub mod primitives;
 pub mod system;
+use object::ObjectRef;
 pub use preload::PRELOAD;
 
 pub struct VM {
@@ -129,10 +131,14 @@ impl VM {
                 continue;
             }
             self.drop();
+            let word_name_before = self.peek().as_byte_array();
             self.lookup_word();
             self.dup();
             if self.is_false() {
-                // TODO HANDLE ERROR
+                println!("ERROR: word not found: {:?}", (*word_name_before).as_str());
+                self.drop();
+                continue;
+                // TODO handle error better
             }
             self.dup();
             if self.is_syntax_word() {
@@ -297,8 +303,7 @@ impl VM {
     }
 
     pub fn dup(&mut self) {
-        let obj = self.pop();
-        self.push(obj);
+        let obj = self.peek();
         self.push(obj);
     }
 
@@ -903,11 +908,57 @@ impl VM {
         self.special_objects.context_object = context_object;
     }
 
+    pub fn print_array(&self, obj: object::ObjectRef) {
+        unsafe {
+            print!("{{ ");
+            let arr = obj.as_array();
+            self.print_array_inner(arr.as_ref().unwrap());
+            print!("}}");
+            println!();
+        }
+    }
+
     pub fn print_quotation(&self, obj: object::ObjectRef) {
         unsafe {
-            let quot = obj.as_quotation().as_ref().unwrap();
-            quot.print(self);
+            print!("[ ");
+            let arr = (*obj.as_quotation()).body.as_array();
+            self.print_array_inner(arr.as_ref().unwrap());
+            print!("]");
             println!();
+        }
+    }
+
+    unsafe fn print_array_inner(&self, arr: &object::ArrayObject) {
+        let data = arr.data();
+        for o in data {
+            let map = o.get_map();
+            if map == self.special_objects.fixnum_map {
+                print!("{:?}", (*o.as_fixnum()).value);
+            } else if map == self.special_objects.word_map {
+                print!("{}", (*o.as_word()).name());
+            } else if map == self.special_objects.quotation_map {
+                print!("[ ");
+                let qarr = (*o.as_quotation()).body.as_array();
+                self.print_array_inner(qarr.as_ref().unwrap());
+                print!("]");
+            } else if map == self.special_objects.box_map {
+                let inner = (*o.as_box()).boxed;
+                let inner_map = inner.get_map();
+                print!("\\ ");
+                if inner_map == self.special_objects.fixnum_map {
+                    print!("{:?}", (*inner.as_fixnum()).value);
+                } else if inner_map == self.special_objects.word_map {
+                    print!("{}", (*inner.as_word()).name());
+                }
+            } else if o.0 == self.special_objects.false_object {
+                print!("f");
+            } else if o.0 == self.special_objects.true_object {
+                print!("t");
+            } else {
+                let map_name = (*map).name();
+                print!("T{{{}}}", map_name)
+            }
+            print!(" ");
         }
     }
 }

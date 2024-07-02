@@ -13,24 +13,24 @@ fn main() {
         vm.execute_quotation(quot.as_quotation());
     }
 
-    //     let testing = r#"
-    //     : -1 ( a -- a-1 ) 1 - ;
-    //     : n| ( a n -- ? ) % 0 = ;
-    //     : !n| ( a n -- ? ) n| not ;
+    let testing = r#"
+            420 3 t <array> array-push array.
 
-    //     : fizzbuzz ( num -- )
-    //         dup 15 n| [ s" FizzBuzz" utf8. ] [
-    //             dup 3 n| [ s" Fizz" utf8. ] when
-    //             dup 5 n| [ s" Buzz" utf8. ] when
-    //         ] if
+            { $[ 2 neg ] 3 4 } array.
 
-    //         dup [ 3 !n| ] [ 5 !n| ] bi and [ dup . ] when
-    //         dup 0 > [ 1 -  fizzbuzz ] [ drop ] if ;
-    // "#;
-    //     unsafe {
-    //         let quot = vm.compile_string(testing);
-    //         vm.execute_quotation(quot.as_quotation());
-    //     }
+            t f 69 \ while* 4array array.
+            
+
+            (): stevejones x y ;
+
+            s" good at" s" programming" stevejones tuple-boa
+            [ 0 slot utf8. ] [ 1 slot utf8. ] bi
+
+        "#;
+    unsafe {
+        let quot = vm.compile_string(testing);
+        vm.execute_quotation(quot.as_quotation());
+    }
 
     let mut step_mode = false;
 

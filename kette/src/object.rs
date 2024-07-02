@@ -342,37 +342,6 @@ impl QuotationObject {
     pub unsafe fn body(&self) -> &[ObjectRef] {
         (*self.body.as_array()).data()
     }
-
-    pub unsafe fn print(&self, vm: &crate::VM) {
-        let body = self.body();
-        print!("[ ");
-        for o in body {
-            let map = o.get_map();
-            if map == vm.special_objects.fixnum_map {
-                print!("{:?}", (*o.as_fixnum()).value);
-            } else if map == vm.special_objects.word_map {
-                print!("{}", (*o.as_word()).name());
-            } else if map == vm.special_objects.quotation_map {
-                (*o.as_quotation()).print(vm);
-            } else if map == vm.special_objects.box_map {
-                let inner = (*o.as_box()).boxed;
-                let inner_map = inner.get_map();
-                print!("\\ ");
-                if inner_map == vm.special_objects.fixnum_map {
-                    print!("{:?}", (*inner.as_fixnum()).value);
-                } else if inner_map == vm.special_objects.word_map {
-                    print!("{}", (*inner.as_word()).name());
-                } else if inner_map == vm.special_objects.quotation_map {
-                    (*o.as_quotation()).print(vm);
-                }
-            } else {
-                let map_name = (*map).name();
-                print!("T{{{}}}", map_name)
-            }
-            print!(" ");
-        }
-        print!("]");
-    }
 }
 
 #[repr(C)]

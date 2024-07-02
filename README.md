@@ -15,8 +15,9 @@ stack oriented language for modern systems
 ## Status (in order)
 - [x] objects
 - [x] garbage collector
-- [ ] repl
-- [ ] declare custom syntax and new objects
+- [x] repl
+- [x] declare custom syntax (arrays comments classes)
+- [ ] single dispatch (or already multiple?)
 - [ ] standard library and external library support
 - [ ] bytecode compiler
 - [ ] inlining and tail-call optimization
