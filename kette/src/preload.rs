@@ -55,6 +55,7 @@ pub const PRELOAD: &str = r#"
 : 2swap ( x y z w -- z w x y ) -rotd -rot ;
 : over ( x b -- x y z ) dupd swap ;
 : pick ( x y z -- x y z x ) [ dup ] 2dip rot ;
+: pickd ( x y z w -- x y z x w ) [ pick ] dip ;
 
 : 3dup ( x y z --  x y z x y z ) 2dup [ pick ] 2dip ;
 : 3dip ( x y z q -- y y z ) swap [ 2dip ] dip ;
@@ -65,7 +66,7 @@ pub const PRELOAD: &str = r#"
 : bi* ( x y p q -- ) [ dip ] dip call ;
 : bi@ ( x y p -- ) dup bi* ;
 
-: loop ( ..a q -- ..a ) [ call ] keep swap [ loop ] when ;
+: loop ( ..a q -- ..a ) [ call ] keep swap [ loop ] [ drop ] if ;
 
 : while ( ..a cond body -- ..a ) 
     [ [ call ] keep ] dip rot 
@@ -127,16 +128,18 @@ pub const PRELOAD: &str = r#"
 : curry ( obj quot -- curried ) [ 0 slot array-push-front ] keep [ 0 set-slot ] keep ;
 
 
-tuple: array-counter array start stop ;
+tuple: array-iter array start stop ;
 
-: array-counter-default ( array -- self ) dup array-size 0 swap array-counter tuple-boa ;
+: <array-iter> ( array -- self ) dup array-size 0 swap array-iter tuple-boa ;
 
-: array-counter-next ( self -- next/? ) 
+: array-iter-next ( self -- next/? ) 
     dup [ 1 slot ] [ 2 slot ] bi < [ 
             [ 1 slot ] 
             [ 0 slot array-nth ] 
             [ [ 1 slot 1 + ] [ 1 set-slot ] bi ] tri 
         ] [ drop f ] if ;
+
+: ?next ( self next/? ) array-iter-next ;
 
 : match-step ( ..a ? array -- ..b c? ? ) 
     [ 1th ] [ 2th ] bi [ swap [ swap call ] keep ] dip swap [
@@ -144,13 +147,13 @@ tuple: array-counter array start stop ;
     ] dip ;
 
 : match-many ( ? array -- ) 
-    array-counter-default [ dup array-counter-next dup ] [
+    <array-iter> [ dup array-iter-next dup ] [
         swap [ match-step dropd ] dip
     ] while 3drop ;
 
 : match ( ? array -- )
-    array-counter-default [
-        dup array-counter-next dup [
+    <array-iter> [
+        dup array-iter-next dup [
             swap [ match-step ] dip rot not
         ] [ f ] if
     ] loop 3drop ;

@@ -14,14 +14,25 @@ fn main() {
     }
 
     let testing = r#"
-        tuple: pos x y ;
-
         : map>> ( obj -- map ) 1 neg slot ;
         : slots>> ( map -- slots ) 3 slot ;
 
-        : lookup-accessor ( name obj -- index ) 
-            map>> ;
+        : lookup-slot ( name obj -- index ) 
+            map>> slots>> <array-iter> [
+                dup ?next dup 
+                [ dup 0 slot pickd bytearray= [ 3 slot ] [ drop f ] if ] [ f ] if
+                dup [ f ] [ drop t ] if
+            ] loop 2dropd ;
 
+        tuple: pos x y ;
+        
+        : x>> ( obj -- x ) dup \ x>> unbox 0 slot swap lookup-slot slot ;
+        : x<< ( value obj -- ) dup \ x<< unbox 0 slot swap lookup-slot set-slot ;
+        : >>x ( obj value -- obj ) dupd swap x<< ;
+
+        10 15 pos tuple-boa
+        dup x>> .
+        s" lol" >>x x>> utf8.
 
         "#;
     unsafe {
