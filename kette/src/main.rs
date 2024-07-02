@@ -14,17 +14,17 @@ fn main() {
     }
 
     let testing = r#"
-            420 3 t <array> array-push array.
+            !/ 10 { 
+                { [ 0 > ] [ s" positive" utf8. ] }
+            } switch !/
 
-            { $[ 2 neg ] 3 4 } array.
-
-            t f 69 \ while* 4array array.
-            
-
-            (): stevejones x y ;
-
-            s" good at" s" programming" stevejones tuple-boa
-            [ 0 slot utf8. ] [ 1 slot utf8. ] bi
+            10 { 
+                { [ 0 > ] [ s" positive" utf8. ] }
+                { [ 0 < ] [ s" negative" utf8. ] }
+                { [ 5 > ] [ s" greater 5" utf8. ] }
+                { [ 2 n| ] [ s" divisible by 2" utf8. ] }
+                { [ 0 = ] [ s" zero" utf8. ] }
+            } match
 
         "#;
     unsafe {
@@ -63,6 +63,9 @@ fn main() {
         unsafe {
             let quot = vm.compile_string(&input);
             vm.execute_quotation(quot.as_quotation());
+            let v = &mut vm as *mut VM;
+            let stack = (*v).allocate_array_from_slice(&vm.stack);
+            vm.print_array(stack);
         }
     }
 

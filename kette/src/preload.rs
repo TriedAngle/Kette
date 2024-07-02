@@ -11,6 +11,12 @@ pub const PRELOAD: &str = r#"
 : < ( a b -- ? ) fixnum< ;
 : <= ( a b -- ? ) fixnum<= ;
 
+: +1 ( a -- n+1 ) 1 + ;
+: -1 ( a -- n-1 ) 1 - ;
+: n| ( a n -- ? ) % 0 = ;
+: !n| ( a n -- ? ) n| not ;
+
+
 : when ( ? q -- ) swap [ call ] [ drop ] if ;
 : unless ( ? q -- ) swap [ drop ] [ call ] if ;
 
@@ -43,6 +49,8 @@ pub const PRELOAD: &str = r#"
 : 2drop ( x y -- ) drop drop ;
 : 3drop ( x y z -- ) drop drop drop ;
 : 4drop ( x y z w -- ) drop drop drop drop ;
+
+: 2dropd ( x y z -- z ) dropd dropd ;
 
 : 2swap ( x y z w -- z w x y ) -rotd -rot ;
 : over ( x b -- x y z ) dupd swap ;
@@ -88,12 +96,15 @@ pub const PRELOAD: &str = r#"
 : (2array) ( x y arr -- arr ) [ 1 swap set-array-nth ] keep (1array)  ;
 : (3array) ( x y z arr -- arr ) [ 2 swap set-array-nth ] keep (2array)  ;
 : (4array) ( x y z w arr -- arr ) [ 3 swap set-array-nth ] keep (3array) ;
-: 1array ( x -- arr ) 1 f <array> [ (1array) ] keep ;
-: 2array ( x y -- arr ) 2 f <array> [ (2array) ] keep ;
-: 3array ( x y z -- arr ) 3 f <array> [ (3array) ] keep ;
-: 4array ( x y z w -- arr ) 4 f <array> [ (4array) ] keep ;
+: 1array ( x -- arr ) 1 f <array> (1array) ;
+: 2array ( x y -- arr ) 2 f <array> (2array) ;
+: 3array ( x y z -- arr ) 3 f <array> (3array) ;
+: 4array ( x y z w -- arr ) 4 f <array> (4array)  ;
 
-!/ word | token !/
+: 1th ( seq -- val ) 0 swap array-nth ;
+: 2th ( seq -- val ) 1 swap array-nth ;
+: 3th ( seq -- val ) 2 swap array-nth ;
+
 @: ():  @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
 
 
@@ -109,8 +120,42 @@ pub const PRELOAD: &str = r#"
 : array-push ( obj arr -- arr ) 
     dup array-size dup 1 + f <array> [ swap [ 0 0 ] dip array-copy ] keep [ [ array-size 1 - ] [ set-array-nth ] bi ] keep ;
 
-: curry-inplace ( obj quot -- ) ;
+!/ this is very inefficient, use vectors if this is your normal usecase !/
+: array-push-front ( obj arr -- arr ) 
+    dup array-size dup 1 + f <array> [ swap [ 0 1 ] dip array-copy ] keep [ 0 swap set-array-nth ] keep ;
 
+
+: curry ( obj quot -- curried ) [ 0 slot array-push-front ] keep [ 0 set-slot ] keep ;
+
+
+
+(): array-counter array start stop ;
+
+: array-counter-default ( array -- self ) dup array-size 0 swap array-counter tuple-boa ;
+
+: array-counter-next ( self -- next/? ) 
+    dup [ 1 slot ] [ 2 slot ] bi < [ 
+            [ 1 slot ] 
+            [ 0 slot array-nth ] 
+            [ [ 1 slot 1 + ] [ 1 set-slot ] bi ] tri 
+        ] [ drop f ] if ;
+
+: match-step ( ..a ? array -- ..b c? ? ) 
+    [ 1th ] [ 2th ] bi [ swap [ swap call ] keep ] dip swap [
+        swap [ [ call ] [ drop ] if ] keep
+    ] dip ;
+
+: match-many ( ? array -- ) 
+    array-counter-default [ dup array-counter-next dup ] [
+        swap [ match-step dropd ] dip
+    ] while 3drop ;
+
+: match ( ? array -- )
+    array-counter-default [
+        dup array-counter-next dup [
+            swap [ match-step ] dip rot not
+        ] [ f ] if
+    ] loop 3drop ;
 
 "#;
 

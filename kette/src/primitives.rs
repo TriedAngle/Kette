@@ -451,7 +451,7 @@ unsafe fn primitive_slot(vm: *mut VM) {
     (*vm).push(slot);
 }
 
-// ( value object index -- value )
+// ( value object index -- )
 unsafe fn primitive_set_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
