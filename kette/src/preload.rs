@@ -1,4 +1,20 @@
 pub const PRELOAD: &str = r#"
+@: \ @vm-next-token @vm-link-token >box ;
+
+@: !/ \ !/ @vm-skip-until drop t ;
+
+: set-word-body ( word body -- ) swap 1 set-slot ;
+
+: define-push-word ( word box -- )  1 swap <array> array>quotation set-word-body ;
+
+@: ?: @vm-next-token @vm-define-empty-global-word dup >box define-push-word t ;
+
+?: }
+
+@: { \ } @vm-parse-until ;
+
+@: $[ \ ] @vm-parse-until array>quotation call ;
+
 : . ( a -- ) fixnum. ;
 : neg ( a -- ) fixnum-neg ;
 : + ( a b -- c ) fixnum+ ;
@@ -19,24 +35,6 @@ pub const PRELOAD: &str = r#"
 
 : when ( ? q -- ) swap [ call ] [ drop ] if ;
 : unless ( ? q -- ) swap [ drop ] [ call ] if ;
-
-
-@: \ @vm-next-token @vm-link-token >box ;
-
-: set-word-body ( word body -- ) swap 1 set-slot ;
-
-: define-push-word ( push word -- )  1 swap <array> array>quotation set-word-body ;
-
-@: ?: @vm-next-token @vm-define-empty-global-word dup >box define-push-word t ;
-
-
-@: !/ \ !/ @vm-skip-until drop t ;
-
-?: }
-
-@: { \ } @vm-parse-until ;
-
-@: $[ \ ] @vm-parse-until array>quotation call ;
 
 
 : 2dup ( x y -- x y x y ) dup [ dupd swap ] dip ;
@@ -72,8 +70,6 @@ pub const PRELOAD: &str = r#"
     [ [ call ] keep ] dip rot 
     [ [ dropd call ] 2keep while ] [ 2drop ] if ;
 
-: ^object ( ptr -- obj ) 0 slot ;
-
 : bi-curry ( x y a b p q  -- ) -rotd [ call ] 3dip call ; 
 : bi*-curry ( x y w p q -- ) [ dup swapd ] 2dip -rotd [ call ] 3dip call ;
 : bi@-curry ( x y w p -- ) dup bi*-curry ;
@@ -106,7 +102,7 @@ pub const PRELOAD: &str = r#"
 : 2th ( seq -- val ) 1 swap array-nth ;
 : 3th ( seq -- val ) 2 swap array-nth ;
 
-@: tuple:  @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
+@: tuple: @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
 
 
 !/ src dst ss sd l c - src dst ss sd l - src dst ss+ sd+ - src dst !/
@@ -156,7 +152,7 @@ tuple: array-iter array start stop ;
         dup array-iter-next dup [
             swap [ match-step ] dip rot not
         ] [ f ] if
-    ] loop 3drop ;
+    ] loop 2drop ;
 
 "#;
 

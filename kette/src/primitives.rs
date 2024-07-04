@@ -105,8 +105,8 @@ unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> obje
     (*word).body = object::ObjectRef::null();
 
     // TODO: implement global vocabulary
-    let word_name = (*name.as_byte_array()).as_str().unwrap().to_string();
-    (*vm).words.insert(word_name, word);
+    let word_name = name.bytearray_as_str();
+    (*vm).words.insert(word_name.to_owned(), word);
 
     word_object
 }
@@ -134,8 +134,9 @@ unsafe fn primitive_string(vm: *mut VM) {
     let v = vm.as_mut().unwrap();
     let ino = v.special_objects.input;
     let inoffsetto = v.special_objects.input_offset;
+    let inoobj = object::ObjectRef(ino as *mut object::Object);
 
-    let input = (*ino).as_str().unwrap();
+    let input = inoobj.bytearray_as_str();
     let mut offset = (*inoffsetto).value as usize;
     let start = offset;
 
@@ -155,8 +156,7 @@ unsafe fn primitive_string(vm: *mut VM) {
 
 unsafe fn primitive_print_string(vm: *mut VM) {
     let obj = (*vm).pop();
-    let ba = obj.as_byte_array();
-    let s = (*ba).as_str().unwrap();
+    let s = obj.bytearray_as_str();
     println!("{:?}", s);
 }
 
@@ -165,12 +165,12 @@ unsafe fn parse_stack_effect(vm: *mut VM) {
     _ = (*vm).pop();
     loop {
         (*vm).read_word();
-        let word = (*vm).pop().as_byte_array();
-        if (*word).is_eq_rust("(") {
+        let word = (*vm).pop();
+        if word.bytearray_is_eq_rust("(") {
             parse_stack_effect(vm);
             continue;
         }
-        if (*word).is_eq_rust(")") {
+        if word.bytearray_is_eq_rust(")") {
             break;
         }
     }
@@ -209,12 +209,12 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
 }
 
 unsafe fn primitive_define_tuple(vm: *mut VM) {
-    let arr = (*vm).pop().as_array();
+    let arr = (*vm).pop();
     let name = (*vm).pop();
 
-    let slot_data = (*arr).data();
+    let slot_count = arr.array_data_len();
 
-    let mut object_size = 2 + slot_data.len();
+    let mut object_size = 2 + slot_count;
     let map_obj = (*vm)
         .gc
         .allocate(mem::size_of::<object::Map>(), 8, true)
@@ -223,28 +223,30 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
     let map = map_obj.as_map_mut();
 
     // * 3 so we have space for accessors get and set and (+ 1 for parent TODO)
-    let slots = (*vm).allocate_array(slot_data.len() * 3);
+    let slots = (*vm).allocate_array(slot_count * 3);
 
     (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
     (*map).name = name;
     (*map).object_size = object_size;
-    (*map).slot_count = slot_data.len();
+    (*map).slot_count = slot_count;
     (*map).slots = slots;
 
     let slot_array = slots.as_array_mut();
-    for (index, slot_name) in slot_data.iter().enumerate() {
+    for index in 0..slot_count {
+        let slot_name = *(arr.array_data().add(index));
+
         let slot_obj =
             (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        (*slot_array).data_mut()[index] = slot_obj;
+        *(slots.array_data().add(index)) = slot_obj;
 
         let slot = slot_obj.as_slot_mut();
-        (*slot).name = *slot_name;
+        (*slot).name = slot_name;
         (*slot).kind = object::SLOT_DATA;
         (*slot).value_type = object::ObjectRef::null();
         (*slot).index = index;
         (*slot).read_only = 0;
 
-        let field_name = (*slot_name.as_byte_array()).as_str().unwrap();
+        let field_name = slot_name.bytearray_as_str();
 
         // getter name>>
         let getter_name = format!("{}>>", field_name);
@@ -252,7 +254,8 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
         let slot_obj =
             (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        (*slot_array).data_mut()[index + slot_data.len()] = slot_obj;
+
+        *(slots.array_data().add(index + slot_count)) = slot_obj;
 
         let slot = slot_obj.as_slot_mut();
         (*slot).name = getter_name_obj;
@@ -267,7 +270,8 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
         let slot_obj =
             (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        (*slot_array).data_mut()[index + slot_data.len() * 2] = slot_obj;
+
+        *(slots.array_data().add(index + slot_count * 2)) = slot_obj;
 
         let slot = slot_obj.as_slot_mut();
         (*slot).name = setter_name_obj;
@@ -277,7 +281,7 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
         (*slot).read_only = 0;
     }
 
-    let map_name = (*name.as_byte_array()).as_str().unwrap();
+    let map_name = name.bytearray_as_str();
     (*vm).maps.insert(map_name.to_owned(), map);
     (*vm).push(map_obj);
 }
@@ -477,20 +481,26 @@ unsafe fn primitive_get_map(vm: *mut VM) {
 unsafe fn primitive_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
-    let slot = obj.get_field((*index).value as usize);
+    let value = obj.get_field((*index).value as usize);
 
-    if let Some(map) = obj.get_map().as_ref() {
-        if let Some(desc) = map
-            .slots()
-            .iter()
-            .find(|s| s.index == (*index).value as usize && s.kind == object::SLOT_EMBEDDED_DATA)
-        {
-            (*vm).push_fixnum(slot.as_isize());
-            return;
+    if obj.get_map().as_ref().is_some() {
+        let map = obj.get_map();
+        let slots = (*map).slots;
+        let slot_count = slots.array_data_len();
+
+        for idx in 0..slot_count {
+            let slot = slots.get_array_at(idx);
+            let slot = slot.as_slot();
+            if (*slot).index == (*index).value as usize
+                && (*slot).kind == object::SLOT_EMBEDDED_DATA
+            {
+                (*vm).push_fixnum(value.as_isize());
+                return;
+            }
         }
     }
 
-    (*vm).push(slot);
+    (*vm).push(value);
 }
 
 // ( value object index -- )
@@ -499,15 +509,21 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
     let obj = (*vm).pop();
     let value = (*vm).pop();
 
-    if let Some(map) = obj.get_map().as_ref() {
-        if let Some(desc) = map
-            .slots()
-            .iter()
-            .find(|s| s.index == (*index).value as usize && s.kind == object::SLOT_EMBEDDED_DATA)
-        {
-            let num = (*value.as_fixnum()).value;
-            let val = mem::transmute(num);
-            obj.set_field((*index).value as usize, object::ObjectRef::from_usize(val));
+    if obj.get_map().as_ref().is_some() {
+        let map = obj.get_map();
+        let slots = (*map).slots;
+        let slot_count = slots.array_data_len();
+
+        for idx in 0..slot_count {
+            let slot = slots.get_array_at(idx);
+            let slot = slot.as_slot();
+            if (*slot).index == (*index).value as usize
+                && (*slot).kind == object::SLOT_EMBEDDED_DATA
+            {
+                let num = (*value.as_fixnum()).value;
+                let val = mem::transmute(num);
+                obj.set_field((*index).value as usize, object::ObjectRef::from_usize(val));
+            }
         }
     }
 
@@ -533,10 +549,8 @@ unsafe fn primitive_create_array(vm: *mut VM) {
     let size = (*vm).pop().as_fixnum();
     let obj = (*vm).allocate_array((*size).value as usize);
 
-    let arr = obj.as_array_mut();
-    let fields = (*arr).data_mut();
-    for field in fields {
-        *field = initial;
+    for index in 0..obj.array_data_len() {
+        *(obj.array_data().add(index)) = initial;
     }
     (*vm).push(obj);
 }
@@ -548,44 +562,13 @@ unsafe fn primitive_create_bytearray(vm: *mut VM) {
 }
 
 unsafe fn primitive_bytearray_eq(vm: *mut VM) {
-    let b = (*vm).pop().as_byte_array();
-    let a = (*vm).pop().as_byte_array();
+    let b = (*vm).pop();
+    let a = (*vm).pop();
 
-    if (*a).is_eq(b.as_ref().unwrap()) {
+    if a.bytearray_is_eq(b) {
         (*vm).push_true();
     } else {
         (*vm).push_false();
-    }
-}
-
-// ( size old -- new )
-unsafe fn primitive_resize_array(vm: *mut VM) {
-    let old = (*vm).pop();
-    (*vm).push_false();
-    primitive_create_array(vm);
-    let new = (*vm).peek();
-    let old_arr = old.as_array();
-    let new_arr = new.as_array_mut();
-    let old_data = (*old_arr).data();
-    let new_data = (*new_arr).data_mut();
-
-    let shorter = usize::min(old_data.len(), new_data.len());
-    let longer = usize::max(old_data.len(), new_data.len());
-    let remaining = longer - shorter;
-
-    for idx in 0..shorter {
-        new_data[idx] = old_data[idx];
-    }
-
-    let ff = (*vm).special_objects.false_object;
-    let f = object::ObjectRef(ff);
-
-    for idx in remaining..longer {
-        new_data[idx] = f;
-    }
-
-    for (idx, elem) in old_data.iter().enumerate() {
-        new_data[idx] = *elem;
     }
 }
 

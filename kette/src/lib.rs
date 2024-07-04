@@ -3,14 +3,12 @@ use std::collections::HashMap;
 use std::mem;
 use std::ptr;
 
-use object::ArrayObject;
-use object::Object;
-
 pub mod gc;
 pub mod object;
 mod preload;
 pub mod primitives;
 pub mod system;
+use object::Object;
 use object::ObjectRef;
 pub use preload::PRELOAD;
 
@@ -131,11 +129,14 @@ impl VM {
                 continue;
             }
             self.drop();
-            let word_name_before = self.peek().as_byte_array();
+            let word_name_before = self.peek();
             self.lookup_word();
             self.dup();
             if self.is_false() {
-                println!("ERROR: word not found: {:?}", (*word_name_before).as_str());
+                println!(
+                    "ERROR: word not found: {:?}",
+                    word_name_before.bytearray_as_str()
+                );
                 self.drop();
                 continue;
                 // TODO handle error better
@@ -210,8 +211,8 @@ impl VM {
 
     // ( name -- word/f )
     pub unsafe fn lookup_word(&mut self) {
-        let word_name = self.pop().as_byte_array();
-        let word = self.words.get((*word_name).as_str().unwrap());
+        let word_name = self.pop();
+        let word = self.words.get(word_name.bytearray_as_str());
         if let Some(word) = word {
             self.push(object::ObjectRef::from_word(*word))
         } else {
@@ -259,20 +260,23 @@ impl VM {
     }
 
     pub fn push_input_stream(&mut self) {
-        self.push(object::ObjectRef(self.special_objects.input as *mut Object));
+        self.push(object::ObjectRef(
+            self.special_objects.input as *mut object::Object,
+        ));
     }
 
     pub fn push_input_stream_offset(&mut self) {
         self.push(object::ObjectRef(
-            self.special_objects.input_offset as *mut Object,
+            self.special_objects.input_offset as *mut object::Object,
         ));
     }
 
     pub fn read_word(&mut self) {
         let ino = self.special_objects.input;
         let inoffseto = self.special_objects.input_offset;
+        let inoobj = object::ObjectRef(ino as *mut Object);
 
-        let input = unsafe { (*ino).as_str().unwrap() };
+        let input = unsafe { inoobj.bytearray_as_str() };
         let mut offset = unsafe { (*inoffseto).value } as usize;
 
         while offset < input.len() && input.as_bytes()[offset].is_ascii_whitespace() {
@@ -309,8 +313,7 @@ impl VM {
 
     pub fn try_parse_number(&mut self) {
         let obj = self.pop();
-        let ba = obj.as_byte_array();
-        let string = unsafe { (*ba).as_str().unwrap() };
+        let string = unsafe { obj.bytearray_as_str() };
         if let Ok(num) = str::parse::<usize>(string) {
             let num_obj = self.allocate_fixnum(num as isize);
             self.push(num_obj);
@@ -427,7 +430,7 @@ impl VM {
         let obj = self.allocate_bytearray(s.len());
         unsafe {
             let ba = obj.as_byte_array_mut();
-            ptr::copy(s.as_ptr(), (*ba).data_ptr_mut(), s.len());
+            ptr::copy(s.as_ptr(), obj.bytearray_data(), s.len());
         }
         obj
     }
@@ -442,25 +445,25 @@ impl VM {
                 map: object::ObjectRef::from_map(self.special_objects.bytearray_map),
             };
             (*ba).capacity = size;
-            ptr::write_bytes((*ba).data_ptr_mut(), 0, size);
+            ptr::write_bytes(obj.bytearray_data(), 0, size);
         }
 
         obj
     }
 
     pub fn allocate_array_from_slice(&mut self, slice: &[object::ObjectRef]) -> object::ObjectRef {
-        let array_obj = self.allocate_array(slice.len());
-        let array = array_obj.as_array_mut();
+        let obj = self.allocate_array(slice.len());
         unsafe {
-            for (i, field) in (*array).data_mut().iter_mut().enumerate() {
-                *field = slice[i];
+            for idx in 0..obj.array_data_len() {
+                *(obj.array_data().add(idx)) = slice[idx];
             }
         }
-        array_obj
+        obj
     }
 
     pub fn allocate_array(&mut self, size: usize) -> object::ObjectRef {
-        let required_size = object::ArrayObject::required_size(size);
+        let required_size =
+            mem::size_of::<object::ArrayObject>() + size * mem::size_of::<object::ObjectRef>();
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
         let arr = obj.as_array_mut();
         unsafe {
@@ -469,7 +472,7 @@ impl VM {
                 map: object::ObjectRef::from_map(self.special_objects.array_map),
             };
             (*arr).size = size;
-            ptr::write_bytes((*arr).data_ptr_mut(), 0, size);
+            ptr::write_bytes(obj.array_data(), 0, size);
         }
         obj
     }
@@ -502,6 +505,7 @@ impl VM {
             .gc
             .allocate(mem::size_of::<object::Map>(), 8, true)
             .unwrap();
+
         unsafe {
             let map = map_obj.as_map_mut();
 
@@ -515,13 +519,13 @@ impl VM {
             (*map).slot_count = slots.len();
             (*map).slots = array;
 
-            let slot_array = array.as_array_mut();
             for (index, (desc, slot_name)) in slots.iter().zip(slot_name_objects).enumerate() {
                 let slot_obj = self
                     .gc
                     .allocate(mem::size_of::<object::SlotObject>(), 8, false)
                     .unwrap();
-                (*slot_array).data_mut()[index] = slot_obj;
+
+                array.set_array_at(index, slot_obj);
 
                 let slot = slot_obj.as_slot_mut();
                 (*slot).name = slot_name;
@@ -545,14 +549,13 @@ impl VM {
             let num = obj.as_fixfloat();
             self.allocate_fixfloat((*num).value)
         } else if map == self.special_objects.array_map {
-            let orig = obj.as_array();
-            let size = (*orig).size;
-            let data = (*orig).data();
+            let size = obj.array_data_len();
             let copy = self.allocate_array(size);
-            let copy_data = (*copy.as_array_mut()).data_mut();
-            for (od, cd) in data.iter().zip(copy_data) {
-                *cd = self.clone_object(*od);
+
+            for idx in 0..size {
+                *(copy.array_data().add(idx)) = *(obj.array_data().add(idx));
             }
+
             copy
         } else if map == self.special_objects.bytearray_map {
             let orig = obj.as_byte_array();
@@ -991,8 +994,8 @@ impl VM {
         unsafe {
             for map in self.maps.values() {
                 let map = map.as_mut().unwrap();
-                let slots = map.slots_mut();
-                for slot in slots {
+                for idx in 0..map.slot_count {
+                    let slot = map.get_slot_mut(idx);
                     slot.header.map = slot_map;
                 }
             }
@@ -1002,8 +1005,8 @@ impl VM {
     pub fn print_array(&self, obj: object::ObjectRef) {
         unsafe {
             print!("{{ ");
-            let arr = obj.as_array();
-            self.print_array_inner(arr.as_ref().unwrap());
+            let arr = obj;
+            self.print_array_inner(arr);
             print!("}}");
             println!();
         }
@@ -1012,16 +1015,17 @@ impl VM {
     pub fn print_quotation(&self, obj: object::ObjectRef) {
         unsafe {
             print!("[ ");
-            let arr = (*obj.as_quotation()).body.as_array();
-            self.print_array_inner(arr.as_ref().unwrap());
+            let arr = (*obj.as_quotation()).body;
+            self.print_array_inner(arr);
             print!("]");
             println!();
         }
     }
 
-    unsafe fn print_array_inner(&self, arr: &object::ArrayObject) {
-        let data = arr.data();
-        for o in data {
+    unsafe fn print_array_inner(&self, arr: object::ObjectRef) {
+        let size = arr.array_data_len();
+        for idx in 0..size {
+            let o = *(arr.array_data().add(idx));
             let map = o.get_map();
             if map == self.special_objects.fixnum_map {
                 print!("{:?}", (*o.as_fixnum()).value);
@@ -1029,8 +1033,8 @@ impl VM {
                 print!("{}", (*o.as_word()).name());
             } else if map == self.special_objects.quotation_map {
                 print!("[ ");
-                let qarr = (*o.as_quotation()).body.as_array();
-                self.print_array_inner(qarr.as_ref().unwrap());
+                let qarr = (*o.as_quotation()).body;
+                self.print_array_inner(qarr);
                 print!("]");
             } else if map == self.special_objects.box_map {
                 let inner = (*o.as_box()).boxed;
