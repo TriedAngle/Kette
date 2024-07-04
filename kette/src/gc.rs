@@ -290,14 +290,12 @@ impl MarkAndSweep {
                 println!("----");
                 println!("address: {:?}", key);
                 let map = key.get_map();
-                let map_name = (*map).name.as_byte_array();
-                let map_name_str = (*map_name).as_str().unwrap();
-                println!("type: {:?}", map_name_str);
+                let map_name = (*map).name.bytearray_as_str();
+                println!("type: {:?}", map_name);
                 if map == (*self.vm).special_objects.map_map {
                     let mapp = key.as_map();
-                    let mapp_name = (*mapp).name.as_byte_array();
-                    let mapp_name_str = (*mapp_name).as_str().unwrap();
-                    println!("map name: {:?}", mapp_name_str);
+                    let mapp_name = (*mapp).name.bytearray_as_str();
+                    println!("map name: {:?}", mapp_name);
                     println!("object size: {:?}", (*mapp).object_size);
                     println!("slot count: {:?}", (*mapp).slot_count);
                 } else if map == (*self.vm).special_objects.fixnum_map {
@@ -306,7 +304,7 @@ impl MarkAndSweep {
                     println!("value: {:?}", value);
                 } else if map == (*self.vm).special_objects.bytearray_map {
                     let ba = key.as_byte_array();
-                    let bas = (*ba).as_str().unwrap();
+                    let bas = key.bytearray_as_str();
                     println!("value: {:?}", bas);
                 } else {
                 }

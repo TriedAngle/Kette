@@ -209,12 +209,12 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
 }
 
 unsafe fn primitive_define_tuple(vm: *mut VM) {
-    let arr = (*vm).pop().as_array();
+    let arr = (*vm).pop();
     let name = (*vm).pop();
 
-    let slot_data = (*arr).data();
+    let slot_count = arr.array_data_len();
 
-    let mut object_size = 2 + slot_data.len();
+    let mut object_size = 2 + slot_count;
     let map_obj = (*vm)
         .gc
         .allocate(mem::size_of::<object::Map>(), 8, true)
@@ -223,22 +223,24 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
     let map = map_obj.as_map_mut();
 
     // * 3 so we have space for accessors get and set and (+ 1 for parent TODO)
-    let slots = (*vm).allocate_array(slot_data.len() * 3);
+    let slots = (*vm).allocate_array(slot_count * 3);
 
     (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
     (*map).name = name;
     (*map).object_size = object_size;
-    (*map).slot_count = slot_data.len();
+    (*map).slot_count = slot_count;
     (*map).slots = slots;
 
     let slot_array = slots.as_array_mut();
-    for (index, slot_name) in slot_data.iter().enumerate() {
+    for index in 0..slot_count {
+        let slot_name = *(arr.array_data().add(index));
+
         let slot_obj =
             (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        (*slot_array).data_mut()[index] = slot_obj;
+        *(slots.array_data().add(index)) = slot_obj;
 
         let slot = slot_obj.as_slot_mut();
-        (*slot).name = *slot_name;
+        (*slot).name = slot_name;
         (*slot).kind = object::SLOT_DATA;
         (*slot).value_type = object::ObjectRef::null();
         (*slot).index = index;
@@ -252,7 +254,8 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
         let slot_obj =
             (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        (*slot_array).data_mut()[index + slot_data.len()] = slot_obj;
+
+        *(slots.array_data().add(index + slot_count)) = slot_obj;
 
         let slot = slot_obj.as_slot_mut();
         (*slot).name = getter_name_obj;
@@ -267,7 +270,8 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
         let slot_obj =
             (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        (*slot_array).data_mut()[index + slot_data.len() * 2] = slot_obj;
+
+        *(slots.array_data().add(index + slot_count * 2)) = slot_obj;
 
         let slot = slot_obj.as_slot_mut();
         (*slot).name = setter_name_obj;
@@ -533,10 +537,8 @@ unsafe fn primitive_create_array(vm: *mut VM) {
     let size = (*vm).pop().as_fixnum();
     let obj = (*vm).allocate_array((*size).value as usize);
 
-    let arr = obj.as_array_mut();
-    let fields = (*arr).data_mut();
-    for field in fields {
-        *field = initial;
+    for index in 0..obj.array_data_len() {
+        *(obj.array_data().add(index)) = initial;
     }
     (*vm).push(obj);
 }
@@ -555,37 +557,6 @@ unsafe fn primitive_bytearray_eq(vm: *mut VM) {
         (*vm).push_true();
     } else {
         (*vm).push_false();
-    }
-}
-
-// ( size old -- new )
-unsafe fn primitive_resize_array(vm: *mut VM) {
-    let old = (*vm).pop();
-    (*vm).push_false();
-    primitive_create_array(vm);
-    let new = (*vm).peek();
-    let old_arr = old.as_array();
-    let new_arr = new.as_array_mut();
-    let old_data = (*old_arr).data();
-    let new_data = (*new_arr).data_mut();
-
-    let shorter = usize::min(old_data.len(), new_data.len());
-    let longer = usize::max(old_data.len(), new_data.len());
-    let remaining = longer - shorter;
-
-    for idx in 0..shorter {
-        new_data[idx] = old_data[idx];
-    }
-
-    let ff = (*vm).special_objects.false_object;
-    let f = object::ObjectRef(ff);
-
-    for idx in remaining..longer {
-        new_data[idx] = f;
-    }
-
-    for (idx, elem) in old_data.iter().enumerate() {
-        new_data[idx] = *elem;
     }
 }
 

@@ -85,11 +85,20 @@ pub struct ObjectRef(pub *mut Object);
 
 impl ObjectRef {
     pub unsafe fn get_field(&self, index: usize) -> ObjectRef {
-        (*self.0).get_field(index)
+        let ptr = self.0 as *mut u8;
+        let start = ptr.add(mem::size_of::<ObjectHeader>());
+        let data = start as *mut ObjectRef;
+        let offset = data.add(index);
+        *offset
     }
 
     pub unsafe fn set_field(&self, index: usize, value: ObjectRef) {
-        (*self.0).set_field(index, value)
+        let ptr = self.0 as *mut u8;
+        let start = ptr.add(mem::size_of::<ObjectHeader>());
+        let data = start as *mut ObjectRef;
+
+        let offset = data.add(index);
+        *offset = value;
     }
 
     pub const fn new(ptr: *mut Object) -> Self {
@@ -211,6 +220,78 @@ impl ObjectRef {
     pub const fn as_slot_mut(&self) -> *mut SlotObject {
         self.0 as *mut SlotObject
     }
+
+    pub unsafe fn array_data(&self) -> *mut ObjectRef {
+        let ptr = self.0 as *mut u8;
+        let data = ptr.add(mem::size_of::<ArrayObject>());
+        data as *mut ObjectRef
+    }
+
+    pub unsafe fn get_array_at(&self, index: usize) -> ObjectRef {
+        let ptr = self.0 as *mut u8;
+        let start = ptr.add(mem::size_of::<ArrayObject>());
+        let data = start as *mut ObjectRef;
+        let offset = data.add(index);
+        *offset
+    }
+
+    pub unsafe fn set_array_at(&self, index: usize, value: ObjectRef) {
+        let ptr = self.0 as *mut u8;
+        let start = ptr.add(mem::size_of::<ArrayObject>());
+        let data = start as *mut ObjectRef;
+        let offset = data.add(index);
+        *offset = value;
+    }
+
+    pub unsafe fn array_data_len(&self) -> usize {
+        let ptr = self.0 as *const u8;
+        let data = ptr.add(mem::size_of::<ObjectHeader>());
+        *(data as *const usize)
+    }
+
+    pub unsafe fn bytearray_data(&self) -> *mut u8 {
+        let ptr = self.0 as *mut u8;
+        let data = ptr.add(mem::size_of::<ByteArrayObject>());
+        data as *mut u8
+    }
+
+    pub unsafe fn bytearray_data_len(&self) -> usize {
+        let ptr = self.0 as *const u8;
+        let data = ptr.add(mem::size_of::<ObjectHeader>());
+        *(data as *const usize)
+    }
+
+    pub unsafe fn bytearray_is_eq(&self, other: ObjectRef) -> bool {
+        let self_ptr = self.bytearray_data();
+        let other_ptr = other.bytearray_data();
+        let self_len = self.bytearray_data_len();
+        let other_len = other.bytearray_data_len();
+
+        if self_len != other_len {
+            return false;
+        }
+        let self_slice = slice::from_raw_parts(self_ptr, self_len);
+        let other_slice = slice::from_raw_parts(other_ptr, other_len);
+        self_slice == other_slice
+    }
+
+    pub unsafe fn bytearray_is_eq_rust(&self, other: &str) -> bool {
+        let self_ptr = self.bytearray_data();
+        let self_len = self.bytearray_data_len();
+
+        if self_len != other.len() {
+            return false;
+        }
+        let self_slice = slice::from_raw_parts(self_ptr, self_len);
+        self_slice == other.as_bytes()
+    }
+
+    pub unsafe fn bytearray_as_str(&self) -> &str {
+        let self_ptr = self.bytearray_data();
+        let self_len = self.bytearray_data_len();
+        let data_slice = slice::from_raw_parts(self_ptr, self_len);
+        std::str::from_utf8(data_slice).unwrap()
+    }
 }
 
 #[repr(C)]
@@ -233,32 +314,6 @@ pub struct ArrayObject {
     pub header: ObjectHeader,
     pub size: usize, // array capacity
                      // data here
-}
-
-impl ArrayObject {
-    pub unsafe fn data_ptr(&self) -> *const u8 {
-        (self as *const Self).add(1) as *const u8
-    }
-
-    pub unsafe fn data_ptr_mut(&mut self) -> *mut u8 {
-        (self as *mut Self).add(1) as *mut u8
-    }
-
-    pub fn required_size(size: usize) -> usize {
-        let object_size = mem::size_of::<Self>();
-        let data_size = mem::size_of::<ObjectRef>() * size;
-        object_size + data_size
-    }
-
-    pub unsafe fn data(&self) -> &[ObjectRef] {
-        let p = self.data_ptr() as *const ObjectRef;
-        slice::from_raw_parts(p, self.size)
-    }
-
-    pub unsafe fn data_mut(&mut self) -> &mut [ObjectRef] {
-        let p = self.data_ptr_mut() as *mut ObjectRef;
-        slice::from_raw_parts_mut(p, self.size)
-    }
 }
 
 #[repr(C)]
@@ -305,6 +360,7 @@ impl ByteArrayObject {
     pub unsafe fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
         let data_ptr = (self as *const Self as *const u8)
             .add(std::mem::size_of::<ObjectHeader>() + std::mem::size_of::<usize>());
+
         let length = (0..self.capacity)
             .find(|&i| *data_ptr.add(i) == 0)
             .unwrap_or(self.capacity);
@@ -340,7 +396,9 @@ pub struct QuotationObject {
 
 impl QuotationObject {
     pub unsafe fn body(&self) -> &[ObjectRef] {
-        (*self.body.as_array()).data()
+        let data = self.body.array_data();
+        let len = self.body.array_data_len();
+        slice::from_raw_parts(data, len)
     }
 }
 
@@ -357,8 +415,7 @@ pub struct WordObject {
 
 impl WordObject {
     pub unsafe fn name<'a>(&'a self) -> &'a str {
-        let arr = self.name.as_byte_array();
-        (*arr).as_str().unwrap()
+        &self.name.bytearray_as_str()
     }
     pub unsafe fn quotation(&self) -> *const QuotationObject {
         self.body.0 as *const QuotationObject
@@ -405,74 +462,60 @@ pub struct Map {
 
 impl Map {
     pub unsafe fn name<'a>(&'a self) -> &'a str {
-        let arr = self.name.as_byte_array();
-        (*arr).as_str().unwrap()
+        self.name.bytearray_as_str()
     }
 
     pub unsafe fn slot_array(&self) -> *mut ArrayObject {
         self.slots.0 as *mut ArrayObject
     }
 
-    pub unsafe fn slots(&self) -> &[&SlotObject] {
-        let array = self.slot_array();
-        let data = (*array).data();
-        let slots = mem::transmute(data);
-        slots
+    pub unsafe fn slots(&self) -> &[SlotObject] {
+        let data = self.slots.array_data() as *const SlotObject;
+        let len = self.slots.array_data_len();
+        let slice = slice::from_raw_parts(data, len);
+        slice
     }
 
-    pub unsafe fn slots_mut(&self) -> &mut [&mut SlotObject] {
-        let array = self.slot_array();
-        let data = (*array).data_mut();
-        let slots = mem::transmute(data);
-        slots
+    pub unsafe fn slots_mut(&self) -> &mut [SlotObject] {
+        let data = self.slots.array_data() as *mut SlotObject;
+        let len = self.slots.array_data_len();
+        let slice = slice::from_raw_parts_mut(data, len);
+        slice
     }
 
-    pub unsafe fn find_slot(&self, name: *const ByteArrayObject) -> Option<&SlotObject> {
+    pub unsafe fn find_slot(&self, name: ObjectRef) -> Option<&SlotObject> {
         let array = self.slot_array();
-        let slots = (*array).data();
-        slots
-            .iter()
-            .map(|obj| obj.as_slot().as_ref().unwrap())
-            .find(|s| (*s.name.as_byte_array()).is_eq(&*name))
+        let slots = self.slots();
+        slots.iter().find(|s| s.name.bytearray_is_eq(name))
     }
 
     pub unsafe fn find_slot_rust(&self, name: &str) -> Option<&SlotObject> {
         let array = self.slot_array();
-        let slots = (*array).data();
-        slots
-            .iter()
-            .map(|obj| obj.as_slot().as_ref().unwrap())
-            .find(|s| (*s.name.as_byte_array()).is_eq_rust(name))
+        let slots = self.slots();
+        slots.iter().find(|s| s.name.bytearray_is_eq_rust(name))
     }
 
-    pub unsafe fn find_slot_mut(
-        &mut self,
-        name: *const ByteArrayObject,
-    ) -> Option<&mut SlotObject> {
+    pub unsafe fn find_slot_mut(&mut self, name: ObjectRef) -> Option<&mut SlotObject> {
         let array = self.slot_array();
-        let slots = (*array).data();
-        slots
-            .iter()
-            .map(|obj| obj.as_slot_mut().as_mut().unwrap())
-            .find(|s| (*s.name.as_byte_array()).is_eq(&*name))
+        let slots = self.slots_mut();
+        slots.iter_mut().find(|s| s.name.bytearray_is_eq(name))
     }
 
     pub unsafe fn find_slot_rust_mut(&mut self, name: &str) -> Option<&mut SlotObject> {
         let array = self.slot_array();
-        let slots = (*array).data();
-        slots
-            .iter()
-            .map(|obj| obj.as_slot_mut().as_mut().unwrap())
-            .find(|s| (*s.name.as_byte_array()).is_eq_rust(name))
+        let slots = self.slots_mut();
+        slots.iter_mut().find(|s| s.name.bytearray_is_eq_rust(name))
     }
 
     pub unsafe fn get_slot(&self, index: usize) -> &SlotObject {
         assert!(index < self.slot_count, "Index out of bounds");
-        self.slots()[index]
+        let obj = self.slots.get_array_at(index);
+        mem::transmute(obj.0 as *const SlotObject)
     }
 
     pub unsafe fn get_slot_mut(&mut self, index: usize) -> &mut SlotObject {
         assert!(index < self.slot_count, "Index out of bounds");
-        self.slots_mut()[index]
+        let obj = self.slots.get_array_at(index);
+        mem::transmute(obj.0 as *mut SlotObject)
     }
 }
