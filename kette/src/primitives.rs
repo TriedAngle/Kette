@@ -542,8 +542,11 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
                 && (*slot).kind == object::SLOT_EMBEDDED_DATA
             {
                 let num = (*value.as_fixnum()).value;
-                let val = mem::transmute(num);
-                obj.set_field((*index).value as usize, object::ObjectRef::from_usize(val));
+                obj.set_field(
+                    (*index).value as usize,
+                    object::ObjectRef(mem::transmute(num)),
+                );
+                return;
             }
         }
     }
@@ -605,6 +608,24 @@ unsafe fn primitive_bytearray_eq(vm: *mut VM) {
     }
 }
 
+unsafe fn primitive_bytearray_concat(vm: *mut VM) {
+    let b = (*vm).pop();
+    let a = (*vm).pop();
+    let new_size = a.bytearray_data_len() + b.bytearray_data_len();
+    let new = (*vm).allocate_bytearray(new_size);
+    std::ptr::copy_nonoverlapping(
+        a.bytearray_data(),
+        new.bytearray_data(),
+        a.bytearray_data_len(),
+    );
+    std::ptr::copy_nonoverlapping(
+        b.bytearray_data(),
+        new.bytearray_data().add(a.bytearray_data_len()),
+        b.bytearray_data_len(),
+    );
+    (*vm).push(new);
+}
+
 impl VM {
     unsafe fn add_globals_primitives(&mut self) {
         self.add_primitive("@vm-next-token", primitive_next_token, false);
@@ -648,7 +669,6 @@ impl VM {
         self.add_primitive("f", primitive_push_false, false);
 
         self.add_primitive("let-me-cook", primitive_context, false);
-        self.add_primitive(">map", primitive_get_map, false);
         self.add_primitive("slot", primitive_slot, false);
         self.add_primitive("set-slot", primitive_set_slot, false);
 
@@ -665,10 +685,10 @@ impl VM {
         self.add_primitive("array>quotation", primitive_array_to_quotation, false);
         self.add_primitive("call", primitive_call_quotation, false);
         self.add_primitive("call-primitive", primitive_call_primitive, false);
-        self.add_primitive("word>quotation", primitive_word_to_quotation, false);
         self.add_primitive("<array>", primitive_create_array, false);
         self.add_primitive("<bytearray>", primitive_create_bytearray, false);
         self.add_primitive("bytearray=", primitive_bytearray_eq, false);
+        self.add_primitive("bytearray-concat", primitive_bytearray_concat, false);
 
         self.add_primitive("utf8.", primitive_print_string, false);
         self.add_primitive("quotation.", primitive_print_quotation, false);
@@ -831,7 +851,7 @@ impl VM {
         self.add_primitive("fixnum-bitor", primitive_fixnum_bitor, false);
         self.add_primitive("fixnum-bitxor", primitive_fixnum_bitxor, false);
         self.add_primitive("fixnum-bitnot", primitive_fixnum_bitnot, false);
-        self.add_primitive("fixnum-bitshiftleft", primitive_fixnum_shift_left, false);
-        self.add_primitive("fixnum-bitshiftright", primitive_fixnum_shift_right, false);
+        self.add_primitive("fixnum-bitshift-left", primitive_fixnum_shift_left, false);
+        self.add_primitive("fixnum-bitshift-right", primitive_fixnum_shift_right, false);
     }
 }

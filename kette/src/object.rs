@@ -126,7 +126,7 @@ impl ObjectRef {
     }
 
     pub fn as_isize(self) -> isize {
-        self.0 as isize
+        unsafe { mem::transmute(self.0) }
     }
 
     pub const fn null() -> Self {

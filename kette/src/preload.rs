@@ -110,6 +110,39 @@ pub const PRELOAD: &str = r#"
 : 2th ( seq -- val ) 1 swap array-nth ;
 : 3th ( seq -- val ) 2 swap array-nth ;
 
+: ref-eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
+
+: special-object ( id -- object ) 8 fixnum* let-me-cook 1 slot swap fixnum+ get^ ^object ;
+
+: primitive? ( word -- ? ) 4 slot 1 fixnum= ;
+: syntax? ( word -- ? ) 3 slot 1 fixnum= ;
+
+: execute-if-syntax ( word -- res ) 
+    dup syntax? 
+    [ dup primitive? [
+        [ call-primitive ] keep
+        \ [ unbox ref-eq? [ 1 swap <array> array>quotation ] unless 
+    ] [ 1 slot call ] if ] 
+    [ drop f ] if ;
+
+@: !: 
+    @vm-next-token @vm-define-empty-global-word @vm-next-token 
+    dup @vm-?number dup [ dropd 1 swap <array> array>quotation set-word-body ] [ 
+        drop @vm-link-word dup [ execute-if-syntax  set-word-body ] [ drop f ] if 
+    ] if t ;
+
+
+!: SLOT-CONSTANT 0
+!: SLOT_PARENT 1
+!: SLOT_DATA 2
+!: SLOT_ASSIGNMENT 3
+!: SLOT_METHOD 4
+!: SLOT_VARIABLE_DATA: 5
+!: SLOT_EMBEDDED_DATA: 6
+
+: map>> ( obj -- map ) 1 neg slot ;
+: slots>> ( map -- slots ) 3 slot ;
+
 @: tuple: 
     @vm-next-token [ @vm-define-empty-global-word ] keep 
     \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
@@ -156,6 +189,7 @@ builtin: word
     { syntax? i64 } ;
 
 
+!/ primitive macros: `@:` `]` `:` but they get !/ 
 primitive: @vm-next-token ( -- token )
 primitive: @vm-parse-until ( wrapped-word -- array )
 primitive: @vm-skip-until ( wrapped-word -- array )
@@ -219,30 +253,6 @@ primitive: fixnum-bitxor ( a b -- c )
 primitive: fixnum-bitnot ( a -- b )
 primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
-
-: ref-eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
-
-: special-object ( id -- object ) 8 fixnum* let-me-cook 1 slot swap fixnum+ get^ ^object ;
-
-
-: primitive? ( word -- ? ) 4 slot 1 fixnum= ;
-: syntax? ( word -- ? ) 3 slot 1 fixnum= ;
-
-
-: execute-if-syntax ( word -- res ) 
-    dup syntax? 
-    [ dup primitive? [
-        [ call-primitive ] keep
-        \ [ unbox ref-eq? [ 1 swap <array> array>quotation ] unless 
-    ] [ 1 slot call ] if ] 
-    [ drop f ] if ;
-
-@: !: 
-    @vm-next-token @vm-define-empty-global-word @vm-next-token 
-    dup @vm-?number dup [ dropd 1 swap <array> array>quotation set-word-body ] [ 
-        drop @vm-link-word dup [ execute-if-syntax  set-word-body ] [ drop f ] if 
-    ] if t ;
-
 
 : array-copy ( src dst start-src start-dst count -- ) 
     0 swap [ 2dup < ] [ [ 1 + ] dip ] [ [ [

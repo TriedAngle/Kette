@@ -14,8 +14,7 @@ fn main() {
     }
 
     let testing = r#"
-        : map>> ( obj -- map ) 1 neg slot ;
-        : slots>> ( map -- slots ) 3 slot ;
+
 
         !/
         : lookup-slot ( name obj -- index ) 
@@ -26,13 +25,7 @@ fn main() {
             ] loop 2dropd ;
         !/
 
-        !: SLOT-CONSTANT 0
-        !: SLOT_PARENT 1
-        !: SLOT_DATA 2
-        !: SLOT_ASSIGNMENT 3
-        !: SLOT_METHOD 4
-        !: SLOT_VARIABLE_DATA: 5
-        !: SLOT_EMBEDDED_DATA: 6
+
 
         !/ TODO: write a find for sequences !/
         : lookup-slot ( name map -- slot )
@@ -51,12 +44,7 @@ fn main() {
         : slot-method (slot -- ) 
             dup 1 slot SLOT_METHOD fixnum= [ 2 slot ] [ drop f ] if ;
 
-        @: builtin:
-            @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
-            define-push-word \ ;  @vm-skip-until drop t ;
 
-        builtin: fixnum
-        builtin:
         
         tuple: pos x y ;
         
