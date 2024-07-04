@@ -21,6 +21,14 @@ fn main() {
         dup x>> .
         333 >>y y>> .
 
+        : fizzbuzz ( num -- ) 
+            dup {
+                { [ 15 n| ] [ s" FizzBuzz" utf8. ] }
+                { [ 3 n| ] [ s" Fizz" utf8. ] }
+                { [ 5 n| ] [ s" Buzz" utf8. ] }
+                { [ drop t ] [ dup . ] }
+            } match dup 0 > [ -1 fizzbuzz ] [ drop ] if ;
+
         "#;
     unsafe {
         let quot = vm.compile_string(testing);

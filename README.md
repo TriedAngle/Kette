@@ -49,9 +49,22 @@ words start with `:` and end with `;`. After `:` comes the word name and after t
 5 +1 +1 +1 . // prints 8
 ```
 
+### Define a macro
+`@:` is used to define a macro/syntax word. they have to return a value. if they have "nothing to return", return `t`.
+example: how comments are implemented:
+```
+@: !/ \ !/ @vm-skip-until drop t ;
+!/ this is a commment !/
+```
+example: how arrays are implemented:
+```
+@: { \ } @vm-parse-until ;
+{ 3 2 1 }
+```
+
 ### Quotations
 Quotations are a powerful concept. They are basically lamdas or anonymous functions in other langauge. In Kette they are also used for control flow. A quotation starts with `[` and end with `]`.
-Quotations just contain normal code or other quotations. Quotations can be called with `call` or other words like `dip` and `keep`. Quotations after being defined just leave a pointer on the stack where they are defined.
+Quotations just contain normal code or other quotations. Quotations can be called with `call` or other words like `dip` and `keep`. Quotations after being defined just leave themselves on the stack where they are defined.
 ```
 // prints 1 as `3 5 +` and 8 are equal
 3 5 + 8 = [ 1 . ] [ 0 . ] if 
@@ -61,9 +74,36 @@ Quotations just contain normal code or other quotations. Quotations can be calle
 2 1 [ 3 * ] dip + . 
 ```
 
-### Builtin words
+Together with quotations and macros we have a very poweful framework to work with, for example `match` is just a word that iterates over arrays and executes its quotation.
 ```
-// Stack words
+: match ( ? array -- ) ... ; !/ implementation hidden for readability !/
+
+: n| ( a n -- ? ) % 0 = ;
+
+: fizzbuzz ( num -- ) 
+    dup {
+        { [ 15 n| ] [ s" FizzBuzz" utf8. ] }
+        { [ 3 n| ] [ s" Fizz" utf8. ] }
+        { [ 5 n| ] [ s" Buzz" utf8. ] }
+        { [ drop t ] [ dup . ] }
+    } match dup 0 > [ 1 - fizzbuzz ] [ drop ] if ;
+
+30 fizzbuzz !/ does fizzbuzz for 30 to 0 !/
+```
+
+### Tuples
+Tuples are data containers whose fields can be accessed accessors.
+```
+tuple: pos x y ;    !/ define tuple pos with slots x and y !/
+10 5 pos boa        !/ construct a new object from the tuple class by "order of arguments"
+dup x>> .           !/ prints 10 !/
+dup 420 swap x<<
+dup x>> .           !/ prints 420 !/
+333 >>y y>> .       !/ prints 333 !/
+```
+
+### Common Stack Operations
+```
 : drop ( a -- )
 : dropd ( a b -- b )
 : dup ( a -- a a ) 
@@ -73,26 +113,15 @@ Quotations just contain normal code or other quotations. Quotations can be calle
 : swapd ( a b c -- b a c )
 : rot ( a b c -- b c a )
 : -rot ( a b c -- c a b )
-: dip ( ... a q -- a ) // takes a from the stack, executes q (quotation) and puts a at the top of the stack
+: dip ( x q -- x ) !/ takes x from the stack, executes q (quotation) and puts x at the top of the stack !/
+: keep ( x q -- x ) !/ like dip but executes q with x too !/
 : call ( q -- ) calls a quotation
 
-// arithmetic: + - * / %  
-// logic: = and or not if
-// bits: bit& bit| bit^ bit<< bit>> bit~
-
-// OTHER
-: . ( n -- ) prints a number to stdout
-: .q ( q -- ) prints the quotation to stdout
-: @ ( p -- v ) dereferences 8 byte pointer
-: ! ( v p -- ) writes v to the location the pointer is pointing to
-: let-me-cook ( -- vm ) returns a pointer to the actual VM
-: LATEST ( -- ) pointer to the latest word
-: word>quot ( w -- q ) takes a word pointer and pushes it's a quotation pointer of the word body onto the stack
-
-// syscall0 up to syscall4 perform syscalls. n stands for the amount of parameters other than the syscall id
-: syscall0 ( id -- res )
-: syscall1 ( id p1 -- res )
-: syscall2 ( id p1 p2 -- res )
-: syscall3 ( id p1 p2 p3 -- res )
-: syscall4 ( id p1 p2 p3 p4 -- res )
+!/
+arithmetic: + - * / %  
+logic: = and or not if when unless
+bits: bit& bit| bit^ bit<< bit>> bit~
+!/
 ```
+
+see src/preload for more
