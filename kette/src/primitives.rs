@@ -105,8 +105,8 @@ unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> obje
     (*word).body = object::ObjectRef::null();
 
     // TODO: implement global vocabulary
-    let word_name = (*name.as_byte_array()).as_str().unwrap().to_string();
-    (*vm).words.insert(word_name, word);
+    let word_name = name.bytearray_as_str();
+    (*vm).words.insert(word_name.to_owned(), word);
 
     word_object
 }
@@ -134,8 +134,9 @@ unsafe fn primitive_string(vm: *mut VM) {
     let v = vm.as_mut().unwrap();
     let ino = v.special_objects.input;
     let inoffsetto = v.special_objects.input_offset;
+    let inoobj = object::ObjectRef(ino as *mut object::Object);
 
-    let input = (*ino).as_str().unwrap();
+    let input = inoobj.bytearray_as_str();
     let mut offset = (*inoffsetto).value as usize;
     let start = offset;
 
@@ -155,8 +156,7 @@ unsafe fn primitive_string(vm: *mut VM) {
 
 unsafe fn primitive_print_string(vm: *mut VM) {
     let obj = (*vm).pop();
-    let ba = obj.as_byte_array();
-    let s = (*ba).as_str().unwrap();
+    let s = obj.bytearray_as_str();
     println!("{:?}", s);
 }
 
@@ -165,12 +165,12 @@ unsafe fn parse_stack_effect(vm: *mut VM) {
     _ = (*vm).pop();
     loop {
         (*vm).read_word();
-        let word = (*vm).pop().as_byte_array();
-        if (*word).is_eq_rust("(") {
+        let word = (*vm).pop();
+        if word.bytearray_is_eq_rust("(") {
             parse_stack_effect(vm);
             continue;
         }
-        if (*word).is_eq_rust(")") {
+        if word.bytearray_is_eq_rust(")") {
             break;
         }
     }
@@ -246,7 +246,7 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
         (*slot).index = index;
         (*slot).read_only = 0;
 
-        let field_name = (*slot_name.as_byte_array()).as_str().unwrap();
+        let field_name = slot_name.bytearray_as_str();
 
         // getter name>>
         let getter_name = format!("{}>>", field_name);
@@ -281,7 +281,7 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
         (*slot).read_only = 0;
     }
 
-    let map_name = (*name.as_byte_array()).as_str().unwrap();
+    let map_name = name.bytearray_as_str();
     (*vm).maps.insert(map_name.to_owned(), map);
     (*vm).push(map_obj);
 }
@@ -481,20 +481,26 @@ unsafe fn primitive_get_map(vm: *mut VM) {
 unsafe fn primitive_slot(vm: *mut VM) {
     let index = (*vm).pop().as_fixnum();
     let obj = (*vm).pop();
-    let slot = obj.get_field((*index).value as usize);
+    let value = obj.get_field((*index).value as usize);
 
-    if let Some(map) = obj.get_map().as_ref() {
-        if let Some(desc) = map
-            .slots()
-            .iter()
-            .find(|s| s.index == (*index).value as usize && s.kind == object::SLOT_EMBEDDED_DATA)
-        {
-            (*vm).push_fixnum(slot.as_isize());
-            return;
+    if obj.get_map().as_ref().is_some() {
+        let map = obj.get_map();
+        let slots = (*map).slots;
+        let slot_count = slots.array_data_len();
+
+        for idx in 0..slot_count {
+            let slot = slots.get_array_at(idx);
+            let slot = slot.as_slot();
+            if (*slot).index == (*index).value as usize
+                && (*slot).kind == object::SLOT_EMBEDDED_DATA
+            {
+                (*vm).push_fixnum(value.as_isize());
+                return;
+            }
         }
     }
 
-    (*vm).push(slot);
+    (*vm).push(value);
 }
 
 // ( value object index -- )
@@ -503,15 +509,21 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
     let obj = (*vm).pop();
     let value = (*vm).pop();
 
-    if let Some(map) = obj.get_map().as_ref() {
-        if let Some(desc) = map
-            .slots()
-            .iter()
-            .find(|s| s.index == (*index).value as usize && s.kind == object::SLOT_EMBEDDED_DATA)
-        {
-            let num = (*value.as_fixnum()).value;
-            let val = mem::transmute(num);
-            obj.set_field((*index).value as usize, object::ObjectRef::from_usize(val));
+    if obj.get_map().as_ref().is_some() {
+        let map = obj.get_map();
+        let slots = (*map).slots;
+        let slot_count = slots.array_data_len();
+
+        for idx in 0..slot_count {
+            let slot = slots.get_array_at(idx);
+            let slot = slot.as_slot();
+            if (*slot).index == (*index).value as usize
+                && (*slot).kind == object::SLOT_EMBEDDED_DATA
+            {
+                let num = (*value.as_fixnum()).value;
+                let val = mem::transmute(num);
+                obj.set_field((*index).value as usize, object::ObjectRef::from_usize(val));
+            }
         }
     }
 
@@ -550,10 +562,10 @@ unsafe fn primitive_create_bytearray(vm: *mut VM) {
 }
 
 unsafe fn primitive_bytearray_eq(vm: *mut VM) {
-    let b = (*vm).pop().as_byte_array();
-    let a = (*vm).pop().as_byte_array();
+    let b = (*vm).pop();
+    let a = (*vm).pop();
 
-    if (*a).is_eq(b.as_ref().unwrap()) {
+    if a.bytearray_is_eq(b) {
         (*vm).push_true();
     } else {
         (*vm).push_false();

@@ -287,10 +287,23 @@ impl ObjectRef {
     }
 
     pub unsafe fn bytearray_as_str(&self) -> &str {
-        let self_ptr = self.bytearray_data();
-        let self_len = self.bytearray_data_len();
-        let data_slice = slice::from_raw_parts(self_ptr, self_len);
+        let data = self.bytearray_data();
+        let data_len = self.bytearray_data_len();
+        let length = (0..data_len)
+            .find(|&i| *data.add(i) == 0)
+            .unwrap_or(data_len);
+
+        let data_slice = slice::from_raw_parts(data, length);
         std::str::from_utf8(data_slice).unwrap()
+    }
+
+    pub unsafe fn map_slots(&self) -> &[SlotObject] {
+        let ptr = self.0 as *mut Map;
+
+        let data = (*ptr).slots.array_data() as *const SlotObject;
+        let len = (*ptr).slots.array_data_len();
+        let slice = slice::from_raw_parts(data, len);
+        slice
     }
 }
 
@@ -337,36 +350,36 @@ impl ByteArrayObject {
         data_ptr
     }
 
-    unsafe fn data(&self) -> &[u8] {
-        let self_ptr = self as *const Self as *const u8;
-        let data_ptr = self_ptr.add(mem::size_of::<Self>());
-        slice::from_raw_parts(data_ptr, self.capacity)
-    }
+    // unsafe fn data(&self) -> &[u8] {
+    //     let self_ptr = self as *const Self as *const u8;
+    //     let data_ptr = self_ptr.add(mem::size_of::<Self>());
+    //     slice::from_raw_parts(data_ptr, self.capacity)
+    // }
 
-    pub unsafe fn is_eq(&self, other: &ByteArrayObject) -> bool {
-        if self.capacity != other.capacity {
-            return false;
-        }
-        self.data() == other.data()
-    }
+    // pub unsafe fn is_eq(&self, other: &ByteArrayObject) -> bool {
+    //     if self.capacity != other.capacity {
+    //         return false;
+    //     }
+    //     self.data() == other.data()
+    // }
 
-    pub unsafe fn is_eq_rust(&self, other: &str) -> bool {
-        if self.capacity != other.len() {
-            return false;
-        }
-        self.data() == other.as_bytes()
-    }
+    // pub unsafe fn is_eq_rust(&self, other: &str) -> bool {
+    //     if self.capacity != other.len() {
+    //         return false;
+    //     }
+    //     self.data() == other.as_bytes()
+    // }
 
-    pub unsafe fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
-        let data_ptr = (self as *const Self as *const u8)
-            .add(std::mem::size_of::<ObjectHeader>() + std::mem::size_of::<usize>());
+    // pub unsafe fn as_str(&self) -> Result<&str, std::str::Utf8Error> {
+    //     let data_ptr = (self as *const Self as *const u8)
+    //         .add(std::mem::size_of::<ObjectHeader>() + std::mem::size_of::<usize>());
 
-        let length = (0..self.capacity)
-            .find(|&i| *data_ptr.add(i) == 0)
-            .unwrap_or(self.capacity);
-        let data_slice = slice::from_raw_parts(data_ptr, length);
-        std::str::from_utf8(data_slice)
-    }
+    //     let length = (0..self.capacity)
+    //         .find(|&i| *data_ptr.add(i) == 0)
+    //         .unwrap_or(self.capacity);
+    //     let data_slice = slice::from_raw_parts(data_ptr, length);
+    //     std::str::from_utf8(data_slice)
+    // }
 }
 
 #[repr(C)]
