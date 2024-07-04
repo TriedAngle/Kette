@@ -127,11 +127,31 @@ unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> obje
     word_object
 }
 
+unsafe fn create_empty_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
+    let word_map = (*vm).special_objects.word_map;
+    let word_object = (*vm).allocate_object(object::ObjectRef::from_map(word_map));
+
+    let word = word_object.as_word_mut();
+    (*word).name = name;
+    (*word).primitive = 0;
+    (*word).syntax = 0;
+    (*word).properties = object::ObjectRef::null();
+    (*word).body = object::ObjectRef::null();
+
+    word_object
+}
+
 unsafe fn primitive_create_empty_global_word(vm: *mut VM) {
     let name = (*vm).pop();
     let word = create_empty_global_word(vm, name);
 
     (*vm).push(word);
+}
+
+unsafe fn primitive_define_empty_word(vm: *mut VM) {
+    let name = (*vm).pop();
+    let word = create_empty_word(vm, name);
+    (*vm).push(word)
 }
 
 unsafe fn primitive_quotation_start(vm: *mut VM) {
@@ -238,8 +258,7 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
     let map = map_obj.as_map_mut();
 
-    // * 3 so we have space for accessors get and set and (+ 1 for parent TODO)
-    let slots = (*vm).allocate_array(slot_count * 3);
+    let slots = (*vm).allocate_array(slot_count);
 
     (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
     (*map).name = name;
@@ -247,7 +266,6 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
     (*map).slot_count = slot_count;
     (*map).slots = slots;
 
-    let slot_array = slots.as_array_mut();
     for index in 0..slot_count {
         let slot_name = *(arr.array_data().add(index));
 
@@ -259,40 +277,6 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
         (*slot).name = slot_name;
         (*slot).kind = object::SLOT_DATA;
         (*slot).value_type = object::ObjectRef::null();
-        (*slot).index = index;
-        (*slot).read_only = 0;
-
-        let field_name = slot_name.bytearray_as_str();
-
-        // getter name>>
-        let getter_name = format!("{}>>", field_name);
-        let getter_name_obj = (*vm).allocate_string(&getter_name);
-
-        let slot_obj =
-            (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-
-        *(slots.array_data().add(index + slot_count)) = slot_obj;
-
-        let slot = slot_obj.as_slot_mut();
-        (*slot).name = getter_name_obj;
-        (*slot).kind = object::SLOT_METHOD;
-        (*slot).value_type = object::ObjectRef::null();
-        (*slot).index = index;
-        (*slot).read_only = 0;
-
-        // setter name<<
-        let setter_name = format!("{}<<", field_name);
-        let setter_name_obj = (*vm).allocate_string(&setter_name);
-
-        let slot_obj =
-            (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-
-        *(slots.array_data().add(index + slot_count * 2)) = slot_obj;
-
-        let slot = slot_obj.as_slot_mut();
-        (*slot).name = setter_name_obj;
-        (*slot).kind = object::SLOT_METHOD;
-        (*slot).value_type = object::ObjectRef::from_map((*vm).special_objects.word_map);
         (*slot).index = index;
         (*slot).read_only = 0;
     }
@@ -307,7 +291,7 @@ unsafe fn primitive_clone(vm: *mut VM) {}
 unsafe fn primitive_tuple_new(vm: *mut VM) {
     let map = (*vm).pop();
     let obj = (*vm).allocate_object(map);
-    let slot_count = (*map.as_map()).slot_count;
+    let slot_count = (*map.as_map()).object_size - 2;
     for i in (0..slot_count).rev() {
         obj.set_field(i, (*vm).pop());
     }
@@ -639,6 +623,8 @@ impl VM {
             primitive_create_empty_global_word,
             false,
         );
+        self.add_primitive("@vm-define-empty-word", primitive_define_empty_word, false);
+
         self.add_primitive("@vm-stack", primitive_vm_stack, false);
         self.add_primitive("@vm-define-tuple", primitive_define_tuple, false);
         self.add_primitive("@vm-clone", primitive_clone, false);

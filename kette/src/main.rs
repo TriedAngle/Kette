@@ -36,10 +36,7 @@ fn main() {
             ] loop 2dropd dup t ref-eq? [ 2drop f ] when ;
 
 
-        : set-slot-method ( word slot -- ) 
-            [ SLOT_METHOD swap 1 set-slot ] 
-            [ 2 set-slot ] 
-            [ 0 swap 3 set-slot ] tri ;
+
 
         : slot-method (slot -- ) 
             dup 1 slot SLOT_METHOD fixnum= [ 2 slot ] [ drop f ] if ;
@@ -48,10 +45,6 @@ fn main() {
         
         tuple: pos x y ;
         
-        : x>> ( obj -- x ) dup \ x>> unbox 0 slot swap lookup-slot slot ;
-        : x<< ( value obj -- ) dup \ x<< unbox 0 slot swap lookup-slot set-slot ;
-        : >>x ( obj value -- obj ) dupd swap x<< ;
-
 
         "#;
     unsafe {

@@ -1,6 +1,8 @@
 pub const PRELOAD: &str = r#"
 @: \ @vm-next-token @vm-link-word >box ;
 
+@: \\ @vm-next-token @vm-link-word t ;
+
 @: !/ \ !/ @vm-skip-until drop t ;
 
 : set-word-body ( word body -- ) swap 1 set-slot ;
@@ -50,10 +52,11 @@ pub const PRELOAD: &str = r#"
 : -rotd ( x y z w -- z x y w ) [ -rot ] dip ;
 
 : 2drop ( x y -- ) drop drop ;
-: 3drop ( x y z -- ) drop drop drop ;
-: 4drop ( x y z w -- ) drop drop drop drop ;
+: 3drop ( x y z -- ) 2drop drop ;
+: 4drop ( x y z w -- ) 3drop drop ;
 
 : 2dropd ( x y z -- z ) dropd dropd ;
+: 3dropd ( x y z -- z ) 2dropd dropd ;
 
 : 2swap ( x y z w -- z w x y ) -rotd -rot ;
 : over ( x b -- x y z ) dupd swap ;
@@ -81,6 +84,7 @@ pub const PRELOAD: &str = r#"
 : bi@-curry ( x y w p -- ) dup bi*-curry ;
 
 : 2bi ( x y p q -- ) [ 2keep ] dip call ;
+: 3bi ( x y z p q -- ) [ 3keep ] dip call ;
 
 : 2dupd ( x y z w -- x y x y z w ) [ 2dup ] 2dip ;
 
@@ -109,6 +113,21 @@ pub const PRELOAD: &str = r#"
 : 1th ( seq -- val ) 0 swap array-nth ;
 : 2th ( seq -- val ) 1 swap array-nth ;
 : 3th ( seq -- val ) 2 swap array-nth ;
+
+: array-copy ( src dst start-src start-dst count -- ) 
+    0 swap [ 2dup fixnum< ] [ [ 1 fixnum+ ] dip ] [ [ [
+        [ fixnum+ ] bi@-curry 2dupd swapd 
+        [ swap array-nth ] [ swap set-array-nth ] bi-curry
+    ] 3keep ] dip ] while* 4drop drop drop ;
+
+!/ this is very inefficient, use vectors if this is your normal usecase !/
+: array-push ( obj arr -- arr ) 
+    dup array-size dup 1 fixnum+ f <array> 
+    [ swap [ 0 0 ] dip array-copy ] keep [ [ array-size 1 - ] [ set-array-nth ] bi ] keep ;
+
+!/ this is very inefficient, use vectors if this is your normal usecase !/
+: array-push-front ( obj arr -- arr ) 
+    dup array-size dup 1 + f <array> [ swap [ 0 1 ] dip array-copy ] keep [ 0 swap set-array-nth ] keep ;
 
 : ref-eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
 
@@ -143,9 +162,76 @@ pub const PRELOAD: &str = r#"
 : map>> ( obj -- map ) 1 neg slot ;
 : slots>> ( map -- slots ) 3 slot ;
 
-@: tuple: 
-    @vm-next-token [ @vm-define-empty-global-word ] keep 
-    \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
+: find-slot ( name slots count -- slot/f ) 
+    1 - dup 0 > [ 
+        [ swap array-nth dup 0 slot pick bytearray= ] 2keep
+        2swap [ 3dropd ] [ drop find-slot ] if
+    ] [ 3drop f ] if ;
+
+: find-slot-in-map-by-name ( name map -- slot/f ) [ slots>> ] [ 2 slot ] bi find-slot ;
+
+: find-slot-in-map ( word map -- slot/f ) [ 0 slot ] dip find-slot-in-map-by-name ;
+
+: find-self ( word obj -- slot/f ) map>> find-slot-in-map ;
+
+: set-slot-method ( word slot -- ) 
+    [ SLOT_METHOD swap 1 set-slot ] 
+    [ 2 set-slot ] 
+    [ 0 swap 3 set-slot ] tri ;
+
+: send-self ( ..a obj boxed-word -- ..b ) unbox dupd swap find-self 2 slot 1 slot call ;
+
+: push-map-slot ( slot map -- ) 
+    [ 3 slot array-push ] [ 3 set-slot ] [ [ 2 slot 1 fixnum+ ] [ 2 set-slot ] bi ] tri  ;
+
+: create-method-slot ( name word -- slot ) 
+    [ SLOT_METHOD ] dip 0 0 1 special-object tuple-boa ;
+
+: push-map-method ( word map -- ) 
+    [ [ 0 slot ] keep create-method-slot ] dip push-map-slot ;
+
+
+
+: define-word ( name body -- word ) 
+    swap @vm-define-empty-word [ 1 set-slot ] keep ;
+
+: create-getter-method ( name index -- word ) 
+    [ s" >>" bytearray-concat ] dip \ slot unbox 2array array>quotation define-word ;
+
+: create-setter-method ( name index -- word )
+    [ s" <<" bytearray-concat ] dip \ set-slot unbox 2array array>quotation define-word ;
+
+: create-getter-word ( name -- )
+    s" >>" bytearray-concat @vm-define-empty-global-word dup >box \ send-self unbox 2array array>quotation set-word-body ;
+
+: create-setter-word ( name -- )
+    s" <<" bytearray-concat @vm-define-empty-global-word dup >box \ send-self unbox 2array array>quotation set-word-body ;
+
+: create-accessor-methods ( name index -- getter setter ) 
+    [ create-getter-method ] [ create-setter-method ] 2bi ;
+
+: create-accessor-words ( name -- )
+    [ create-getter-word ] [ create-setter-word ] bi ;
+
+: tuple-slot-for ( map name index ) 
+    [ drop create-accessor-words ] [ create-accessor-methods ] 2bi
+    rot [ push-map-method ] bi@-curry ;
+
+: define-tuple-accessors ( map array count -- ) 
+    1 - dup 0 >= [
+        [ 2dup swap array-nth pickd rot tuple-slot-for 2drop ] 3keep
+        define-tuple-accessors
+    ] [ 3drop ] if ;
+
+: define-map-word ( name map -- ) 
+    [ @vm-define-empty-global-word ] dip define-push-word ;
+
+!/  t m a - t m  !/
+@: tuple:
+    @vm-next-token dup \ ; @vm-skip-until [ @vm-define-tuple ] keep 
+    [ dup array-size define-tuple-accessors ] 2keep
+    drop define-map-word t ;
+
 
 @: builtin:
     @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
@@ -254,19 +340,7 @@ primitive: fixnum-bitnot ( a -- b )
 primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
 
-: array-copy ( src dst start-src start-dst count -- ) 
-    0 swap [ 2dup < ] [ [ 1 + ] dip ] [ [ [
-        [ + ] bi@-curry 2dupd swapd 
-        [ swap array-nth ] [ swap set-array-nth ] bi-curry
-    ] 3keep ] dip ] while* 4drop drop drop ;
 
-!/ this is very inefficient, use vectors if this is your normal usecase !/
-: array-push ( obj arr -- arr ) 
-    dup array-size dup 1 + f <array> [ swap [ 0 0 ] dip array-copy ] keep [ [ array-size 1 - ] [ set-array-nth ] bi ] keep ;
-
-!/ this is very inefficient, use vectors if this is your normal usecase !/
-: array-push-front ( obj arr -- arr ) 
-    dup array-size dup 1 + f <array> [ swap [ 0 1 ] dip array-copy ] keep [ 0 swap set-array-nth ] keep ;
 
 
 : curry ( obj quot -- curried ) [ 0 slot array-push-front ] keep [ 0 set-slot ] keep ;
