@@ -559,10 +559,13 @@ impl VM {
             copy
         } else if map == self.special_objects.bytearray_map {
             let orig = obj.as_byte_array();
-            let new_obj = self.allocate_bytearray((*orig).capacity);
-            let new = new_obj.as_byte_array_mut();
-            ptr::copy_nonoverlapping((*orig).data_ptr(), (*new).data_ptr_mut(), (*new).capacity);
-            new_obj
+            let new = self.allocate_bytearray((*orig).capacity);
+            ptr::copy_nonoverlapping(
+                obj.bytearray_data(),
+                new.bytearray_data(),
+                new.bytearray_data_len(),
+            );
+            new
         } else {
             // TODO check map for custom clone
             obj

@@ -1,6 +1,7 @@
 use std::mem;
 
 use crate::object;
+use crate::object::Object;
 use crate::VM;
 
 impl VM {
@@ -91,6 +92,10 @@ unsafe fn primitive_skip_until(vm: *mut VM) {
 
 unsafe fn primitive_link_token(vm: *mut VM) {
     (*vm).lookup_word();
+}
+
+unsafe fn primitive_try_parse_num(vm: *mut VM) {
+    (*vm).try_parse_number();
 }
 
 unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
@@ -451,6 +456,11 @@ unsafe fn primitive_call_quotation(vm: *mut VM) {
     (*vm).execute_quotation(quot);
 }
 
+unsafe fn primitive_call_primitive(vm: *mut VM) {
+    let word = (*vm).pop().as_word();
+    (*vm).execute_primitive(word)
+}
+
 unsafe fn primitive_word_to_quotation(vm: *mut VM) {
     let word = (*vm).pop().as_quotation();
     let body = (*word).body;
@@ -536,6 +546,18 @@ unsafe fn primitive_ptr_get(vm: *mut VM) {
     (*vm).push_fixnum(*ptr);
 }
 
+unsafe fn primitive_object_ptr_get(vm: *mut VM) {
+    let object = (*vm).pop();
+    let ptr: isize = mem::transmute(object.0);
+    (*vm).push_fixnum(ptr);
+}
+
+unsafe fn primitive_ptr_deref(vm: *mut VM) {
+    let ptr = (*vm).pop().as_fixnum();
+    let obj = (*ptr).value;
+    (*vm).push(object::ObjectRef(obj as *mut Object));
+}
+
 unsafe fn primitive_ptr_set(vm: *mut VM) {
     let address = (*(*vm).pop().as_fixnum()).value;
     let value = (*(*vm).pop().as_fixnum()).value;
@@ -578,6 +600,7 @@ impl VM {
         self.add_primitive("@vm-parse-until", primitive_parse_until, false);
         self.add_primitive("@vm-skip-until", primitive_skip_until, false);
         self.add_primitive("@vm-link-token", primitive_link_token, false);
+        self.add_primitive("@vm-try-parse-num", primitive_try_parse_num, false);
         self.add_primitive(
             "@vm-define-empty-global-word",
             primitive_create_empty_global_word,
@@ -618,6 +641,8 @@ impl VM {
         self.add_primitive("set-slot", primitive_set_slot, false);
 
         self.add_primitive("get^", primitive_ptr_get, false);
+        self.add_primitive("object^", primitive_object_ptr_get, false);
+        self.add_primitive("^object", primitive_ptr_deref, false);
         self.add_primitive("set^", primitive_ptr_set, false);
 
         self.add_primitive("if", primitive_if, false);
@@ -627,6 +652,7 @@ impl VM {
 
         self.add_primitive("array>quotation", primitive_array_to_quotation, false);
         self.add_primitive("call", primitive_call_quotation, false);
+        self.add_primitive("call-primitive", primitive_call_primitive, false);
         self.add_primitive("word>quotation", primitive_word_to_quotation, false);
         self.add_primitive("<array>", primitive_create_array, false);
         self.add_primitive("<bytearray>", primitive_create_bytearray, false);

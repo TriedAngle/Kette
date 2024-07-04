@@ -5,7 +5,7 @@ pub const PRELOAD: &str = r#"
 
 : set-word-body ( word body -- ) swap 1 set-slot ;
 
-: define-push-word ( word box -- )  1 swap <array> array>quotation set-word-body ;
+: define-push-word ( word value -- )  1 swap <array> array>quotation set-word-body ;
 
 @: ?: @vm-next-token @vm-define-empty-global-word dup >box define-push-word t ;
 
@@ -14,6 +14,8 @@ pub const PRELOAD: &str = r#"
 @: { \ } @vm-parse-until ;
 
 @: $[ \ ] @vm-parse-until array>quotation call ;
+
+
 
 : . ( a -- ) fixnum. ;
 : neg ( a -- ) fixnum-neg ;
@@ -105,7 +107,31 @@ pub const PRELOAD: &str = r#"
 @: tuple: @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
 
 
-!/ src dst ss sd l c - src dst ss sd l - src dst ss+ sd+ - src dst !/
+: eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
+
+: special-object ( id -- object ) 8 fixnum* let-me-cook 1 slot swap fixnum+ get^ ^object ;
+
+
+: primitive? ( word -- ? ) 4 slot 1 fixnum= ;
+: syntax? ( word -- ? ) 3 slot 1 fixnum= ;
+
+
+: execute-if-syntax ( word -- res ) 
+    dup syntax? 
+    [ dup primitive? [
+        [ call-primitive ] keep
+        \ [ unbox eq? [ 1 swap <array> array>quotation ] unless 
+    ] [ 1 slot call ] if ] 
+    [ drop f ] if ;
+
+@: const: 
+    @vm-next-token @vm-define-empty-global-word @vm-next-token 
+    dup @vm-try-parse-num dup [ dropd 1 swap <array> array>quotation set-word-body ] [ 
+        drop @vm-link-token dup [ execute-if-syntax  set-word-body ] [ drop f ] if 
+    ] if
+    t ;
+
+
 : array-copy ( src dst start-src start-dst count -- ) 
     0 swap [ 2dup < ] [ [ 1 + ] dip ] [ [ [
         [ + ] bi@-curry 2dupd swapd 
@@ -153,6 +179,22 @@ tuple: array-iter array start stop ;
             swap [ match-step ] dip rot not
         ] [ f ] if
     ] loop 2drop ;
+
+
+
+tuple: vector len underlying ;
+
+: <vector> ( size -- vector ) f <array> 0 swap vector tuple-boa ;
+
+: set-at ( obj n vector -- ) 1 slot set-array-nth ;
+
+: vector-grow ( vector -- ) s" resize" utf8.
+    dup 1 slot dup array-size dup 2 fixnum* 
+    f <array> [ swap [ 0 0 ] dip array-copy ] keep swap 1 set-slot ; 
+
+: vector-push ( obj vector -- ) 
+    dup [ 0 slot ] [ 1 slot 0 slot ] bi < [ dup vector-grow ] unless 
+    dup [ 0 slot ] [ [ 0 slot 1 + ] keep 0 set-slot ] bi swap set-at ;
 
 "#;
 
