@@ -379,7 +379,7 @@ pub struct WordObject {
     pub name: ObjectRef,
     pub body: ObjectRef, // quotation
     pub properties: ObjectRef,
-    pub primitive: usize, // true => body rust function
+    pub primitive: usize, // true => body rust function // TODO: use t & f here
     pub syntax: usize,
 }
 
@@ -397,10 +397,9 @@ pub const SLOT_PARENT: usize = 1;
 pub const SLOT_DATA: usize = 2;
 pub const SLOT_ASSIGNMENT: usize = 3;
 pub const SLOT_METHOD: usize = 4;
-pub const SLOT_ACCESSOR: usize = 5;
-pub const SLOT_VARIABLE_DATA: usize = 6;
+pub const SLOT_VARIABLE_DATA: usize = 5;
 // TODO: probably get rid of embedded data or handle fixnums&floats always diff?
-pub const SLOT_EMBEDDED_DATA: usize = 7;
+pub const SLOT_EMBEDDED_DATA: usize = 6;
 
 #[repr(C)]
 #[derive(Debug)]

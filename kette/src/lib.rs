@@ -705,18 +705,9 @@ impl VM {
             (*map).get_slot_mut(1).value_type = fixfloat_map;
         }
 
-        let array_traits = self.allocate_map("array-traits", &[]);
-
         let array_map = self.allocate_map(
             "array",
             &[
-                SlotDescriptor {
-                    name: "parent",
-                    kind: object::SLOT_PARENT,
-                    value_type: array_traits,
-                    index: 0,
-                    read_only: 0,
-                },
                 SlotDescriptor {
                     name: "size",
                     kind: object::SLOT_EMBEDDED_DATA,
@@ -753,23 +744,12 @@ impl VM {
                 .header
                 .map = array_map;
 
-            (*(*array_traits.as_map()).slots.as_array_mut()).header.map = array_map;
-
             (*(*number_traits.as_map()).slots.as_array_mut()).header.map = array_map;
         }
-
-        let quotation_traits = self.allocate_map("quotation-traits", &[]);
 
         let quotation_map = self.allocate_map(
             "quotation",
             &[
-                SlotDescriptor {
-                    name: "parent",
-                    kind: object::SLOT_PARENT,
-                    value_type: quotation_traits,
-                    index: 0,
-                    read_only: 0,
-                },
                 SlotDescriptor {
                     name: "body",
                     kind: object::SLOT_DATA,
@@ -795,18 +775,9 @@ impl VM {
         );
         self.special_objects.quotation_map = quotation_map.as_map_mut();
 
-        let word_traits = self.allocate_map("word-traits", &[]);
-
         let word_map = self.allocate_map(
             "word",
             &[
-                SlotDescriptor {
-                    name: "parent",
-                    kind: object::SLOT_PARENT,
-                    value_type: word_traits,
-                    index: 0,
-                    read_only: 0,
-                },
                 SlotDescriptor {
                     name: "name",
                     kind: object::SLOT_DATA,
@@ -892,7 +863,7 @@ impl VM {
         self.special_objects.box_map = box_map.as_map_mut();
 
         let slot_map = self.allocate_map(
-            "slot",
+            "map-slot",
             &[
                 SlotDescriptor {
                     name: "name",

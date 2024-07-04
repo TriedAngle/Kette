@@ -17,13 +17,47 @@ fn main() {
         : map>> ( obj -- map ) 1 neg slot ;
         : slots>> ( map -- slots ) 3 slot ;
 
+        !/
         : lookup-slot ( name obj -- index ) 
             map>> slots>> <array-iter> [
                 dup ?next dup 
                 [ dup 0 slot pickd bytearray= [ 3 slot ] [ drop f ] if ] [ f ] if
                 dup [ f ] [ drop t ] if
             ] loop 2dropd ;
+        !/
 
+        !: SLOT-CONSTANT 0
+        !: SLOT_PARENT 1
+        !: SLOT_DATA 2
+        !: SLOT_ASSIGNMENT 3
+        !: SLOT_METHOD 4
+        !: SLOT_VARIABLE_DATA: 5
+        !: SLOT_EMBEDDED_DATA: 6
+
+        !/ TODO: write a find for sequences !/
+        : lookup-slot ( name map -- slot )
+            slots>> <array-iter> [
+                dup ?next dup 
+                [ dup 0 slot pickd bytearray= [ drop f ] unless ] [ t ] if
+                dup [ f ] [ drop t ] if
+            ] loop 2dropd dup t ref-eq? [ 2drop f ] when ;
+
+
+        : set-slot-method ( word slot -- ) 
+            [ SLOT_METHOD swap 1 set-slot ] 
+            [ 2 set-slot ] 
+            [ 0 swap 3 set-slot ] tri ;
+
+        : slot-method (slot -- ) 
+            dup 1 slot SLOT_METHOD fixnum= [ 2 slot ] [ drop f ] if ;
+
+        @: builtin:
+            @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
+            define-push-word \ ;  @vm-skip-until drop t ;
+
+        builtin: fixnum
+        builtin:
+        
         tuple: pos x y ;
         
         : x>> ( obj -- x ) dup \ x>> unbox 0 slot swap lookup-slot slot ;

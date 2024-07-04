@@ -1,5 +1,5 @@
 pub const PRELOAD: &str = r#"
-@: \ @vm-next-token @vm-link-token >box ;
+@: \ @vm-next-token @vm-link-word >box ;
 
 @: !/ \ !/ @vm-skip-until drop t ;
 
@@ -10,6 +10,9 @@ pub const PRELOAD: &str = r#"
 @: ?: @vm-next-token @vm-define-empty-global-word dup >box define-push-word t ;
 
 ?: }
+?: )
+?: ;
+?: ]
 
 @: { \ } @vm-parse-until ;
 
@@ -61,6 +64,7 @@ pub const PRELOAD: &str = r#"
 : 3dip ( x y z q -- y y z ) swap [ 2dip ] dip ;
 : 3keep ( x y z q -- x y z ) [ 3dup ] dip 3dip ;
 
+: spin ( x y z -- z y x ) -rot swap ;
 
 : bi ( x p q -- ) [ keep ] dip call ;
 : bi* ( x y p q -- ) [ dip ] dip call ;
@@ -75,6 +79,8 @@ pub const PRELOAD: &str = r#"
 : bi-curry ( x y a b p q  -- ) -rotd [ call ] 3dip call ; 
 : bi*-curry ( x y w p q -- ) [ dup swapd ] 2dip -rotd [ call ] 3dip call ;
 : bi@-curry ( x y w p -- ) dup bi*-curry ;
+
+: 2bi ( x y p q -- ) [ 2keep ] dip call ;
 
 : 2dupd ( x y z w -- x y x y z w ) [ 2dup ] 2dip ;
 
@@ -104,10 +110,117 @@ pub const PRELOAD: &str = r#"
 : 2th ( seq -- val ) 1 swap array-nth ;
 : 3th ( seq -- val ) 2 swap array-nth ;
 
-@: tuple: @vm-next-token [ @vm-define-empty-global-word ] keep \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
+@: tuple: 
+    @vm-next-token [ @vm-define-empty-global-word ] keep 
+    \ ; @vm-skip-until @vm-define-tuple 1 swap <array> array>quotation set-word-body t ;
+
+@: builtin:
+    @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
+    define-push-word \ ; @vm-skip-until drop t ;
+
+@: primitive: @vm-next-token drop \ ) @vm-skip-until drop t ;
+
+builtin: object ... ;
+builtin: fixnum < number { value i64 } ;
+builtin: fixfloat < number { value f64 } ;
+builtin: array { size i64 } { data ... } ;
+builtin: bytearray { capacity i64 } { data ... } ;
+builtin: box boxed ;
+
+builtin: map 
+    { name bytearray } 
+    { object-size i64 } 
+    { slot-count i64 } 
+    { slots array } 
+    { default-instance object } ;
+
+!/ TODO: use t & f for boolean !/
+builtin: map-slot 
+    { name bytearray } 
+    { kind i64 } 
+    { type map }
+    { index i64 } 
+    { read-only? i64 } ;
+
+builtin: quotation
+    { body array }
+    effect
+    entry ;
+
+!/ TODO: use t & f for boolean !/
+builtin: word
+    { name bytearray }
+    { body quotation }
+    { properties array }
+    { primitive? i64 }
+    { syntax? i64 } ;
 
 
-: eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
+primitive: @vm-next-token ( -- token )
+primitive: @vm-parse-until ( wrapped-word -- array )
+primitive: @vm-skip-until ( wrapped-word -- array )
+primitive: @vm-link-word ( name -- word )
+primitive: @vm-?number ( token -- number/? )
+primitive: @vm-define-empty-global-word ( name -- word )
+primitive: @vm-stack ( -- stack )
+primitive: @vm-define-tuple ( name spec -- map )
+primitive: @vm-clone ( obj -- clone )
+primitive: tuple-boa ( ..obj map -- obj )
+primitive: >box ( value -- box )
+primitive: unbox ( box -- value )
+
+primitive: dup ( x -- x x )
+primitive: dupd ( x y -- x x y )
+primitive: drop ( x -- )
+primitive: dropd ( x y -- y )
+primitive: swap ( x y -- y x )
+primitive: swapd ( x y z -- y x z )
+primitive: rot ( x y z -- y z x )
+primitive: -rot ( x y z -- z x y )
+primitive: dip ( x q -- x )
+primitive: keep ( x q -- x )
+primitive: t ( -- t )
+primitive: f ( -- f )
+primitive: let-me-cook ( -- context )
+primitive: slot ( n obj -- obj )
+primitive: set-slot ( value n obj -- )
+primitive: get^ ( ptr -- fixnum )
+primitive: object^ ( obj -- ptr )
+primitive: ^object ( fixnum -- obj ) !/ reinterpret a fixnum as an object !/
+primitive: set^ ( fixnum ptr -- )
+primitive: if ( ... ? true false -- ... )
+primitive: and ( x y -- ? )
+primitive: or ( x y -- ? )
+primitive: not ( x -- ? )
+primitive: array>quotation ( array -- quotation )
+primitive: call ( ... quotation -- ... )
+primitive: call-primitive ( ... word -- ... ) !/ TODO: make call generic over "callables" !/
+primitive: <array> ( n default -- array )
+primitive: <bytearray> ( n -- bytearray )
+primitive: utf8. ( bytearray -- )
+primitive: quotation. ( quotation --  )
+primitive: array. ( array --  )
+primitive: fixnum. ( a -- )
+
+primitive: fixnum-neg ( a -- -a )
+primitive: fixnum+ ( a b -- c )
+primitive: fixnum- ( a b -- c )
+primitive: fixnum* ( a b -- c )
+primitive: fixnum/ ( a b -- c )
+primitive: fixnum% ( a b -- c )
+primitive: fixnum= ( a b -- ? )
+primitive: fixnum< ( a b -- ? )
+primitive: fixnum> ( a b -- ? )
+primitive: fixnum<= ( a b -- ? )
+primitive: fixnum>= ( a b -- ? )
+primitive: fixnum-bitand ( a b -- c )
+primitive: fixnum-bitor ( a b -- c )
+primitive: fixnum-bitxor ( a b -- c )
+primitive: fixnum-bitnot ( a -- b )
+primitive: fixnum-bitshift-left ( a b -- c )
+primitive: fixnum-bitshift-rigt ( a b -- c )
+
+: ref-eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
 
 : special-object ( id -- object ) 8 fixnum* let-me-cook 1 slot swap fixnum+ get^ ^object ;
 
@@ -120,16 +233,15 @@ pub const PRELOAD: &str = r#"
     dup syntax? 
     [ dup primitive? [
         [ call-primitive ] keep
-        \ [ unbox eq? [ 1 swap <array> array>quotation ] unless 
+        \ [ unbox ref-eq? [ 1 swap <array> array>quotation ] unless 
     ] [ 1 slot call ] if ] 
     [ drop f ] if ;
 
-@: const: 
+@: !: 
     @vm-next-token @vm-define-empty-global-word @vm-next-token 
-    dup @vm-try-parse-num dup [ dropd 1 swap <array> array>quotation set-word-body ] [ 
-        drop @vm-link-token dup [ execute-if-syntax  set-word-body ] [ drop f ] if 
-    ] if
-    t ;
+    dup @vm-?number dup [ dropd 1 swap <array> array>quotation set-word-body ] [ 
+        drop @vm-link-word dup [ execute-if-syntax  set-word-body ] [ drop f ] if 
+    ] if t ;
 
 
 : array-copy ( src dst start-src start-dst count -- ) 
@@ -182,19 +294,29 @@ tuple: array-iter array start stop ;
 
 
 
-tuple: vector len underlying ;
+tuple: vector length underlying ;
 
 : <vector> ( size -- vector ) f <array> 0 swap vector tuple-boa ;
 
-: set-at ( obj n vector -- ) 1 slot set-array-nth ;
+: vector-set-at ( obj n vector -- ) 1 slot set-array-nth ;
+: vector-at ( n vector -- ) 1 slot array-nth ;
 
-: vector-grow ( vector -- ) s" resize" utf8.
+: vector-grow ( vector -- )
     dup 1 slot dup array-size dup 2 fixnum* 
     f <array> [ swap [ 0 0 ] dip array-copy ] keep swap 1 set-slot ; 
 
+: vector-shrink ( vector -- ) drop ;
+
 : vector-push ( obj vector -- ) 
     dup [ 0 slot ] [ 1 slot 0 slot ] bi < [ dup vector-grow ] unless 
-    dup [ 0 slot ] [ [ 0 slot 1 + ] keep 0 set-slot ] bi swap set-at ;
+    dup [ 0 slot ] [ [ 0 slot 1 + ] keep 0 set-slot ] bi swap vector-set-at ;
+
+: vector-pop ( vector -- obj ) 
+    dup [ 0 slot 3 fixnum/ ] [ 1 slot 0 slot ] bi > [ dup vector-shrink ] unless
+    dup [ 0 slot 1 - ] [ [ 0 slot 1 - ] keep 0 set-slot ] bi 
+    dup 0 fixnum>= [ 
+        [ swap vector-at ] [ f spin vector-set-at ] 2bi 
+    ] [ drop 0 swap 0 set-slot f ] if ; !/ TODO: implement error logic !/
 
 "#;
 

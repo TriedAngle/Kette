@@ -94,6 +94,17 @@ unsafe fn primitive_link_token(vm: *mut VM) {
     (*vm).lookup_word();
 }
 
+unsafe fn primitive_link_map(vm: *mut VM) {
+    let ba = (*vm).pop();
+    let name = ba.bytearray_as_str();
+    let map = (*vm).maps.get(name);
+    if let Some(map) = map {
+        (*vm).push(object::ObjectRef::from_map(*map))
+    } else {
+        (*vm).push_false();
+    }
+}
+
 unsafe fn primitive_try_parse_num(vm: *mut VM) {
     (*vm).try_parse_number();
 }
@@ -264,7 +275,7 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
         let slot = slot_obj.as_slot_mut();
         (*slot).name = getter_name_obj;
-        (*slot).kind = object::SLOT_ACCESSOR;
+        (*slot).kind = object::SLOT_METHOD;
         (*slot).value_type = object::ObjectRef::null();
         (*slot).index = index;
         (*slot).read_only = 0;
@@ -280,7 +291,7 @@ unsafe fn primitive_define_tuple(vm: *mut VM) {
 
         let slot = slot_obj.as_slot_mut();
         (*slot).name = setter_name_obj;
-        (*slot).kind = object::SLOT_ACCESSOR;
+        (*slot).kind = object::SLOT_METHOD;
         (*slot).value_type = object::ObjectRef::from_map((*vm).special_objects.word_map);
         (*slot).index = index;
         (*slot).read_only = 0;
@@ -599,8 +610,9 @@ impl VM {
         self.add_primitive("@vm-next-token", primitive_next_token, false);
         self.add_primitive("@vm-parse-until", primitive_parse_until, false);
         self.add_primitive("@vm-skip-until", primitive_skip_until, false);
-        self.add_primitive("@vm-link-token", primitive_link_token, false);
-        self.add_primitive("@vm-try-parse-num", primitive_try_parse_num, false);
+        self.add_primitive("@vm-link-word", primitive_link_token, false);
+        self.add_primitive("@vm-link-map", primitive_link_map, false);
+        self.add_primitive("@vm-?number", primitive_try_parse_num, false);
         self.add_primitive(
             "@vm-define-empty-global-word",
             primitive_create_empty_global_word,
