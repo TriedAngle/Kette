@@ -14,37 +14,12 @@ fn main() {
     }
 
     let testing = r#"
-
-
-        !/
-        : lookup-slot ( name obj -- index ) 
-            map>> slots>> <array-iter> [
-                dup ?next dup 
-                [ dup 0 slot pickd bytearray= [ 3 slot ] [ drop f ] if ] [ f ] if
-                dup [ f ] [ drop t ] if
-            ] loop 2dropd ;
-        !/
-
-
-
-        !/ TODO: write a find for sequences !/
-        : lookup-slot ( name map -- slot )
-            slots>> <array-iter> [
-                dup ?next dup 
-                [ dup 0 slot pickd bytearray= [ drop f ] unless ] [ t ] if
-                dup [ f ] [ drop t ] if
-            ] loop 2dropd dup t ref-eq? [ 2drop f ] when ;
-
-
-
-
-        : slot-method (slot -- ) 
-            dup 1 slot SLOT_METHOD fixnum= [ 2 slot ] [ drop f ] if ;
-
-
-        
         tuple: pos x y ;
-        
+        10 5 pos boa
+        dup x>> .
+        dup 420 swap x<<
+        dup x>> .
+        333 >>y y>> .
 
         "#;
     unsafe {

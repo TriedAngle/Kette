@@ -201,20 +201,33 @@ pub const PRELOAD: &str = r#"
 : create-setter-method ( name index -- word )
     [ s" <<" bytearray-concat ] dip \ set-slot unbox 2array array>quotation define-word ;
 
-: create-getter-word ( name -- )
-    s" >>" bytearray-concat @vm-define-empty-global-word dup >box \ send-self unbox 2array array>quotation set-word-body ;
-
-: create-setter-word ( name -- )
-    s" <<" bytearray-concat @vm-define-empty-global-word dup >box \ send-self unbox 2array array>quotation set-word-body ;
-
 : create-accessor-methods ( name index -- getter setter ) 
     [ create-getter-method ] [ create-setter-method ] 2bi ;
 
-: create-accessor-words ( name -- )
-    [ create-getter-word ] [ create-setter-word ] bi ;
+: define-getter-word ( name -- )
+    s" >>" bytearray-concat @vm-define-empty-global-word dup >box \ send-self unbox 2array array>quotation set-word-body ;
+
+: define-setter-word ( name -- )
+    s" <<" bytearray-concat @vm-define-empty-global-word dup >box \ send-self unbox 2array array>quotation set-word-body ;
+
+
+!/ TODO !/
+: define-change-word ( name -- ) 
+    drop
+;
+
+: define-keep-set-word ( name -- ) 
+    [ s" >>" swap bytearray-concat @vm-define-empty-global-word ] keep s" <<" bytearray-concat @vm-link-word
+    \ over unbox swap 2array array>quotation set-word-body ;
+
+: define-extra-accessor-words ( name -- ) 
+    [ define-keep-set-word ] [ define-change-word ] bi ;
+
+: define-accessor-words ( name -- )
+    [ define-getter-word ] [ define-setter-word ] [ define-extra-accessor-words ] tri ;
 
 : tuple-slot-for ( map name index ) 
-    [ drop create-accessor-words ] [ create-accessor-methods ] 2bi
+    [ drop define-accessor-words ] [ create-accessor-methods ] 2bi
     rot [ push-map-method ] bi@-curry ;
 
 : define-tuple-accessors ( map array count -- ) 
@@ -226,12 +239,12 @@ pub const PRELOAD: &str = r#"
 : define-map-word ( name map -- ) 
     [ @vm-define-empty-global-word ] dip define-push-word ;
 
-!/  t m a - t m  !/
 @: tuple:
     @vm-next-token dup \ ; @vm-skip-until [ @vm-define-tuple ] keep 
     [ dup array-size define-tuple-accessors ] 2keep
     drop define-map-word t ;
 
+: boa ( ..slots map -- tuple ) tuple-boa ;
 
 @: builtin:
     @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi

@@ -13,16 +13,17 @@ stack oriented language for modern systems
 - most of the language written within the language (parsing words)
 
 ## Status (in order)
+see src/preload for code
 - [x] objects
 - [x] garbage collector
 - [x] repl
 - [x] declare custom syntax/macros
 - [x] implement arrays, comments, classes classes via macros
-- [ ] single dispatch (or already multiple?)
+- [x] single dispatch
 - [ ] alien interface (c and rust wrapping)
 - [ ] standard library and external library support
 - [ ] bytecode compiler
-- [ ] inlining and tail-call optimization
+- [ ] inlining, tail-call and caching optimization
 - [ ] rewrite garbage collector (one that supports threads, maybe allow different allocators and manual memory managemed?)
 - [ ] images
 - [ ] variables
