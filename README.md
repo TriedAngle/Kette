@@ -20,14 +20,15 @@ see src/preload for code
 - [x] declare custom syntax/macros
 - [x] implement arrays, comments, classes classes via macros
 - [x] single dispatch
+- [x] slot accessors and methods
 - [ ] alien interface (c and rust wrapping)
 - [ ] standard library and external library support
+- [ ] variables
+- [ ] gradual typing
 - [ ] bytecode compiler
 - [ ] inlining, tail-call and caching optimization
 - [ ] rewrite garbage collector (one that supports threads, maybe allow different allocators and manual memory managemed?)
 - [ ] images
-- [ ] variables
-- [ ] gradual typing
 - [ ] processes
 - [ ] "selfhost"
 - [ ] jit compilation
@@ -91,15 +92,28 @@ Together with quotations and macros we have a very poweful framework to work wit
 30 fizzbuzz !/ does fizzbuzz for 30 to 0 !/
 ```
 
-### Tuples
-Tuples are data containers whose fields can be accessed accessors.
+### Types
+Types are data containers whose fields can be accessed accessors.
 ```
-tuple: pos x y ;    !/ define tuple pos with slots x and y !/
+type: pos x y ;    !/ define tuple pos with slots x and y !/
 10 5 pos boa        !/ construct a new object from the tuple class by "order of arguments"
 dup x>> .           !/ prints 10 !/
 dup 420 swap x<<
 dup x>> .           !/ prints 420 !/
 333 >>y y>> .       !/ prints 333 !/
+```
+Types can have methods
+```
+method: to-string ( obj -- string )
+
+type: shape x y ;
+m: shape to-string drop s" shape" ;
+
+type: cat name ;
+m: cat to-string [ s" cat with name " ] dip name>> bytearray-concat ;
+
+420 69 shape boa to-string utf8. !/ prints: "shape" !/
+s" Steve" cat boa to-string utf8. !/ prints "cat with name Steve" !/
 ```
 
 ### Common Stack Operations

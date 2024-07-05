@@ -14,20 +14,16 @@ fn main() {
     }
 
     let testing = r#"
-        tuple: pos x y ;
-        10 5 pos boa
-        dup x>> .
-        dup 420 swap x<<
-        dup x>> .
-        333 >>y y>> .
+        method: to-string ( obj -- string )
+        
+        type: shape x y ;
+        m: shape to-string drop s" shape" ;
 
-        : fizzbuzz ( num -- ) 
-            dup {
-                { [ 15 n| ] [ s" FizzBuzz" utf8. ] }
-                { [ 3 n| ] [ s" Fizz" utf8. ] }
-                { [ 5 n| ] [ s" Buzz" utf8. ] }
-                { [ drop t ] [ dup . ] }
-            } match dup 0 > [ -1 fizzbuzz ] [ drop ] if ;
+        type: cat name ;
+        m: cat to-string [ s" cat with name " ] dip name>> bytearray-concat ;
+
+        420 69 shape boa to-string utf8. !/ prints: "shape" !/
+        s" Steve" cat boa to-string utf8. !/ prints "cat with name Steve" !/
 
         "#;
     unsafe {

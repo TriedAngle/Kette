@@ -105,10 +105,12 @@ pub const PRELOAD: &str = r#"
 : (2array) ( x y arr -- arr ) [ 1 swap set-array-nth ] keep (1array)  ;
 : (3array) ( x y z arr -- arr ) [ 2 swap set-array-nth ] keep (2array)  ;
 : (4array) ( x y z w arr -- arr ) [ 3 swap set-array-nth ] keep (3array) ;
+: (5array) ( x y z w v arr -- arr ) [ 4 swap set-array-nth ] keep (4array) ;
 : 1array ( x -- arr ) 1 f <array> (1array) ;
 : 2array ( x y -- arr ) 2 f <array> (2array) ;
 : 3array ( x y z -- arr ) 3 f <array> (3array) ;
 : 4array ( x y z w -- arr ) 4 f <array> (4array)  ;
+: 5array ( x y z w v -- arr ) 5 f <array> (5array)  ;
 
 : 1th ( seq -- val ) 0 swap array-nth ;
 : 2th ( seq -- val ) 1 swap array-nth ;
@@ -239,10 +241,22 @@ pub const PRELOAD: &str = r#"
 : define-map-word ( name map -- ) 
     [ @vm-define-empty-global-word ] dip define-push-word ;
 
-@: tuple:
+@: type:
     @vm-next-token dup \ ; @vm-skip-until [ @vm-define-tuple ] keep 
     [ dup array-size define-tuple-accessors ] 2keep
     drop define-map-word t ;
+
+
+!/ word || obj bword obj  !/
+@: method: 
+    @vm-next-token \ ) @vm-skip-until drop @vm-define-empty-global-word dup
+    >box \ unbox unbox \ over unbox \ find-self unbox \ dup unbox [ 2 slot 1 slot call ] [ drop f ] \ if unbox 5array
+    array-push-front array-push-front array-push-front array>quotation set-word-body
+ t ;
+
+@: m: 
+    @vm-next-token @vm-link-map @vm-next-token @vm-link-word \ ; @vm-parse-until array>quotation 
+    [ 0 slot ] dip define-word swap push-map-method t ;
 
 : boa ( ..slots map -- tuple ) tuple-boa ;
 
@@ -359,7 +373,7 @@ primitive: fixnum-bitshift-rigt ( a b -- c )
 : curry ( obj quot -- curried ) [ 0 slot array-push-front ] keep [ 0 set-slot ] keep ;
 
 
-tuple: array-iter array start stop ;
+type: array-iter array start stop ;
 
 : <array-iter> ( array -- self ) dup array-size 0 swap array-iter tuple-boa ;
 
@@ -391,7 +405,7 @@ tuple: array-iter array start stop ;
 
 
 
-tuple: vector length underlying ;
+type: vector length underlying ;
 
 : <vector> ( size -- vector ) f <array> 0 swap vector tuple-boa ;
 
