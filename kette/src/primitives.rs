@@ -669,8 +669,8 @@ impl VM {
         self.add_primitive("not", primitive_not, false);
 
         self.add_primitive("array>quotation", primitive_array_to_quotation, false);
-        self.add_primitive("call", primitive_call_quotation, false);
-        self.add_primitive("call-primitive", primitive_call_primitive, false);
+        self.add_primitive("(call)", primitive_call_quotation, false);
+        self.add_primitive("(call-primitive)", primitive_call_primitive, false);
         self.add_primitive("<array>", primitive_create_array, false);
         self.add_primitive("<bytearray>", primitive_create_bytearray, false);
         self.add_primitive("bytearray=", primitive_bytearray_eq, false);

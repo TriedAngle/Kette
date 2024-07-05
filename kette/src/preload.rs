@@ -18,7 +18,7 @@ pub const PRELOAD: &str = r#"
 
 @: { \ } @vm-parse-until ;
 
-@: $[ \ ] @vm-parse-until array>quotation call ;
+@: $[ \ ] @vm-parse-until array>quotation (call) ;
 
 
 
@@ -40,8 +40,8 @@ pub const PRELOAD: &str = r#"
 : !n| ( a n -- ? ) n| not ;
 
 
-: when ( ? q -- ) swap [ call ] [ drop ] if ;
-: unless ( ? q -- ) swap [ drop ] [ call ] if ;
+: when ( ? q -- ) swap [ (call) ] [ drop ] if ;
+: unless ( ? q -- ) swap [ drop ] [ (call) ] if ;
 
 
 : 2dup ( x y -- x y x y ) dup [ dupd swap ] dip ;
@@ -69,33 +69,33 @@ pub const PRELOAD: &str = r#"
 
 : spin ( x y z -- z y x ) -rot swap ;
 
-: bi ( x p q -- ) [ keep ] dip call ;
-: bi* ( x y p q -- ) [ dip ] dip call ;
+: bi ( x p q -- ) [ keep ] dip (call) ;
+: bi* ( x y p q -- ) [ dip ] dip (call) ;
 : bi@ ( x y p -- ) dup bi* ;
 
-: loop ( ..a q -- ..a ) [ call ] keep swap [ loop ] [ drop ] if ;
+: loop ( ..a q -- ..a ) [ (call) ] keep swap [ loop ] [ drop ] if ;
 
 : while ( ..a cond body -- ..a ) 
-    [ [ call ] keep ] dip rot 
-    [ [ dropd call ] 2keep while ] [ 2drop ] if ;
+    [ [ (call) ] keep ] dip rot 
+    [ [ dropd (call) ] 2keep while ] [ 2drop ] if ;
 
-: bi-curry ( x y a b p q  -- ) -rotd [ call ] 3dip call ; 
-: bi*-curry ( x y w p q -- ) [ dup swapd ] 2dip -rotd [ call ] 3dip call ;
+: bi-curry ( x y a b p q  -- ) -rotd [ (call) ] 3dip (call) ; 
+: bi*-curry ( x y w p q -- ) [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) ;
 : bi@-curry ( x y w p -- ) dup bi*-curry ;
 
-: 2bi ( x y p q -- ) [ 2keep ] dip call ;
-: 3bi ( x y z p q -- ) [ 3keep ] dip call ;
+: 2bi ( x y p q -- ) [ 2keep ] dip (call) ;
+: 3bi ( x y z p q -- ) [ 3keep ] dip (call) ;
 
 : 2dupd ( x y z w -- x y x y z w ) [ 2dup ] 2dip ;
 
-: tri ( x p q r -- ) [ [ keep ] dip keep ] dip call ;
-: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip call ;
+: tri ( x p q r -- ) [ [ keep ] dip keep ] dip (call) ;
+: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip (call) ;
 : tri@ ( x y z p -- ) dup dup tri* ;
 
 : while* ( ..a cond do-after body -- ..a )
-    [ [ call ] keep swap ] 2dip rot
-    [ [ -rot [ [ call ] keep ] 2dip ] [ ] if rot ] keep
-    [ swapd [ [ call ] keep ] 2dip swapd while* ] [ 3drop ] if ;
+    [ [ (call) ] keep swap ] 2dip rot
+    [ [ -rot [ [ (call) ] keep ] 2dip ] [ ] if rot ] keep
+    [ swapd [ [ (call) ] keep ] 2dip swapd while* ] [ 3drop ] if ;
 
 : array-size ( arr -- n ) 0 slot ;
 : array-nth ( n array -- val ) swap 1 + slot ;
@@ -141,9 +141,9 @@ pub const PRELOAD: &str = r#"
 : execute-if-syntax ( word -- res ) 
     dup syntax? 
     [ dup primitive? [
-        [ call-primitive ] keep
+        [ (call-primitive) ] keep
         \ [ unbox ref-eq? [ 1 swap <array> array>quotation ] unless 
-    ] [ 1 slot call ] if ] 
+    ] [ 1 slot (call) ] if ] 
     [ drop f ] if ;
 
 @: !: 
@@ -181,7 +181,7 @@ pub const PRELOAD: &str = r#"
     [ 2 set-slot ] 
     [ 0 swap 3 set-slot ] tri ;
 
-: send-self ( ..a obj boxed-word -- ..b ) unbox dupd swap find-self 2 slot 1 slot call ;
+: send-self ( ..a obj boxed-word -- ..b ) unbox dupd swap find-self 2 slot 1 slot (call) ;
 
 : push-map-slot ( slot map -- ) 
     [ 3 slot array-push ] [ 3 set-slot ] [ [ 2 slot 1 fixnum+ ] [ 2 set-slot ] bi ] tri  ;
@@ -246,13 +246,10 @@ pub const PRELOAD: &str = r#"
     [ dup array-size define-tuple-accessors ] 2keep
     drop define-map-word t ;
 
-
-!/ word || obj bword obj  !/
 @: method: 
     @vm-next-token \ ) @vm-skip-until drop @vm-define-empty-global-word dup
-    >box \ unbox unbox \ over unbox \ find-self unbox \ dup unbox [ 2 slot 1 slot call ] [ drop f ] \ if unbox 5array
-    array-push-front array-push-front array-push-front array>quotation set-word-body
- t ;
+    >box \ unbox unbox \ over \ find-self \ dup [ unbox ] tri@ [ 2 slot 1 slot (call) ] [ drop f ] \ if unbox 5array
+    array-push-front array-push-front array-push-front array>quotation set-word-body t ;
 
 @: m: 
     @vm-next-token @vm-link-map @vm-next-token @vm-link-word \ ; @vm-parse-until array>quotation 
@@ -340,8 +337,8 @@ primitive: and ( x y -- ? )
 primitive: or ( x y -- ? )
 primitive: not ( x -- ? )
 primitive: array>quotation ( array -- quotation )
-primitive: call ( ... quotation -- ... )
-primitive: call-primitive ( ... word -- ... ) !/ TODO: make call generic over "callables" !/
+primitive: (call) ( ... quotation -- ... )
+primitive: (call-primitive) ( ... word -- ... ) !/ TODO: make call generic over "callables" !/
 primitive: <array> ( n default -- array )
 primitive: <bytearray> ( n -- bytearray )
 primitive: utf8. ( bytearray -- )
@@ -368,9 +365,18 @@ primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
 
 
+method: call ( callable -- ) 
 
+m: quotation call (call) ;
+m: word call 1 slot call ; 
 
-: curry ( obj quot -- curried ) [ 0 slot array-push-front ] keep [ 0 set-slot ] keep ;
+type: curried obj quot ;
+: curry ( obj quot -- curried ) curried boa ; 
+m: curried call [ obj>> ] [ quot>> ] bi call ;
+
+type: composed first second ;
+: compose ( p q -- composed ) composed boa ;
+m: composed call [ first>> call ] [ second>> call ] bi  ;
 
 
 type: array-iter array start stop ;
