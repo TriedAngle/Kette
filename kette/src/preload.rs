@@ -27,6 +27,7 @@ pub const PRELOAD: &str = r#"
 : neg ( a -- ) fixnum-neg ;
 : + ( a b -- c ) fixnum+ ;
 : - ( a b -- c ) fixnum- ;
+: * ( a b -- c ) fixnum* ;
 : / ( a -- ) fixnum/ ;
 : = ( a b -- ? ) fixnum= ;
 : % ( a b -- c ) fixnum% ;
@@ -67,6 +68,10 @@ pub const PRELOAD: &str = r#"
 : 3dup ( x y z --  x y z x y z ) 2dup [ pick ] 2dip ;
 : 3dip ( x y z q -- y y z ) swap [ 2dip ] dip ;
 : 3keep ( x y z q -- x y z ) [ 3dup ] dip 3dip ;
+
+: 4dup ( x y z w -- x y z w x y z w ) 3dup [ pickd swap ] 3dip ;
+: 4dip ( w x y z q -- w x y z ) swap [ 3dip ] dip ;
+: 4keep ( x y z w q -- x y z w ) [ 4dup ] dip 4dip ;
 
 : spin ( x y z -- z y x ) -rot swap ;
 
@@ -399,7 +404,9 @@ method: size ( sequence -- size )
 method: length ( sequence -- size )
 method: nth! ( n seuqence -- obj )
 method: set-nth! ( obj n sequence -- )
+
 method: in-bounds? ( n sequence -- ? )
+method: check-bounds ( n sequence -- n sequence )
 method: nth ( n sequence -- obj )
 method: set-nth ( obj n sequence -- )
 method: find ( q sequence -- obj/f )
@@ -413,8 +420,11 @@ m: array nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
 
 
+method: push ( value sequence -- )
+method: pop ( value sequence -- )
+
 type: vector length underlying ;
-: <vector> ( size -- vector ) f <array> 0 swap vector @vm-new-object ;
+: <vector> ( size -- vector ) f <array> 0 swap vector boa ;
 
 m: vector size underlying>> size ;
 m: vector length length>> ;
@@ -424,26 +434,57 @@ m: vector in-bounds? [ drop 0 >= ] [ length 1 < ] 2bi and ;
 m: vector nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
 
-!/
-: vector-at ( n vector -- ) 1 slot array-nth ;
 
 : vector-grow ( vector -- )
-    dup 1 slot dup array-size dup 2 fixnum* 
-    f <array> [ swap [ 0 0 ] dip array-copy ] keep swap 1 set-slot ; 
+    dup [ underlying>> ] [ size dup 2 * f <array> ] bi
+    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ; 
 
-: vector-shrink ( vector -- ) drop ;
+: vector-shrink-minimum ( vector -- ) 
+    dup [ underlying>> ] [ length dup ] bi f <array>
+    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ;
 
-: vector-push ( obj vector -- ) 
-    dup [ 0 slot ] [ 1 slot 0 slot ] bi < [ dup vector-grow ] unless 
-    dup [ 0 slot ] [ [ 0 slot 1 + ] keep 0 set-slot ] bi swap vector-set-at ;
+: vector-shrink ( vector -- ) 
+    dup [ underlying>> ] [ length ] [ size 2 / f <array> ] bi
+    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ;
 
-: vector-pop ( vector -- obj ) 
-    dup [ 0 slot 3 fixnum/ ] [ 1 slot 0 slot ] bi > [ dup vector-shrink ] unless
-    dup [ 0 slot 1 - ] [ [ 0 slot 1 - ] keep 0 set-slot ] bi 
-    dup 0 fixnum>= [ 
-        [ swap vector-at ] [ f spin vector-set-at ] 2bi 
-    ] [ drop 0 swap 0 set-slot f ] if ;
+m: vector push
+    dup [ length ] [ size ] bi < [ dup vector-grow ] unless
+    [ length ] [ underlying>> set-nth! ] [ [ length 1 + ] [ length<< ] bi ] tri ;
+
+m: vector pop
+    dup [ length ] [ size 3 / ] < [ dup vector-shrink ] when
+    [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
+
+
+: filter-apply ( element q -- ? ) call ;
+
+: filter-step ( output element q -- ) dupd filter-apply [ swap push ] [ 2drop ] if ;
+
+: filter-sequence ( output q sequence counter -- output ) 
+    1 - dup 0 >= [
+        [ swap nth! swap filter-step ] 4keep  
+        filter-sequence
+    ] [ 3drop ] if ;
+
+: filter ( sequence q -- filtered ) 
+    10 <vector> spin dup length filter-sequence dup vector-shrink-minimum ;
+
+
 !/
+: inherit-from-map ( map-child map-parent -- ) 
+    slots>>
+;
+
+@: type: 
+    scan-new-map [ define-map-word drop ] keep 
+    @vm-peek-next-token s" <" bytearray= [ @vm-next-token drop 
+    @vm-next-token @vm-link-map dupd inherit-from-map ] when 
+    \ ; @vm-skip-until  
+    dup array-size [ define-slots ] [ define-object-accessors ] 3bi t ;
+
+!/ 
+
+
 
 !/
 type: array-iter array start stop ;
