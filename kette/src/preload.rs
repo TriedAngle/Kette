@@ -193,6 +193,9 @@ pub const PRELOAD: &str = r#"
 : create-slot-slot ( name index -- slot )
     [ SLOT_DATA f ] dip 0 1 special-object @vm-new-object ;
 
+: create-parent-slot ( parent -- slot ) 
+    [ s" parent" SLOT_PARENT ] dip 0 1 1 special-object @vm-new-object ;
+
 : push-map-method ( word map -- ) 
     [ [ 0 slot ] keep create-method-slot ] dip push-map-slot ;
 
@@ -283,8 +286,8 @@ pub const PRELOAD: &str = r#"
 @: primitive: @vm-next-token drop \ ) @vm-skip-until drop t ;
 
 builtin: object ... ;
-builtin: fixnum < number { value i64 } ;
-builtin: fixfloat < number { value f64 } ;
+builtin: fixnum { value i64 } ;
+builtin: fixfloat { value f64 } ;
 builtin: array { size i64 } { data ... } ;
 builtin: bytearray { capacity i64 } { data ... } ;
 builtin: box boxed ;
@@ -407,7 +410,9 @@ method: in-bounds? ( n sequence -- ? )
 method: check-bounds ( n sequence -- n sequence )
 method: nth ( n sequence -- obj )
 method: set-nth ( obj n sequence -- )
-method: find ( q sequence -- obj/f )
+method: push ( value sequence -- )
+method: pop ( value sequence -- )
+method: push-front ( value sequence -- )
 
 m: array size array-size ;
 m: array length array-size ;
@@ -418,8 +423,6 @@ m: array nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
 
 
-method: push ( value sequence -- )
-method: pop ( value sequence -- )
 
 type: vector length underlying ;
 : <vector> ( size -- vector ) f <array> 0 swap vector boa ;
@@ -488,41 +491,29 @@ m: vector pop
     swap dup length each-sequence ;
 
 
-!/
-: inherit-from-map ( map-child map-parent -- ) 
-    slots>>
-;
+: enumerate-sequence ( output sequence counter -- output )
+    1 - dup 0 >= [
+        [ enumerate-sequence ] 3keep
+        swap dupd nth! 2array swap push
+    ] [ 2drop ] if ;
 
-@: type: 
+: enumerate ( sequence -- sequence ) 
+    [ 10 <vector> ] dip dup length enumerate-sequence dup vector-shrink-minimum ;
+
+
+
+!/
+@: type:
     scan-new-map [ define-map-word drop ] keep 
     @vm-peek-next-token s" <" bytearray= [ @vm-next-token drop 
     @vm-next-token @vm-link-map dupd inherit-from-map ] when 
-    \ ; @vm-skip-until  
-    dup array-size [ define-slots ] [ define-object-accessors ] 3bi t ;
+    \ ; @vm-skip-until  ;
 
-!/ 
+!/
 
 
 
 !/
-type: array-iter array start stop ;
-
-: <array-iter> ( array -- self ) dup array-size 0 swap array-iter @vm-new-object ;
-
-: array-iter-next ( self -- next/? ) 
-    dup [ 1 slot ] [ 2 slot ] bi < [ 
-            [ 1 slot ] 
-            [ 0 slot array-nth ] 
-            [ [ 1 slot 1 + ] [ 1 set-slot ] bi ] tri 
-        ] [ drop f ] if ;
-
-: ?next ( self next/? ) array-iter-next ;
-
-: match-step ( ..a ? array -- ..b c? ? ) 
-    [ 1th ] [ 2th ] bi [ swap [ swap call ] keep ] dip swap [
-        swap [ [ call ] [ drop ] if ] keep
-    ] dip ;
-
 : match-many ( ? array -- ) 
     <array-iter> [ dup array-iter-next dup ] [
         swap [ match-step dropd ] dip

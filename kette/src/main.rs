@@ -27,7 +27,7 @@ fn main() {
         s" Steve" cat boa to-string utf8.
         !/
 
-        type: box < shape width height ;
+        !/ type: box < shape width height !/
 
         "#;
     unsafe {
