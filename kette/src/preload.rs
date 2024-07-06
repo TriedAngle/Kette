@@ -462,12 +462,26 @@ m: vector pop
 
 : filter-sequence ( output q sequence counter -- output ) 
     1 - dup 0 >= [
-        [ swap nth! swap filter-step ] 4keep  
-        filter-sequence
+        [ filter-sequence ] 4keep  
+        swap nth! swap filter-step 
     ] [ 3drop ] if ;
 
 : filter ( sequence q -- filtered ) 
     10 <vector> spin dup length filter-sequence dup vector-shrink-minimum ;
+
+
+: map-apply ( element q -- element ) call ;
+
+: map-step ( output element q -- ) map-apply swap push ;
+
+: map-sequence ( output q sequence counter -- output )
+    1 - dup 0 >= [
+        [ map-sequence ] 4keep
+        swap nth! swap map-step
+    ] [ 3drop ] if ;
+
+: map ( sequence q -- mapped ) 
+    10 <vector> spin dup length map-sequence dup vector-shrink-minimum ;
 
 
 !/
