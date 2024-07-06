@@ -44,6 +44,12 @@ unsafe fn primitive_unbox(vm: *mut VM) {
     (*vm).push(boxed);
 }
 
+unsafe fn primitive_peek_next_token(vm: *mut VM) {
+    let position = (*(*vm).special_objects.input_offset).value;
+    (*vm).read_word();
+    (*(*vm).special_objects.input_offset).value = position;
+}
+
 unsafe fn primitive_next_token(vm: *mut VM) {
     (*vm).read_word();
 }
@@ -244,51 +250,29 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
     (*vm).push_true();
 }
 
-unsafe fn primitive_define_tuple(vm: *mut VM) {
-    let arr = (*vm).pop();
+unsafe fn primitive_define_map(vm: *mut VM) {
     let name = (*vm).pop();
-
-    let slot_count = arr.array_data_len();
-
-    let mut object_size = 2 + slot_count;
     let map_obj = (*vm)
         .gc
         .allocate(mem::size_of::<object::Map>(), 8, true)
         .unwrap();
-
     let map = map_obj.as_map_mut();
-
-    let slots = (*vm).allocate_array(slot_count);
-
+    let slots = (*vm).allocate_array(0);
     (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
     (*map).name = name;
-    (*map).object_size = object_size;
-    (*map).slot_count = slot_count;
+    (*map).object_size = 2;
+    (*map).slot_count = 0;
     (*map).slots = slots;
-
-    for index in 0..slot_count {
-        let slot_name = *(arr.array_data().add(index));
-
-        let slot_obj =
-            (*vm).allocate_object(object::ObjectRef::from_map((*vm).special_objects.slot_map));
-        *(slots.array_data().add(index)) = slot_obj;
-
-        let slot = slot_obj.as_slot_mut();
-        (*slot).name = slot_name;
-        (*slot).kind = object::SLOT_DATA;
-        (*slot).value_type = object::ObjectRef::null();
-        (*slot).index = index;
-        (*slot).read_only = 0;
-    }
 
     let map_name = name.bytearray_as_str();
     (*vm).maps.insert(map_name.to_owned(), map);
+
     (*vm).push(map_obj);
 }
 
 unsafe fn primitive_clone(vm: *mut VM) {}
 
-unsafe fn primitive_tuple_new(vm: *mut VM) {
+unsafe fn primitive_object_new_from_map(vm: *mut VM) {
     let map = (*vm).pop();
     let obj = (*vm).allocate_object(map);
     let slot_count = (*map.as_map()).object_size - 2;
@@ -612,6 +596,7 @@ unsafe fn primitive_bytearray_concat(vm: *mut VM) {
 
 impl VM {
     unsafe fn add_globals_primitives(&mut self) {
+        self.add_primitive("@vm-peek-next-token", primitive_peek_next_token, false);
         self.add_primitive("@vm-next-token", primitive_next_token, false);
         self.add_primitive("@vm-parse-until", primitive_parse_until, false);
         self.add_primitive("@vm-skip-until", primitive_skip_until, false);
@@ -626,9 +611,9 @@ impl VM {
         self.add_primitive("@vm-define-empty-word", primitive_define_empty_word, false);
 
         self.add_primitive("@vm-stack", primitive_vm_stack, false);
-        self.add_primitive("@vm-define-tuple", primitive_define_tuple, false);
+        self.add_primitive("@vm-define-map", primitive_define_map, false);
         self.add_primitive("@vm-clone", primitive_clone, false);
-        self.add_primitive("tuple-boa", primitive_tuple_new, false);
+        self.add_primitive("@vm-new-object", primitive_object_new_from_map, false);
 
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);

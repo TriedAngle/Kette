@@ -20,6 +20,7 @@ pub const PRELOAD: &str = r#"
 
 @: $[ \ ] @vm-parse-until array>quotation (call) ;
 
+: @stack. ( -- ) @vm-stack array. ;
 
 
 : . ( a -- ) fixnum. ;
@@ -176,18 +177,18 @@ pub const PRELOAD: &str = r#"
 
 : find-self ( word obj -- slot/f ) map>> find-slot-in-map ;
 
-: set-slot-method ( word slot -- ) 
-    [ SLOT_METHOD swap 1 set-slot ] 
-    [ 2 set-slot ] 
-    [ 0 swap 3 set-slot ] tri ;
 
 : send-self ( ..a obj boxed-word -- ..b ) unbox dupd swap find-self 2 slot 1 slot (call) ;
 
 : push-map-slot ( slot map -- ) 
     [ 3 slot array-push ] [ 3 set-slot ] [ [ 2 slot 1 fixnum+ ] [ 2 set-slot ] bi ] tri  ;
 
+
 : create-method-slot ( name word -- slot ) 
-    [ SLOT_METHOD ] dip 0 0 1 special-object tuple-boa ;
+    [ SLOT_METHOD ] dip 0 0 1 special-object @vm-new-object ;
+
+: create-slot-slot ( name index -- slot )
+    [ SLOT_DATA f ] dip 0 1 special-object @vm-new-object ;
 
 : push-map-method ( word map -- ) 
     [ [ 0 slot ] keep create-method-slot ] dip push-map-slot ;
@@ -228,23 +229,38 @@ pub const PRELOAD: &str = r#"
 : define-accessor-words ( name -- )
     [ define-getter-word ] [ define-setter-word ] [ define-extra-accessor-words ] tri ;
 
-: tuple-slot-for ( map name index ) 
+: object-slot-for ( map name index ) 
     [ drop define-accessor-words ] [ create-accessor-methods ] 2bi
     rot [ push-map-method ] bi@-curry ;
 
-: define-tuple-accessors ( map array count -- ) 
-    1 - dup 0 >= [
-        [ 2dup swap array-nth pickd rot tuple-slot-for 2drop ] 3keep
-        define-tuple-accessors
+: define-object-accessors ( map array count -- ) 
+    1 fixnum- dup 0 fixnum>= [
+        [ 2dup swap array-nth pickd rot object-slot-for 2drop ] 3keep
+        define-object-accessors
     ] [ 3drop ] if ;
 
-: define-map-word ( name map -- ) 
-    [ @vm-define-empty-global-word ] dip define-push-word ;
+: define-map-word ( map -- word ) 
+    [ 0 slot @vm-define-empty-global-word dup ] keep define-push-word ;
 
-@: type:
-    @vm-next-token dup \ ; @vm-skip-until [ @vm-define-tuple ] keep 
-    [ dup array-size define-tuple-accessors ] 2keep
-    drop define-map-word t ;
+: scan-new-map ( -- map ) @vm-next-token @vm-define-map ;
+
+: increase-map-object-slot-count ( map -- ) 
+    [ [ 1 slot 1 fixnum+ ] [ 1 set-slot ] bi ] 
+    [ [ 2 slot 1 fixnum+ ] [ 2 set-slot ] bi ] bi ;
+
+: prepend-object-slot ( map name index -- ) 
+    [ dup increase-map-object-slot-count ] 2dip 
+    create-slot-slot swap [ 3 slot array-push-front ] keep 3 set-slot ;
+
+: define-slots ( map array count -- ) 
+    1 fixnum- dup 0 fixnum>= [
+        [ [ swap array-nth dupd ] keep prepend-object-slot ] 2keep
+        define-slots
+    ] [ 3drop ] if ;
+
+@: type: 
+    scan-new-map [ define-map-word drop ] keep \ ; @vm-skip-until  
+    dup array-size [ define-slots ] [ define-object-accessors ] 3bi t ;
 
 @: method: 
     @vm-next-token \ ) @vm-skip-until drop @vm-define-empty-global-word dup
@@ -255,7 +271,7 @@ pub const PRELOAD: &str = r#"
     @vm-next-token @vm-link-map @vm-next-token @vm-link-word \ ; @vm-parse-until array>quotation 
     [ 0 slot ] dip define-word swap push-map-method t ;
 
-: boa ( ..slots map -- tuple ) tuple-boa ;
+: boa ( ..slots map -- tuple ) @vm-new-object ;
 
 @: builtin:
     @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
@@ -307,9 +323,9 @@ primitive: @vm-link-word ( name -- word )
 primitive: @vm-?number ( token -- number/? )
 primitive: @vm-define-empty-global-word ( name -- word )
 primitive: @vm-stack ( -- stack )
-primitive: @vm-define-tuple ( name spec -- map )
+primitive: @vm-define-map ( name -- map )
 primitive: @vm-clone ( obj -- clone )
-primitive: tuple-boa ( ..obj map -- obj )
+primitive: @vm-new-object ( ..obj map -- obj )
 primitive: >box ( value -- box )
 primitive: unbox ( box -- value )
 
@@ -364,11 +380,11 @@ primitive: fixnum-bitnot ( a -- b )
 primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
 
-
 method: call ( callable -- ) 
 
 m: quotation call (call) ;
 m: word call 1 slot call ; 
+
 
 type: curried obj quot ;
 : curry ( obj quot -- curried ) curried boa ; 
@@ -379,9 +395,10 @@ type: composed first second ;
 m: composed call [ first>> call ] [ second>> call ] bi  ;
 
 
+
 type: array-iter array start stop ;
 
-: <array-iter> ( array -- self ) dup array-size 0 swap array-iter tuple-boa ;
+: <array-iter> ( array -- self ) dup array-size 0 swap array-iter @vm-new-object ;
 
 : array-iter-next ( self -- next/? ) 
     dup [ 1 slot ] [ 2 slot ] bi < [ 
@@ -413,7 +430,7 @@ type: array-iter array start stop ;
 
 type: vector length underlying ;
 
-: <vector> ( size -- vector ) f <array> 0 swap vector tuple-boa ;
+: <vector> ( size -- vector ) f <array> 0 swap vector @vm-new-object ;
 
 : vector-set-at ( obj n vector -- ) 1 slot set-array-nth ;
 : vector-at ( n vector -- ) 1 slot array-nth ;
@@ -433,8 +450,7 @@ type: vector length underlying ;
     dup [ 0 slot 1 - ] [ [ 0 slot 1 - ] keep 0 set-slot ] bi 
     dup 0 fixnum>= [ 
         [ swap vector-at ] [ f spin vector-set-at ] 2bi 
-    ] [ drop 0 swap 0 set-slot f ] if ; !/ TODO: implement error logic !/
-
+    ] [ drop 0 swap 0 set-slot f ] if ;
 "#;
 
 const _TEST: &str = r#"
