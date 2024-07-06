@@ -277,7 +277,13 @@ unsafe fn primitive_object_new_from_map(vm: *mut VM) {
     let obj = (*vm).allocate_object(map);
     let slot_count = (*map.as_map()).object_size - 2;
     for i in (0..slot_count).rev() {
-        obj.set_field(i, (*vm).pop());
+        let map_slot = (*map.as_map()).get_slot(i);
+        if map_slot.kind == object::SLOT_EMBEDDED_DATA {
+            let val = (*(*vm).pop().as_fixnum()).value;
+            obj.set_field(i, object::ObjectRef::from_usize(mem::transmute(val)));
+        } else {
+            obj.set_field(i, (*vm).pop());
+        }
     }
     (*vm).push(obj);
 }

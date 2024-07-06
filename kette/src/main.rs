@@ -22,9 +22,12 @@ fn main() {
         type: cat name ;
         m: cat to-string [ s" cat with name " ] dip name>> bytearray-concat ;
 
+        !/
         420 69 shape boa to-string utf8.
         s" Steve" cat boa to-string utf8.
+        !/
 
+        type: box < shape width height ;
 
         "#;
     unsafe {

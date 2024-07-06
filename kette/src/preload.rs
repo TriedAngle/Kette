@@ -317,6 +317,7 @@ builtin: word
 
 !/ primitive macros: `@:` `]` `:` but they get !/ 
 primitive: @vm-next-token ( -- token )
+primitive: @vm-peek-next-token ( -- token )
 primitive: @vm-parse-until ( wrapped-word -- array )
 primitive: @vm-skip-until ( wrapped-word -- array )
 primitive: @vm-link-word ( name -- word )
@@ -385,7 +386,6 @@ method: call ( callable -- )
 m: quotation call (call) ;
 m: word call 1 slot call ; 
 
-
 type: curried obj quot ;
 : curry ( obj quot -- curried ) curried boa ; 
 m: curried call [ obj>> ] [ quot>> ] bi call ;
@@ -395,7 +395,57 @@ type: composed first second ;
 m: composed call [ first>> call ] [ second>> call ] bi  ;
 
 
+method: size ( sequence -- size )
+method: length ( sequence -- size )
+method: nth! ( n seuqence -- obj )
+method: set-nth! ( obj n sequence -- )
+method: in-bounds? ( n sequence -- ? )
+method: nth ( n sequence -- obj )
+method: set-nth ( obj n sequence -- )
+method: find ( q sequence -- obj/f )
 
+m: array size array-size ;
+m: array length array-size ;
+m: array nth! array-nth ;
+m: array set-nth! set-array-nth ;
+m: array in-bounds? [ drop 0 >= ] [ size < ] 2bi and ;
+m: array nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
+
+
+type: vector length underlying ;
+: <vector> ( size -- vector ) f <array> 0 swap vector @vm-new-object ;
+
+m: vector size underlying>> size ;
+m: vector length length>> ;
+m: vector nth! underlying>> nth! ;
+m: vector set-nth! underlying>> nth! ;
+m: vector in-bounds? [ drop 0 >= ] [ length 1 < ] 2bi and ;
+m: vector nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
+
+!/
+: vector-at ( n vector -- ) 1 slot array-nth ;
+
+: vector-grow ( vector -- )
+    dup 1 slot dup array-size dup 2 fixnum* 
+    f <array> [ swap [ 0 0 ] dip array-copy ] keep swap 1 set-slot ; 
+
+: vector-shrink ( vector -- ) drop ;
+
+: vector-push ( obj vector -- ) 
+    dup [ 0 slot ] [ 1 slot 0 slot ] bi < [ dup vector-grow ] unless 
+    dup [ 0 slot ] [ [ 0 slot 1 + ] keep 0 set-slot ] bi swap vector-set-at ;
+
+: vector-pop ( vector -- obj ) 
+    dup [ 0 slot 3 fixnum/ ] [ 1 slot 0 slot ] bi > [ dup vector-shrink ] unless
+    dup [ 0 slot 1 - ] [ [ 0 slot 1 - ] keep 0 set-slot ] bi 
+    dup 0 fixnum>= [ 
+        [ swap vector-at ] [ f spin vector-set-at ] 2bi 
+    ] [ drop 0 swap 0 set-slot f ] if ;
+!/
+
+!/
 type: array-iter array start stop ;
 
 : <array-iter> ( array -- self ) dup array-size 0 swap array-iter @vm-new-object ;
@@ -425,32 +475,12 @@ type: array-iter array start stop ;
             swap [ match-step ] dip rot not
         ] [ f ] if
     ] loop 2drop ;
+!/
 
 
 
-type: vector length underlying ;
 
-: <vector> ( size -- vector ) f <array> 0 swap vector @vm-new-object ;
 
-: vector-set-at ( obj n vector -- ) 1 slot set-array-nth ;
-: vector-at ( n vector -- ) 1 slot array-nth ;
-
-: vector-grow ( vector -- )
-    dup 1 slot dup array-size dup 2 fixnum* 
-    f <array> [ swap [ 0 0 ] dip array-copy ] keep swap 1 set-slot ; 
-
-: vector-shrink ( vector -- ) drop ;
-
-: vector-push ( obj vector -- ) 
-    dup [ 0 slot ] [ 1 slot 0 slot ] bi < [ dup vector-grow ] unless 
-    dup [ 0 slot ] [ [ 0 slot 1 + ] keep 0 set-slot ] bi swap vector-set-at ;
-
-: vector-pop ( vector -- obj ) 
-    dup [ 0 slot 3 fixnum/ ] [ 1 slot 0 slot ] bi > [ dup vector-shrink ] unless
-    dup [ 0 slot 1 - ] [ [ 0 slot 1 - ] keep 0 set-slot ] bi 
-    dup 0 fixnum>= [ 
-        [ swap vector-at ] [ f spin vector-set-at ] 2bi 
-    ] [ drop 0 swap 0 set-slot f ] if ;
 "#;
 
 const _TEST: &str = r#"
