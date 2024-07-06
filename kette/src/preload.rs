@@ -1,8 +1,6 @@
 pub const PRELOAD: &str = r#"
 @: \ @vm-next-token @vm-link-word >box ;
 
-@: \\ @vm-next-token @vm-link-word t ;
-
 @: !/ \ !/ @vm-skip-until drop t ;
 
 : set-word-body ( word body -- ) swap 1 set-slot ;
@@ -456,9 +454,7 @@ m: vector pop
     [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
 
 
-: filter-apply ( element q -- ? ) call ;
-
-: filter-step ( output element q -- ) dupd filter-apply [ swap push ] [ 2drop ] if ;
+: filter-step ( output element q -- ) dupd call [ swap push ] [ 2drop ] if ;
 
 : filter-sequence ( output q sequence counter -- output ) 
     1 - dup 0 >= [
@@ -470,9 +466,7 @@ m: vector pop
     10 <vector> spin dup length filter-sequence dup vector-shrink-minimum ;
 
 
-: map-apply ( element q -- element ) call ;
-
-: map-step ( output element q -- ) map-apply swap push ;
+: map-step ( output element q -- ) call swap push ;
 
 : map-sequence ( output q sequence counter -- output )
     1 - dup 0 >= [
@@ -482,6 +476,16 @@ m: vector pop
 
 : map ( sequence q -- mapped ) 
     10 <vector> spin dup length map-sequence dup vector-shrink-minimum ;
+
+
+: each-sequence ( q sequence counter -- )
+    1 - dup 0 >= [
+        [ each-sequence ] 3keep
+        swap nth! swap call
+    ] [ 3drop ] if ;
+
+: each ( sequence q -- ) 
+    swap dup length each-sequence ;
 
 
 !/
