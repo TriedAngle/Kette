@@ -21,25 +21,6 @@ pub const PRELOAD: &str = r#"
 : @stack. ( -- ) @vm-stack array. ;
 
 
-: . ( a -- ) fixnum. ;
-: neg ( a -- ) fixnum-neg ;
-: + ( a b -- c ) fixnum+ ;
-: - ( a b -- c ) fixnum- ;
-: * ( a b -- c ) fixnum* ;
-: / ( a -- ) fixnum/ ;
-: = ( a b -- ? ) fixnum= ;
-: % ( a b -- c ) fixnum% ;
-: > ( a b -- ? ) fixnum> ;
-: >= ( a b -- ? ) fixnum>= ;
-: < ( a b -- ? ) fixnum< ;
-: <= ( a b -- ? ) fixnum<= ;
-
-: +1 ( a -- n+1 ) 1 + ;
-: -1 ( a -- n-1 ) 1 - ;
-: n| ( a n -- ? ) % 0 = ;
-: !n| ( a n -- ? ) n| not ;
-
-
 : when ( ? q -- ) swap [ (call) ] [ drop ] if ;
 : unless ( ? q -- ) swap [ drop ] [ (call) ] if ;
 
@@ -50,6 +31,9 @@ pub const PRELOAD: &str = r#"
 
 : rotd ( x y z w -- y z a w ) [ rot ] dip ;
 : -rotd ( x y z w -- z x y w ) [ -rot ] dip ;
+
+: roll ( x y z w -- y z w x ) rotd swap ;
+: -roll ( x y z w -- w x y z ) swap -rotd ;
 
 : 2drop ( x y -- ) drop drop ;
 : 3drop ( x y z -- ) 2drop drop ;
@@ -63,6 +47,7 @@ pub const PRELOAD: &str = r#"
 : pick ( x y z -- x y z x ) [ dup ] 2dip rot ;
 : pickd ( x y z w -- x y z x w ) [ pick ] dip ;
 
+: 2over ( x y z -- x y z x y ) pick pick ;
 : 3dup ( x y z --  x y z x y z ) 2dup [ pick ] 2dip ;
 : 3dip ( x y z q -- y y z ) swap [ 2dip ] dip ;
 : 3keep ( x y z q -- x y z ) [ 3dup ] dip 3dip ;
@@ -102,8 +87,8 @@ pub const PRELOAD: &str = r#"
     [ swapd [ [ (call) ] keep ] 2dip swapd while* ] [ 3drop ] if ;
 
 : array-size ( arr -- n ) 0 slot ;
-: array-nth ( n array -- val ) swap 1 + slot ;
-: set-array-nth ( val n array -- ) swap 1 + set-slot ;
+: array-nth ( n array -- val ) swap 1 fixnum+ slot ;
+: set-array-nth ( val n array -- ) swap 1 fixnum+ set-slot ;
 
 : (1array) ( x arr -- arr ) [ 0 swap set-array-nth ] keep ;
 : (2array) ( x y arr -- arr ) [ 1 swap set-array-nth ] keep (1array)  ;
@@ -129,11 +114,11 @@ pub const PRELOAD: &str = r#"
 !/ this is very inefficient, use vectors if this is your normal usecase !/
 : array-push ( obj arr -- arr ) 
     dup array-size dup 1 fixnum+ f <array> 
-    [ swap [ 0 0 ] dip array-copy ] keep [ [ array-size 1 - ] [ set-array-nth ] bi ] keep ;
+    [ swap [ 0 0 ] dip array-copy ] keep [ [ array-size 1 fixnum- ] [ set-array-nth ] bi ] keep ;
 
 !/ this is very inefficient, use vectors if this is your normal usecase !/
 : array-push-front ( obj arr -- arr ) 
-    dup array-size dup 1 + f <array> [ swap [ 0 1 ] dip array-copy ] keep [ 0 swap set-array-nth ] keep ;
+    dup array-size dup 1 fixnum+ f <array> [ swap [ 0 1 ] dip array-copy ] keep [ 0 swap set-array-nth ] keep ;
 
 : ref-eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
 
@@ -165,11 +150,11 @@ pub const PRELOAD: &str = r#"
 !: SLOT_VARIABLE_DATA: 5
 !: SLOT_EMBEDDED_DATA: 6
 
-: map>> ( obj -- map ) 1 neg slot ;
+: map>> ( obj -- map ) 1 fixnum-neg slot ;
 : slots>> ( map -- slots ) 3 slot ;
 
 : find-slot ( name slots count -- slot/f ) 
-    1 - dup 0 > [ 
+    1 fixnum- dup 0 fixnum> [ 
         [ swap array-nth dup 0 slot pick bytearray= ] 2keep
         2swap [ 3dropd ] [ drop find-slot ] if
     ] [ 3drop f ] if ;
@@ -286,8 +271,9 @@ pub const PRELOAD: &str = r#"
 @: primitive: @vm-next-token drop \ ) @vm-skip-until drop t ;
 
 builtin: object ... ;
-builtin: fixnum { value i64 } ;
-builtin: fixfloat { value f64 } ;
+builtin: fixnum { i64 } ;
+builtin: bool { t | f } ;
+builtin: fixfloat { f64 } ;
 builtin: array { size i64 } { data ... } ;
 builtin: bytearray { capacity i64 } { data ... } ;
 builtin: box boxed ;
@@ -387,52 +373,111 @@ primitive: fixnum-bitnot ( a -- b )
 primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
 
+
+method: . ( obj -- )
+method: neg ( n -- -n )
+method: + ( a b -- c )
+method: - ( a b -- c )
+method: * ( a b -- c )
+method: / ( a -- )
+method: % ( a b -- c )
+method: /% ( a b -- / % )
+method: = ( a b -- ? )
+method: > ( a b -- ? )
+method: >= ( a b -- ? )
+method: < ( a b -- ? )
+method: <= ( a b -- ? )
+
+m: fixnum . fixnum. ;
+m: fixnum neg fixnum-neg ;
+m: fixnum +  fixnum+ ;
+m: fixnum - fixnum- ;
+m: fixnum * fixnum* ;
+m: fixnum / fixnum/ ;
+m: fixnum % fixnum% ;
+m: fixnum /% [ fixnum/ ] [ fixnum% ] 2bi ;
+m: fixnum = fixnum= ;
+m: fixnum > fixnum> ;
+m: fixnum >= fixnum>= ;
+m: fixnum < fixnum< ;
+m: fixnum <= fixnum<= ;
+
+m: array . array. ;
+m: quotation . quotation. ;
+m: bytearray . utf8. ;
+m: bool . [ s" t" utf8. ] [ s" f" utf8. ] if ;
+
+: zero? ( a -- ? ) 0 = ;
+: one? ( a -- ? ) 1 = ;
+
+: +1 ( a -- n+1 ) 1 + ;
+: -1 ( a -- n-1 ) 1 - ;
+: n| ( a n -- ? ) % 0 = ;
+: !n| ( a n -- ? ) n| not ;
+
+
 method: call ( callable -- ) 
 
 m: quotation call (call) ;
 m: word call 1 slot call ; 
 
 type: curried obj quot ;
-: curry ( obj quot -- curried ) curried boa ; 
 m: curried call [ obj>> ] [ quot>> ] bi call ;
 
+: curry ( obj p -- curried ) curried boa ; 
+: 2curry ( obj1 obj2 p -- curried ) curry curry ;
+: 3curry ( obj1 obj2 obj3 p -- curried ) curry curry curry ;
+
+
 type: composed first second ;
-: compose ( p q -- composed ) composed boa ;
 m: composed call [ first>> call ] [ second>> call ] bi  ;
+
+: compose ( p q -- composed ) composed boa ;
+: 2compose ( p q -- composed ) compose compose ;
 
 
 method: size ( sequence -- size )
 method: length ( sequence -- size )
 method: nth! ( n seuqence -- obj )
 method: set-nth! ( obj n sequence -- )
-
 method: in-bounds? ( n sequence -- ? )
+
 method: check-bounds ( n sequence -- n sequence )
 method: nth ( n sequence -- obj )
+method: ?nth ( n sequence -- obj/f )
 method: set-nth ( obj n sequence -- )
+method: ?set-nth ( obj n sequence -- ? )
 method: push ( value sequence -- )
 method: pop ( value sequence -- )
 method: push-front ( value sequence -- )
+method: pop-front ( value sequence -- )
 
 m: array size array-size ;
 m: array length array-size ;
 m: array nth! array-nth ;
 m: array set-nth! set-array-nth ;
 m: array in-bounds? [ drop 0 >= ] [ size < ] 2bi and ;
-m: array nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+
+m: array nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: array ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
 
 
 
 type: vector length underlying ;
 : <vector> ( size -- vector ) f <array> 0 swap vector boa ;
+: array>vector ( array - vector ) [ size ] keep vector boa ;
+
+@: V{ \ } @vm-parse-until array>vector ;
 
 m: vector size underlying>> size ;
 m: vector length length>> ;
 m: vector nth! underlying>> nth! ;
-m: vector set-nth! underlying>> nth! ;
-m: vector in-bounds? [ drop 0 >= ] [ length 1 < ] 2bi and ;
-m: vector nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+m: vector set-nth! underlying>> set-nth! ;
+m: vector in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
+
+m: vector nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: vector ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
 
 
@@ -457,50 +502,112 @@ m: vector pop
     [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
 
 
+
+type: range start length step ;
+: <range> ( a b step -- range ) 
+    [ over - ] dip [ / 1 + ] keep range boa ;
+
+
+m: range size length>> ;
+m: range length length>> ;
+m: range nth! [ step>> * ] [ start>> ] bi + ;
+m: range in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
+m: range nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: range ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+
+
+: a..b ( a b -- a b step ) 2dup < [ 1 ] [ 1 neg ] if ;
+: ..b) ( a b step -- a' b' step ) [ - ] keep ;
+: (a.. ( a b step -- a' b' step ) [ swap [ + ] dip ] keep ;
+
+: [a..b] ( a b -- range ) a..b <range> ;
+: [a..b) ( a b -- range ) a..b ..b) <range> ;
+: (a..b] ( a b -- range ) a..b (a.. <range> ;
+: (a..b) ( a b -- range ) a..b (a.. ..b) <range> ;
+
+
+
+type: iterator seq n ;
+: <iterator> ( seq -- iterator ) 0 iterator boa ;
+: iterator-increment-offset ( iterator -- ) [ n>> 1 + ] [ n<< ] bi ; 
+: iterator-current ( iterator -- e/f ) [ n>> ] [ seq>> ] bi ?nth ;
+
+: ?next ( iterator -- e/f ) 
+    dup iterator-current dup [ swap iterator-increment-offset ] [ dropd ] if ;
+
+
 : filter-step ( output element q -- ) dupd call [ swap push ] [ 2drop ] if ;
 
-: filter-sequence ( output q sequence counter -- output ) 
-    1 - dup 0 >= [
-        [ filter-sequence ] 4keep  
-        swap nth! swap filter-step 
+: filter-inner ( output q iterator -- output ) 
+    dup ?next dup [
+        -rot [ 3dup filter-step dropd ] dip 
+        filter-inner
     ] [ 3drop ] if ;
 
 : filter ( sequence q -- filtered ) 
-    10 <vector> spin dup length filter-sequence dup vector-shrink-minimum ;
+    10 <vector> spin <iterator> filter-inner dup vector-shrink-minimum ;
 
 
 : map-step ( output element q -- ) call swap push ;
 
-: map-sequence ( output q sequence counter -- output )
-    1 - dup 0 >= [
-        [ map-sequence ] 4keep
-        swap nth! swap map-step
+: map-inner ( output q iterator -- output )
+    dup ?next dup [
+        -rot [ 3dup map-step dropd ] dip 
+        map-inner
     ] [ 3drop ] if ;
 
 : map ( sequence q -- mapped ) 
-    10 <vector> spin dup length map-sequence dup vector-shrink-minimum ;
+    [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
 
 
-: each-sequence ( q sequence counter -- )
-    1 - dup 0 >= [
-        [ each-sequence ] 3keep
-        swap nth! swap call
+: each-inner ( q iterator -- )
+    dup ?next dup [
+        swap [ dupd swap call ] dip
+        each-inner
     ] [ 3drop ] if ;
 
 : each ( sequence q -- ) 
-    swap dup length each-sequence ;
+    swap <iterator> each-inner ;
+
+m: range . [ ] map underlying>> . ;
 
 
-: enumerate-sequence ( output sequence counter -- output )
-    1 - dup 0 >= [
-        [ enumerate-sequence ] 3keep
-        swap dupd nth! 2array swap push
-    ] [ 2drop ] if ;
+: match-sequence-step ( ? p? q -- ? ?c ) 
+    [ [ call ] 2keep drop  ] dip
+;
 
-: enumerate ( sequence -- sequence ) 
-    [ 10 <vector> ] dip dup length enumerate-sequence dup vector-shrink-minimum ;
+: match-sequence ( ? sequence counter -- ) 
+    1 - dup 0 >= [ 
+        [ match-sequence ]
+    ] [ 3drop ] if ;
+
+: match ( ? seq: { p? q } -- )
+    dup length match-sequence ;
 
 
+: match ( ? seq: { p? q } -- )
+    [ [ [  ] [ ] bi ] curry ] dip each ;
+
+
+
+: inherit-slots-from-map ( child parent -- ) 
+    slots>> [ 1 slot SLOT_DATA = ] filter 
+    [ [ [ push-map-slot ] [ 1 slot 1 + ] [ 1 set-slot ] tri ] curry ] dip swap each ;
+
+: inherit-link-parent ( child parent -- )
+    create-parent-slot swap push-map-slot ;
+
+: inherit-from-map ( child parent -- )
+    [ inherit-link-parent ] [ inherit-slots-from-map ] 2bi ;
+
+
+: parse-slot-desc ( slots-raw -- slot-desc ) ;
+
+: define-object-slot ( map offset { idx slot-desc } -- ) 
+    [ 1th ] [ 2th ] bi [ + ] dip
+;
+: define-object-slots ( map array -- )
+    parse-slot-desc [ [  ] curry ] dip ;
 
 !/
 @: type:
@@ -509,27 +616,8 @@ m: vector pop
     @vm-next-token @vm-link-map dupd inherit-from-map ] when 
     \ ; @vm-skip-until  ;
 
-!/
-
-
 
 !/
-: match-many ( ? array -- ) 
-    <array-iter> [ dup array-iter-next dup ] [
-        swap [ match-step dropd ] dip
-    ] while 3drop ;
-
-: match ( ? array -- )
-    <array-iter> [
-        dup array-iter-next dup [
-            swap [ match-step ] dip rot not
-        ] [ f ] if
-    ] loop 2drop ;
-!/
-
-
-
-
 
 "#;
 

@@ -818,33 +818,11 @@ impl VM {
 
         self.special_objects.word_map = word_map.as_map_mut();
 
-        let false_traits = self.allocate_map("false-traits", &[]);
-        let true_traits = self.allocate_map("true-traits", &[]);
+        let bool_map = self.allocate_map("bool", &[]);
 
-        let false_map = self.allocate_map(
-            "f",
-            &[SlotDescriptor {
-                name: "parent",
-                kind: object::SLOT_PARENT,
-                value_type: false_traits,
-                index: 0,
-                read_only: 0,
-            }],
-        );
 
-        let true_map = self.allocate_map(
-            "t",
-            &[SlotDescriptor {
-                name: "parent",
-                kind: object::SLOT_PARENT,
-                value_type: true_traits,
-                index: 0,
-                read_only: 0,
-            }],
-        );
-
-        let false_object = self.allocate_object(false_map);
-        let true_object = self.allocate_object(true_map);
+        let false_object = self.allocate_object(bool_map);
+        let true_object = self.allocate_object(bool_map);
         self.gc.set_object_root(false_object);
         self.gc.set_object_root(true_object);
         self.special_objects.false_object = false_object.0;
