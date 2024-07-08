@@ -365,24 +365,6 @@ unsafe fn primitive_neg_rot(vm: *mut VM) {
     (*vm).push(b);
 }
 
-// ( x q -- x )
-unsafe fn primitive_dip(vm: *mut VM) {
-    let q = (*vm).pop().as_quotation();
-    (*vm).pop_retain_push();
-    (*vm).execute_quotation(q);
-    (*vm).retain_pop_push();
-}
-
-// ( x q: ( ... x -- ... ) -- x )
-unsafe fn primitive_keep(vm: *mut VM) {
-    let q = (*vm).pop().as_quotation();
-    let x = (*vm).peek();
-    (*vm).pop_retain_push();
-    (*vm).push(x);
-    (*vm).execute_quotation(q);
-    (*vm).retain_pop_push();
-}
-
 unsafe fn primitive_push_true(vm: *mut VM) {
     (*vm).push_true();
 }
@@ -648,8 +630,6 @@ impl VM {
         self.add_primitive("swapd", primitive_swapd, false);
         self.add_primitive("rot", primitive_rot, false);
         self.add_primitive("-rot", primitive_neg_rot, false);
-        self.add_primitive("dip", primitive_dip, false);
-        self.add_primitive("keep", primitive_keep, false);
 
         self.add_primitive("t", primitive_push_true, false);
         self.add_primitive("f", primitive_push_false, false);

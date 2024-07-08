@@ -19,8 +19,9 @@
 
 : @stack. ( -- ) @vm-stack array. ;
 
-
+: over ( x b -- x y z ) dupd swap ;
 : dip ( ? q -- ) swap @>r (call) @r> ;
+: keep ( ? q -- ) over [ (call) ] dip ;
 : when ( ? q -- ) swap [ (call) ] [ drop ] if ;
 : unless ( ? q -- ) swap [ drop ] [ (call) ] if ;
 
@@ -43,7 +44,6 @@
 : 3dropd ( x y z -- z ) 2dropd dropd ;
 
 : 2swap ( x y z w -- z w x y ) -rotd -rot ;
-: over ( x b -- x y z ) dupd swap ;
 : pick ( x y z -- x y z x ) [ dup ] 2dip rot ;
 : pickd ( x y z w -- x y z x w ) [ pick ] dip ;
 
@@ -439,6 +439,7 @@ m: composed call [ first>> call ] [ second>> call ] bi  ;
 
 
 : dip ( ? q -- ) swap @>r call @r> ;
+: keep ( ? q -- ) over [ call ] dip ;
 : when ( ? q -- ) swap [ call ] [ drop ] if ;
 : unless ( ? q -- ) swap [ drop ] [ call ] if ;
 
