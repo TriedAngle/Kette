@@ -288,6 +288,14 @@ unsafe fn primitive_object_new_from_map(vm: *mut VM) {
     (*vm).push(obj);
 }
 
+unsafe fn primitive_retain_push(vm: *mut VM) {
+    (*vm).pop_retain_push();
+}
+
+unsafe fn primitive_retian_pop(vm: *mut VM) {
+    (*vm).retain_pop_push();
+}
+
 unsafe fn primitive_vm_stack(vm: *mut VM) {
     let stack = (*vm).allocate_array_from_slice(&(*vm).stack);
     (*vm).push(stack);
@@ -620,7 +628,8 @@ impl VM {
         self.add_primitive("@vm-define-map", primitive_define_map, false);
         self.add_primitive("@vm-clone", primitive_clone, false);
         self.add_primitive("@vm-new-object", primitive_object_new_from_map, false);
-
+        self.add_primitive("@>r", primitive_retain_push, false);
+        self.add_primitive("@r>", primitive_retian_pop, false);
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);
         self.add_primitive("[", primitive_quotation_start, true);

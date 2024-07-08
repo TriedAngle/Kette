@@ -1,4 +1,3 @@
-pub const PRELOAD: &str = r#"
 @: \ @vm-next-token @vm-link-word >box ;
 
 @: !/ \ !/ @vm-skip-until drop t ;
@@ -21,6 +20,7 @@ pub const PRELOAD: &str = r#"
 : @stack. ( -- ) @vm-stack array. ;
 
 
+: dip ( ? q -- ) swap @>r (call) @r> ;
 : when ( ? q -- ) swap [ (call) ] [ drop ] if ;
 : unless ( ? q -- ) swap [ drop ] [ (call) ] if ;
 
@@ -68,10 +68,6 @@ pub const PRELOAD: &str = r#"
     [ [ (call) ] keep ] dip rot 
     [ [ dropd (call) ] 2keep while ] [ 2drop ] if ;
 
-: bi-curry ( x y a b p q  -- ) -rotd [ (call) ] 3dip (call) ; 
-: bi*-curry ( x y w p q -- ) [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) ;
-: bi@-curry ( x y w p -- ) dup bi*-curry ;
-
 : 2bi ( x y p q -- ) [ 2keep ] dip (call) ;
 : 3bi ( x y z p q -- ) [ 3keep ] dip (call) ;
 
@@ -107,8 +103,8 @@ pub const PRELOAD: &str = r#"
 
 : array-copy ( src dst start-src start-dst count -- ) 
     0 swap [ 2dup fixnum< ] [ [ 1 fixnum+ ] dip ] [ [ [
-        [ fixnum+ ] bi@-curry 2dupd swapd 
-        [ swap array-nth ] [ swap set-array-nth ] bi-curry
+        [ fixnum+ ] dup [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) 2dupd swapd 
+        [ swap array-nth ] [ swap set-array-nth ] -rotd [ (call) ] 3dip (call)
     ] 3keep ] dip ] while* 4drop drop drop ;
 
 !/ this is very inefficient, use vectors if this is your normal usecase !/
@@ -222,7 +218,7 @@ pub const PRELOAD: &str = r#"
 
 : object-slot-for ( map name index ) 
     [ drop define-accessor-words ] [ create-accessor-methods ] 2bi
-    rot [ push-map-method ] bi@-curry ;
+    rot [ push-map-method ] dup [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) ;
 
 : define-object-accessors ( map array count -- ) 
     1 fixnum- dup 0 fixnum>= [
@@ -264,13 +260,17 @@ pub const PRELOAD: &str = r#"
 
 : boa ( ..slots map -- tuple ) @vm-new-object ;
 
+: define-type?-word ( map -- word ) 
+    dup 0 slot s" ?" bytearray-concat @vm-define-empty-global-word dup rot 
+    \ swap \ map>> \ ref-eq? [ unbox ] tri@  4array array>quotation set-word-body drop ;
+
 @: builtin:
     @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
-    define-push-word \ ; @vm-skip-until drop t ;
+    [ dropd define-type?-word ] [ define-push-word ] 2bi \ ; @vm-skip-until drop t ;
 
 @: primitive: @vm-next-token drop \ ) @vm-skip-until drop t ;
 
-builtin: object ... ;
+
 builtin: fixnum { i64 } ;
 builtin: bool { t | f } ;
 builtin: fixfloat { f64 } ;
@@ -425,9 +425,10 @@ type: curried obj quot ;
 m: curried call [ obj>> ] [ quot>> ] bi call ;
 
 : curry ( obj p -- curried ) curried boa ; 
+: uncurry ( curried - obj p ) [ obj>> ] [ quot>> ] bi ; 
 : 2curry ( obj1 obj2 p -- curried ) curry curry ;
 : 3curry ( obj1 obj2 obj3 p -- curried ) curry curry curry ;
-
+: curry-maker ( p -- p' ) [ curry ] curry ;
 
 type: composed first second ;
 m: composed call [ first>> call ] [ second>> call ] bi  ;
@@ -436,191 +437,34 @@ m: composed call [ first>> call ] [ second>> call ] bi  ;
 : 2compose ( p q -- composed ) compose compose ;
 
 
-method: size ( sequence -- size )
-method: length ( sequence -- size )
-method: nth! ( n seuqence -- obj )
-method: set-nth! ( obj n sequence -- )
-method: in-bounds? ( n sequence -- ? )
 
-method: check-bounds ( n sequence -- n sequence )
-method: nth ( n sequence -- obj )
-method: ?nth ( n sequence -- obj/f )
-method: set-nth ( obj n sequence -- )
-method: ?set-nth ( obj n sequence -- ? )
-method: push ( value sequence -- )
-method: pop ( value sequence -- )
-method: push-front ( value sequence -- )
-method: pop-front ( value sequence -- )
+: dip ( ? q -- ) swap @>r call @r> ;
+: when ( ? q -- ) swap [ call ] [ drop ] if ;
+: unless ( ? q -- ) swap [ drop ] [ call ] if ;
 
-m: array size array-size ;
-m: array length array-size ;
-m: array nth! array-nth ;
-m: array set-nth! set-array-nth ;
-m: array in-bounds? [ drop 0 >= ] [ size < ] 2bi and ;
-
-m: array nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
-m: array ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
-m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
+: bi ( x p q -- ) [ keep ] dip call ;
+: bi* ( x y p q -- ) [ dip ] dip call ;
+: bi@ ( x y p -- ) dup bi* ;
 
 
 
-type: vector length underlying ;
-: <vector> ( size -- vector ) f <array> 0 swap vector boa ;
-: array>vector ( array - vector ) [ size ] keep vector boa ;
+: bi-curry ( x p q -- p' q' ) [ curry-maker ] bi@ bi ;
+: bi*-curry ( x y p q -- p' q' ) [ curry-maker ] bi@ bi* ;
+: bi@-curry ( x y p -- p' q' ) curry-maker bi@ ;
 
-@: V{ \ } @vm-parse-until array>vector ;
+: 2bi ( x y p q -- ) [ 2keep ] dip call ;
+: 3bi ( x y z p q -- ) [ 3keep ] dip call ;
 
-m: vector size underlying>> size ;
-m: vector length length>> ;
-m: vector nth! underlying>> nth! ;
-m: vector set-nth! underlying>> set-nth! ;
-m: vector in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
+: 2dupd ( x y z w -- x y x y z w ) [ 2dup ] 2dip ;
 
-m: vector nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
-m: vector ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
-m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
+: tri ( x p q r -- ) [ [ keep ] dip keep ] dip call ;
+: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip call ;
+: tri@ ( x y z p -- ) dup dup tri* ;
 
+: loop ( ..a q -- ..a ) [ call ] keep [ loop ] curry when ;
+: while ( ..a cond body -- ..a ) swap dup 2dip compose [ loop ] curry when ;
 
-: vector-grow ( vector -- )
-    dup [ underlying>> ] [ size dup 2 * f <array> ] bi
-    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ; 
-
-: vector-shrink-minimum ( vector -- ) 
-    dup [ underlying>> ] [ length dup ] bi f <array>
-    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ;
-
-: vector-shrink ( vector -- ) 
-    dup [ underlying>> ] [ length ] [ size 2 / f <array> ] bi
-    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ;
-
-m: vector push
-    dup [ length ] [ size ] bi < [ dup vector-grow ] unless
-    [ length ] [ underlying>> set-nth! ] [ [ length 1 + ] [ length<< ] bi ] tri ;
-
-m: vector pop
-    dup [ length ] [ size 3 / ] < [ dup vector-shrink ] when
-    [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
-
-
-
-type: range start length step ;
-: <range> ( a b step -- range ) 
-    [ over - ] dip [ / 1 + ] keep range boa ;
-
-
-m: range size length>> ;
-m: range length length>> ;
-m: range nth! [ step>> * ] [ start>> ] bi + ;
-m: range in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
-m: range nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
-m: range ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
-
-
-: a..b ( a b -- a b step ) 2dup < [ 1 ] [ 1 neg ] if ;
-: ..b) ( a b step -- a' b' step ) [ - ] keep ;
-: (a.. ( a b step -- a' b' step ) [ swap [ + ] dip ] keep ;
-
-: [a..b] ( a b -- range ) a..b <range> ;
-: [a..b) ( a b -- range ) a..b ..b) <range> ;
-: (a..b] ( a b -- range ) a..b (a.. <range> ;
-: (a..b) ( a b -- range ) a..b (a.. ..b) <range> ;
-
-
-
-type: iterator seq n ;
-: <iterator> ( seq -- iterator ) 0 iterator boa ;
-: iterator-increment-offset ( iterator -- ) [ n>> 1 + ] [ n<< ] bi ; 
-: iterator-current ( iterator -- e/f ) [ n>> ] [ seq>> ] bi ?nth ;
-
-: ?next ( iterator -- e/f ) 
-    dup iterator-current dup [ swap iterator-increment-offset ] [ dropd ] if ;
-
-
-: filter-step ( output element q -- ) dupd call [ swap push ] [ 2drop ] if ;
-
-: filter-inner ( output q iterator -- output ) 
-    dup ?next dup [
-        -rot [ 3dup filter-step dropd ] dip 
-        filter-inner
-    ] [ 3drop ] if ;
-
-: filter ( sequence q -- filtered ) 
-    10 <vector> spin <iterator> filter-inner dup vector-shrink-minimum ;
-
-
-: map-step ( output element q -- ) call swap push ;
-
-: map-inner ( output q iterator -- output )
-    dup ?next dup [
-        -rot [ 3dup map-step dropd ] dip 
-        map-inner
-    ] [ 3drop ] if ;
-
-: map ( sequence q -- mapped ) 
-    [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
-
-
-: each-inner ( q iterator -- )
-    dup ?next dup [
-        swap [ dupd swap call ] dip
-        each-inner
-    ] [ 3drop ] if ;
-
-: each ( sequence q -- ) 
-    swap <iterator> each-inner ;
-
-m: range . [ ] map underlying>> . ;
-
-
-: match-sequence-step ( ? p? q -- ? ?c ) 
-    [ [ call ] 2keep drop  ] dip
-;
-
-: match-sequence ( ? sequence counter -- ) 
-    1 - dup 0 >= [ 
-        [ match-sequence ]
-    ] [ 3drop ] if ;
-
-: match ( ? seq: { p? q } -- )
-    dup length match-sequence ;
-
-
-: match ( ? seq: { p? q } -- )
-    [ [ [  ] [ ] bi ] curry ] dip each ;
-
-
-
-: inherit-slots-from-map ( child parent -- ) 
-    slots>> [ 1 slot SLOT_DATA = ] filter 
-    [ [ [ push-map-slot ] [ 1 slot 1 + ] [ 1 set-slot ] tri ] curry ] dip swap each ;
-
-: inherit-link-parent ( child parent -- )
-    create-parent-slot swap push-map-slot ;
-
-: inherit-from-map ( child parent -- )
-    [ inherit-link-parent ] [ inherit-slots-from-map ] 2bi ;
-
-
-: parse-slot-desc ( slots-raw -- slot-desc ) ;
-
-: define-object-slot ( map offset { idx slot-desc } -- ) 
-    [ 1th ] [ 2th ] bi [ + ] dip
-;
-: define-object-slots ( map array -- )
-    parse-slot-desc [ [  ] curry ] dip ;
-
-!/
-@: type:
-    scan-new-map [ define-map-word drop ] keep 
-    @vm-peek-next-token s" <" bytearray= [ @vm-next-token drop 
-    @vm-next-token @vm-link-map dupd inherit-from-map ] when 
-    \ ; @vm-skip-until  ;
-
-
-!/
-
-"#;
-
-const _TEST: &str = r#"
-
-"#;
+: while* ( ..a cond do-after body -- ..a )
+    [ [ call ] keep swap ] 2dip rot
+    [ [ -rot [ [ call ] keep ] 2dip ] [ ] if rot ] keep
+    [ swapd [ [ call ] keep ] 2dip swapd while* ] [ 3drop ] if ;

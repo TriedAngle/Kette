@@ -1,4 +1,3 @@
-use kette::PRELOAD;
 use kette::VM;
 use std::io::{self, Write};
 
@@ -9,8 +8,11 @@ fn main() {
     // accessing vm special objects example: let-me-cook 1 slot 8 + get^ ^object 0 slot utf8. -> prints "world"
 
     unsafe {
-        let quot = vm.compile_string(PRELOAD);
-        vm.execute_quotation(quot.as_quotation());
+        let stage0 = vm.compile_source_file("std/core/stage-0.ktt");
+        vm.execute_quotation(stage0.as_quotation());
+
+        let stage1 = vm.compile_source_file("std/core/stage-1.ktt");
+        vm.execute_quotation(stage1.as_quotation());
     }
 
     let testing = r#"

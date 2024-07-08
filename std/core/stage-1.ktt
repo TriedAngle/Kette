@@ -1,0 +1,195 @@
+method: size ( sequence -- size )
+method: length ( sequence -- size )
+method: nth! ( n seuqence -- obj )
+method: set-nth! ( obj n sequence -- )
+method: in-bounds? ( n sequence -- ? )
+
+method: check-bounds ( n sequence -- n sequence )
+method: nth ( n sequence -- obj )
+method: ?nth ( n sequence -- obj/f )
+method: set-nth ( obj n sequence -- )
+method: ?set-nth ( obj n sequence -- ? )
+method: push ( value sequence -- )
+method: pop ( value sequence -- )
+method: push-front ( value sequence -- )
+method: pop-front ( value sequence -- )
+
+m: array size array-size ;
+m: array length array-size ;
+m: array nth! array-nth ;
+m: array set-nth! set-array-nth ;
+m: array in-bounds? [ drop 0 >= ] [ size < ] 2bi and ;
+
+m: array nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: array ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
+
+
+type: vector length underlying ;
+m: vector . underlying>> . ;
+: <vector> ( size -- vector ) f <array> 0 swap vector boa ;
+: array>vector ( array - vector ) [ size ] keep vector boa ;
+
+@: V{ \ } @vm-parse-until array>vector ;
+
+m: vector size underlying>> size ;
+m: vector length length>> ;
+m: vector nth! underlying>> nth! ;
+m: vector set-nth! underlying>> set-nth! ;
+m: vector in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
+
+m: vector nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: vector ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
+
+
+: vector-grow ( vector -- )
+    dup [ underlying>> ] [ size dup 2 * f <array> ] bi
+    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ; 
+
+: vector-shrink-minimum ( vector -- ) 
+    dup [ underlying>> ] [ length dup ] bi f <array>
+    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ;
+
+: vector-shrink ( vector -- ) 
+    dup [ underlying>> ] [ length ] [ size 2 / f <array> ] bi
+    [ swap [ 0 0 ] dip array-copy ] keep swap underlying<< ;
+
+m: vector push
+    dup [ length ] [ size ] bi < [ dup vector-grow ] unless
+    [ length ] [ underlying>> set-nth! ] [ [ length 1 + ] [ length<< ] bi ] tri ;
+
+m: vector pop
+    dup [ length ] [ size 3 / ] < [ dup vector-shrink ] when
+    [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
+
+
+
+type: range start length step ;
+: <range> ( a b step -- range ) 
+    [ over - ] dip [ / 1 + ] keep range boa ;
+
+
+m: range size length>> ;
+m: range length length>> ;
+m: range nth! [ step>> * ] [ start>> ] bi + ;
+m: range in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
+m: range nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: range ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+
+
+: a..b ( a b -- a b step ) 2dup < [ 1 ] [ 1 neg ] if ;
+: ..b) ( a b step -- a' b' step ) [ - ] keep ;
+: (a.. ( a b step -- a' b' step ) [ swap [ + ] dip ] keep ;
+
+: [a..b] ( a b -- range ) a..b <range> ;
+: [a..b) ( a b -- range ) a..b ..b) <range> ;
+: (a..b] ( a b -- range ) a..b (a.. <range> ;
+: (a..b) ( a b -- range ) a..b (a.. ..b) <range> ;
+
+
+
+type: iterator seq n ;
+: <iterator> ( seq -- iterator ) 0 iterator boa ;
+: iterator-increment-offset ( iterator -- ) [ n>> 1 + ] [ n<< ] bi ; 
+: iterator-current ( iterator -- e/f ) [ n>> ] [ seq>> ] bi ?nth ;
+
+: ?next ( iterator -- e/f ) 
+    dup iterator-current dup [ swap iterator-increment-offset ] [ dropd ] if ;
+
+
+: filter-step ( output element q -- ) dupd call [ swap push ] [ 2drop ] if ;
+
+: filter-inner ( output q iterator -- output ) 
+    dup ?next dup [
+        -rot [ 3dup filter-step dropd ] dip 
+        filter-inner
+    ] [ 3drop ] if ;
+
+: filter ( sequence q -- filtered ) 
+    10 <vector> spin <iterator> filter-inner dup vector-shrink-minimum ;
+
+
+: map-step ( output element q -- ) call swap push ;
+
+: map-inner ( output q iterator -- output )
+    dup ?next dup [
+        -rot [ 3dup map-step dropd ] dip 
+        map-inner
+    ] [ 3drop ] if ;
+
+: map ( sequence q -- mapped ) 
+    [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
+
+
+: each-inner ( q iterator -- )
+    dup ?next dup [
+        swap [ dupd swap call ] dip
+        each-inner
+    ] [ 3drop ] if ;
+
+: each ( sequence q -- ) 
+    swap <iterator> each-inner ;
+
+m: range . [ ] map underlying>> . ;
+
+
+: match-sequence-step ( ? p? q -- ? ?c ) 
+    [ [ call ] 2keep drop  ] dip
+;
+
+: match-sequence ( ? sequence counter -- ) 
+    1 - dup 0 >= [ 
+        [ match-sequence ]
+    ] [ 3drop ] if ;
+
+: match ( ? seq: { p? q } -- )
+    dup length match-sequence ;
+
+
+: match ( ? seq: { p? q } -- )
+    [ [ [  ] [ ] bi ] curry ] dip each ;
+
+
+
+: inherit-slots-from-map ( child parent -- ) 
+    slots>> [ 1 slot SLOT_DATA = ] filter 
+    [ [ [ push-map-slot ] [ 1 slot 1 + ] [ 1 set-slot ] tri ] curry ] dip swap each ;
+
+: inherit-link-parent ( child parent -- )
+    create-parent-slot swap push-map-slot ;
+
+: inherit-from-map ( child parent -- )
+    [ inherit-link-parent ] [ inherit-slots-from-map ] 2bi ;
+
+
+
+: parse-array-slot ( slot-raw -- slot-desc ) ;
+
+: parse-slot-desc ( slot-raw -- slot-desc ) 
+    dup array? [ 
+
+    ] [ 
+
+    ] if ;
+
+: parse-slot-descs ( slots-raw -- slot-descs ) 
+    [ 
+        [ ]
+    ] map ;
+
+: define-object-slot ( map offset { idx slot-desc } -- ) 
+    [ 1th ] [ 2th ] bi [ + ] dip
+;
+: define-object-slots ( map array -- )
+    parse-slot-desc [ [  ] curry ] dip ;
+
+!/
+@: type:
+    scan-new-map [ define-map-word drop ] keep 
+    @vm-peek-next-token s" <" bytearray= [ @vm-next-token drop 
+    @vm-next-token @vm-link-map dupd inherit-from-map ] when 
+    \ ; @vm-skip-until  ;
+
+
+!/

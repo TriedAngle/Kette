@@ -1,16 +1,15 @@
 #![allow(unused)]
 use std::collections::HashMap;
+use std::fs;
 use std::mem;
 use std::ptr;
 
 pub mod gc;
 pub mod object;
-mod preload;
 pub mod primitives;
 pub mod system;
 use object::Object;
 use object::ObjectRef;
-pub use preload::PRELOAD;
 
 pub struct VM {
     pub gc: gc::MarkAndSweep,
@@ -159,6 +158,11 @@ impl VM {
         }
         let arr = self.allocate_array_from_slice(&vec);
         self.push(arr);
+    }
+
+    pub unsafe fn compile_source_file(&mut self, p: &str) -> object::ObjectRef {
+        let source = fs::read_to_string(p).unwrap();
+        self.compile_string(&source)
     }
 
     // returns a quotation
