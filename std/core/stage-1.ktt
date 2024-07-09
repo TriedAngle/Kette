@@ -16,6 +16,8 @@ method: pop-front ( value sequence -- )
 method: 1th ( seq -- val )
 method: 2th ( seq -- val )
 method: 3th ( seq -- val )
+method: first ( seq -- val )
+method: last ( seq -- val )
 
 
 m: array size array-size ;
@@ -30,6 +32,8 @@ m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
 m: array 1th 0 swap nth ;
 m: array 2th 1 swap nth ;
 m: array 3th 2 swap nth ;
+m: array first 0 swap nth ;
+m: array last [ length 1 - ] keep nth ;
 
 
 type: vector length underlying ;
@@ -51,6 +55,8 @@ m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
 m: vector 1th 0 swap nth ;
 m: vector 2th 1 swap nth ;
 m: vector 3th 2 swap nth ;
+m: array first 0 swap nth ;
+m: array last [ length 1 - ] keep nth ;
 
 : vector-grow ( vector -- )
     dup [ underlying>> ] [ size dup 2 * f <array> ] bi
@@ -132,10 +138,10 @@ type: iterator seq n ;
 : map ( sequence q -- mapped ) 
     [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
 
-
+!/ q i n !/
 : each-inner ( q iterator -- )
     dup ?next dup [
-        swap [ dupd swap call ] dip
+        [ dropd swap call ] 3keep drop
         each-inner
     ] [ 3drop ] if ;
 
@@ -160,6 +166,9 @@ m: range . [ ] map underlying>> . ;
 : enumerate ( sequence -- enumerated ) 
     dup length [0..b) swap zip ;
 
+
+: explode ( sequence -- ..length(seq) ) 
+    dup array? [ [ ] each ] [ dup map>> 2drop s" TODO: implement explode" . ] if ;
 
 : match-test ( ? p? -- ? ?c ) keep swap ;
 
@@ -194,9 +203,9 @@ m: range . [ ] map underlying>> . ;
 
 : parse-slot-desc ( slot-raw -- slot-desc ) 
     dup array? [ 
-
+        !/ match array size: 1 -> like not array, 2 -> name + type, 3 -> either name + type + default or name + type + mutable 4 -> full !/
     ] [ 
-
+        !/ TODO: normal untyped mutable slot !/
     ] if ;
 
 : parse-slot-descs ( slots-raw -- slot-descs ) 
