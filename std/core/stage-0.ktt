@@ -29,6 +29,7 @@
 : 2dup ( x y -- x y x y ) dup [ dupd swap ] dip ;
 : 2dip ( x y q -- x y ) swap [ dip ] dip ;
 : 2keep ( x y q -- x y ) [ 2dup ] dip 2dip ;
+: keepd ( x y q -- x ) 2keep drop ;
 
 : rotd ( x y z w -- y z a w ) [ rot ] dip ;
 : -rotd ( x y z w -- z x y w ) [ -rot ] dip ;
@@ -258,7 +259,7 @@
     @vm-next-token @vm-link-map @vm-next-token @vm-link-word \ ; @vm-parse-until array>quotation 
     [ 0 slot ] dip define-word swap push-map-method t ;
 
-: boa ( ..slots map -- tuple ) @vm-new-object ;
+: boa ( ..slots map -- object ) @vm-new-object ;
 
 : define-type?-word ( map -- word ) 
     dup 0 slot s" ?" bytearray-concat @vm-define-empty-global-word dup rot 

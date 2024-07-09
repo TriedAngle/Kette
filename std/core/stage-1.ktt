@@ -13,6 +13,10 @@ method: push ( value sequence -- )
 method: pop ( value sequence -- )
 method: push-front ( value sequence -- )
 method: pop-front ( value sequence -- )
+method: 1th ( seq -- val )
+method: 2th ( seq -- val )
+method: 3th ( seq -- val )
+
 
 m: array size array-size ;
 m: array length array-size ;
@@ -23,6 +27,9 @@ m: array in-bounds? [ drop 0 >= ] [ size < ] 2bi and ;
 m: array nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
 m: array ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
+m: array 1th 0 swap nth ;
+m: array 2th 1 swap nth ;
+m: array 3th 2 swap nth ;
 
 
 type: vector length underlying ;
@@ -41,7 +48,9 @@ m: vector in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
 m: vector nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
 m: vector ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
-
+m: vector 1th 0 swap nth ;
+m: vector 2th 1 swap nth ;
+m: vector 3th 2 swap nth ;
 
 : vector-grow ( vector -- )
     dup [ underlying>> ] [ size dup 2 * f <array> ] bi
@@ -86,8 +95,10 @@ m: range ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
 : [a..b) ( a b -- range ) a..b ..b) <range> ;
 : (a..b] ( a b -- range ) a..b (a.. <range> ;
 : (a..b) ( a b -- range ) a..b (a.. ..b) <range> ;
-
-
+: [0..b] ( b -- range ) 0 swap [a..b] ;
+: [1..b] ( b -- range ) 1 swap [a..b] ;
+: [0..b) ( b -- range ) 0 swap [a..b) ;
+: [1..b) ( b -- range ) 1 swap [a..b) ;
 
 type: iterator seq n ;
 : <iterator> ( seq -- iterator ) 0 iterator boa ;
@@ -134,22 +145,37 @@ type: iterator seq n ;
 m: range . [ ] map underlying>> . ;
 
 
-: match-sequence-step ( ? p? q -- ? ?c ) 
-    [ [ call ] 2keep drop  ] dip
-;
+: zip-inner ( output i1 i2 -- output ) 
+    2dup [ ?next ] bi@ dup [
+        2array pickd swap push
+        zip-inner
+    ] [ 4drop ] if ;
 
-: match-sequence ( ? sequence counter -- ) 
-    1 - dup 0 >= [ 
-        [ match-sequence ]
-    ] [ 3drop ] if ;
+: zip ( seq1 seq2 -- seq { e1 e2 } ) 
+    2dup [ length ] bi@ = [
+        dup length <vector> -rot [ <iterator> ] bi@ zip-inner
+    ] [ 2drop s" sequences not same size" . ] if ;
+
+
+: enumerate ( sequence -- enumerated ) 
+    dup length [0..b) swap zip ;
+
+
+: match-test ( ? p? -- ? ?c ) keep swap ;
+
+: match-inner-step ( ? { p? q } -- matched? ) 
+    [ 1th ] [ 2th ] bi [ match-test ] dip
+    swap [ call t ] [ 2drop f ] if ;
+
+!/ ? iter next | ? iter next - ? iter matched? !/
+: match-inner ( ? interator: { p? q } ) 
+    dup ?next dup [
+        [ dropd match-inner-step ] 3keep drop
+        rot [ 2drop ] [ match-inner ] if
+    ] [ 2drop ] if ; !/ TODO: this should error !/
 
 : match ( ? seq: { p? q } -- )
-    dup length match-sequence ;
-
-
-: match ( ? seq: { p? q } -- )
-    [ [ [  ] [ ] bi ] curry ] dip each ;
-
+    <iterator> match-inner ;
 
 
 : inherit-slots-from-map ( child parent -- ) 
@@ -190,6 +216,8 @@ m: range . [ ] map underlying>> . ;
     @vm-peek-next-token s" <" bytearray= [ @vm-next-token drop 
     @vm-next-token @vm-link-map dupd inherit-from-map ] when 
     \ ; @vm-skip-until  ;
+
+
 
 
 !/

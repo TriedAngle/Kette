@@ -31,6 +31,13 @@ fn main() {
 
         !/ type: box < shape width height !/
 
+        !/ 
+        5 { 
+            { [ 0 = ] [ drop s" zero" . 2 ] } 
+            { [ 0 < ] [ drop s" negative" .  3 ] } 
+            { [ 0 > ] [ drop s" positive" .  3 ] } 
+        } match
+        !/
         "#;
     unsafe {
         let quot = vm.compile_string(testing);
