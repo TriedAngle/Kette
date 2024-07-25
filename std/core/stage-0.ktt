@@ -98,10 +98,6 @@
 : 4array ( x y z w -- arr ) 4 f <array> (4array)  ;
 : 5array ( x y z w v -- arr ) 5 f <array> (5array)  ;
 
-: 1th ( seq -- val ) 0 swap array-nth ;
-: 2th ( seq -- val ) 1 swap array-nth ;
-: 3th ( seq -- val ) 2 swap array-nth ;
-
 : array-copy ( src dst start-src start-dst count -- ) 
     0 swap [ 2dup fixnum< ] [ [ 1 fixnum+ ] dip ] [ [ [
         [ fixnum+ ] dup [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) 2dupd swapd 
@@ -144,8 +140,8 @@
 !: SLOT_DATA 2
 !: SLOT_ASSIGNMENT 3
 !: SLOT_METHOD 4
-!: SLOT_VARIABLE_DATA: 5
-!: SLOT_EMBEDDED_DATA: 6
+!: SLOT_VARIABLE_DATA 5
+!: SLOT_EMBEDDED_DATA 6
 
 : map>> ( obj -- map ) 1 fixnum-neg slot ;
 : slots>> ( map -- slots ) 3 slot ;
@@ -265,48 +261,26 @@
     dup 0 slot s" ?" bytearray-concat @vm-define-empty-global-word dup rot 
     \ swap \ map>> \ ref-eq? [ unbox ] tri@  4array array>quotation set-word-body drop ;
 
-@: builtin:
-    @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi
-    [ dropd define-type?-word ] [ define-push-word ] 2bi \ ; @vm-skip-until drop t ;
 
 @: primitive: @vm-next-token drop \ ) @vm-skip-until drop t ;
 
+@: builtin: 
+    @vm-next-token [ @vm-define-empty-global-word ] [ @vm-link-map ] bi 
+    [ [ dropd define-type?-word ] [ define-push-word ] 2bi ] keep
+    \ ; @vm-skip-until dup array-size define-object-accessors t ;
 
-builtin: fixnum { i64 } ;
-builtin: bool { t | f } ;
-builtin: fixfloat { f64 } ;
-builtin: array { size i64 } { data ... } ;
-builtin: bytearray { capacity i64 } { data ... } ;
+
+builtin: fixnum ;
+builtin: bool ;
+builtin: fixfloat ;
+builtin: array size ;
+builtin: bytearray capacity ;
 builtin: box boxed ;
 
-builtin: map 
-    { name bytearray } 
-    { object-size i64 } 
-    { slot-count i64 } 
-    { slots array } 
-    { default-instance object } ;
-
-!/ TODO: use t & f for boolean !/
-builtin: map-slot 
-    { name bytearray } 
-    { kind i64 } 
-    { type map }
-    { index i64 } 
-    { read-only? i64 } ;
-
-builtin: quotation
-    { body array }
-    effect
-    entry ;
-
-!/ TODO: use t & f for boolean !/
-builtin: word
-    { name bytearray }
-    { body quotation }
-    { properties array }
-    { primitive? i64 }
-    { syntax? i64 } ;
-
+builtin: map name object-size slot-count slots default-instance ;
+builtin: map-slot name kind type index read-only? ;
+builtin: quotation body effect entry ;
+builtin: word name body properties primitive? syntax? ;
 
 !/ primitive macros: `@:` `]` `:` but they get !/ 
 primitive: @vm-next-token ( -- token )
@@ -373,7 +347,6 @@ primitive: fixnum-bitxor ( a b -- c )
 primitive: fixnum-bitnot ( a -- b )
 primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
-
 
 method: . ( obj -- )
 method: neg ( n -- -n )

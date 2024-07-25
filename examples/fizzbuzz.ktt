@@ -1,48 +1,28 @@
-: -1 ( a -- a-1 ) 1 - ;
-: n| ( a n -- ? ) % 0 = ;
-: !n| ( a n -- ? ) n| not ;
+        !/
 
 
-
-: for
-
-: fizzbuzz ( num -- )
-    dup 15 n| [ s" FizzBuzz" utf8. ] [
-        dup 3 n| [ s" Fizz" utf8. ] when
-        dup 5 n| [ s" Buzz" utf8. ] when
-    ] if
-
-    dup [ 3 !n| ] keep 5 !n| and [ dup . ] when
-    dup 0 > [ -1 fizzbuzz ] [ drop ] if ;
-
-: fizzbuzz-looped ( num -- )
-    [ dup 0 > ] [ 
-        dup 15 n| [ s" FizzBuzz" utf8. ] [
-            dup 3 n| [ s" Fizz" utf8. ] when
-            dup 5 n| [ s" Buzz" utf8. ] when
-        ] if
-        dup [ 3 !n| ] keep 5 !n| and [ dup . ] when
-        - 1 
-    ] while
-
-15 fizzbuzz
-
-        : map>> ( obj -- map ) 1 neg slot ;
-        : slots>> ( map -- slots ) 3 slot ;
-
-        : lookup-slot ( name obj -- index ) 
-            map>> slots>> <array-iter> [
-                dup ?next dup 
-                [ dup 0 slot pickd bytearray= [ 3 slot ] [ drop f ] if ] [ f ] if
-                dup [ f ] [ drop t ] if
-            ] loop 2dropd ;
-
-        tuple: pos x y ;
+        !/
         
-        : x>> ( obj -- x ) dup \ x>> unbox 0 slot swap lookup-slot slot ;
-        : x<< ( value obj -- ) dup \ x<< unbox 0 slot swap lookup-slot set-slot ;
-        : >>x ( obj value -- obj ) dupd swap x<< ;
+        : fry ( ..n quot -- fried-quot ) ;
+        '[ 5 _ + ] -> [ 5 _ + ] fry!
 
-        10 15 pos tuple-boa
-        dup x>> .
-        s" lol" >>x x>> utf8.
+        struct: i64 8 ;
+        i64 { inner bytearray }
+        => 8 bytearray
+        inner>> 8 bytearray
+
+        #: namestack !/ vector of pairs name value !/
+        #: modules !/ vector of pairs name words !/ 
+        
+        type: module name words ;
+
+        
+        struct: vec2
+            { x i64 }
+            { y i64 } ;
+
+        vec2 { inner bytearray }
+        => 16 bytearray
+        x>> inner>> type>> x-offset>> size>> struct-copy
+
+        !/
