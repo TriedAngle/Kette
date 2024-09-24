@@ -16,6 +16,9 @@ method: pop-front ( value sequence -- )
 method: 1th ( seq -- val )
 method: 2th ( seq -- val )
 method: 3th ( seq -- val )
+method: 1th<< ( val seq -- )
+method: 2th<< ( val seq -- )
+method: 3th<< ( val seq -- )
 method: first ( seq -- val )
 method: last ( seq -- val )
 
@@ -32,6 +35,9 @@ m: array set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
 m: array 1th 0 swap nth ;
 m: array 2th 1 swap nth ;
 m: array 3th 2 swap nth ;
+m: array 1th<< 0 swap set-nth! ;
+m: array 2th<< 1 swap set-nth! ; 
+m: array 3th<< 2 swap set-nth! ; 
 m: array first 0 swap nth ;
 m: array last [ length 1 - ] keep nth ;
 
@@ -55,8 +61,11 @@ m: vector set-nth 2dup in-bounds? [ set-nth! ] [ 2drop f ] if ;
 m: vector 1th 0 swap nth ;
 m: vector 2th 1 swap nth ;
 m: vector 3th 2 swap nth ;
-m: array first 0 swap nth ;
-m: array last [ length 1 - ] keep nth ;
+m: vector 1th<< 0 swap set-nth! ;
+m: vector 2th<< 1 swap set-nth! ; 
+m: vector 3th<< 2 swap set-nth! ; 
+m: vector first 0 swap nth ;
+m: vector last [ length 1 - ] keep nth ;
 
 : vector-grow ( vector -- )
     dup [ underlying>> ] [ size dup 2 * f <array> ] bi
@@ -176,7 +185,6 @@ m: range . [ ] map underlying>> . ;
     [ 1th ] [ 2th ] bi [ match-test ] dip
     swap [ call t ] [ 2drop f ] if ;
 
-!/ ? iter next | ? iter next - ? iter matched? !/
 : match-inner ( ? interator: { p? q } ) 
     dup ?next dup [
         [ dropd match-inner-step ] 3keep drop
@@ -198,35 +206,28 @@ m: range . [ ] map underlying>> . ;
     [ inherit-link-parent ] [ inherit-slots-from-map ] 2bi ;
 
 
+: parse|slot-name>slot ( idx name -- slot ) ;
+: parse|slot-desc>slot ( idx desc -- slot ) ;
 
-: parse-array-slot ( slot-raw -- slot-desc ) ;
+: define-slot-accessor ( slot idx -- slot ) ;
 
-: parse-slot-desc ( slot-raw -- slot-desc ) 
-    dup array? [ 
-        !/ match array size: 1 -> like not array, 2 -> name + type, 3 -> either name + type + default or name + type + mutable 4 -> full !/
-    ] [ 
-        !/ TODO: normal untyped mutable slot !/
-    ] if ;
+!/ ( offset -- array ) - [ array [ ] ]  !/
+: parse|descs>slots ( offset slots-raw -- slots: { slot accessor } ) 
+    enumerate [ 
+        explode [ over + ] dip
+        dup 2th array? [ parse|slot-desc>slot ] [ parse|slot-name>slot ] if
+        [ dupd 1th define-slot-accessor ] 2bi 2array
+    ] map dropd ;
 
-: parse-slot-descs ( slots-raw -- slot-descs ) 
-    [ 
-        [ ]
-    ] map ;
 
-: define-object-slot ( map offset { idx slot-desc } -- ) 
-    [ 1th ] [ 2th ] bi [ + ] dip
-;
 : define-object-slots ( map array -- )
-    parse-slot-desc [ [  ] curry ] dip ;
-
-!/
-@: type:
-    scan-new-map [ define-map-word drop ] keep 
-    @vm-peek-next-token s" <" bytearray= [ @vm-next-token drop 
-    @vm-next-token @vm-link-map dupd inherit-from-map ] when 
-    \ ; @vm-skip-until  ;
+    parse|descs>slots ;
 
 
-
+@: type-new:
+    scan-new-map [ define-type-words ] keep 
+    @vm-peek-next-token s" <" bytearray= 
+    [ @vm-next-token drop @vm-next-token @vm-link-map dupd inherit-from-map ] when 
+    \ ; @vm-skip-until define-object-slots t ;
 
 !/

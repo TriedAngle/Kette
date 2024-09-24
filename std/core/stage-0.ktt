@@ -223,10 +223,16 @@
         define-object-accessors
     ] [ 3drop ] if ;
 
-: define-map-word ( map -- word ) 
+: define-type-word ( map -- word ) 
     [ 0 slot @vm-define-empty-global-word dup ] keep define-push-word ;
 
+: define-type?-word ( map -- ) 
+    dup 0 slot s" ?" bytearray-concat @vm-define-empty-global-word dup rot 
+    \ swap \ map>> \ ref-eq? [ unbox ] tri@  4array array>quotation set-word-body drop ;
+
+
 : scan-new-map ( -- map ) @vm-next-token @vm-define-map ;
+: define-type-words ( map -- ) [ define-type-word drop ] [ define-type?-word ] bi ;
 
 : increase-map-object-slot-count ( map -- ) 
     [ [ 1 slot 1 fixnum+ ] [ 1 set-slot ] bi ] 
@@ -242,8 +248,10 @@
         define-slots
     ] [ 3drop ] if ;
 
+
+
 @: type: 
-    scan-new-map [ define-map-word drop ] keep \ ; @vm-skip-until  
+    scan-new-map [ define-type-words ] keep  \ ; @vm-skip-until  
     dup array-size [ define-slots ] [ define-object-accessors ] 3bi t ;
 
 @: method: 
@@ -257,9 +265,6 @@
 
 : boa ( ..slots map -- object ) @vm-new-object ;
 
-: define-type?-word ( map -- word ) 
-    dup 0 slot s" ?" bytearray-concat @vm-define-empty-global-word dup rot 
-    \ swap \ map>> \ ref-eq? [ unbox ] tri@  4array array>quotation set-word-body drop ;
 
 
 @: primitive: @vm-next-token drop \ ) @vm-skip-until drop t ;

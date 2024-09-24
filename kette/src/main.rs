@@ -19,25 +19,10 @@ fn main() {
         method: to-string ( obj -- string )
         
         type: shape x y ;
-        m: shape to-string drop s" shape" ;
 
-        type: cat name ;
-        m: cat to-string [ s" cat with name " ] dip name>> bytearray-concat ;
+        !/ type-new: rectangle < shape width height ; !/
 
-        !/
-        420 69 shape boa to-string utf8.
-        s" Steve" cat boa to-string utf8.
-        !/
-
-        !/ type: box < shape width height !/
-
-        !/ 
-        5 { 
-            { [ 0 = ] [ drop s" zero" . 2 ] } 
-            { [ 0 < ] [ drop s" negative" .  3 ] } 
-            { [ 0 > ] [ drop s" positive" .  3 ] } 
-        } match
-        !/
+        
         "#;
     unsafe {
         let quot = vm.compile_string(testing);

@@ -824,7 +824,6 @@ impl VM {
 
         let bool_map = self.allocate_map("bool", &[]);
 
-
         let false_object = self.allocate_object(bool_map);
         let true_object = self.allocate_object(bool_map);
         self.gc.set_object_root(false_object);

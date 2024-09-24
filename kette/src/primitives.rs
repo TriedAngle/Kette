@@ -45,13 +45,12 @@ unsafe fn primitive_close_library(vm: *mut VM) {
 }
 
 unsafe fn primitive_library_symbol(vm: *mut VM) {
-    let lib = (*vm).pop().as_fixnum();
     let symbol = (*vm).pop();
+    let lib = (*vm).pop().as_fixnum();
     let library = mem::transmute((*lib).value);
     let sym = system::library_symbol(library, symbol.bytearray_as_str());
     (*vm).push_fixnum(mem::transmute(sym));
 }
-
 
 unsafe fn primitive_box(vm: *mut VM) {
     let obj = (*vm).pop();
