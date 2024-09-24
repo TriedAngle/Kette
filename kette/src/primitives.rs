@@ -2,6 +2,7 @@ use std::mem;
 
 use crate::object;
 use crate::object::Object;
+use crate::system;
 use crate::VM;
 
 impl VM {
@@ -28,6 +29,29 @@ impl VM {
         }
     }
 }
+
+unsafe fn primitive_open_library(vm: *mut VM) {
+    let ba = (*vm).pop();
+    let str = ba.bytearray_as_str();
+    let library = system::open_library(str);
+    (*vm).push_fixnum(mem::transmute(library));
+}
+
+unsafe fn primitive_close_library(vm: *mut VM) {
+    let lib = (*vm).pop().as_fixnum();
+    let library = mem::transmute((*lib).value);
+    let value = system::close_library(library);
+    (*vm).push_fixnum(value as isize);
+}
+
+unsafe fn primitive_library_symbol(vm: *mut VM) {
+    let lib = (*vm).pop().as_fixnum();
+    let symbol = (*vm).pop();
+    let library = mem::transmute((*lib).value);
+    let sym = system::library_symbol(library, symbol.bytearray_as_str());
+    (*vm).push_fixnum(mem::transmute(sym));
+}
+
 
 unsafe fn primitive_box(vm: *mut VM) {
     let obj = (*vm).pop();
@@ -612,6 +636,9 @@ impl VM {
         self.add_primitive("@vm-new-object", primitive_object_new_from_map, false);
         self.add_primitive("@>r", primitive_retain_push, false);
         self.add_primitive("@r>", primitive_retian_pop, false);
+        self.add_primitive("(open-library)", primitive_open_library, false);
+        self.add_primitive("(close-library)", primitive_close_library, false);
+        self.add_primitive("(library-symbol)", primitive_library_symbol, false);
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);
         self.add_primitive("[", primitive_quotation_start, true);
