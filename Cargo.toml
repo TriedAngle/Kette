@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "kette", "kette_terminal",
+    "kette", 
+    "kette_terminal",
 ]
+default-run = "kette"
