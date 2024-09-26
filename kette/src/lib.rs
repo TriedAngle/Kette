@@ -8,8 +8,7 @@ pub mod gc;
 pub mod object;
 pub mod primitives;
 pub mod system;
-use object::Object;
-use object::ObjectRef;
+pub mod context;
 
 pub struct VM {
     pub gc: gc::MarkAndSweep,
@@ -278,7 +277,7 @@ impl VM {
     pub fn read_word(&mut self) {
         let ino = self.special_objects.input;
         let inoffseto = self.special_objects.input_offset;
-        let inoobj = object::ObjectRef(ino as *mut Object);
+        let inoobj = object::ObjectRef(ino as *mut object::Object);
 
         let input = unsafe { inoobj.bytearray_as_str() };
         let mut offset = unsafe { (*inoffseto).value } as usize;
