@@ -4,14 +4,17 @@ use std::fs;
 use std::mem;
 use std::ptr;
 
+use context::Context;
+
+pub mod context;
 pub mod gc;
 pub mod object;
 pub mod primitives;
 pub mod system;
-pub mod context;
 
 pub struct VM {
     pub gc: gc::MarkAndSweep,
+    pub active_context: Context,
     pub special_objects: object::SpecialObjects,
     pub stack: Vec<object::ObjectRef>,
     pub retainstack: Vec<object::ObjectRef>,
@@ -24,6 +27,7 @@ impl VM {
     pub fn new() -> Self {
         Self {
             gc: gc::MarkAndSweep::new(),
+            active_context: Context::new_empty(),
             stack: Vec::new(),
             retainstack: Vec::new(),
             callstack: Vec::new(),
