@@ -104,6 +104,10 @@
         [ swap array-nth ] [ swap set-array-nth ] -rotd [ (call) ] 3dip (call)
     ] 3keep ] dip ] while* 4drop drop drop ;
 
+
+: resize-array ( array size -- new )
+    [ dup 0 slot ] dip f <array> [ swap 0 0 rot array-copy ] keep ; 
+
 !/ this is very inefficient, use vectors if this is your normal usecase !/
 : array-push ( obj arr -- arr ) 
     dup array-size dup 1 fixnum+ f <array> 
