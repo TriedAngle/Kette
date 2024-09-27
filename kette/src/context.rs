@@ -1,6 +1,6 @@
 use std::{mem, ptr};
 
-use crate::object::{Object, ObjectRef};
+use crate::{gc::MarkAndSweep, object::{Object, ObjectHeader, ObjectRef, SpecialObjects}, VM};
 
 pub struct Segment {
     start: *mut ObjectRef,
@@ -26,24 +26,49 @@ impl Segment {
     pub fn in_bounds(&self, obj: *mut ObjectRef) -> bool {
         self.start <= obj && obj <= self.end
     }
+
+    pub unsafe fn from_array(obj: ObjectRef) -> Self {
+        let start = obj.array_data();
+        let size = obj.array_data_len();
+        let end = start.add(size);
+        Self {
+            start, size, end
+        }
+    }
 }
 
 pub struct Context {
-    data_top: *mut ObjectRef,
-    retain_top: *mut ObjectRef,
-    call_top: *mut ObjectRef,
+    pub header: ObjectHeader,
+    pub vm: *mut VM,
+    pub gc: *mut MarkAndSweep,
+    pub so: *mut SpecialObjects,
 
-    data: Segment,
-    retain: Segment,
-    call: Segment,
+    pub data_top: *mut ObjectRef,
+    pub retain_top: *mut ObjectRef,
+    pub call_top: *mut ObjectRef,
 
-    name: *mut Object,
-    context: *mut Object,
+    pub data_array: ObjectRef,
+    pub retain_array: ObjectRef,
+    pub call_array: ObjectRef,
+
+    pub name: *mut Object,
+
+
+    pub data: Segment,
+    pub retain: Segment,
+    pub call: Segment,
+
+
+
 }
 
 impl Context {
     pub fn new_empty() -> Self {
         Self {
+            header: ObjectHeader { map: ObjectRef::null(), meta: 0},
+            vm: ptr::null_mut(),
+            gc: ptr::null_mut(),
+            so: ptr::null_mut(),
             data_top: ptr::null_mut(),
             retain_top: ptr::null_mut(),
             call_top: ptr::null_mut(),
@@ -51,8 +76,20 @@ impl Context {
             retain: Segment::NULL,
             call: Segment::NULL,
             name: ptr::null_mut(),
-            context: ptr::null_mut(),
+            data_array: ObjectRef::null(),
+            retain_array: ObjectRef::null(),
+            call_array: ObjectRef::null(),
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.data_top = self.data.start;
+        self.retain_top = self.retain.start;
+        self.call_top = self.call_top;
+    }
+
+    pub unsafe fn len(&self) -> usize {
+        (self.data_top as usize - self.data.start as usize) / mem::size_of::<ObjectRef>() 
     }
 
     pub unsafe fn push(&mut self, value: ObjectRef) {
@@ -63,6 +100,10 @@ impl Context {
     pub unsafe fn pop(&mut self) -> ObjectRef {
         self.data_top = self.data_top.sub(1);
         *self.data_top
+    }
+
+    pub unsafe fn peek(&mut self) -> ObjectRef {
+        *self.data_top.sub(1)
     }
 
     pub unsafe fn retain_push(&mut self, value: ObjectRef) {

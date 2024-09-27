@@ -12,7 +12,6 @@ pub struct SpecialObjects {
     pub bytearray_map: *mut Map,
     pub alien_map: *mut Map,
     pub context_map: *mut Map,
-    pub context_object: ObjectRef,
 
     pub false_object: *mut Object,
     pub true_object: *mut Object,
@@ -35,7 +34,6 @@ impl Default for SpecialObjects {
             bytearray_map: ptr::null_mut(),
             alien_map: ptr::null_mut(),
             context_map: ptr::null_mut(),
-            context_object: ObjectRef::null(),
             false_object: ptr::null_mut(),
             true_object: ptr::null_mut(),
 

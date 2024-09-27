@@ -5,6 +5,7 @@ use std::mem;
 use std::ptr;
 
 use context::Context;
+use context::Segment;
 use object::ArrayObject;
 use object::ByteArrayObject;
 use object::Map;
@@ -21,20 +22,22 @@ pub mod system;
 
 pub struct VM {
     pub gc: gc::MarkAndSweep,
-    pub active_context: Context,
+    pub active_context: *mut Context,
+
+    pub maps: HashMap<String, *mut Map>,
+    pub words: HashMap<String, *mut WordObject>,
     pub special_objects: object::SpecialObjects,
+
     pub stack: Vec<ObjectRef>,
     pub retainstack: Vec<ObjectRef>,
     pub callstack: Vec<ObjectRef>,
-    pub maps: HashMap<String, *mut Map>,
-    pub words: HashMap<String, *mut WordObject>,
 }
 
 impl VM {
     pub fn new() -> Self {
         Self {
             gc: gc::MarkAndSweep::new(),
-            active_context: Context::new_empty(),
+            active_context: ptr::null_mut(),
             stack: Vec::new(),
             retainstack: Vec::new(),
             callstack: Vec::new(),
@@ -44,16 +47,29 @@ impl VM {
         }
     }
 
+    pub unsafe fn ctx(&mut self) -> &mut Context {
+        &mut *self.active_context
+    }
+
     pub fn push(&mut self, obj: ObjectRef) {
-        self.stack.push(obj)
+        // self.stack.push(obj);
+        unsafe {
+            self.ctx().push(obj);
+        }
     }
 
     pub fn pop(&mut self) -> ObjectRef {
-        self.stack.pop().unwrap()
+        unsafe {
+            self.ctx().pop()
+        }
+        // self.stack.pop().unwrap()
     }
 
     pub fn peek(&mut self) -> ObjectRef {
-        *self.stack.last().unwrap()
+        unsafe {
+            self.ctx().peek()
+        }
+        // *self.stack.last().unwrap()
     }
 
     pub fn retain_push(&mut self, obj: ObjectRef) {
@@ -249,6 +265,8 @@ impl VM {
     pub fn init(&mut self) {
         self.gc.link_vm(self as *const VM);
         self.init_primitive_maps();
+        let context = self.allocate_context(3000, 3000, 3000);
+        self.active_context = context.0 as *mut Context;
         self.add_primitives();
     }
 
@@ -484,6 +502,36 @@ impl VM {
             ptr::write_bytes(obj.array_data(), 0, size);
         }
         obj
+    }
+
+    pub fn allocate_context(&mut self, data_size: usize, retain_size: usize, call_size: usize) -> ObjectRef {
+        let alloc_size = mem::size_of::<Context>();
+        let alloc_align = mem::align_of::<Context>();
+        unsafe {
+            let obj = self.gc.allocate(alloc_size, alloc_align, true).unwrap();
+            let ctx = obj.0 as *mut Context;
+            
+            let data_array = self.allocate_array(data_size);
+            let retain_array = self.allocate_array(retain_size);
+            let call_array = self.allocate_array(call_size);
+
+            // TODO: don't do this
+            self.gc.set_object_root(data_array);
+            self.gc.set_object_root(retain_array);
+            self.gc.set_object_root(call_array);
+
+            (*ctx).header.map = ObjectRef::from_map(self.special_objects.context_map);
+            (*ctx).data = Segment::from_array(data_array);
+            (*ctx).retain = Segment::from_array(retain_array);
+            (*ctx).call = Segment::from_array(call_array);
+            (*ctx).data_array = data_array;
+            (*ctx).retain_array = retain_array;
+            (*ctx).call_array = call_array;
+
+            (*ctx).reset();
+            // (*ctx_ptr).
+            obj
+        }
     }
 
     pub fn allocate_map<'a>(&mut self, name: &str, slots: &[SlotDescriptor<'a>]) -> ObjectRef {
@@ -888,61 +936,71 @@ impl VM {
             "context",
             &[
                 SlotDescriptor {
-                    name: "garbage-collector",
-                    kind: object::SLOT_DATA,
+                    name: "virtual-machine",
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: fixnum_map,
                     index: 0,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "special-objects",
-                    kind: object::SLOT_DATA,
+                    name: "garbage-collector",
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: fixnum_map,
                     index: 1,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "data-stack",
-                    kind: object::SLOT_DATA,
+                    name: "special-objects",
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: fixnum_map,
                     index: 2,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "retain-stack",
-                    kind: object::SLOT_DATA,
+                    name: "data-top",
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: fixnum_map,
                     index: 3,
                     read_only: 0,
                 },
                 SlotDescriptor {
-                    name: "call-stack",
-                    kind: object::SLOT_DATA,
+                    name: "retain-top",
+                    kind: object::SLOT_EMBEDDED_DATA,
                     value_type: fixnum_map,
                     index: 4,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "call-top",
+                    kind: object::SLOT_EMBEDDED_DATA,
+                    value_type: fixnum_map,
+                    index: 5,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "data-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: array_map,
+                    index: 6,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "retain-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: array_map,
+                    index: 7,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "call-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: array_map,
+                    index: 8,
                     read_only: 0,
                 },
             ],
         );
         self.special_objects.context_map = context_map.as_map_mut();
-
-        let context_object = self.allocate_object(context_map);
-        unsafe {
-            let sp = self as *mut Self;
-            let gc = self.allocate_fixnum(&mut (*sp).gc as *mut _ as isize);
-            let special_objects =
-                self.allocate_fixnum(&mut (*sp).special_objects as *mut _ as isize);
-            let stack = self.allocate_fixnum(&self.stack as *const _ as isize);
-            let retainstack = self.allocate_fixnum(&self.retainstack as *const _ as isize);
-            let callstack = self.allocate_fixnum(&self.callstack as *const _ as isize);
-
-            context_object.set_field(0, gc);
-            context_object.set_field(1, special_objects);
-            context_object.set_field(2, stack);
-            context_object.set_field(3, retainstack);
-            context_object.set_field(4, callstack);
-        }
-        self.special_objects.context_object = context_object;
 
         unsafe {
             for map in self.maps.values() {
@@ -955,11 +1013,11 @@ impl VM {
         }
     }
 
-    pub fn print_array(&self, obj: ObjectRef) {
+    pub fn print_array(&self, obj: ObjectRef, size: usize) {
         unsafe {
             print!("{{ ");
             let arr = obj;
-            self.print_array_inner(arr);
+            self.print_array_inner(arr, size);
             print!("}}");
             println!();
         }
@@ -969,14 +1027,14 @@ impl VM {
         unsafe {
             print!("[ ");
             let arr = (*obj.as_quotation()).body;
-            self.print_array_inner(arr);
+            let len = obj.array_data_len();
+            self.print_array_inner(arr, len);
             print!("]");
             println!();
         }
     }
 
-    unsafe fn print_array_inner(&self, arr: ObjectRef) {
-        let size = arr.array_data_len();
+    unsafe fn print_array_inner(&self, arr: ObjectRef, size: usize) {
         for idx in 0..size {
             let o = *(arr.array_data().add(idx));
             let map = o.get_map();
@@ -987,7 +1045,8 @@ impl VM {
             } else if map == self.special_objects.quotation_map {
                 print!("[ ");
                 let qarr = (*o.as_quotation()).body;
-                self.print_array_inner(qarr);
+                let size = qarr.array_data_len();
+                self.print_array_inner(qarr, size);
                 print!("]");
             } else if map == self.special_objects.box_map {
                 let inner = (*o.as_box()).boxed;

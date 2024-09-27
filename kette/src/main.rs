@@ -62,7 +62,13 @@ fn main() {
             vm.execute_quotation(quot.as_quotation());
             let v = &mut vm as *mut VM;
             let stack = (*v).allocate_array_from_slice(&vm.stack);
-            vm.print_array(stack);
+            let len = stack.array_data_len();
+            vm.print_array(stack, len);
+
+            let ctx = vm.ctx();
+            let stack2 = ctx.data_array;
+            let len2 = ctx.len();
+            vm.print_array(stack2, len2);
         }
     }
 

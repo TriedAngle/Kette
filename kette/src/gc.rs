@@ -200,7 +200,9 @@ impl MarkAndSweep {
     pub unsafe fn mark(&mut self) {
         while let Some(obj) = self.worklist.pop() {
             let map = obj.get_map();
-
+            if map.is_null() {
+                continue;
+            }
             // our object is a map
             if map == (*self.vm).special_objects.map_map {
                 let mapp = obj.as_map();

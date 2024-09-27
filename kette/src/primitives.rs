@@ -471,11 +471,12 @@ unsafe fn primitive_print_quotation(vm: *mut VM) {
 
 unsafe fn primitive_print_array(vm: *mut VM) {
     let arr = (*vm).pop();
-    (*vm).print_array(arr);
+    let len = arr.array_data_len();
+    (*vm).print_array(arr, len);
 }
 
 unsafe fn primitive_context(vm: *mut VM) {
-    (*vm).push((*vm).special_objects.context_object);
+    (*vm).push(ObjectRef::new((*vm).active_context as *mut _));
 }
 
 unsafe fn primitive_get_map(vm: *mut VM) {

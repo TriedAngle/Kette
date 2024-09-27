@@ -115,7 +115,7 @@
 
 : ref-eq? ( x y -- ? ) [ object^ ] bi@ fixnum= ;
 
-: special-object ( id -- object ) 8 fixnum* let-me-cook 1 slot swap fixnum+ get^ ^object ;
+: special-object ( id -- object ) 8 fixnum* let-me-cook 2 slot swap fixnum+ get^ ^object ;
 
 : primitive? ( word -- ? ) 4 slot 1 fixnum= ;
 : syntax? ( word -- ? ) 3 slot 1 fixnum= ;
