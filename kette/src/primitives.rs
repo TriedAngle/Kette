@@ -1,7 +1,9 @@
 use std::mem;
 
 use crate::object;
-use crate::object::Object;
+use crate::object::Map;
+use crate::object::ObjectRef;
+use crate::Object;
 use crate::system;
 use crate::VM;
 
@@ -9,15 +11,15 @@ impl VM {
     // requires slot to already exist
     pub unsafe fn add_primitive(&mut self, name: &str, fun: unsafe fn(vm: *mut VM), syntax: bool) {
         let word_map = *self.maps.get("word").unwrap();
-        let word_object = self.allocate_object(object::ObjectRef::from_map(word_map));
+        let word_object = self.allocate_object(ObjectRef::from_map(word_map));
 
         let word_name = self.allocate_string(name);
         let word = word_object.as_word_mut();
         (*word).name = word_name;
         (*word).primitive = 1;
         (*word).syntax = if syntax { 1 } else { 0 };
-        (*word).properties = object::ObjectRef::null();
-        (*word).body = object::ObjectRef::from_fn(fun);
+        (*word).properties = ObjectRef::null();
+        (*word).body = ObjectRef::from_fn(fun);
 
         self.words.insert(name.to_string(), word);
     }
@@ -55,7 +57,7 @@ unsafe fn primitive_library_symbol(vm: *mut VM) {
 unsafe fn primitive_box(vm: *mut VM) {
     let obj = (*vm).pop();
     let box_map = (*vm).special_objects.box_map;
-    let box_obj = (*vm).allocate_object(object::ObjectRef::from_map(box_map));
+    let box_obj = (*vm).allocate_object(ObjectRef::from_map(box_map));
     let boxx = box_obj.as_box_mut();
     (*boxx).boxed = obj;
     (*vm).push(box_obj);
@@ -82,7 +84,7 @@ unsafe fn primitive_parse_until(vm: *mut VM) {
 }
 
 unsafe fn primitive_skip_until(vm: *mut VM) {
-    let mut vec = Vec::<object::ObjectRef>::new();
+    let mut vec = Vec::<ObjectRef>::new();
     let end_obj = (*vm).pop().as_box();
     let end_word = (*end_obj).boxed;
     loop {
@@ -128,7 +130,7 @@ unsafe fn primitive_link_map(vm: *mut VM) {
     let name = ba.bytearray_as_str();
     let map = (*vm).maps.get(name);
     if let Some(map) = map {
-        (*vm).push(object::ObjectRef::from_map(*map))
+        (*vm).push(ObjectRef::from_map(*map))
     } else {
         (*vm).push_false();
     }
@@ -138,16 +140,16 @@ unsafe fn primitive_try_parse_num(vm: *mut VM) {
     (*vm).try_parse_number();
 }
 
-unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
+unsafe fn create_empty_global_word(vm: *mut VM, name: ObjectRef) -> ObjectRef {
     let word_map = (*vm).special_objects.word_map;
-    let word_object = (*vm).allocate_object(object::ObjectRef::from_map(word_map));
+    let word_object = (*vm).allocate_object(ObjectRef::from_map(word_map));
 
     let word = word_object.as_word_mut();
     (*word).name = name;
     (*word).primitive = 0;
     (*word).syntax = 0;
-    (*word).properties = object::ObjectRef::null();
-    (*word).body = object::ObjectRef::null();
+    (*word).properties = ObjectRef::null();
+    (*word).body = ObjectRef::null();
 
     // TODO: implement global vocabulary
     let word_name = name.bytearray_as_str();
@@ -156,16 +158,16 @@ unsafe fn create_empty_global_word(vm: *mut VM, name: object::ObjectRef) -> obje
     word_object
 }
 
-unsafe fn create_empty_word(vm: *mut VM, name: object::ObjectRef) -> object::ObjectRef {
+unsafe fn create_empty_word(vm: *mut VM, name: ObjectRef) -> ObjectRef {
     let word_map = (*vm).special_objects.word_map;
-    let word_object = (*vm).allocate_object(object::ObjectRef::from_map(word_map));
+    let word_object = (*vm).allocate_object(ObjectRef::from_map(word_map));
 
     let word = word_object.as_word_mut();
     (*word).name = name;
     (*word).primitive = 0;
     (*word).syntax = 0;
-    (*word).properties = object::ObjectRef::null();
-    (*word).body = object::ObjectRef::null();
+    (*word).properties = ObjectRef::null();
+    (*word).body = ObjectRef::null();
 
     word_object
 }
@@ -185,7 +187,7 @@ unsafe fn primitive_define_empty_word(vm: *mut VM) {
 
 unsafe fn primitive_quotation_start(vm: *mut VM) {
     let word = (*vm).words.get("]").unwrap();
-    (*vm).push(object::ObjectRef::from_word(*word));
+    (*vm).push(ObjectRef::from_word(*word));
     primitive_box(vm);
     (*vm).parse_until();
     primitive_array_to_quotation(vm);
@@ -199,7 +201,7 @@ unsafe fn primitive_string(vm: *mut VM) {
     let v = vm.as_mut().unwrap();
     let ino = v.special_objects.input;
     let inoffsetto = v.special_objects.input_offset;
-    let inoobj = object::ObjectRef(ino as *mut object::Object);
+    let inoobj = ObjectRef(ino as *mut Object);
 
     let input = inoobj.bytearray_as_str();
     let mut offset = (*inoffsetto).value as usize;
@@ -248,7 +250,7 @@ unsafe fn primitive_define_word(vm: *mut VM) {
     let word = word_obj.as_word_mut();
     parse_stack_effect(vm); // ignore for now lol
     let word_end = (*vm).words.get(";").unwrap();
-    (*vm).push(object::ObjectRef::from_word(*word_end));
+    (*vm).push(ObjectRef::from_word(*word_end));
     primitive_box(vm);
     (*vm).parse_until();
     primitive_array_to_quotation(vm);
@@ -263,7 +265,7 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
     let word_obj = create_empty_global_word(vm, name);
     let word = word_obj.as_word_mut();
     let word_end = (*vm).words.get(";").unwrap();
-    (*vm).push(object::ObjectRef::from_word(*word_end));
+    (*vm).push(ObjectRef::from_word(*word_end));
     primitive_box(vm);
     (*vm).parse_until();
     primitive_array_to_quotation(vm);
@@ -277,11 +279,11 @@ unsafe fn primitive_define_map(vm: *mut VM) {
     let name = (*vm).pop();
     let map_obj = (*vm)
         .gc
-        .allocate(mem::size_of::<object::Map>(), 8, true)
+        .allocate(mem::size_of::<Map>(), 8, true)
         .unwrap();
     let map = map_obj.as_map_mut();
     let slots = (*vm).allocate_array(0);
-    (*map).header.map = object::ObjectRef::from_map((*vm).special_objects.map_map);
+    (*map).header.map = ObjectRef::from_map((*vm).special_objects.map_map);
     (*map).name = name;
     (*map).object_size = 2;
     (*map).slot_count = 0;
@@ -303,7 +305,7 @@ unsafe fn primitive_object_new_from_map(vm: *mut VM) {
         let map_slot = (*map.as_map()).get_slot(i);
         if map_slot.kind == object::SLOT_EMBEDDED_DATA {
             let val = (*(*vm).pop().as_fixnum()).value;
-            obj.set_field(i, object::ObjectRef::from_usize(mem::transmute(val)));
+            obj.set_field(i, ObjectRef::from_usize(mem::transmute(val)));
         } else {
             obj.set_field(i, (*vm).pop());
         }
@@ -443,7 +445,7 @@ unsafe fn primitive_or(vm: *mut VM) {
 pub unsafe fn primitive_array_to_quotation(vm: *mut VM) {
     let array = (*vm).pop();
     let quot_map = (*vm).special_objects.quotation_map;
-    let quot_obj = (*vm).allocate_object(object::ObjectRef::from_map(quot_map));
+    let quot_obj = (*vm).allocate_object(ObjectRef::from_map(quot_map));
     let quot = quot_obj.as_quotation_mut();
     (*quot).body = array;
     (*vm).push(quot_obj);
@@ -482,7 +484,7 @@ unsafe fn primitive_context(vm: *mut VM) {
 unsafe fn primitive_get_map(vm: *mut VM) {
     let obj = (*vm).pop();
     let map = obj.get_map_mut();
-    (*vm).push(object::ObjectRef::from_map(map));
+    (*vm).push(ObjectRef::from_map(map));
 }
 
 // ( object index -- value )
@@ -531,7 +533,7 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
                 let num = (*value.as_fixnum()).value;
                 obj.set_field(
                     (*index).value as usize,
-                    object::ObjectRef(mem::transmute(num)),
+                    ObjectRef(mem::transmute(num)),
                 );
                 return;
             }
@@ -556,7 +558,7 @@ unsafe fn primitive_object_ptr_get(vm: *mut VM) {
 unsafe fn primitive_ptr_deref(vm: *mut VM) {
     let ptr = (*vm).pop().as_fixnum();
     let obj = (*ptr).value;
-    (*vm).push(object::ObjectRef(obj as *mut Object));
+    (*vm).push(ObjectRef(obj as *mut Object));
 }
 
 unsafe fn primitive_ptr_set(vm: *mut VM) {

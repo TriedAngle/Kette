@@ -5,6 +5,13 @@ use std::mem;
 use std::ptr;
 
 use context::Context;
+use object::ArrayObject;
+use object::ByteArrayObject;
+use object::Map;
+use object::ObjectHeader;
+use object::QuotationObject;
+use object::WordObject;
+use object::{Object, ObjectRef};
 
 pub mod context;
 pub mod gc;
@@ -16,11 +23,11 @@ pub struct VM {
     pub gc: gc::MarkAndSweep,
     pub active_context: Context,
     pub special_objects: object::SpecialObjects,
-    pub stack: Vec<object::ObjectRef>,
-    pub retainstack: Vec<object::ObjectRef>,
-    pub callstack: Vec<object::ObjectRef>,
-    pub maps: HashMap<String, *mut object::Map>,
-    pub words: HashMap<String, *mut object::WordObject>,
+    pub stack: Vec<ObjectRef>,
+    pub retainstack: Vec<ObjectRef>,
+    pub callstack: Vec<ObjectRef>,
+    pub maps: HashMap<String, *mut Map>,
+    pub words: HashMap<String, *mut WordObject>,
 }
 
 impl VM {
@@ -37,23 +44,23 @@ impl VM {
         }
     }
 
-    pub fn push(&mut self, obj: object::ObjectRef) {
+    pub fn push(&mut self, obj: ObjectRef) {
         self.stack.push(obj)
     }
 
-    pub fn pop(&mut self) -> object::ObjectRef {
+    pub fn pop(&mut self) -> ObjectRef {
         self.stack.pop().unwrap()
     }
 
-    pub fn peek(&mut self) -> object::ObjectRef {
+    pub fn peek(&mut self) -> ObjectRef {
         *self.stack.last().unwrap()
     }
 
-    pub fn retain_push(&mut self, obj: object::ObjectRef) {
+    pub fn retain_push(&mut self, obj: ObjectRef) {
         self.retainstack.push(obj)
     }
 
-    pub fn retain_pop(&mut self) -> object::ObjectRef {
+    pub fn retain_pop(&mut self) -> ObjectRef {
         self.retainstack.pop().unwrap()
     }
 
@@ -67,15 +74,15 @@ impl VM {
         self.push(x);
     }
 
-    pub fn call_push(&mut self, obj: object::ObjectRef) {
+    pub fn call_push(&mut self, obj: ObjectRef) {
         self.callstack.push(obj)
     }
 
-    pub fn call_pop(&mut self) -> object::ObjectRef {
+    pub fn call_pop(&mut self) -> ObjectRef {
         self.callstack.pop().unwrap()
     }
 
-    pub unsafe fn execute_primitive(&mut self, word: *const object::WordObject) {
+    pub unsafe fn execute_primitive(&mut self, word: *const WordObject) {
         let fun: fn(vm: *mut VM) = unsafe {
             assert_eq!((*word).primitive, 1);
             mem::transmute((*word).body.0)
@@ -85,7 +92,7 @@ impl VM {
         fun(vm);
     }
 
-    pub unsafe fn execute_quotation(&mut self, quotation: *const object::QuotationObject) {
+    pub unsafe fn execute_quotation(&mut self, quotation: *const QuotationObject) {
         for obj in (*quotation).body() {
             let map = obj.get_map();
 
@@ -100,7 +107,7 @@ impl VM {
         }
     }
 
-    pub unsafe fn execute_word(&mut self, word: *const object::WordObject) {
+    pub unsafe fn execute_word(&mut self, word: *const WordObject) {
         if (*word).primitive == 1 {
             self.execute_primitive(word);
             return;
@@ -111,7 +118,7 @@ impl VM {
 
     // ( end -- array )
     pub unsafe fn parse_until(&mut self) {
-        let mut vec = Vec::<object::ObjectRef>::new();
+        let mut vec = Vec::<ObjectRef>::new();
         let end_obj = self.pop().as_box();
         let end_word = (*end_obj).boxed;
         loop {
@@ -163,15 +170,15 @@ impl VM {
         self.push(arr);
     }
 
-    pub unsafe fn compile_source_file(&mut self, p: &str) -> object::ObjectRef {
+    pub unsafe fn compile_source_file(&mut self, p: &str) -> ObjectRef {
         let source = fs::read_to_string(p).unwrap();
         self.compile_string(&source)
     }
 
     // returns a quotation
-    pub unsafe fn compile_string(&mut self, s: &str) -> object::ObjectRef {
+    pub unsafe fn compile_string(&mut self, s: &str) -> ObjectRef {
         self.bind_input(s);
-        let mut vec = Vec::<object::ObjectRef>::new();
+        let mut vec = Vec::<ObjectRef>::new();
 
         loop {
             self.read_word();
@@ -221,7 +228,7 @@ impl VM {
         let word_name = self.pop();
         let word = self.words.get(word_name.bytearray_as_str());
         if let Some(word) = word {
-            self.push(object::ObjectRef::from_word(*word))
+            self.push(ObjectRef::from_word(*word))
         } else {
             self.push_false();
         }
@@ -250,11 +257,11 @@ impl VM {
     }
 
     pub fn bind_input(&mut self, input: &str) {
-        self.gc.unset_object_root(object::ObjectRef(
-            self.special_objects.input as *mut object::Object,
+        self.gc.unset_object_root(ObjectRef(
+            self.special_objects.input as *mut Object,
         ));
-        self.gc.unset_object_root(object::ObjectRef(
-            self.special_objects.input_offset as *mut object::Object,
+        self.gc.unset_object_root(ObjectRef(
+            self.special_objects.input_offset as *mut Object,
         ));
 
         let input_object = self.allocate_string(input);
@@ -267,21 +274,21 @@ impl VM {
     }
 
     pub fn push_input_stream(&mut self) {
-        self.push(object::ObjectRef(
-            self.special_objects.input as *mut object::Object,
+        self.push(ObjectRef(
+            self.special_objects.input as *mut Object,
         ));
     }
 
     pub fn push_input_stream_offset(&mut self) {
-        self.push(object::ObjectRef(
-            self.special_objects.input_offset as *mut object::Object,
+        self.push(ObjectRef(
+            self.special_objects.input_offset as *mut Object,
         ));
     }
 
     pub fn read_word(&mut self) {
         let ino = self.special_objects.input;
         let inoffseto = self.special_objects.input_offset;
-        let inoobj = object::ObjectRef(ino as *mut object::Object);
+        let inoobj = ObjectRef(ino as *mut Object);
 
         let input = unsafe { inoobj.bytearray_as_str() };
         let mut offset = unsafe { (*inoffseto).value } as usize;
@@ -350,11 +357,11 @@ impl VM {
     }
 
     pub fn push_true(&mut self) {
-        self.push(object::ObjectRef(self.special_objects.true_object));
+        self.push(ObjectRef(self.special_objects.true_object));
     }
 
     pub fn push_false(&mut self) {
-        self.push(object::ObjectRef(self.special_objects.false_object));
+        self.push(ObjectRef(self.special_objects.false_object));
     }
 
     pub fn push_fixnum(&mut self, fixnum: isize) {
@@ -384,7 +391,7 @@ impl VM {
 pub struct SlotDescriptor<'a> {
     pub name: &'a str,
     pub kind: usize,
-    pub value_type: object::ObjectRef, // null for untyped
+    pub value_type: ObjectRef, // null for untyped
     pub index: usize,
     pub read_only: usize, // 0/null/f => false
 }
@@ -394,7 +401,7 @@ impl<'a> Default for SlotDescriptor<'a> {
         Self {
             name: "",
             kind: object::SLOT_DATA,
-            value_type: object::ObjectRef::null(),
+            value_type: ObjectRef::null(),
             index: 0,
             read_only: 0,
         }
@@ -402,9 +409,9 @@ impl<'a> Default for SlotDescriptor<'a> {
 }
 
 impl VM {
-    pub fn allocate_object(&mut self, map: object::ObjectRef) -> object::ObjectRef {
+    pub fn allocate_object(&mut self, map: ObjectRef) -> ObjectRef {
         let map = map.as_map_mut();
-        let required_size = unsafe { object::Object::required_size(&*map) };
+        let required_size = unsafe { Object::required_size(&*map) };
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
         unsafe {
             let object = obj.object_mut();
@@ -413,9 +420,9 @@ impl VM {
         obj
     }
 
-    pub fn allocate_fixnum(&mut self, value: isize) -> object::ObjectRef {
+    pub fn allocate_fixnum(&mut self, value: isize) -> ObjectRef {
         let map = self.special_objects.fixnum_map;
-        let object = self.allocate_object(object::ObjectRef::from_map(map));
+        let object = self.allocate_object(ObjectRef::from_map(map));
         let num = object.as_fixnum_mut();
         unsafe {
             (*num).value = value;
@@ -423,9 +430,9 @@ impl VM {
         object
     }
 
-    pub fn allocate_fixfloat(&mut self, value: f64) -> object::ObjectRef {
+    pub fn allocate_fixfloat(&mut self, value: f64) -> ObjectRef {
         let map = self.special_objects.fixfloat_map;
-        let object = self.allocate_object(object::ObjectRef::from_map(map));
+        let object = self.allocate_object(ObjectRef::from_map(map));
         let num = object.as_fixfloat_mut();
         unsafe {
             (*num).value = value;
@@ -433,7 +440,7 @@ impl VM {
         object
     }
 
-    pub fn allocate_string<'a>(&mut self, s: &'a str) -> object::ObjectRef {
+    pub fn allocate_string<'a>(&mut self, s: &'a str) -> ObjectRef {
         let obj = self.allocate_bytearray(s.len());
         unsafe {
             let ba = obj.as_byte_array_mut();
@@ -442,14 +449,14 @@ impl VM {
         obj
     }
 
-    pub fn allocate_bytearray<'a>(&mut self, size: usize) -> object::ObjectRef {
-        let ba_size = mem::size_of::<object::ByteArrayObject>();
+    pub fn allocate_bytearray<'a>(&mut self, size: usize) -> ObjectRef {
+        let ba_size = mem::size_of::<ByteArrayObject>();
         let obj = self.gc.allocate(ba_size + size, 8, false).unwrap();
         let ba = obj.as_byte_array_mut();
         unsafe {
-            (*ba).header = object::ObjectHeader {
+            (*ba).header = ObjectHeader {
                 meta: 0,
-                map: object::ObjectRef::from_map(self.special_objects.bytearray_map),
+                map: ObjectRef::from_map(self.special_objects.bytearray_map),
             };
             (*ba).capacity = size;
             ptr::write_bytes(obj.bytearray_data(), 0, size);
@@ -458,7 +465,7 @@ impl VM {
         obj
     }
 
-    pub fn allocate_array_from_slice(&mut self, slice: &[object::ObjectRef]) -> object::ObjectRef {
+    pub fn allocate_array_from_slice(&mut self, slice: &[ObjectRef]) -> ObjectRef {
         let obj = self.allocate_array(slice.len());
         unsafe {
             for idx in 0..obj.array_data_len() {
@@ -468,15 +475,15 @@ impl VM {
         obj
     }
 
-    pub fn allocate_array(&mut self, size: usize) -> object::ObjectRef {
+    pub fn allocate_array(&mut self, size: usize) -> ObjectRef {
         let required_size =
-            mem::size_of::<object::ArrayObject>() + size * mem::size_of::<object::ObjectRef>();
+            mem::size_of::<ArrayObject>() + size * mem::size_of::<ObjectRef>();
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
         let arr = obj.as_array_mut();
         unsafe {
-            (*arr).header = object::ObjectHeader {
+            (*arr).header = ObjectHeader {
                 meta: 0,
-                map: object::ObjectRef::from_map(self.special_objects.array_map),
+                map: ObjectRef::from_map(self.special_objects.array_map),
             };
             (*arr).size = size;
             ptr::write_bytes(obj.array_data(), 0, size);
@@ -488,7 +495,7 @@ impl VM {
         &mut self,
         name: &str,
         slots: &[SlotDescriptor<'a>],
-    ) -> object::ObjectRef {
+    ) -> ObjectRef {
         let array = self.allocate_array(slots.len());
 
         let map_name = self.allocate_string(name);
@@ -510,16 +517,16 @@ impl VM {
 
         let map_obj = self
             .gc
-            .allocate(mem::size_of::<object::Map>(), 8, true)
+            .allocate(mem::size_of::<Map>(), 8, true)
             .unwrap();
 
         unsafe {
             let map = map_obj.as_map_mut();
 
             (*map).header.map = if self.special_objects.map_map.is_null() {
-                object::ObjectRef::null()
+                ObjectRef::null()
             } else {
-                object::ObjectRef::from_map(self.special_objects.map_map)
+                ObjectRef::from_map(self.special_objects.map_map)
             };
             (*map).name = map_name;
             (*map).object_size = object_size;
@@ -547,7 +554,7 @@ impl VM {
         map_obj
     }
 
-    pub unsafe fn clone_object(&mut self, obj: object::ObjectRef) -> object::ObjectRef {
+    pub unsafe fn clone_object(&mut self, obj: ObjectRef) -> ObjectRef {
         let map = obj.get_map_mut();
         if map == self.special_objects.fixnum_map {
             let num = obj.as_fixnum();
@@ -586,35 +593,35 @@ impl VM {
                 SlotDescriptor {
                     name: "name",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 0,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "object-size",
                     kind: object::SLOT_EMBEDDED_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 1,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "slot-count",
                     kind: object::SLOT_EMBEDDED_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 2,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "slots",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 3,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "default-instance",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 4,
                     read_only: 0,
                 },
@@ -635,13 +642,13 @@ impl VM {
                 SlotDescriptor {
                     name: "capacity",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     ..Default::default()
                 },
                 SlotDescriptor {
                     name: "data",
                     kind: object::SLOT_VARIABLE_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 1,
                     read_only: 0,
                 },
@@ -680,7 +687,7 @@ impl VM {
                 SlotDescriptor {
                     name: "value",
                     kind: object::SLOT_EMBEDDED_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     ..Default::default()
                 },
             ],
@@ -698,7 +705,7 @@ impl VM {
                 SlotDescriptor {
                     name: "value",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     ..Default::default()
                 },
             ],
@@ -725,7 +732,7 @@ impl VM {
                 SlotDescriptor {
                     name: "data",
                     kind: object::SLOT_VARIABLE_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 1,
                     read_only: 0,
                 },
@@ -767,14 +774,14 @@ impl VM {
                 SlotDescriptor {
                     name: "effect",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 1,
                     read_only: 0,
                 },
                 SlotDescriptor {
                     name: "entry",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 2,
                     read_only: 0,
                 },
@@ -802,7 +809,7 @@ impl VM {
                 SlotDescriptor {
                     name: "properties",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 2,
                     read_only: 0,
                 },
@@ -839,7 +846,7 @@ impl VM {
             &[SlotDescriptor {
                 name: "boxed",
                 kind: object::SLOT_DATA,
-                value_type: object::ObjectRef::null(),
+                value_type: ObjectRef::null(),
                 index: 0,
                 read_only: 1,
             }],
@@ -866,7 +873,7 @@ impl VM {
                 SlotDescriptor {
                     name: "type",
                     kind: object::SLOT_DATA,
-                    value_type: object::ObjectRef::null(),
+                    value_type: ObjectRef::null(),
                     index: 2,
                     read_only: 0,
                 },
@@ -960,7 +967,7 @@ impl VM {
         }
     }
 
-    pub fn print_array(&self, obj: object::ObjectRef) {
+    pub fn print_array(&self, obj: ObjectRef) {
         unsafe {
             print!("{{ ");
             let arr = obj;
@@ -970,7 +977,7 @@ impl VM {
         }
     }
 
-    pub fn print_quotation(&self, obj: object::ObjectRef) {
+    pub fn print_quotation(&self, obj: ObjectRef) {
         unsafe {
             print!("[ ");
             let arr = (*obj.as_quotation()).body;
@@ -980,7 +987,7 @@ impl VM {
         }
     }
 
-    unsafe fn print_array_inner(&self, arr: object::ObjectRef) {
+    unsafe fn print_array_inner(&self, arr: ObjectRef) {
         let size = arr.array_data_len();
         for idx in 0..size {
             let o = *(arr.array_data().add(idx));

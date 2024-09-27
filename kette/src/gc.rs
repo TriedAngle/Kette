@@ -1,4 +1,5 @@
-use crate::object;
+use crate::object::{self, Object};
+use crate::object::ObjectRef;
 use crate::VM;
 use std::alloc;
 use std::collections::HashMap;
@@ -89,8 +90,8 @@ impl MSAllocation {
 }
 
 pub struct MarkAndSweep {
-    allocations: HashMap<object::ObjectRef, MSAllocation>,
-    worklist: Vec<object::ObjectRef>,
+    allocations: HashMap<ObjectRef, MSAllocation>,
+    worklist: Vec<ObjectRef>,
     paused: bool,
     vm: *const VM,
 }
@@ -114,7 +115,7 @@ impl MarkAndSweep {
         size: usize,
         align: usize,
         root: bool,
-    ) -> GCResult<object::ObjectRef> {
+    ) -> GCResult<ObjectRef> {
         let layout = alloc::Layout::from_size_align(size, align).unwrap();
         let mut ptr = unsafe { alloc::alloc(layout) };
         if ptr.is_null() {
@@ -124,7 +125,7 @@ impl MarkAndSweep {
                 return GCResult::OutOfMemory;
             }
         }
-        let object = object::ObjectRef::new(ptr as *mut object::Object);
+        let object = ObjectRef::new(ptr as *mut Object);
 
         let mut allocation = MSAllocation::new(ptr, layout);
         if root {
@@ -134,7 +135,7 @@ impl MarkAndSweep {
         GCResult::Ok(object)
     }
 
-    pub fn deallocate(&mut self, object: object::ObjectRef) -> GCResult<()> {
+    pub fn deallocate(&mut self, object: ObjectRef) -> GCResult<()> {
         let allocation = self.allocations.remove(&object);
 
         if allocation.is_none() {
@@ -148,19 +149,19 @@ impl MarkAndSweep {
         GCResult::Ok(())
     }
 
-    pub fn allocation(&mut self, object: object::ObjectRef) -> Option<&MSAllocation> {
+    pub fn allocation(&mut self, object: ObjectRef) -> Option<&MSAllocation> {
         self.allocations.get(&object)
     }
 
-    pub fn allocation_mut(&mut self, object: object::ObjectRef) -> Option<&mut MSAllocation> {
+    pub fn allocation_mut(&mut self, object: ObjectRef) -> Option<&mut MSAllocation> {
         self.allocations.get_mut(&object)
     }
 
     pub fn reallocate(
         &mut self,
-        object: object::ObjectRef,
+        object: ObjectRef,
         size: usize,
-    ) -> GCResult<object::ObjectRef> {
+    ) -> GCResult<ObjectRef> {
         let allocation = self.allocations.get_mut(&object);
         if allocation.is_none() {
             return GCResult::ObjectDoesNotExist;
@@ -175,7 +176,7 @@ impl MarkAndSweep {
             return GCResult::Ok(object);
         }
 
-        GCResult::Ok(object::ObjectRef::null())
+        GCResult::Ok(ObjectRef::null())
     }
 
     pub fn mark_roots(&mut self) {
@@ -187,7 +188,7 @@ impl MarkAndSweep {
             }
         }
         for root in vm.words.values() {
-            let obj = object::ObjectRef::from_word(*root);
+            let obj = ObjectRef::from_word(*root);
             if let Some(allocation) = self.allocations.get_mut(&obj) {
                 allocation.mark();
                 self.worklist.push(obj);
@@ -323,13 +324,13 @@ impl MarkAndSweep {
             .for_each(|obj| self.deallocate(*obj).unwrap());
     }
 
-    pub fn set_object_root(&mut self, obj: object::ObjectRef) {
+    pub fn set_object_root(&mut self, obj: ObjectRef) {
         if let Some(allocation) = self.allocations.get_mut(&obj) {
             allocation.root();
         }
     }
 
-    pub fn unset_object_root(&mut self, obj: object::ObjectRef) {
+    pub fn unset_object_root(&mut self, obj: ObjectRef) {
         if let Some(allocation) = self.allocations.get_mut(&obj) {
             allocation.unroot();
         }
