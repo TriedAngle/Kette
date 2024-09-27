@@ -27,9 +27,6 @@ pub struct VM {
     pub maps: HashMap<String, *mut Map>,
     pub words: HashMap<String, *mut WordObject>,
     pub special_objects: object::SpecialObjects,
-
-    pub retainstack: Vec<ObjectRef>,
-    pub callstack: Vec<ObjectRef>,
 }
 
 impl VM {
@@ -37,8 +34,6 @@ impl VM {
         Self {
             gc: gc::MarkAndSweep::new(),
             active_context: ptr::null_mut(),
-            retainstack: Vec::new(),
-            callstack: Vec::new(),
             special_objects: Default::default(),
             maps: HashMap::new(),
             words: HashMap::new(),
@@ -50,7 +45,6 @@ impl VM {
     }
 
     pub fn push(&mut self, obj: ObjectRef) {
-        // self.stack.push(obj);
         unsafe {
             self.ctx().push(obj);
         }
@@ -60,22 +54,24 @@ impl VM {
         unsafe {
             self.ctx().pop()
         }
-        // self.stack.pop().unwrap()
     }
 
     pub fn peek(&mut self) -> ObjectRef {
         unsafe {
             self.ctx().peek()
         }
-        // *self.stack.last().unwrap()
     }
 
     pub fn retain_push(&mut self, obj: ObjectRef) {
-        self.retainstack.push(obj)
+        unsafe {
+            self.ctx().retain_push(obj);
+        }
     }
 
     pub fn retain_pop(&mut self) -> ObjectRef {
-        self.retainstack.pop().unwrap()
+        unsafe {
+            self.ctx().retain_pop()
+        }
     }
 
     pub fn pop_retain_push(&mut self) {
@@ -89,11 +85,15 @@ impl VM {
     }
 
     pub fn call_push(&mut self, obj: ObjectRef) {
-        self.callstack.push(obj)
+        unsafe {
+            self.ctx().call_push(obj);
+        }
     }
 
     pub fn call_pop(&mut self) -> ObjectRef {
-        self.callstack.pop().unwrap()
+        unsafe {
+            self.ctx().call_pop()
+        }
     }
 
     pub unsafe fn execute_primitive(&mut self, word: *const WordObject) {
@@ -513,11 +513,6 @@ impl VM {
             let retain_array = self.allocate_array(retain_size);
             let call_array = self.allocate_array(call_size);
 
-            // TODO: don't do this
-            self.gc.set_object_root(data_array);
-            self.gc.set_object_root(retain_array);
-            self.gc.set_object_root(call_array);
-
             (*ctx).vm = self as *mut _;
             (*ctx).gc = &mut self.gc as *mut _;
             (*ctx).so = &mut self.special_objects as *mut _;
@@ -532,7 +527,6 @@ impl VM {
             (*ctx).call_array = call_array;
 
             (*ctx).reset();
-            // (*ctx_ptr).
             obj
         }
     }

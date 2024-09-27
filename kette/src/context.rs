@@ -30,7 +30,7 @@ impl Segment {
     pub unsafe fn from_array(obj: ObjectRef) -> Self {
         let start = obj.array_data();
         let size = obj.array_data_len();
-        let end = start.add(size);
+        let end = start.add(size - 1);
         Self {
             start, size, end
         }
@@ -51,8 +51,7 @@ pub struct Context {
     pub retain_array: ObjectRef,
     pub call_array: ObjectRef,
 
-    pub name: *mut Object,
-
+    pub name: ObjectRef,
 
     pub data: Segment,
     pub retain: Segment,
@@ -75,15 +74,20 @@ impl Context {
             data: Segment::NULL,
             retain: Segment::NULL,
             call: Segment::NULL,
-            name: ptr::null_mut(),
+            name: ObjectRef::null(),
             data_array: ObjectRef::null(),
             retain_array: ObjectRef::null(),
             call_array: ObjectRef::null(),
         }
     }
 
-    pub fn reset(&mut self) {
+    pub unsafe fn reset_data(&mut self) {
+        self.data = Segment::from_array(self.data_array);
         self.data_top = self.data.start;
+    }
+
+    pub unsafe fn reset(&mut self) {
+        unsafe { self.reset_data(); }
         self.retain_top = self.retain.start;
         self.call_top = self.call_top;
     }

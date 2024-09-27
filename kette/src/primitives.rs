@@ -320,8 +320,20 @@ unsafe fn primitive_retian_pop(vm: *mut VM) {
 
 unsafe fn primitive_vm_stack(vm: *mut VM) {
     let ctx = (*vm).ctx();
-    let stack = ctx.data_array;
-    (*vm).push(stack);
+    let stack = ctx.data.start;
+    let len = ctx.len();
+    let slice = std::slice::from_raw_parts(stack, len);
+    let array = (*vm).allocate_array_from_slice(slice);
+    (*vm).push(array);
+}
+
+unsafe fn primitive_vm_set_stack(vm: *mut VM) {
+    let ctx = (*vm).ctx();
+    let array = (*vm).pop();
+    let offset = (*vm).pop().as_fixnum();
+    ctx.data_array = array;
+    ctx.reset_data();
+    ctx.data_top = ctx.data_top.add((*offset).value as usize);
 }
 
 unsafe fn primitive_define_end(vm: *mut VM) {
@@ -628,6 +640,7 @@ impl VM {
         self.add_primitive("@vm-define-empty-word", primitive_define_empty_word, false);
 
         self.add_primitive("@vm-stack", primitive_vm_stack, false);
+        self.add_primitive( "@vm-set-stack", primitive_vm_set_stack, false);
         self.add_primitive("@vm-define-map", primitive_define_map, false);
         self.add_primitive("@vm-clone", primitive_clone, false);
         self.add_primitive("@vm-new-object", primitive_object_new_from_map, false);
@@ -639,7 +652,6 @@ impl VM {
         self.add_primitive(">box", primitive_box, false);
         self.add_primitive("unbox", primitive_unbox, false);
         self.add_primitive("[", primitive_quotation_start, true);
-        self.add_primitive("]", primitive_quotation_end, false);
         self.add_primitive(":", primitive_define_word, true);
         self.add_primitive("@:", primitive_define_syntax, true);
         self.add_primitive(";", primitive_define_end, false);
