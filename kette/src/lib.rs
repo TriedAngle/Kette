@@ -28,7 +28,6 @@ pub struct VM {
     pub words: HashMap<String, *mut WordObject>,
     pub special_objects: object::SpecialObjects,
 
-    pub stack: Vec<ObjectRef>,
     pub retainstack: Vec<ObjectRef>,
     pub callstack: Vec<ObjectRef>,
 }
@@ -38,7 +37,6 @@ impl VM {
         Self {
             gc: gc::MarkAndSweep::new(),
             active_context: ptr::null_mut(),
-            stack: Vec::new(),
             retainstack: Vec::new(),
             callstack: Vec::new(),
             special_objects: Default::default(),
@@ -520,10 +518,15 @@ impl VM {
             self.gc.set_object_root(retain_array);
             self.gc.set_object_root(call_array);
 
+            (*ctx).vm = self as *mut _;
+            (*ctx).gc = &mut self.gc as *mut _;
+            (*ctx).so = &mut self.special_objects as *mut _;
+
             (*ctx).header.map = ObjectRef::from_map(self.special_objects.context_map);
             (*ctx).data = Segment::from_array(data_array);
             (*ctx).retain = Segment::from_array(retain_array);
             (*ctx).call = Segment::from_array(call_array);
+
             (*ctx).data_array = data_array;
             (*ctx).retain_array = retain_array;
             (*ctx).call_array = call_array;

@@ -16,12 +16,7 @@ fn main() {
     }
 
     let testing = r#"
-        method: to-string ( obj -- string )
         
-        type: shape x y ;
-
-        !/ type-new: rectangle < shape width height ; !/
-
         
         "#;
     unsafe {
@@ -60,11 +55,6 @@ fn main() {
         unsafe {
             let quot = vm.compile_string(&input);
             vm.execute_quotation(quot.as_quotation());
-            let v = &mut vm as *mut VM;
-            let stack = (*v).allocate_array_from_slice(&vm.stack);
-            let len = stack.array_data_len();
-            vm.print_array(stack, len);
-
             let ctx = vm.ctx();
             let stack2 = ctx.data_array;
             let len2 = ctx.len();

@@ -319,7 +319,8 @@ unsafe fn primitive_retian_pop(vm: *mut VM) {
 }
 
 unsafe fn primitive_vm_stack(vm: *mut VM) {
-    let stack = (*vm).allocate_array_from_slice(&(*vm).stack);
+    let ctx = (*vm).ctx();
+    let stack = ctx.data_array;
     (*vm).push(stack);
 }
 

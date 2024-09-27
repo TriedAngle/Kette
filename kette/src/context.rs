@@ -3,9 +3,9 @@ use std::{mem, ptr};
 use crate::{gc::MarkAndSweep, object::{Object, ObjectHeader, ObjectRef, SpecialObjects}, VM};
 
 pub struct Segment {
-    start: *mut ObjectRef,
-    size: usize,
-    end: *mut ObjectRef,
+    pub start: *mut ObjectRef,
+    pub size: usize,
+    pub end: *mut ObjectRef,
 }
 
 impl Segment {

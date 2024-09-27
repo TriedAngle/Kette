@@ -1,6 +1,7 @@
 use crate::object::ObjectRef;
 use crate::object::{self, Object};
 use crate::VM;
+use core::slice;
 use std::alloc;
 use std::collections::HashMap;
 use std::ptr;
@@ -166,9 +167,13 @@ impl MarkAndSweep {
         GCResult::Ok(ObjectRef::null())
     }
 
-    pub fn mark_roots(&mut self) {
-        let vm = unsafe { self.vm.as_ref().unwrap() };
-        for root in vm.stack.iter() {
+    pub unsafe fn mark_roots(&mut self) {
+        let vm = &mut *(self.vm as *mut VM);
+        let ctx = vm.ctx();
+        let data_ptr = ctx.data.start;
+        let len = ctx.len();
+        let stack = slice::from_raw_parts(data_ptr, len);
+        for root in stack.iter() {
             if let Some(allocation) = self.allocations.get_mut(root) {
                 allocation.mark();
                 self.worklist.push(*root);
@@ -190,8 +195,8 @@ impl MarkAndSweep {
     }
 
     pub fn mark_sweep(&mut self) {
-        self.mark_roots();
         unsafe {
+            self.mark_roots();
             self.mark();
             self.sweep();
         }
