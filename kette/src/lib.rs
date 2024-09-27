@@ -253,16 +253,16 @@ impl VM {
     }
 
     pub fn deinit(&mut self) {
-        self.gc.deallocate_all();
+        unsafe {
+            self.gc.deallocate_all();
+        }
     }
 
     pub fn bind_input(&mut self, input: &str) {
-        self.gc.unset_object_root(ObjectRef(
-            self.special_objects.input as *mut Object,
-        ));
-        self.gc.unset_object_root(ObjectRef(
-            self.special_objects.input_offset as *mut Object,
-        ));
+        self.gc
+            .unset_object_root(ObjectRef(self.special_objects.input as *mut Object));
+        self.gc
+            .unset_object_root(ObjectRef(self.special_objects.input_offset as *mut Object));
 
         let input_object = self.allocate_string(input);
         self.gc.set_object_root(input_object);
@@ -274,15 +274,11 @@ impl VM {
     }
 
     pub fn push_input_stream(&mut self) {
-        self.push(ObjectRef(
-            self.special_objects.input as *mut Object,
-        ));
+        self.push(ObjectRef(self.special_objects.input as *mut Object));
     }
 
     pub fn push_input_stream_offset(&mut self) {
-        self.push(ObjectRef(
-            self.special_objects.input_offset as *mut Object,
-        ));
+        self.push(ObjectRef(self.special_objects.input_offset as *mut Object));
     }
 
     pub fn read_word(&mut self) {
@@ -476,8 +472,7 @@ impl VM {
     }
 
     pub fn allocate_array(&mut self, size: usize) -> ObjectRef {
-        let required_size =
-            mem::size_of::<ArrayObject>() + size * mem::size_of::<ObjectRef>();
+        let required_size = mem::size_of::<ArrayObject>() + size * mem::size_of::<ObjectRef>();
         let obj = self.gc.allocate(required_size, 8, false).unwrap();
         let arr = obj.as_array_mut();
         unsafe {
@@ -491,11 +486,7 @@ impl VM {
         obj
     }
 
-    pub fn allocate_map<'a>(
-        &mut self,
-        name: &str,
-        slots: &[SlotDescriptor<'a>],
-    ) -> ObjectRef {
+    pub fn allocate_map<'a>(&mut self, name: &str, slots: &[SlotDescriptor<'a>]) -> ObjectRef {
         let array = self.allocate_array(slots.len());
 
         let map_name = self.allocate_string(name);
@@ -515,10 +506,7 @@ impl VM {
             }
         }
 
-        let map_obj = self
-            .gc
-            .allocate(mem::size_of::<Map>(), 8, true)
-            .unwrap();
+        let map_obj = self.gc.allocate(mem::size_of::<Map>(), 8, true).unwrap();
 
         unsafe {
             let map = map_obj.as_map_mut();

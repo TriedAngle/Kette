@@ -3,8 +3,8 @@ use std::mem;
 use crate::object;
 use crate::object::Map;
 use crate::object::ObjectRef;
-use crate::Object;
 use crate::system;
+use crate::Object;
 use crate::VM;
 
 impl VM {
@@ -277,10 +277,7 @@ unsafe fn primitive_define_syntax(vm: *mut VM) {
 
 unsafe fn primitive_define_map(vm: *mut VM) {
     let name = (*vm).pop();
-    let map_obj = (*vm)
-        .gc
-        .allocate(mem::size_of::<Map>(), 8, true)
-        .unwrap();
+    let map_obj = (*vm).gc.allocate(mem::size_of::<Map>(), 8, true).unwrap();
     let map = map_obj.as_map_mut();
     let slots = (*vm).allocate_array(0);
     (*map).header.map = ObjectRef::from_map((*vm).special_objects.map_map);
@@ -531,10 +528,7 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
                 && (*slot).kind == object::SLOT_EMBEDDED_DATA
             {
                 let num = (*value.as_fixnum()).value;
-                obj.set_field(
-                    (*index).value as usize,
-                    ObjectRef(mem::transmute(num)),
-                );
+                obj.set_field((*index).value as usize, ObjectRef(mem::transmute(num)));
                 return;
             }
         }

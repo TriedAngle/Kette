@@ -1,5 +1,5 @@
-use crate::object::{self, Object};
 use crate::object::ObjectRef;
+use crate::object::{self, Object};
 use crate::VM;
 use std::alloc;
 use std::collections::HashMap;
@@ -110,12 +110,7 @@ impl MarkAndSweep {
         self.vm = vm;
     }
 
-    pub fn allocate(
-        &mut self,
-        size: usize,
-        align: usize,
-        root: bool,
-    ) -> GCResult<ObjectRef> {
+    pub fn allocate(&mut self, size: usize, align: usize, root: bool) -> GCResult<ObjectRef> {
         let layout = alloc::Layout::from_size_align(size, align).unwrap();
         let mut ptr = unsafe { alloc::alloc(layout) };
         if ptr.is_null() {
@@ -135,18 +130,14 @@ impl MarkAndSweep {
         GCResult::Ok(object)
     }
 
-    pub fn deallocate(&mut self, object: ObjectRef) -> GCResult<()> {
-        let allocation = self.allocations.remove(&object);
-
-        if allocation.is_none() {
-            return GCResult::ObjectDoesNotExist;
+    pub unsafe fn deallocate_object(&mut self, object: ObjectRef) {
+        if let Some(allocation) = self.allocations.remove(&object) {
+            self.deallocate(allocation);
         }
-        let allocation = allocation.unwrap();
-        unsafe {
-            alloc::dealloc(allocation.object, allocation.layout);
-        }
+    }
 
-        GCResult::Ok(())
+    pub unsafe fn deallocate(&mut self, allocation: MSAllocation) {
+        alloc::dealloc(allocation.object, allocation.layout);
     }
 
     pub fn allocation(&mut self, object: ObjectRef) -> Option<&MSAllocation> {
@@ -157,11 +148,7 @@ impl MarkAndSweep {
         self.allocations.get_mut(&object)
     }
 
-    pub fn reallocate(
-        &mut self,
-        object: ObjectRef,
-        size: usize,
-    ) -> GCResult<ObjectRef> {
+    pub fn reallocate(&mut self, object: ObjectRef, size: usize) -> GCResult<ObjectRef> {
         let allocation = self.allocations.get_mut(&object);
         if allocation.is_none() {
             return GCResult::ObjectDoesNotExist;
@@ -262,9 +249,7 @@ impl MarkAndSweep {
             .map(|(k, _v)| *k)
             .collect::<Vec<_>>();
 
-        unmarked
-            .iter()
-            .for_each(|obj| self.deallocate(*obj).unwrap());
+        unmarked.iter().for_each(|obj| self.deallocate_object(*obj));
 
         self.allocations.iter_mut().for_each(|(_k, v)| v.unmark());
     }
@@ -313,7 +298,7 @@ impl MarkAndSweep {
         }
     }
 
-    pub fn deallocate_all(&mut self) {
+    pub unsafe fn deallocate_all(&mut self) {
         let allocations = self
             .allocations
             .iter()
@@ -321,7 +306,7 @@ impl MarkAndSweep {
             .collect::<Vec<_>>();
         allocations
             .iter()
-            .for_each(|obj| self.deallocate(*obj).unwrap());
+            .for_each(|obj| self.deallocate_object(*obj));
     }
 
     pub fn set_object_root(&mut self, obj: ObjectRef) {
