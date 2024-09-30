@@ -51,15 +51,11 @@ impl VM {
     }
 
     pub fn pop(&mut self) -> ObjectRef {
-        unsafe {
-            self.ctx().pop()
-        }
+        unsafe { self.ctx().pop() }
     }
 
     pub fn peek(&mut self) -> ObjectRef {
-        unsafe {
-            self.ctx().peek()
-        }
+        unsafe { self.ctx().peek() }
     }
 
     pub fn retain_push(&mut self, obj: ObjectRef) {
@@ -69,9 +65,7 @@ impl VM {
     }
 
     pub fn retain_pop(&mut self) -> ObjectRef {
-        unsafe {
-            self.ctx().retain_pop()
-        }
+        unsafe { self.ctx().retain_pop() }
     }
 
     pub fn pop_retain_push(&mut self) {
@@ -91,9 +85,7 @@ impl VM {
     }
 
     pub fn call_pop(&mut self) -> ObjectRef {
-        unsafe {
-            self.ctx().call_pop()
-        }
+        unsafe { self.ctx().call_pop() }
     }
 
     pub unsafe fn execute_primitive(&mut self, word: *const WordObject) {
@@ -502,13 +494,18 @@ impl VM {
         obj
     }
 
-    pub fn allocate_context(&mut self, data_size: usize, retain_size: usize, call_size: usize) -> ObjectRef {
+    pub fn allocate_context(
+        &mut self,
+        data_size: usize,
+        retain_size: usize,
+        call_size: usize,
+    ) -> ObjectRef {
         let alloc_size = mem::size_of::<Context>();
         let alloc_align = mem::align_of::<Context>();
         unsafe {
             let obj = self.gc.allocate(alloc_size, alloc_align, true).unwrap();
             let ctx = obj.0 as *mut Context;
-            
+
             let data_array = self.allocate_array(data_size);
             let retain_array = self.allocate_array(retain_size);
             let call_array = self.allocate_array(call_size);

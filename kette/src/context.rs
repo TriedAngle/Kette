@@ -1,6 +1,10 @@
 use std::{mem, ptr};
 
-use crate::{gc::MarkAndSweep, object::{Object, ObjectHeader, ObjectRef, SpecialObjects}, VM};
+use crate::{
+    gc::MarkAndSweep,
+    object::{Object, ObjectHeader, ObjectRef, SpecialObjects},
+    VM,
+};
 
 pub struct Segment {
     pub start: *mut ObjectRef,
@@ -31,9 +35,7 @@ impl Segment {
         let start = obj.array_data();
         let size = obj.array_data_len();
         let end = start.add(size - 1);
-        Self {
-            start, size, end
-        }
+        Self { start, size, end }
     }
 }
 
@@ -56,15 +58,15 @@ pub struct Context {
     pub data: Segment,
     pub retain: Segment,
     pub call: Segment,
-
-
-
 }
 
 impl Context {
     pub fn new_empty() -> Self {
         Self {
-            header: ObjectHeader { map: ObjectRef::null(), meta: 0},
+            header: ObjectHeader {
+                map: ObjectRef::null(),
+                meta: 0,
+            },
             vm: ptr::null_mut(),
             gc: ptr::null_mut(),
             so: ptr::null_mut(),
@@ -87,13 +89,15 @@ impl Context {
     }
 
     pub unsafe fn reset(&mut self) {
-        unsafe { self.reset_data(); }
+        unsafe {
+            self.reset_data();
+        }
         self.retain_top = self.retain.start;
         self.call_top = self.call_top;
     }
 
     pub unsafe fn len(&self) -> usize {
-        (self.data_top as usize - self.data.start as usize) / mem::size_of::<ObjectRef>() 
+        (self.data_top as usize - self.data.start as usize) / mem::size_of::<ObjectRef>()
     }
 
     pub unsafe fn push(&mut self, value: ObjectRef) {

@@ -640,7 +640,7 @@ impl VM {
         self.add_primitive("@vm-define-empty-word", primitive_define_empty_word, false);
 
         self.add_primitive("@vm-stack", primitive_vm_stack, false);
-        self.add_primitive( "@vm-set-stack", primitive_vm_set_stack, false);
+        self.add_primitive("@vm-set-stack", primitive_vm_set_stack, false);
         self.add_primitive("@vm-define-map", primitive_define_map, false);
         self.add_primitive("@vm-clone", primitive_clone, false);
         self.add_primitive("@vm-new-object", primitive_object_new_from_map, false);

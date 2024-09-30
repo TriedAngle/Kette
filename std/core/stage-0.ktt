@@ -361,6 +361,11 @@ primitive: fixnum-bitnot ( a -- b )
 primitive: fixnum-bitshift-left ( a b -- c )
 primitive: fixnum-bitshift-rigt ( a b -- c )
 
+
+: <word> ( name body -- word ) { } f f word boa ;
+: <empty-word> ( name -- word ) { } array>quotation <word> ;
+: word-self-push ( word -- ) dup >box 1array array>quotation swap body<< ;
+
 method: . ( obj -- )
 method: neg ( n -- -n )
 method: + ( a b -- c )
@@ -393,6 +398,13 @@ m: array . array. ;
 m: quotation . quotation. ;
 m: bytearray . utf8. ;
 m: bool . [ s" t" utf8. ] [ s" f" utf8. ] if ;
+m: bytearray = bytearray= ;
+
+: ref-eq? ( a b -- ? )  [ object^ ] bi@ = ;
+
+: by-value-eq? ( x -- ? ) \ = unbox swap find-self ;
+
+: eq? ( a b -- ? ) dup by-value-eq? [ = ] [ ref-eq? ] if ;
 
 : zero? ( a -- ? ) 0 = ;
 : one? ( a -- ? ) 1 = ;

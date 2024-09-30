@@ -88,35 +88,48 @@ m: vector pop
     [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
 
 
-!/ TODO: complete this
-: find<-inner ( key seq offset -- value/f ) 
+: ?find2|idx<inner ( key seq offset -- idx/f ) 
     dup 0 = not [
-        1 - dup pick nth!  
-    ] [ 2drop f ] if ;
-;
+        2 - dup pick nth! pickd eq? [
+            2dropd
+        ] [ ?find2|idx<inner ] if
+    ] [ 3drop f ] if ;
 
-: find<- ( key seq -- value/f ) 
-    dup length dup 0 = not [
-        1 - 
+: ?find2|idx< ( key seq -- idx/f ) 
+    dup length ?find2|idx<inner ;
 
-    ] [ 2drop f ] if ;
-!/
+: ?find2< ( key seq -- value/f )
+    dup -rot ?find2|idx< dup [ 1 + swap nth! ] [ 2dropd ] if ;
 
 : init-namestack ( -- ) 
     100 <vector> let-me-cook name-stack<< ;
 
 init-namestack
 
-!/ TODO: complete this
-: @ ( variable -- value )
-    let-me-cook name-stack>> ;
 
-: ! ( value variable -- )
-!/
+: define-symbol ( word -- sym ) 
+    dup let-me-cook name-stack>> ?find2|idx< dup [
+        2drop
+    ] [ 
+        drop dup word-self-push dup
+        let-me-cook name-stack>> [ push ] keep f swap push 
+    ] if ; 
+
+
+: var@ ( variable -- value )
+    unbox let-me-cook name-stack>> ?find2|idx< dup [
+        1 + let-me-cook name-stack>> nth!
+    ] [ drop f ] if ; !/ TODO: ERROR HERE !/
+
+: var! ( value variable -- )
+    unbox let-me-cook name-stack>> ?find2|idx< dup [
+        1 + let-me-cook name-stack>> set-nth!
+    ] [ 2drop f ] if ; !/ TODO: ERROR HERE !/
+
+@: sym: @vm-next-token @vm-define-empty-global-word define-symbol drop t ;
 
 type: vocabulary name words ;
 : <vocabulary> ( name -- vocabulary ) 10 <vector> vocabulary boa ;
-
 
 
 type: range start length step ;
@@ -176,7 +189,6 @@ type: iterator seq n ;
 : map ( sequence q -- mapped ) 
     [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
 
-!/ q i n !/
 : each-inner ( q iterator -- )
     dup ?next dup [
         [ dropd swap call ] 3keep drop
