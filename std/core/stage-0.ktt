@@ -290,6 +290,10 @@ builtin: map name object-size slot-count slots default-instance ;
 builtin: map-slot name kind type index read-only? ;
 builtin: quotation body effect entry ;
 builtin: word name body properties primitive? syntax? ;
+builtin: context 
+    virtual-machine garbage-collector special-objects 
+    data-top retain-top call-top data-stack retain-stack call-stack
+    name-stack ;
 
 !/ primitive macros: `@:` `]` `:` but they get !/ 
 primitive: @vm-next-token ( -- token )

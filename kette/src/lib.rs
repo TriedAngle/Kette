@@ -526,6 +526,8 @@ impl VM {
             (*ctx).retain_array = retain_array;
             (*ctx).call_array = call_array;
 
+            (*ctx).name = ObjectRef::new(self.special_objects.false_object);
+
             (*ctx).reset();
             obj
         }
@@ -990,6 +992,13 @@ impl VM {
                 },
                 SlotDescriptor {
                     name: "call-stack",
+                    kind: object::SLOT_DATA,
+                    value_type: array_map,
+                    index: 8,
+                    read_only: 0,
+                },
+                SlotDescriptor {
+                    name: "name-stack",
                     kind: object::SLOT_DATA,
                     value_type: array_map,
                     index: 8,

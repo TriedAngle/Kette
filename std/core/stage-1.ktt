@@ -88,11 +88,40 @@ m: vector pop
     [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
 
 
+!/ TODO: complete this
+: find<-inner ( key seq offset -- value/f ) 
+    dup 0 = not [
+        1 - dup pick nth!  
+    ] [ 2drop f ] if ;
+;
+
+: find<- ( key seq -- value/f ) 
+    dup length dup 0 = not [
+        1 - 
+
+    ] [ 2drop f ] if ;
+!/
+
+: init-namestack ( -- ) 
+    100 <vector> let-me-cook name-stack<< ;
+
+init-namestack
+
+!/ TODO: complete this
+: @ ( variable -- value )
+    let-me-cook name-stack>> ;
+
+: ! ( value variable -- )
+!/
+
+type: vocabulary name words ;
+: <vocabulary> ( name -- vocabulary ) 10 <vector> vocabulary boa ;
+
+
 
 type: range start length step ;
 : <range> ( a b step -- range ) 
     [ over - ] dip [ / 1 + ] keep range boa ;
-
 
 m: range size length>> ;
 m: range length length>> ;
@@ -204,7 +233,6 @@ m: range . [ ] map underlying>> . ;
 
 : inherit-from-map ( child parent -- )
     [ inherit-link-parent ] [ inherit-slots-from-map ] 2bi ;
-
 
 : parse|slot-name>slot ( idx name -- slot ) ;
 : parse|slot-desc>slot ( idx desc -- slot ) ;
