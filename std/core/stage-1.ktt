@@ -90,7 +90,7 @@ m: vector pop
 
 : ?find2|idx<inner ( key seq offset -- idx/f ) 
     dup 0 = not [
-        2 - dup pick nth! pickd eq? [
+        2 - dup pick nth! pickd = [
             2dropd
         ] [ ?find2|idx<inner ] if
     ] [ 3drop f ] if ;

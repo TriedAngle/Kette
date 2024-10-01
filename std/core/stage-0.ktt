@@ -374,7 +374,6 @@ method: * ( a b -- c )
 method: / ( a -- )
 method: % ( a b -- c )
 method: /% ( a b -- / % )
-method: = ( a b -- ? )
 method: > ( a b -- ? )
 method: >= ( a b -- ? )
 method: < ( a b -- ? )
@@ -388,7 +387,6 @@ m: fixnum * fixnum* ;
 m: fixnum / fixnum/ ;
 m: fixnum % fixnum% ;
 m: fixnum /% [ fixnum/ ] [ fixnum% ] 2bi ;
-m: fixnum = fixnum= ;
 m: fixnum > fixnum> ;
 m: fixnum >= fixnum>= ;
 m: fixnum < fixnum< ;
@@ -398,13 +396,17 @@ m: array . array. ;
 m: quotation . quotation. ;
 m: bytearray . utf8. ;
 m: bool . [ s" t" utf8. ] [ s" f" utf8. ] if ;
-m: bytearray = bytearray= ;
 
-: ref-eq? ( a b -- ? )  [ object^ ] bi@ = ;
+: ref-eq? ( x y -- ? )  [ object^ ] bi@ fixnum= ;
 
-: by-value-eq? ( x -- ? ) \ = unbox swap find-self ;
+method: val-eq? ( x y -- ? ) 
 
-: eq? ( a b -- ? ) dup by-value-eq? [ = ] [ ref-eq? ] if ;
+m: fixnum val-eq? fixnum= ;
+m: bytearray val-eq? bytearray= ;
+
+: has-val-eq? ( x -- ? ) \ val-eq? unbox swap find-self ;
+
+: = ( x y -- ? ) dup has-val-eq? [ val-eq? ] [ ref-eq? ] if ;
 
 : zero? ( a -- ? ) 0 = ;
 : one? ( a -- ? ) 1 = ;
