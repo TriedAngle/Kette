@@ -88,6 +88,20 @@ m: vector pop
     [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
 
 
+: ?find|idx<inner ( value seq offset -- idx/f ) 
+    dup 0 = not [
+        1 - dup pick nth! pickd = [
+            2dropd
+        ] [ ?find|idx<inner ] if
+    ] [ 3drop f ] if ;
+
+: ?find|idx< ( value seq -- idx/f ) 
+    dup length ?find|idx<inner ;
+
+: ?find< ( value seq -- value/f )
+    dup -rot ?find|idx< dup [ swap nth! ] [ 2dropd ] if ;
+
+
 : ?find2|idx<inner ( key seq offset -- idx/f ) 
     dup 0 = not [
         2 - dup pick nth! pickd = [
@@ -99,13 +113,12 @@ m: vector pop
     dup length ?find2|idx<inner ;
 
 : ?find2< ( key seq -- value/f )
-    dup -rot ?find2|idx< dup [ 1 + swap nth! ] [ 2dropd ] if ;
+    dup -rot ?find2|idx< dup [ 1 + swap nth! ] [ dropd ] if ;
 
-: init-namestack ( -- ) 
+: reset-namestack ( -- ) 
     100 <vector> let-me-cook name-stack<< ;
 
-init-namestack
-
+$[ reset-namestack t ]
 
 : define-symbol ( word -- sym ) 
     dup let-me-cook name-stack>> ?find2|idx< dup [
@@ -126,10 +139,30 @@ init-namestack
         1 + let-me-cook name-stack>> set-nth!
     ] [ 2drop f ] if ; !/ TODO: ERROR HERE !/
 
-@: sym: @vm-next-token @vm-define-empty-global-word define-symbol drop t ;
+@: sym: 
+    @vm-next-token @vm-define-empty-global-word define-symbol drop t ;
 
 type: vocabulary name words ;
 : <vocabulary> ( name -- vocabulary ) 10 <vector> vocabulary boa ;
+
+$[
+    sym: dictionary
+    sym: last-word
+    sym: active-vocabulary
+t ]
+
+: reset-dictionary ( -- )
+    100 <vector> dictionary var! ;
+
+$[ reset-dictionary t ]
+
+@: vocab: 
+    @vm-next-token dup dictionary var@ ?find2< dup [
+        dropd active-vocabulary var!
+    ] [
+        [ <vocabulary> dup active-vocabulary var! ] keep
+        dictionary var@ [ swapd push ] keep push
+    ] if t ;
 
 
 type: range start length step ;
@@ -251,7 +284,7 @@ m: range . [ ] map underlying>> . ;
 
 : define-slot-accessor ( slot idx -- slot ) ;
 
-!/ ( offset -- array ) - [ array [ ] ]  !/
+!/ 
 : parse|descs>slots ( offset slots-raw -- slots: { slot accessor } ) 
     enumerate [ 
         explode [ over + ] dip

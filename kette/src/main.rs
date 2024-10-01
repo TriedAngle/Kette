@@ -16,8 +16,6 @@ fn main() {
     }
 
     let testing = r#"
-        
-        
         "#;
     unsafe {
         let quot = vm.compile_string(testing);

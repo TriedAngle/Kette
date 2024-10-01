@@ -419,6 +419,8 @@ m: bytearray val-eq? bytearray= ;
 
 method: call ( callable -- ) 
 
+@: $[ \ ] @vm-parse-until array>quotation call ;
+
 m: quotation call (call) ;
 m: word call 1 slot call ; 
 
