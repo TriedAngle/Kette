@@ -98,8 +98,8 @@ m: vector pop
 : ?find|idx< ( value seq -- idx/f ) 
     dup length ?find|idx<inner ;
 
-: ?find< ( value seq -- value/f )
-    dup -rot ?find|idx< dup [ swap nth! ] [ 2dropd ] if ;
+: ?find< ( value seq -- idx value/f )
+    dup -rot ?find|idx< dup [ [ swap nth! ] keep swap ] [ 2dropd ] if ;
 
 
 : ?find2|idx<inner ( key seq offset -- idx/f ) 
@@ -112,8 +112,8 @@ m: vector pop
 : ?find2|idx< ( key seq -- idx/f ) 
     dup length ?find2|idx<inner ;
 
-: ?find2< ( key seq -- value/f )
-    dup -rot ?find2|idx< dup [ 1 + swap nth! ] [ dropd ] if ;
+: ?find2< ( key seq -- idx value/f )
+    dup -rot ?find2|idx< dup [ [ 1 + swap nth! ] keep swap ] [ dropd 1 neg swap ] if ;
 
 : reset-namestack ( -- ) 
     100 <vector> let-me-cook name-stack<< ;
@@ -142,10 +142,6 @@ $[ reset-namestack t ]
 @: sym: 
     @vm-next-token @vm-define-empty-global-word define-symbol drop t ;
 
-type: vocabulary name words dependencies dependency-names ;
-: <vocabulary> ( name -- vocabulary ) 10 <vector> 10 <vector> 10 <vector> vocabulary boa ;
-
-
 $[
     sym: dictionary
     sym: last-word
@@ -157,8 +153,14 @@ t ]
 
 $[ reset-dictionary t ]
 
+type: vocabulary name words dependencies dependency-names ;
+: <vocabulary> ( name -- vocabulary ) 10 <vector> 10 <vector> 10 <vector> vocabulary boa ;
+
+: lookup-vocabulary ( name vocabulary -- idx word/f )
+    words>> ?find2< ;
+
 @: vocab: 
-    @vm-next-token dup dictionary var@ ?find2< dup [
+    @vm-next-token dup dictionary var@ ?find2< dropd dup [
         dropd active-vocabulary var!
     ] [
         drop [ <vocabulary> dup active-vocabulary var! ] keep
@@ -166,142 +168,19 @@ $[ reset-dictionary t ]
     ] if t ;
 
 
-type: range start length step ;
-: <range> ( a b step -- range ) 
-    [ over - ] dip [ / 1 + ] keep range boa ;
+: lookup-current-vocabulary ( name -- idx word/f ) 
+    active-vocabulary var@ lookup-vocabulary ;
 
-m: range size length>> ;
-m: range length length>> ;
-m: range nth! [ step>> * ] [ start>> ] bi + ;
-m: range in-bounds? [ drop 0 >= ] [ length < ] 2bi and ;
-m: range nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
-m: range ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+: new-empty-word-in-vocabulary ( name vocabulary -- word ) 
+    words>> swap dup <empty-word> [ swap pick push over push drop ] keep ;
 
 
-: a..b ( a b -- a b step ) 2dup < [ 1 ] [ 1 neg ] if ;
-: ..b) ( a b step -- a' b' step ) [ - ] keep ;
-: (a.. ( a b step -- a' b' step ) [ swap [ + ] dip ] keep ;
+: word-in-current-vocabulary ( name -- word ) 
+    dup lookup-current-vocabulary dropd dup [ dropd ] [ 
+        drop active-vocabulary var@ new-empty-word-in-vocabulary
+    ] if ;
 
-: [a..b] ( a b -- range ) a..b <range> ;
-: [a..b) ( a b -- range ) a..b ..b) <range> ;
-: (a..b] ( a b -- range ) a..b (a.. <range> ;
-: (a..b) ( a b -- range ) a..b (a.. ..b) <range> ;
-: [0..b] ( b -- range ) 0 swap [a..b] ;
-: [1..b] ( b -- range ) 1 swap [a..b] ;
-: [0..b) ( b -- range ) 0 swap [a..b) ;
-: [1..b) ( b -- range ) 1 swap [a..b) ;
-
-type: iterator seq n ;
-: <iterator> ( seq -- iterator ) 0 iterator boa ;
-: iterator-increment-offset ( iterator -- ) [ n>> 1 + ] [ n<< ] bi ; 
-: iterator-current ( iterator -- e/f ) [ n>> ] [ seq>> ] bi ?nth ;
-
-: ?next ( iterator -- e/f ) 
-    dup iterator-current dup [ swap iterator-increment-offset ] [ dropd ] if ;
-
-
-: filter-step ( output element q -- ) dupd call [ swap push ] [ 2drop ] if ;
-
-: filter-inner ( output q iterator -- output ) 
-    dup ?next dup [
-        -rot [ 3dup filter-step dropd ] dip 
-        filter-inner
-    ] [ 3drop ] if ;
-
-: filter ( sequence q -- filtered ) 
-    10 <vector> spin <iterator> filter-inner dup vector-shrink-minimum ;
-
-
-: map-step ( output element q -- ) call swap push ;
-
-: map-inner ( output q iterator -- output )
-    dup ?next dup [
-        -rot [ 3dup map-step dropd ] dip 
-        map-inner
-    ] [ 3drop ] if ;
-
-: map ( sequence q -- mapped ) 
-    [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
-
-: each-inner ( q iterator -- )
-    dup ?next dup [
-        [ dropd swap call ] 3keep drop
-        each-inner
-    ] [ 3drop ] if ;
-
-: each ( sequence q -- ) 
-    swap <iterator> each-inner ;
-
-m: range . [ ] map underlying>> . ;
-
-
-: zip-inner ( output i1 i2 -- output ) 
-    2dup [ ?next ] bi@ dup [
-        2array pickd swap push
-        zip-inner
-    ] [ 4drop ] if ;
-
-: zip ( seq1 seq2 -- seq { e1 e2 } ) 
-    2dup [ length ] bi@ = [
-        dup length <vector> -rot [ <iterator> ] bi@ zip-inner
-    ] [ 2drop s" sequences not same size" . ] if ;
-
-
-: enumerate ( sequence -- enumerated ) 
-    dup length [0..b) swap zip ;
-
-
-: explode ( sequence -- ..length(seq) ) 
-    dup array? [ [ ] each ] [ dup map>> 2drop s" TODO: implement explode" . ] if ;
-
-: match-test ( ? p? -- ? ?c ) keep swap ;
-
-: match-inner-step ( ? { p? q } -- matched? ) 
-    [ 1th ] [ 2th ] bi [ match-test ] dip
-    swap [ call t ] [ 2drop f ] if ;
-
-: match-inner ( ? interator: { p? q } ) 
-    dup ?next dup [
-        [ dropd match-inner-step ] 3keep drop
-        rot [ 2drop ] [ match-inner ] if
-    ] [ 2drop ] if ; !/ TODO: this should error !/
-
-: match ( ? seq: { p? q } -- )
-    <iterator> match-inner ;
-
-
-: inherit-slots-from-map ( child parent -- ) 
-    slots>> [ 1 slot SLOT_DATA = ] filter 
-    [ [ [ push-map-slot ] [ 1 slot 1 + ] [ 1 set-slot ] tri ] curry ] dip swap each ;
-
-: inherit-link-parent ( child parent -- )
-    create-parent-slot swap push-map-slot ;
-
-: inherit-from-map ( child parent -- )
-    [ inherit-link-parent ] [ inherit-slots-from-map ] 2bi ;
-
-: parse|slot-name>slot ( idx name -- slot ) ;
-: parse|slot-desc>slot ( idx desc -- slot ) ;
-
-: define-slot-accessor ( slot idx -- slot ) ;
-
-!/ 
-: parse|descs>slots ( offset slots-raw -- slots: { slot accessor } ) 
-    enumerate [ 
-        explode [ over + ] dip
-        dup 2th array? [ parse|slot-desc>slot ] [ parse|slot-name>slot ] if
-        [ dupd 1th define-slot-accessor ] 2bi 2array
-    ] map dropd ;
-
-
-: define-object-slots ( map array -- )
-    parse|descs>slots ;
-
-
-@: type-new:
-    scan-new-map [ define-type-words ] keep 
-    @vm-peek-next-token s" <" bytearray= 
-    [ @vm-next-token drop @vm-next-token @vm-link-map dupd inherit-from-map ] when 
-    \ ; @vm-skip-until define-object-slots t ;
-
+!/ name -- 
+@: : @vm-next-token \ ; @vm-parse-until array>quotation ;
 !/
+
