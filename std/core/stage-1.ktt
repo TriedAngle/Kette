@@ -142,8 +142,9 @@ $[ reset-namestack t ]
 @: sym: 
     @vm-next-token @vm-define-empty-global-word define-symbol drop t ;
 
-type: vocabulary name words ;
-: <vocabulary> ( name -- vocabulary ) 10 <vector> vocabulary boa ;
+type: vocabulary name words dependencies dependency-names ;
+: <vocabulary> ( name -- vocabulary ) 10 <vector> 10 <vector> 10 <vector> vocabulary boa ;
+
 
 $[
     sym: dictionary
@@ -160,8 +161,8 @@ $[ reset-dictionary t ]
     @vm-next-token dup dictionary var@ ?find2< dup [
         dropd active-vocabulary var!
     ] [
-        [ <vocabulary> dup active-vocabulary var! ] keep
-        dictionary var@ [ swapd push ] keep push
+        drop [ <vocabulary> dup active-vocabulary var! ] keep
+        dictionary var@ [ push ] keep push
     ] if t ;
 
 
