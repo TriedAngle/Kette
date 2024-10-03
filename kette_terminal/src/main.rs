@@ -1,4 +1,3 @@
-use kette::PRELOAD;
 use kette::VM;
 
 use crossterm::{
@@ -19,8 +18,6 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{error::Error, io};
-use tui_input::backend::crossterm::EventHandler;
-use tui_input::Input;
 enum InputMode {
     Normal,
     Editing,
