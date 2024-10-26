@@ -4,4 +4,6 @@ members = [
     "kette", 
     "kette_terminal",
 ]
-default-run = "kette"
+
+[profile.release]
+lto = "fat"

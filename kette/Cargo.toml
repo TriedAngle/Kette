@@ -2,5 +2,9 @@
 name = "kette"
 version = "0.1.0"
 edition = "2021"
-default-run ="kette"
+default-run = "kette"
+
+[build-dependencies]
+cc = "1.1.31"
+
 [dependencies]
