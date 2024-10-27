@@ -63,6 +63,7 @@ m: bytearray first 0 swap nth ;
 m: bytearray last [ length 1 - ] keep nth ;
 
 
+
 type: vector length underlying ;
 m: vector . underlying>> . ;
 : <vector> ( size -- vector ) f <array> 0 swap vector boa ;
@@ -109,6 +110,46 @@ m: vector pop
     [ length 1 - ] [ underlying>> set-nth! ] [ [ length 1 - ] [ length<< ] bi ] tri ;
 
 
+type: iterator seq n ;
+: <iterator> ( seq -- iterator ) 0 iterator boa ;
+: iterator-increment-offset ( iterator -- ) [ n>> 1 + ] [ n<< ] bi ; 
+: iterator-current ( iterator -- e/f ) [ n>> ] [ seq>> ] bi ?nth ;
+
+: ?next ( iterator -- e/f ) 
+    dup iterator-current dup [ swap iterator-increment-offset ] [ dropd ] if ;
+
+
+: filter-step ( output element q -- ) dupd call [ swap push ] [ 2drop ] if ;
+
+: filter-inner ( output q iterator -- output ) 
+    dup ?next dup [
+        -rot [ 3dup filter-step dropd ] dip 
+        filter-inner
+    ] [ 3drop ] if ;
+
+: filter ( sequence q -- filtered ) 
+    10 <vector> spin <iterator> filter-inner dup vector-shrink-minimum ;
+
+: map-step ( output element q -- ) call swap push ;
+
+: map-inner ( output q iterator -- output )
+    dup ?next dup [
+        -rot [ 3dup map-step dropd ] dip 
+        map-inner
+    ] [ 3drop ] if ;
+
+: map ( sequence q -- mapped ) 
+    [ dup size <vector> ] dip rot <iterator> map-inner dup vector-shrink-minimum ;
+
+: each-inner ( q iterator -- )
+    dup ?next dup [
+        [ dropd swap call ] 3keep drop
+        each-inner
+    ] [ 3drop ] if ;
+
+: each ( sequence q -- ) 
+    swap <iterator> each-inner ;
+
 : ?find|idx<inner ( value seq offset -- idx/f ) 
     dup 0 = not [
         1 - dup pick nth! pickd = [
@@ -122,6 +163,9 @@ m: vector pop
 : ?find< ( value seq -- idx value/f )
     dup -rot ?find|idx< dup [ [ swap nth! ] keep swap ] [ 2dropd ] if ;
 
+
+: contains? ( value seq -- ? ) 
+    ?find|idx< [ t ] [ f ] if ; 
 
 : ?find2|idx<inner ( key seq offset -- idx/f ) 
     dup 0 = not [
@@ -178,19 +222,36 @@ $[ reset-dictionary t ]
 type: vocabulary name words dependencies dependency-names ;
 : <vocabulary> ( name -- vocabulary ) 10 <vector> 10 <vector> 10 <vector> vocabulary boa ;
 
+: find-vocabulary ( name -- vocabulary/f ) 
+    dictionary var@ ?find2< dropd ;
+
 : lookup-vocabulary ( name vocabulary -- idx word/f )
     words>> ?find2< ;
 
+: lookup-dependencies ( name vocabulary -- vocabulary idx word/f ) 
+    dependencies>> swap [ swap lookup-vocabulary ] curry map [ dup = ] filter first ;
+
+: vocabulary-add-dependency ( dependency vocabulary -- ) 
+    2dup dependencies>> contains? [ 2drop ] [ 
+        dependencies>> push
+    ] if ;
+
+: get-create-vocabulary ( name -- vocabulary ) 
+    dup dictionary var@ ?find2< dropd dup 
+    [ dropd ] [ 
+        drop dup <vocabulary> 
+        [ swap dictionary var@ [ push ] keep push ] keep 
+    ] if ;
+
+: set-active-vocabulary ( name -- ) 
+    get-create-vocabulary active-vocabulary var! ;
+
+$[ s" global" set-active-vocabulary t ]
+
 @: vocab: 
-    @vm-next-token dup dictionary var@ ?find2< dropd dup [
-        dropd active-vocabulary var!
-    ] [
-        drop [ <vocabulary> dup active-vocabulary var! ] keep
-        dictionary var@ [ push ] keep push
-    ] if t ;
+    @vm-next-token set-active-vocabulary t ;
 
-
-: lookup-current-vocabulary ( name -- idx word/f ) 
+: lookup-active-vocabulary ( name -- idx word/f ) 
     active-vocabulary var@ lookup-vocabulary ;
 
 : new-empty-word-in-vocabulary ( name vocabulary -- word ) 
@@ -206,10 +267,15 @@ type: parser text line column parsing-words ;
 
 : <parser> ( text -- ) 1 0 50 <vector> parser boa ;
 
+: parser|lookup ( str -- word/f ) 
+    lookup-current-vocabulary dropd ;
+
+: parser| ( -- ) ;
+
 : parser|next-line ( parser -- ) dup line>> 1 + swap line<< ;
 
 
-!/ name -- 
+!/
 @: : @vm-next-token \ ; @vm-parse-until array>quotation ;
 !/
 
