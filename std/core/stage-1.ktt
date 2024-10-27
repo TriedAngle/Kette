@@ -4,6 +4,7 @@ method: nth! ( n seuqence -- obj )
 method: set-nth! ( obj n sequence -- )
 method: in-bounds? ( n sequence -- ? )
 
+!/ TODO: these should be implemented automaticaly by the protocol !/
 method: check-bounds ( n sequence -- n sequence )
 method: nth ( n sequence -- obj )
 method: ?nth ( n sequence -- obj/f )
@@ -40,6 +41,26 @@ m: array 2th<< 1 swap set-nth! ;
 m: array 3th<< 2 swap set-nth! ; 
 m: array first 0 swap nth ;
 m: array last [ length 1 - ] keep nth ;
+
+
+m: bytearray size bytearray-size>> ;
+m: bytearray length bytearray-size>> ;
+m: bytearray nth! bytearray-data>> swap alien-u8 ;
+m: bytearray set-nth! bytearray-data>> swap set-alien-u8 ;
+m: bytearray in-bounds? [ drop 0 >= ] [ size < ] 2bi and ;
+
+m: bytearray nth 2dup in-bounds? [ nth! ] [ 2drop ] if ;
+m: bytearray ?nth 2dup in-bounds? [ nth! ] [ 2drop f ] if ;
+m: bytearray set-nth 2dup in-bounds? [ set-nth! ] [ 3drop f ] if ;
+m: bytearray 1th 0 swap nth ;
+m: bytearray 1th 0 swap nth ;
+m: bytearray 2th 1 swap nth ;
+m: bytearray 3th 2 swap nth ;
+m: bytearray 1th<< 0 swap set-nth! ;
+m: bytearray 2th<< 1 swap set-nth! ; 
+m: bytearray 3th<< 2 swap set-nth! ; 
+m: bytearray first 0 swap nth ;
+m: bytearray last [ length 1 - ] keep nth ;
 
 
 type: vector length underlying ;

@@ -648,6 +648,7 @@ unsafe fn primitive_alien_usize(vm: *mut VM) {
     _primitive_alien_t::<usize, usize>(vm);
 }
 
+// ( value ptr n -- )
 unsafe fn primitive_set_alien_i8(vm: *mut VM) {
     _primitive_set_alien_t::<i8>(vm);
 }
@@ -831,7 +832,7 @@ impl VM {
         self.add_primitive("(call-c)", primitive_call_c, false);
         self.add_primitive("<array>", primitive_create_array, false);
         self.add_primitive("<bytearray>", primitive_create_bytearray, false);
-        self.add_primitive("bytearray-capacity>>", primitive_bytearray_capacity, false);
+        self.add_primitive("bytearray-size>>", primitive_bytearray_capacity, false);
         self.add_primitive("bytearray-data>>", primitive_bytearray_data, false);
         self.add_primitive("bytearray=", primitive_bytearray_eq, false);
         self.add_primitive("bytearray-concat", primitive_bytearray_concat, false);

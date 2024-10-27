@@ -102,11 +102,22 @@
     0 swap [ 2dup fixnum< ] [ [ 1 fixnum+ ] dip ] [ [ [
         [ fixnum+ ] dup [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) 2dupd swapd 
         [ swap array-nth ] [ swap set-array-nth ] -rotd [ (call) ] 3dip (call)
-    ] 3keep ] dip ] while* 4drop drop drop ;
+    ] 3keep ] dip ] while* 4drop 2drop ;
 
 
 : resize-array ( array size -- new )
     [ dup 0 slot ] dip f <array> [ swap 0 0 rot array-copy ] keep ; 
+
+: bytearray-copy ( src dst start-src start-dst count -- )
+    0 swap [ 2dup fixnum< ] [ [ 1 fixnum+ ] dip ] [ [ [ 
+        [ fixnum+ ] dup [ dup swapd ] 2dip -rotd [ (call) ] 3dip (call) 2dupd swapd
+        [ [ bytearray-data>> ] dip alien-u8 ] [ [ bytearray-data>> ] dip set-alien-u8 ]
+        -rotd [ (call) ] 3dip (call) 
+    ] 3keep ] dip ] while* 4drop 2drop ;
+
+: resize-bytearray ( array size -- new )
+    [ dup bytearray-size>> ] dip <bytearray> [ swap 0 0 rot bytearray-copy ] keep ; 
+
 
 !/ this is very inefficient, use vectors if this is your normal usecase !/
 : array-push ( obj arr -- arr ) 
