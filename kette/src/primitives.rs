@@ -185,6 +185,16 @@ unsafe fn primitive_define_empty_word(vm: *mut VM) {
     (*vm).push(word)
 }
 
+// maybe it would be better to already use a global vm array
+unsafe fn primitive_get_all_bootstrap_global_words(vm: *mut VM) {
+    let words = (*vm).words.values()
+        .copied()
+        .map(|word| ObjectRef::from_word(word))
+        .collect::<Vec<_>>();
+    let arr = (*vm).allocate_array_from_slice(&words);
+    (*vm).push(arr);
+}
+
 unsafe fn primitive_quotation_start(vm: *mut VM) {
     let word = (*vm).words.get("]").unwrap();
     (*vm).push(ObjectRef::from_word(*word));
@@ -758,7 +768,7 @@ impl VM {
             false,
         );
         self.add_primitive("@vm-define-empty-word", primitive_define_empty_word, false);
-
+        self.add_primitive("@vm-get-all-bootstrap-global-words", primitive_get_all_bootstrap_global_words, false);
         self.add_primitive("@vm-stack", primitive_vm_stack, false);
         self.add_primitive("@vm-set-stack", primitive_vm_set_stack, false);
         self.add_primitive("@vm-define-map", primitive_define_map, false);

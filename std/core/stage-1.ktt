@@ -257,25 +257,33 @@ $[ s" global" set-active-vocabulary t ]
 : new-empty-word-in-vocabulary ( name vocabulary -- word ) 
     words>> swap dup <empty-word> [ swap pick push over push drop ] keep ;
 
-: word-in-current-vocabulary ( name -- word ) 
-    dup lookup-current-vocabulary dropd dup [ dropd ] [ 
+: word-in-active-vocabulary ( name -- word ) 
+    dup lookup-active-vocabulary dropd dup [ dropd ] [ 
         drop active-vocabulary var@ new-empty-word-in-vocabulary
     ] if ;
 
-
+!/ 
 type: parser text line column parsing-words ;
 
 : <parser> ( text -- ) 1 0 50 <vector> parser boa ;
 
 : parser|lookup ( str -- word/f ) 
-    lookup-current-vocabulary dropd ;
+    lookup-active-vocabulary dropd ;
 
 : parser| ( -- ) ;
 
 : parser|next-line ( parser -- ) dup line>> 1 + swap line<< ;
-
-
-!/
-@: : @vm-next-token \ ; @vm-parse-until array>quotation ;
 !/
 
+$[
+    @vm-get-all-bootstrap-global-words array>vector 
+    s" global" find-vocabulary words<<
+t ]
+
+!/
+@: ( \ ) @vm-skip-until drop t ;
+
+@: : @vm-next-token \ ; @vm-parse-until array>quotation @stack. t ;
+
+: lel ( -- ) 4 4 + ;
+!/
