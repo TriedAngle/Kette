@@ -183,6 +183,14 @@ impl ObjectRef {
         self.0 as *const FixnumObject
     }
 
+    pub unsafe fn fixnum_isize(&self) -> isize {
+        (*self.as_fixnum()).value
+    }
+
+    pub unsafe fn fixnum_usize(&self) -> usize {
+        mem::transmute((*self.as_fixnum()).value)
+    }
+
     pub const fn as_fixnum_mut(&self) -> *mut FixnumObject {
         self.0 as *mut FixnumObject
     }

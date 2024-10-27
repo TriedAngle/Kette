@@ -1060,6 +1060,22 @@ impl VM {
                 } else if inner_map == self.special_objects.word_map {
                     print!("{}", (*inner.as_word()).name());
                 }
+            } else if map == self.special_objects.bytearray_map {
+                let data = o.bytearray_data();
+                let length = o.bytearray_data_len();
+                print!("B{{");
+                for idx in 0..length {
+                    let byte = *data.add(idx);
+                    print!("{:02x}", byte);
+                    if idx < length - 1 {
+                        print!(" ");
+                    }
+                    if idx == 42 {
+                        print!(" ...");
+                        break;
+                    }
+                }
+                print!("}}");
             } else if o.0 == self.special_objects.false_object {
                 print!("f");
             } else if o.0 == self.special_objects.true_object {

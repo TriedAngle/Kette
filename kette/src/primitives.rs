@@ -471,6 +471,21 @@ unsafe fn primitive_call_primitive(vm: *mut VM) {
     (*vm).execute_primitive(word)
 }
 
+// if void no return
+// ( parameters... function-ptr return-type parameter-types decl -- return )
+unsafe fn primitive_call_c(vm: *mut VM) {
+    let decl = (*vm).pop();
+    let parameter_types = (*vm).pop();
+    let return_type = (*vm).pop();
+    let func_ptr = (*vm).pop();
+
+    // let parameter_types =
+    // let paremeters = (0..parameter_types.array_data_len())
+    //     .into_iter()
+    //     .map(|_| (*vm).pop())
+    //     .collect::<Vec<_>>();
+}
+
 unsafe fn primitive_word_to_quotation(vm: *mut VM) {
     let word = (*vm).pop().as_quotation();
     let body = (*word).body;
@@ -552,7 +567,7 @@ unsafe fn primitive_set_slot(vm: *mut VM) {
 }
 
 unsafe fn primitive_ptr_get(vm: *mut VM) {
-    let address = (*(*vm).pop().as_fixnum()).value as usize;
+    let address = (*(*vm).pop().as_fixnum()).value;
     let ptr = address as *mut isize;
     (*vm).push_fixnum(*ptr);
 }
@@ -576,6 +591,96 @@ unsafe fn primitive_ptr_set(vm: *mut VM) {
     *ptr = value;
 }
 
+unsafe fn _primitive_alien_t<T: Copy, U: Copy + TryFrom<T>>(vm: *mut VM) {
+    let offset = (*vm).pop().fixnum_isize();
+    let ptr = (*vm).pop().fixnum_isize() as *mut T;
+    let ptr = ptr.offset(offset);
+    let val = *ptr;
+    let ret_pre: U = val.try_into().unwrap_unchecked();
+    let ret_pre_ptr = &ret_pre as *const U as *mut U;
+    let ret_ptr = ret_pre_ptr as *mut isize;
+    let ret = *ret_ptr;
+    (*vm).push_fixnum(ret);
+}
+
+unsafe fn _primitive_set_alien_t<T: Copy>(vm: *mut VM) {
+    let offset = (*vm).pop().fixnum_isize();
+    let ptr = (*vm).pop().fixnum_isize() as *mut T;
+    let ptr = ptr.offset(offset);
+    let value = (*vm).pop().fixnum_isize();
+    let value_ptr = &value as *const _ as *mut T;
+    let casted_value = *value_ptr;
+    *ptr = casted_value;
+}
+
+// ( ptr n -- fixnum )
+unsafe fn primitive_alien_i8(vm: *mut VM) {
+    _primitive_alien_t::<i8, isize>(vm);
+}
+
+unsafe fn primitive_alien_i16(vm: *mut VM) {
+    _primitive_alien_t::<i16, isize>(vm);
+}
+unsafe fn primitive_alien_i32(vm: *mut VM) {
+    _primitive_alien_t::<i32, isize>(vm);
+}
+unsafe fn primitive_alien_i64(vm: *mut VM) {
+    _primitive_alien_t::<i64, isize>(vm);
+}
+
+unsafe fn primitive_alien_u8(vm: *mut VM) {
+    _primitive_alien_t::<u8, usize>(vm);
+}
+unsafe fn primitive_alien_u16(vm: *mut VM) {
+    _primitive_alien_t::<u16, usize>(vm);
+}
+unsafe fn primitive_alien_u32(vm: *mut VM) {
+    _primitive_alien_t::<u32, usize>(vm);
+}
+unsafe fn primitive_alien_u64(vm: *mut VM) {
+    _primitive_alien_t::<u64, usize>(vm);
+}
+
+unsafe fn primitive_alien_isize(vm: *mut VM) {
+    _primitive_alien_t::<isize, isize>(vm);
+}
+unsafe fn primitive_alien_usize(vm: *mut VM) {
+    _primitive_alien_t::<usize, usize>(vm);
+}
+
+unsafe fn primitive_set_alien_i8(vm: *mut VM) {
+    _primitive_set_alien_t::<i8>(vm);
+}
+unsafe fn primitive_set_alien_i16(vm: *mut VM) {
+    _primitive_set_alien_t::<i16>(vm);
+}
+unsafe fn primitive_set_alien_i32(vm: *mut VM) {
+    _primitive_set_alien_t::<i32>(vm);
+}
+unsafe fn primitive_set_alien_i64(vm: *mut VM) {
+    _primitive_set_alien_t::<i64>(vm);
+}
+
+unsafe fn primitive_set_alien_u8(vm: *mut VM) {
+    _primitive_set_alien_t::<u8>(vm);
+}
+unsafe fn primitive_set_alien_u16(vm: *mut VM) {
+    _primitive_set_alien_t::<u16>(vm);
+}
+unsafe fn primitive_set_alien_u32(vm: *mut VM) {
+    _primitive_set_alien_t::<u32>(vm);
+}
+unsafe fn primitive_set_alien_u64(vm: *mut VM) {
+    _primitive_set_alien_t::<u64>(vm);
+}
+
+unsafe fn primitive_set_alien_isize(vm: *mut VM) {
+    _primitive_set_alien_t::<isize>(vm);
+}
+unsafe fn primitive_set_alien_usize(vm: *mut VM) {
+    _primitive_set_alien_t::<usize>(vm);
+}
+
 // ( size default-value -- array )
 unsafe fn primitive_create_array(vm: *mut VM) {
     let initial = (*vm).pop();
@@ -592,6 +697,20 @@ unsafe fn primitive_create_bytearray(vm: *mut VM) {
     let size = (*vm).pop().as_fixnum();
     let ba = (*vm).allocate_bytearray((*size).value as usize);
     (*vm).push(ba);
+}
+
+unsafe fn primitive_bytearray_capacity(vm: *mut VM) {
+    let ba = (*vm).pop();
+    let len = ba.bytearray_data_len();
+    let size = mem::transmute(len);
+    (*vm).push_fixnum(size);
+}
+
+unsafe fn primitive_bytearray_data(vm: *mut VM) {
+    let ba = (*vm).pop();
+    let data = ba.bytearray_data();
+    let size = mem::transmute(data);
+    (*vm).push_fixnum(size);
 }
 
 unsafe fn primitive_bytearray_eq(vm: *mut VM) {
@@ -679,6 +798,28 @@ impl VM {
         self.add_primitive("^object", primitive_ptr_deref, false);
         self.add_primitive("set^", primitive_ptr_set, false);
 
+        self.add_primitive("alien-i8", primitive_alien_i8, false);
+        self.add_primitive("alien-i16", primitive_alien_i16, false);
+        self.add_primitive("alien-i32", primitive_alien_i32, false);
+        self.add_primitive("alien-i64", primitive_alien_i64, false);
+        self.add_primitive("alien-u8", primitive_alien_u8, false);
+        self.add_primitive("alien-u16", primitive_alien_u16, false);
+        self.add_primitive("alien-u32", primitive_alien_u32, false);
+        self.add_primitive("alien-u64", primitive_alien_u64, false);
+        self.add_primitive("alien-isize", primitive_alien_isize, false);
+        self.add_primitive("alien-usize", primitive_alien_usize, false);
+
+        self.add_primitive("set-alien-i8", primitive_set_alien_i8, false);
+        self.add_primitive("set-alien-i16", primitive_set_alien_i16, false);
+        self.add_primitive("set-alien-i32", primitive_set_alien_i32, false);
+        self.add_primitive("set-alien-i64", primitive_set_alien_i64, false);
+        self.add_primitive("set-alien-u8", primitive_set_alien_u8, false);
+        self.add_primitive("set-alien-u16", primitive_set_alien_u16, false);
+        self.add_primitive("set-alien-u32", primitive_set_alien_u32, false);
+        self.add_primitive("set-alien-u64", primitive_set_alien_u64, false);
+        self.add_primitive("set-alien-isize", primitive_set_alien_isize, false);
+        self.add_primitive("set-alien-usize", primitive_set_alien_usize, false);
+
         self.add_primitive("if", primitive_if, false);
         self.add_primitive("and", primitive_and, false);
         self.add_primitive("or", primitive_or, false);
@@ -687,8 +828,11 @@ impl VM {
         self.add_primitive("array>quotation", primitive_array_to_quotation, false);
         self.add_primitive("(call)", primitive_call_quotation, false);
         self.add_primitive("(call-primitive)", primitive_call_primitive, false);
+        self.add_primitive("(call-c)", primitive_call_c, false);
         self.add_primitive("<array>", primitive_create_array, false);
         self.add_primitive("<bytearray>", primitive_create_bytearray, false);
+        self.add_primitive("bytearray-capacity>>", primitive_bytearray_capacity, false);
+        self.add_primitive("bytearray-data>>", primitive_bytearray_data, false);
         self.add_primitive("bytearray=", primitive_bytearray_eq, false);
         self.add_primitive("bytearray-concat", primitive_bytearray_concat, false);
 
