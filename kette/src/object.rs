@@ -687,7 +687,9 @@ mod tests {
         unsafe {
             let map = alloc(layout) as *mut Map;
 
-            (*map).header = ObjectHeader::null();
+            (*map).header = ObjectHeader {
+                map: Object::map_map_ref().as_ptr_unchecked() as *mut _,
+            };
             (*map).name = Object::false_ref();
             (*map).object_size =
                 std::mem::size_of::<Object>() + (object_slots * std::mem::size_of::<ObjectRef>());
