@@ -4,29 +4,25 @@ pub const TAG_MASK: u64 = 0x1;
 pub const TAG_OBJECT: u64 = 0x1;
 pub const TAG_INT: u64 = 0x0;
 
-pub static mut TRUE_OBJECT: Object = Object {
-    header: ObjectHeader::null(),
-};
+const fn empty_object() -> Object {
+    Object {
+        header: ObjectHeader::null(),
+    }
+}
 
-pub static mut FALSE_OBJECT: Object = Object {
-    header: ObjectHeader::null(),
-};
+pub static mut SPECIAL_OBJECTS: [Object; 7] = [
+    empty_object(), // 0 = f
+    empty_object(), // 1 = t
+    empty_object(), // 2 = map map
+    empty_object(), // 3 = parent_slot
+    empty_object(), // 4 = trait_slot
+    empty_object(), // 5 = data_slot
+    empty_object(), // 6 = method_slot
+];
 
-pub static mut MAP_MAP: Object = Object {
-    header: ObjectHeader::null(),
-};
-
-pub static mut PARENT_SLOT_KIND: Object = Object {
-    header: ObjectHeader::null(),
-};
-
-pub static mut TRAIT_SLOT_KIND: Object = Object {
-    header: ObjectHeader::null(),
-};
-
-pub static mut DATA_SLOT_KIND: Object = Object {
-    header: ObjectHeader::null(),
-};
+fn get_special_object(index: usize) -> ObjectRef {
+    unsafe { ObjectRef::from_ptr(&mut SPECIAL_OBJECTS[index]) }
+}
 
 #[repr(C)]
 pub struct ObjectHeader {
@@ -55,28 +51,32 @@ impl Object {
         unsafe { &mut *self.header.map }
     }
 
-    pub fn true_ref() -> ObjectRef {
-        ObjectRef::from_ptr(&raw mut TRUE_OBJECT)
-    }
-
     pub fn false_ref() -> ObjectRef {
-        ObjectRef::from_ptr(&raw mut FALSE_OBJECT)
+        get_special_object(0)
     }
 
-    pub fn parent_kind_ref() -> ObjectRef {
-        ObjectRef::from_ptr(&raw mut PARENT_SLOT_KIND)
-    }
-
-    pub fn trait_kind_ref() -> ObjectRef {
-        ObjectRef::from_ptr(&raw mut TRAIT_SLOT_KIND)
-    }
-
-    pub fn data_kind_ref() -> ObjectRef {
-        ObjectRef::from_ptr(&raw mut DATA_SLOT_KIND)
+    pub fn true_ref() -> ObjectRef {
+        get_special_object(1)
     }
 
     pub fn map_map_ref() -> ObjectRef {
-        ObjectRef::from_ptr(&raw mut MAP_MAP)
+        get_special_object(2)
+    }
+
+    pub fn parent_kind_ref() -> ObjectRef {
+        get_special_object(3)
+    }
+
+    pub fn trait_kind_ref() -> ObjectRef {
+        get_special_object(4)
+    }
+
+    pub fn data_kind_ref() -> ObjectRef {
+        get_special_object(5)
+    }
+
+    pub fn method_kind_ref() -> ObjectRef {
+        get_special_object(6)
     }
 
     pub unsafe fn get_slot_value(&self, index: usize) -> Option<ObjectRef> {
