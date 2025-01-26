@@ -1,32 +1,35 @@
-use std::fmt;
+use std::{fmt, mem};
 
+// Basic type tag (LSB)
 pub const TAG_MASK: u64 = 0x1;
-pub const TAG_OBJECT: u64 = 0x1;
-pub const TAG_INT: u64 = 0x0;
-pub const HEADER_TAG: u64 = 0b11;
-pub const MARK_BIT: u64 = 1 << 2;
-pub const HEADER_FULL_TAG: u64 = 0b111;
-pub const MAP_MASK: u64 = !HEADER_FULL_TAG;
+pub const TAG_INT: u64 = 0x1; // Integers have LSB = 1
+pub const TAG_OBJECT: u64 = 0x0; // Pointers have LSB = 0
 
-const fn empty_object() -> Object {
-    Object {
-        header: ObjectHeader::null(),
-    }
+// Lower 3 bits patterns
+pub const ALIGN_MASK: u64 = 0x7; // 111
+pub const HEADER_TAG: u64 = 0x2; // 010
+pub const MARK_BIT: u64 = 0x4; // 100
+
+// Object type tags in upper bits (bits 63-60, giving us 16 possible types)
+pub const TYPE_SHIFT: u64 = 60;
+pub const TYPE_BITS: u64 = 0xF; // 4 bits for type
+pub const TYPE_MASK: u64 = TYPE_BITS << TYPE_SHIFT;
+
+pub const FALSE_VALUE: u64 = 0;
+
+#[repr(u64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectType {
+    Normal = 0,
+    Array = 1,
+    ByteArray = 2,
+    Float = 3,
+    Alien = 4,
+    Box = 5,
+    // 6-15 available for future use
 }
 
-pub static mut SPECIAL_OBJECTS: [Object; 7] = [
-    empty_object(), // 0 = f
-    empty_object(), // 1 = t
-    empty_object(), // 2 = map map
-    empty_object(), // 3 = parent_slot
-    empty_object(), // 4 = trait_slot
-    empty_object(), // 5 = data_slot
-    empty_object(), // 6 = method_slot
-];
-
-fn get_special_object(index: usize) -> ObjectRef {
-    unsafe { ObjectRef::from_ptr(&mut SPECIAL_OBJECTS[index]) }
-}
+pub const MAP_MASK: u64 = !(TYPE_MASK | ALIGN_MASK);
 
 #[repr(C)]
 pub struct ObjectHeader {
@@ -35,7 +38,9 @@ pub struct ObjectHeader {
 
 impl ObjectHeader {
     pub const fn null() -> Self {
-        Self { map: 0 }
+        Self {
+            map: 0 | HEADER_TAG,
+        }
     }
 
     pub fn new(map: *mut Map) -> Self {
@@ -69,8 +74,231 @@ impl ObjectHeader {
     }
 }
 
-// ObjectHeader:
-// [63: mark bit][62-2: map pointer][1-0: header tag (11)]
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObjectRef(u64);
+
+impl ObjectRef {
+    pub const fn null() -> Self {
+        Self(FALSE_VALUE)
+    }
+
+    pub fn from_ptr(ptr: *mut Object) -> Self {
+        debug_assert!((ptr as u64 & ALIGN_MASK) == 0);
+        Self(ptr as u64)
+    }
+
+    pub fn from_int(value: i64) -> Self {
+        unsafe { Self((mem::transmute::<_, u64>(value) << 1) | TAG_INT) }
+    }
+
+    pub fn from_int_checked(value: i64) -> Option<Self> {
+        if value > (i64::MAX >> 1) || value < (i64::MIN >> 1) {
+            return None;
+        }
+        Some(Self::from_int(value))
+    }
+
+    pub fn from_map(ptr: *mut Map) -> Self {
+        debug_assert!((ptr as u64 & ALIGN_MASK) == 0);
+        Self(ptr as u64)
+    }
+
+    pub fn from_typed_ptr(ptr: *mut Object, obj_type: ObjectType) -> Self {
+        debug_assert!((ptr as u64 & ALIGN_MASK) == 0);
+        Self((ptr as u64) | ((obj_type as u64) << TYPE_SHIFT))
+    }
+
+    pub fn from_array_ptr(ptr: *mut Array) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::Array)
+    }
+
+    pub fn from_bytearray_ptr(ptr: *mut ByteArray) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::ByteArray)
+    }
+
+    pub fn from_float_ptr(ptr: *mut Float) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::Float)
+    }
+
+    pub fn from_alien_ptr(ptr: *mut Alien) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::Alien)
+    }
+
+    pub fn from_box_ptr(ptr: *mut Box) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::Box)
+    }
+
+    pub fn is_int(&self) -> bool {
+        self.0 & TAG_MASK == TAG_INT
+    }
+
+    pub fn is_header(&self) -> bool {
+        (self.0 & ALIGN_MASK) == HEADER_TAG
+    }
+
+    pub fn get_type(&self) -> Option<ObjectType> {
+        if self.is_int() || self.is_header() {
+            return None;
+        }
+        let type_bits = (self.0 & TYPE_MASK) >> TYPE_SHIFT;
+        match type_bits {
+            0 => Some(ObjectType::Normal),
+            1 => Some(ObjectType::Array),
+            2 => Some(ObjectType::ByteArray),
+            3 => Some(ObjectType::Float),
+            4 => Some(ObjectType::Alien),
+            5 => Some(ObjectType::Box),
+            _ => None,
+        }
+    }
+
+    pub fn as_int(&self) -> Option<i64> {
+        if self.is_int() {
+            Some(unsafe { mem::transmute::<_, i64>(self.0) >> 1 })
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn as_int_unchecked(&self) -> i64 {
+        (self.0 >> 1) as i64
+    }
+
+    pub fn is_false(&self) -> bool {
+        self.0 == FALSE_VALUE
+    }
+
+    pub fn as_ptr(&self) -> Option<*mut Object> {
+        if self.is_false() || self.is_int() || self.is_header() {
+            None
+        } else {
+            Some((self.0 & MAP_MASK) as *mut Object)
+        }
+    }
+
+    pub fn as_array_ptr(&self) -> Option<*mut Array> {
+        if self.get_type() == Some(ObjectType::Array) {
+            Some((self.0 & MAP_MASK) as *mut Array)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_bytearray_ptr(&self) -> Option<*mut ByteArray> {
+        if self.get_type() == Some(ObjectType::ByteArray) {
+            Some((self.0 & MAP_MASK) as *mut ByteArray)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_float_ptr(&self) -> Option<*mut Float> {
+        if self.get_type() == Some(ObjectType::Float) {
+            Some((self.0 & MAP_MASK) as *mut Float)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_alien_ptr(&self) -> Option<*mut Alien> {
+        if self.get_type() == Some(ObjectType::Alien) {
+            Some((self.0 & MAP_MASK) as *mut Alien)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_box_ptr(&self) -> Option<*mut Box> {
+        if self.get_type() == Some(ObjectType::Box) {
+            Some((self.0 & MAP_MASK) as *mut Box)
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn as_ptr_unchecked(&self) -> *mut Object {
+        (self.0 & MAP_MASK) as *mut Object
+    }
+}
+
+pub struct SpecialObjects {
+    pub map_map: ObjectRef,
+    pub array_map: ObjectRef,
+    pub bytearray_map: ObjectRef,
+    pub slot_map: ObjectRef,
+}
+
+impl SpecialObjects {
+    pub fn new() -> Self {
+        Self {
+            map_map: ObjectRef::null(),
+            array_map: ObjectRef::null(),
+            bytearray_map: ObjectRef::null(),
+            slot_map: ObjectRef::null(),
+        }
+    }
+
+    pub fn get_false() -> ObjectRef {
+        ObjectRef::null()
+    }
+
+    pub fn get_slot_kind_data() -> ObjectRef {
+        ObjectRef::from_int(0)
+    }
+
+    pub fn get_slot_kind_method() -> ObjectRef {
+        ObjectRef::from_int(1)
+    }
+
+    pub fn get_slot_kind_parent() -> ObjectRef {
+        ObjectRef::from_int(2)
+    }
+
+    pub fn get_slot_kind_trait() -> ObjectRef {
+        ObjectRef::from_int(3)
+    }
+
+    pub fn get_map_map(&self) -> ObjectRef {
+        self.map_map
+    }
+
+    pub fn get_array_map(&self) -> ObjectRef {
+        self.array_map
+    }
+
+    pub fn get_bytearray_map(&self) -> ObjectRef {
+        self.bytearray_map
+    }
+
+    pub fn get_slot_map(&self) -> ObjectRef {
+        self.slot_map
+    }
+}
+
+impl fmt::Debug for ObjectRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_int() {
+            write!(f, "Int({})", unsafe { self.as_int_unchecked() })
+        } else if self.is_header() {
+            write!(f, "Header({:#x})", self.0 & MAP_MASK)
+        } else if *self == SpecialObjects::get_false() {
+            write!(f, "f")
+        } else {
+            let type_name = match self.get_type() {
+                Some(ObjectType::Normal) => "Object",
+                Some(ObjectType::Array) => "Array",
+                Some(ObjectType::ByteArray) => "ByteArray",
+                Some(ObjectType::Float) => "Float",
+                Some(ObjectType::Alien) => "Alien",
+                Some(ObjectType::Box) => "Box",
+                None => "Invalid",
+            };
+            write!(f, "{}({:#x})", type_name, self.0 & MAP_MASK)
+        }
+    }
+}
+
 #[repr(C)]
 pub struct Object {
     pub header: ObjectHeader,
@@ -83,34 +311,6 @@ impl Object {
 
     pub fn get_map_mut(&mut self) -> &mut Map {
         unsafe { &mut *self.header.map() }
-    }
-
-    pub fn false_ref() -> ObjectRef {
-        get_special_object(0)
-    }
-
-    pub fn true_ref() -> ObjectRef {
-        get_special_object(1)
-    }
-
-    pub fn map_map_ref() -> ObjectRef {
-        get_special_object(2)
-    }
-
-    pub fn parent_kind_ref() -> ObjectRef {
-        get_special_object(3)
-    }
-
-    pub fn trait_kind_ref() -> ObjectRef {
-        get_special_object(4)
-    }
-
-    pub fn data_kind_ref() -> ObjectRef {
-        get_special_object(5)
-    }
-
-    pub fn method_kind_ref() -> ObjectRef {
-        get_special_object(6)
     }
 
     pub unsafe fn get_slot_value(&self, index: usize) -> Option<ObjectRef> {
@@ -129,15 +329,16 @@ impl Object {
 
     pub fn lookup_slot_value(&self, name: &ByteArray) -> Option<ObjectRef> {
         let map = self.get_map();
-        map.lookup_slot(name, None)
-            .and_then(|(slot, _)| unsafe { self.get_slot_value(slot.index) })
+        map.lookup_slot(name, None).and_then(|(slot, _)| unsafe {
+            self.get_slot_value(slot.index.as_int_unchecked() as usize)
+        })
     }
 
     pub fn set_slot_value_by_name(&mut self, name: &ByteArray, value: ObjectRef) -> bool {
         let map = self.get_map();
         if let Some((slot, _)) = map.lookup_slot(name, None) {
             unsafe {
-                self.set_slot_value(slot.index, value);
+                self.set_slot_value(slot.index.as_int_unchecked() as usize, value);
             }
             true
         } else {
@@ -147,64 +348,26 @@ impl Object {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq)]
-pub struct ObjectRef(u64);
+pub struct Float {
+    pub header: ObjectHeader,
+    pub float: f64,
+}
 
-impl ObjectRef {
-    pub fn from_ptr(ptr: *mut Object) -> Self {
-        debug_assert!((ptr as u64 & TAG_MASK) == 0);
-        Self(ptr as u64 | TAG_OBJECT)
-    }
+#[repr(C)]
+pub struct Alien {
+    pub header: ObjectHeader,
+}
 
-    pub fn from_int(value: i64) -> Self {
-        Self(value as u64)
-    }
-
-    pub fn from_int_checked(value: i64) -> Option<Self> {
-        if (value as u64 & TAG_MASK) != 0 {
-            return None;
-        }
-        Some(Self(value as u64))
-    }
-
-    pub fn is_int(&self) -> bool {
-        self.0 & TAG_MASK == TAG_INT
-    }
-
-    pub fn inner(&self) -> u64 {
-        self.0
-    }
-
-    pub fn as_int(&self) -> Option<i64> {
-        if self.is_int() {
-            Some(self.0 as i64)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_ptr(&self) -> Option<*mut Object> {
-        if !self.is_int() {
-            Some((self.0 & !TAG_MASK) as *mut Object)
-        } else {
-            None
-        }
-    }
-
-    pub unsafe fn as_int_unchecked(&self) -> i64 {
-        self.0 as i64
-    }
-
-    pub unsafe fn as_ptr_unchecked(&self) -> *mut Object {
-        (self.0 & !TAG_MASK) as *mut Object
-    }
+#[repr(C)]
+pub struct Box {
+    pub header: ObjectHeader,
 }
 
 #[repr(C)]
 pub struct Array {
     pub header: ObjectHeader,
-    pub size: usize,
-    // [ObjectRef; length] elements follow here
+    pub size: ObjectRef, // int
+                         // [ObjectRef; length] elements follow here
 }
 
 impl Array {
@@ -216,7 +379,8 @@ impl Array {
     }
 
     pub fn get_element(&self, index: usize) -> Option<ObjectRef> {
-        if index >= self.size {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
+        if index >= size {
             return None;
         }
 
@@ -224,7 +388,8 @@ impl Array {
     }
 
     pub fn set_element(&self, index: usize, value: ObjectRef) -> bool {
-        if index >= self.size {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
+        if index >= size {
             return false;
         }
         unsafe {
@@ -316,7 +481,9 @@ impl ByteArray {
         debug_assert!(self.size >= s.len(), "ByteArray too small for string");
         let bytes = s.as_bytes();
         unsafe {
-            let elements = (self as *mut Self).add(1) as *mut u8;
+            let base_ptr = self as *const Self as *const u8 as *mut u8;
+            let elements = base_ptr.add(std::mem::size_of::<ByteArray>());
+            // let elements = (self as *mut Self).add(1) as *mut u8;
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), elements, s.len());
         }
     }
@@ -335,7 +502,7 @@ pub struct Slot {
     pub header: ObjectHeader,
     pub name: ObjectRef, // ByteArray
     pub ty: ObjectRef,
-    pub index: usize,
+    pub index: ObjectRef,
     pub kind: ObjectRef,
     pub guard: ObjectRef,
 }
@@ -345,26 +512,30 @@ impl Slot {
         unsafe { self.name.as_ptr().map(|ptr| &*(ptr as *const ByteArray)) }
     }
 
+    pub fn is_data_slot(&self) -> bool {
+        self.kind == SpecialObjects::get_slot_kind_data()
+    }
+
+    pub fn is_method_slot(&self) -> bool {
+        self.kind == SpecialObjects::get_slot_kind_method()
+    }
+
     pub fn is_parent_slot(&self) -> bool {
-        self.kind.inner() == Object::parent_kind_ref().inner()
+        self.kind == SpecialObjects::get_slot_kind_parent()
     }
 
     pub fn is_trait_slot(&self) -> bool {
-        self.kind.inner() == Object::trait_kind_ref().inner()
-    }
-
-    pub fn is_data_slot(&self) -> bool {
-        self.kind.inner() == Object::data_kind_ref().inner()
+        self.kind == SpecialObjects::get_slot_kind_trait()
     }
 }
 
 #[repr(C)]
 pub struct Map {
     pub header: ObjectHeader,
-    pub name: ObjectRef, // ByteArray
-    pub object_size: usize,
-    pub slot_count: usize,
-    pub slots: ObjectRef, // Array
+    pub name: ObjectRef,        // ByteArray
+    pub object_size: ObjectRef, // integer
+    pub slot_count: ObjectRef,  // integer
+    pub slots: ObjectRef,       // Array
     pub default: ObjectRef,
 }
 
@@ -380,7 +551,8 @@ impl Map {
     pub fn get_parent_slots(&self) -> Vec<&Slot> {
         let mut parent_slots = Vec::new();
 
-        for i in 0..self.slot_count {
+        let slot_count = unsafe { self.slot_count.as_int_unchecked() } as usize;
+        for i in 0..slot_count {
             if let Some(slot_ref) = self.get_slot(i) {
                 unsafe {
                     let slot = &*(slot_ref.as_ptr_unchecked() as *const Slot);
@@ -396,7 +568,8 @@ impl Map {
     pub fn get_trait_slots(&self) -> Vec<&Slot> {
         let mut trait_slots = Vec::new();
 
-        for i in 0..self.slot_count {
+        let slot_count = unsafe { self.slot_count.as_int_unchecked() } as usize;
+        for i in 0..slot_count {
             if let Some(slot_ref) = self.get_slot(i) {
                 unsafe {
                     let slot = &*(slot_ref.as_ptr_unchecked() as *const Slot);
@@ -414,7 +587,7 @@ impl Map {
             if let Some(slot_ref) = self.get_slot(index) {
                 unsafe {
                     let slot = &*(slot_ref.as_ptr_unchecked() as *const Slot);
-                    if kind.map_or(true, |k| slot.kind.inner() == k.inner()) {
+                    if kind.map_or(true, |k| slot.kind == k) {
                         return Some((slot, index));
                     }
                 }
@@ -435,7 +608,8 @@ impl Map {
     }
 
     pub fn get_slot_index(&self, name: &ByteArray) -> Option<usize> {
-        for i in 0..self.slot_count {
+        let slot_count = unsafe { self.slot_count.as_int_unchecked() } as usize;
+        for i in 0..slot_count {
             if let Some(slot_ref) = self.get_slot(i) {
                 unsafe {
                     let slot = &*(slot_ref.as_ptr_unchecked() as *const Slot);
@@ -461,45 +635,34 @@ impl Map {
     }
 }
 
-impl fmt::Debug for ObjectRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_int() {
-            write!(f, "Fixnum({})", unsafe { self.as_int_unchecked() })
-        } else {
-            let ptr = unsafe { self.as_ptr_unchecked() };
-            let inner = self.inner();
-
-            if inner == Object::true_ref().inner() {
-                write!(f, "t")
-            } else if inner == Object::false_ref().inner() {
-                write!(f, "f")
-            } else {
-                write!(f, "OBJ({:#x})", ptr as usize)
-            }
-        }
-    }
-}
-
 impl fmt::Debug for Map {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = unsafe {
-            if let Some(ptr) = self.name.as_ptr() {
-                let byte_array = &*(ptr as *const ByteArray);
-                byte_array
-            } else {
-                return write!(f, "Map {{ name: <invalid>, ... }}");
+        let mut slot_debug = f.debug_struct("Map");
+
+        if self.name.is_false() {
+            slot_debug.field("name", &ObjectRef::null());
+        } else {
+            unsafe {
+                if let Some(ptr) = self.name.as_ptr() {
+                    let byte_array = &*(ptr as *const ByteArray);
+                    if let Some(s) = byte_array.as_str() {
+                        slot_debug.field("name", &s);
+                    } else {
+                        slot_debug.field("name", &"<invalid utf8>");
+                    }
+                } else {
+                    slot_debug.field("name", &"<invalid>");
+                }
             }
         };
 
         let slots = self.slots();
-        let mut slot_debug = f.debug_struct("Map");
         slot_debug
-            .field("name", &name)
             .field("object_size", &self.object_size)
             .field("slot_count", &self.slot_count);
-
         let mut formatted_slots = Vec::new();
-        for i in 0..self.slot_count {
+        let slot_count = unsafe { self.slot_count.as_int_unchecked() } as usize;
+        for i in 0..slot_count {
             if let Some(slot_ref) = slots.get_element(i) {
                 unsafe {
                     if let Some(ptr) = slot_ref.as_ptr() {
@@ -533,8 +696,9 @@ impl fmt::Debug for ByteArray {
 
 impl fmt::Debug for Array {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
         f.debug_list()
-            .entries((0..self.size).filter_map(|i| self.get_element(i)))
+            .entries((0..size).filter_map(|i| self.get_element(i)))
             .finish()
     }
 }
@@ -574,6 +738,91 @@ mod tests {
     use super::*;
     use std::alloc::{Layout, alloc};
 
+    unsafe fn create_test_object(map: *mut Map) -> *mut Object {
+        let align = std::mem::align_of::<Object>();
+        unsafe {
+            let size = (*map).object_size.as_int_unchecked() as usize;
+            let layout = Layout::from_size_align(size, align).unwrap();
+            let obj = alloc(layout) as *mut Object;
+            (*obj).header = ObjectHeader::new(map);
+            obj
+        }
+    }
+
+    unsafe fn create_test_array(length: usize) -> *mut Array {
+        let size = Array::required_size(length);
+        let align = std::mem::align_of::<Array>();
+        let layout = Layout::from_size_align(size, align).unwrap();
+
+        unsafe {
+            let ptr = alloc(layout) as *mut Array;
+            (*ptr).size = ObjectRef::from_int(length as i64);
+            (*ptr).header = ObjectHeader::null();
+            ptr
+        }
+    }
+
+    unsafe fn create_test_bytearray(length: usize) -> *mut ByteArray {
+        let size = ByteArray::required_size(length);
+        let align = std::mem::align_of::<ByteArray>();
+        let layout = Layout::from_size_align(size, align).unwrap();
+
+        unsafe {
+            let ptr = alloc(layout) as *mut ByteArray;
+            (*ptr).size = length;
+            (*ptr).header = ObjectHeader::null();
+            ptr
+        }
+    }
+
+    unsafe fn create_test_map(slot_count: usize, object_slots: usize) -> *mut Map {
+        let align = std::mem::align_of::<Map>();
+        let size = std::mem::size_of::<Map>();
+        let layout = Layout::from_size_align(size, align).unwrap();
+
+        let slot_count_obj = ObjectRef::from_int(slot_count as i64);
+        let object_size_bytes =
+            std::mem::size_of::<Object>() + (object_slots * std::mem::size_of::<ObjectRef>());
+
+        unsafe {
+            let map = alloc(layout) as *mut Map;
+            (*map).header = ObjectHeader::null();
+            (*map).name = ObjectRef::null();
+            (*map).object_size = ObjectRef::from_int(object_size_bytes as i64);
+            (*map).slot_count = slot_count_obj;
+            (*map).default = ObjectRef::null();
+
+            let slots_array = create_test_array(slot_count);
+            (*map).slots = ObjectRef::from_array_ptr(slots_array);
+
+            map
+        }
+    }
+
+    unsafe fn create_test_slot(name: &[u8], kind: ObjectRef) -> *mut Slot {
+        let align = std::mem::align_of::<Slot>();
+        let size = std::mem::size_of::<Slot>();
+        let layout = Layout::from_size_align(size, align).unwrap();
+
+        unsafe {
+            let slot = alloc(layout) as *mut Slot;
+            (*slot).header = ObjectHeader::null();
+
+            let name_array = create_test_bytearray(name.len());
+            for (i, &byte) in name.iter().enumerate() {
+                (*name_array).set_element(i, byte);
+            }
+
+            (*slot).name = ObjectRef::from_bytearray_ptr(name_array);
+            (*slot).kind = kind;
+            (*slot).ty = ObjectRef::null();
+            (*slot).index = ObjectRef::from_int(0);
+            (*slot).guard = ObjectRef::null();
+
+            slot
+        }
+    }
+
     #[test]
     fn test_integer_encoding() {
         let positive = 42i64;
@@ -594,7 +843,7 @@ mod tests {
 
         let min = i64::MIN;
         let min_ref = ObjectRef::from_int_checked(min);
-        assert!(min_ref.is_some());
+        assert!(min_ref.is_none());
     }
 
     #[test]
@@ -605,30 +854,6 @@ mod tests {
         assert!(!ptr_ref.is_int());
         assert_eq!(ptr_ref.as_ptr(), Some(dummy_addr));
         assert_eq!(ptr_ref.as_int(), None);
-    }
-
-    unsafe fn create_test_array(length: usize) -> *mut Array {
-        let size = Array::required_size(length);
-        let align = std::mem::align_of::<Array>();
-        let layout = Layout::from_size_align(size, align).unwrap();
-
-        unsafe {
-            let ptr = alloc(layout) as *mut Array;
-            (*ptr).size = length;
-            ptr
-        }
-    }
-
-    unsafe fn create_test_bytearray(length: usize) -> *mut ByteArray {
-        let size = ByteArray::required_size(length);
-        let align = std::mem::align_of::<ByteArray>();
-        let layout = Layout::from_size_align(size, align).unwrap();
-
-        unsafe {
-            let ptr = alloc(layout) as *mut ByteArray;
-            (*ptr).size = length;
-            ptr
-        }
     }
 
     #[test]
@@ -701,11 +926,10 @@ mod tests {
             assert!(!(*ba1).equal(&*ba3));
         }
     }
+
     #[test]
     fn test_header() {
-        let dummy_map = unsafe { create_test_map(1, 1) };
-        unsafe { (*dummy_map).header = ObjectHeader::new_u64(0x1000) };
-        let header = unsafe { &mut (*dummy_map).header };
+        let header = ObjectHeader::new_u64(0x1000);
 
         assert_eq!(
             header.map & 0b11,
@@ -719,6 +943,7 @@ mod tests {
         );
 
         assert!(!header.is_marked(), "New header should not be marked");
+        let mut header = header;
         header.set_mark();
         assert!(header.is_marked(), "Header should be marked after set_mark");
         assert_eq!(header.map & MARK_BIT, MARK_BIT, "Mark bit should be set");
@@ -743,64 +968,6 @@ mod tests {
         );
     }
 
-    unsafe fn create_test_object(map: *mut Map) -> *mut Object {
-        let align = std::mem::align_of::<Object>();
-        unsafe {
-            let size = (*map).object_size;
-            let layout = Layout::from_size_align(size, align).unwrap();
-            let obj = alloc(layout) as *mut Object;
-            (*obj).header = ObjectHeader::new(map);
-            obj
-        }
-    }
-
-    unsafe fn create_test_map(slot_count: usize, object_slots: usize) -> *mut Map {
-        let align = std::mem::align_of::<Map>();
-        let size = std::mem::size_of::<Map>();
-        let layout = Layout::from_size_align(size, align).unwrap();
-
-        unsafe {
-            let map = alloc(layout) as *mut Map;
-
-            (*map).header = ObjectHeader::new(Object::map_map_ref().as_ptr_unchecked() as *mut _);
-            (*map).name = Object::false_ref();
-            (*map).object_size =
-                std::mem::size_of::<Object>() + (object_slots * std::mem::size_of::<ObjectRef>());
-            (*map).slot_count = slot_count;
-            (*map).default = Object::false_ref();
-
-            let slots_array = create_test_array(slot_count);
-            (*map).slots = ObjectRef::from_ptr(slots_array as *mut Object);
-
-            map
-        }
-    }
-
-    unsafe fn create_test_slot(name: &[u8], kind: ObjectRef) -> *mut Slot {
-        let align = std::mem::align_of::<Slot>();
-        let size = std::mem::size_of::<Slot>();
-        let layout = Layout::from_size_align(size, align).unwrap();
-
-        unsafe {
-            let slot = alloc(layout) as *mut Slot;
-
-            (*slot).header = ObjectHeader::null();
-
-            let name_array = create_test_bytearray(name.len());
-            for (i, &byte) in name.iter().enumerate() {
-                (*name_array).set_element(i, byte);
-            }
-
-            (*slot).name = ObjectRef::from_ptr(name_array as *mut Object);
-            (*slot).kind = kind;
-            (*slot).ty = Object::false_ref();
-            (*slot).index = 0;
-            (*slot).guard = Object::false_ref();
-
-            slot
-        }
-    }
-
     #[test]
     fn test_object_slots() {
         unsafe {
@@ -808,13 +975,11 @@ mod tests {
             let parent_obj = create_test_object(parent_map);
             (*parent_obj).header = ObjectHeader::new(parent_map);
 
-            let x_name = create_test_bytearray(1);
-            (*x_name).set_from_str("x");
-
-            let x_slot = create_test_slot(b"x", Object::data_kind_ref());
+            let x_slot = create_test_slot(b"x", ObjectRef::from_int(0));
             (*x_slot).ty = ObjectRef::from_int(42);
-            (*x_slot).index = 0;
+            (*x_slot).index = ObjectRef::from_int(0);
             (*parent_map).set_slot(ObjectRef::from_ptr(x_slot as *mut Object), 0);
+            (*parent_map).slot_count = ObjectRef::from_int(1);
 
             (*parent_obj).set_slot_value(0, ObjectRef::from_int(100));
 
@@ -822,17 +987,18 @@ mod tests {
             let child_obj = create_test_object(child_map);
             (*child_obj).header = ObjectHeader::new(child_map);
 
-            let y_slot = create_test_slot(b"y", Object::data_kind_ref());
-            (*y_slot).index = 1;
+            let y_slot = create_test_slot(b"y", ObjectRef::from_int(0));
+            (*y_slot).index = ObjectRef::from_int(1);
 
-            let parent_slot = create_test_slot(b"parent", Object::parent_kind_ref());
+            let parent_slot = create_test_slot(b"parent", ObjectRef::from_int(2));
             (*parent_slot).ty = ObjectRef::from_ptr(parent_obj);
 
-            (*child_map).set_slot(ObjectRef::from_ptr(y_slot as _), 0);
-            (*child_map).set_slot(ObjectRef::from_ptr(parent_slot as _), 1);
+            (*child_map).set_slot(ObjectRef::from_ptr(y_slot as *mut Object), 0);
+            (*child_map).set_slot(ObjectRef::from_ptr(parent_slot as *mut Object), 1);
+            (*child_map).slot_count = ObjectRef::from_int(2);
 
-            (*child_obj).set_slot_value(1, ObjectRef::from_int(200));
             (*child_obj).set_slot_value(0, ObjectRef::from_int(100));
+            (*child_obj).set_slot_value(1, ObjectRef::from_int(200));
 
             let x_lookup = create_test_bytearray(1);
             (*x_lookup).set_from_str("x");
