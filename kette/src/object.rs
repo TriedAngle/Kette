@@ -3,6 +3,10 @@ use std::fmt;
 pub const TAG_MASK: u64 = 0x1;
 pub const TAG_OBJECT: u64 = 0x1;
 pub const TAG_INT: u64 = 0x0;
+pub const HEADER_TAG: u64 = 0b11;
+pub const MARK_BIT: u64 = 1 << 2;
+pub const HEADER_FULL_TAG: u64 = 0b111;
+pub const MAP_MASK: u64 = !HEADER_FULL_TAG;
 
 const fn empty_object() -> Object {
     Object {
@@ -26,17 +30,47 @@ fn get_special_object(index: usize) -> ObjectRef {
 
 #[repr(C)]
 pub struct ObjectHeader {
-    map: *mut Map,
+    pub map: u64,
 }
 
 impl ObjectHeader {
     pub const fn null() -> Self {
+        Self { map: 0 }
+    }
+
+    pub fn new(map: *mut Map) -> Self {
+        let ptr_bits = map as u64 & MAP_MASK;
         Self {
-            map: std::ptr::null_mut(),
+            map: ptr_bits | HEADER_TAG,
         }
+    }
+
+    pub fn new_u64(value: u64) -> Self {
+        let ptr_bits = value & MAP_MASK;
+        Self {
+            map: ptr_bits | HEADER_TAG,
+        }
+    }
+
+    pub fn map(&self) -> *mut Map {
+        (self.map & MAP_MASK) as *mut Map
+    }
+
+    pub fn is_marked(&self) -> bool {
+        self.map & MARK_BIT != 0
+    }
+
+    pub fn set_mark(&mut self) {
+        self.map |= MARK_BIT;
+    }
+
+    pub fn clear_mark(&mut self) {
+        self.map &= !MARK_BIT;
     }
 }
 
+// ObjectHeader:
+// [63: mark bit][62-2: map pointer][1-0: header tag (11)]
 #[repr(C)]
 pub struct Object {
     pub header: ObjectHeader,
@@ -44,11 +78,11 @@ pub struct Object {
 
 impl Object {
     pub fn get_map(&self) -> &Map {
-        unsafe { &*self.header.map }
+        unsafe { &*self.header.map() }
     }
 
     pub fn get_map_mut(&mut self) -> &mut Map {
-        unsafe { &mut *self.header.map }
+        unsafe { &mut *self.header.map() }
     }
 
     pub fn false_ref() -> ObjectRef {
@@ -168,8 +202,8 @@ impl ObjectRef {
 
 #[repr(C)]
 pub struct Array {
-    header: ObjectHeader,
-    size: usize,
+    pub header: ObjectHeader,
+    pub size: usize,
     // [ObjectRef; length] elements follow here
 }
 
@@ -216,8 +250,8 @@ impl Array {
 
 #[repr(C)]
 pub struct ByteArray {
-    header: ObjectHeader,
-    size: usize,
+    pub header: ObjectHeader,
+    pub size: usize,
     // [u8; length] elements follow here
 }
 
@@ -390,7 +424,7 @@ impl Map {
         for parent_slot in self.get_parent_slots() {
             unsafe {
                 let parent_obj = &*(parent_slot.ty.as_ptr_unchecked());
-                let parent_map = &*(parent_obj.header.map);
+                let parent_map = &*(parent_obj.header.map());
                 if let Some((slot, idx)) = parent_map.lookup_slot(name, kind) {
                     return Some((slot, idx));
                 }
@@ -667,6 +701,47 @@ mod tests {
             assert!(!(*ba1).equal(&*ba3));
         }
     }
+    #[test]
+    fn test_header() {
+        let dummy_map = unsafe { create_test_map(1, 1) };
+        unsafe { (*dummy_map).header = ObjectHeader::new_u64(0x1000) };
+        let header = unsafe { &mut (*dummy_map).header };
+
+        assert_eq!(
+            header.map & 0b11,
+            HEADER_TAG,
+            "Header tag bits should be set"
+        );
+        assert_eq!(
+            header.map(),
+            0x1000 as *mut _,
+            "Should recover original value"
+        );
+
+        assert!(!header.is_marked(), "New header should not be marked");
+        header.set_mark();
+        assert!(header.is_marked(), "Header should be marked after set_mark");
+        assert_eq!(header.map & MARK_BIT, MARK_BIT, "Mark bit should be set");
+        header.clear_mark();
+        assert!(
+            !header.is_marked(),
+            "Header should not be marked after clear_mark"
+        );
+
+        let ptr_bits = header.map & MAP_MASK;
+        header.set_mark();
+        assert_eq!(
+            header.map & MAP_MASK,
+            ptr_bits,
+            "Pointer bits should be preserved when marking"
+        );
+        header.clear_mark();
+        assert_eq!(
+            header.map & MAP_MASK,
+            ptr_bits,
+            "Pointer bits should be preserved when clearing mark"
+        );
+    }
 
     unsafe fn create_test_object(map: *mut Map) -> *mut Object {
         let align = std::mem::align_of::<Object>();
@@ -674,7 +749,7 @@ mod tests {
             let size = (*map).object_size;
             let layout = Layout::from_size_align(size, align).unwrap();
             let obj = alloc(layout) as *mut Object;
-            (*obj).header.map = map;
+            (*obj).header = ObjectHeader::new(map);
             obj
         }
     }
@@ -687,9 +762,7 @@ mod tests {
         unsafe {
             let map = alloc(layout) as *mut Map;
 
-            (*map).header = ObjectHeader {
-                map: Object::map_map_ref().as_ptr_unchecked() as *mut _,
-            };
+            (*map).header = ObjectHeader::new(Object::map_map_ref().as_ptr_unchecked() as *mut _);
             (*map).name = Object::false_ref();
             (*map).object_size =
                 std::mem::size_of::<Object>() + (object_slots * std::mem::size_of::<ObjectRef>());
@@ -733,7 +806,7 @@ mod tests {
         unsafe {
             let parent_map = create_test_map(1, 1);
             let parent_obj = create_test_object(parent_map);
-            (*parent_obj).header.map = parent_map;
+            (*parent_obj).header = ObjectHeader::new(parent_map);
 
             let x_name = create_test_bytearray(1);
             (*x_name).set_from_str("x");
@@ -747,7 +820,7 @@ mod tests {
 
             let child_map = create_test_map(2, 2);
             let child_obj = create_test_object(child_map);
-            (*child_obj).header.map = child_map;
+            (*child_obj).header = ObjectHeader::new(child_map);
 
             let y_slot = create_test_slot(b"y", Object::data_kind_ref());
             (*y_slot).index = 1;
