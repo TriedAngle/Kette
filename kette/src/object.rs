@@ -398,6 +398,10 @@ impl Array {
         true
     }
 
+    pub fn data_ptr_mut(&mut self) -> *mut ObjectRef {
+        unsafe { (self as *mut Self).add(1) as *mut _ }
+    }
+
     pub unsafe fn get_element_unsafe(&self, index: usize) -> ObjectRef {
         unsafe {
             let elements = (self as *const Self).add(1) as *const ObjectRef;
@@ -733,10 +737,16 @@ impl fmt::Debug for Slot {
     }
 }
 
+impl From<*mut Array> for ObjectRef {
+    fn from(value: *mut Array) -> Self {
+        Self::from_array_ptr(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{Layout, alloc};
+    use std::alloc::{alloc, Layout};
 
     unsafe fn create_test_object(map: *mut Map) -> *mut Object {
         let align = std::mem::align_of::<Object>();

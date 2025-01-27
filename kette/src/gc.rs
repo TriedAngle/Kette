@@ -1,28 +1,40 @@
 use std::{alloc, collections::HashSet, ptr, usize};
 
-use crate::object::{
-    Array, ByteArray, HEADER_TAG, MARK_BIT, Map, Object, ObjectHeader, ObjectRef, Slot,
-    SpecialObjects,
-};
+use crate::object::{Array, ByteArray, Map, Object, ObjectHeader, ObjectRef, Slot, SpecialObjects};
 
-const BUMP_CHUNK_SIZE: usize = 64 * 1024;
 const SMALL_OBJECT_MAX_SIZE: usize = 64;
-const MIN_OBJECT_SIZE: usize = 8;
+const BUMP_CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
+const MIN_OBJECT_ALIGNMENT: usize = 8;
+const ALLOCATION_METADATA_SIZE: usize = std::mem::size_of::<usize>();
 
-struct BumpChunk {
+pub struct AllocatorStats {
+    pub chunk_count: usize,
+    pub total_allocated: usize,
+    pub total_objects: usize,
+    pub live_objects: usize,
+}
+
+struct Chunk {
     start: *mut u8,
     current: *mut u8,
     end: *mut u8,
+
+    object_count: usize,
+    live_count: usize,
 }
 
-impl BumpChunk {
+impl Chunk {
     unsafe fn new() -> Self {
-        let layout = unsafe { alloc::Layout::from_size_align_unchecked(BUMP_CHUNK_SIZE, 8) };
-        let ptr = unsafe { alloc::alloc(layout) };
+        let layout =
+            alloc::Layout::from_size_align_unchecked(BUMP_CHUNK_SIZE, MIN_OBJECT_ALIGNMENT);
+        let ptr = alloc::alloc(layout);
+
         Self {
             start: ptr,
             current: ptr,
-            end: unsafe { ptr.add(BUMP_CHUNK_SIZE) },
+            end: ptr.add(BUMP_CHUNK_SIZE),
+            object_count: 0,
+            live_count: 0,
         }
     }
 
@@ -30,92 +42,117 @@ impl BumpChunk {
         unsafe { self.end.offset_from(self.current) as usize }
     }
 
-    // fn contains_address(&self, addr: *mut u8) -> bool {
-    //     self.start <= addr && addr < self.end
-    // }
+    fn contains_address(&self, addr: *mut u8) -> bool {
+        addr >= self.start && addr < self.end
+    }
 
-    unsafe fn scan_live_objects(&self) -> usize {
-        let mut live_count = 0;
-        let mut current = self.start as *mut u64;
-        while current < self.end as *mut u64 {
-            let value = unsafe { *current };
-            if (value & HEADER_TAG) == HEADER_TAG {
-                if value & MARK_BIT != 0 {
-                    live_count += 1;
-                }
-            }
-            current = unsafe { current.add(1) };
+    unsafe fn allocate(&mut self, size: usize) -> Option<*mut u8> {
+        let total_size = size + ALLOCATION_METADATA_SIZE;
+        let aligned_size = (total_size + MIN_OBJECT_ALIGNMENT - 1) & !(MIN_OBJECT_ALIGNMENT - 1);
+
+        if self.remaining_space() < aligned_size {
+            return None;
         }
+
+        *(self.current as *mut usize) = size;
+        let object_start = self.current.add(ALLOCATION_METADATA_SIZE);
+
+        self.current = self.current.add(aligned_size);
+        self.object_count += 1;
+
+        Some(object_start)
+    }
+
+    unsafe fn for_each_object<F>(&self, mut f: F)
+    where
+        F: FnMut(*mut ObjectHeader),
+    {
+        let mut current = self.start;
+
+        while current < self.current {
+            let size = *(current as *mut usize);
+            let object = current.add(ALLOCATION_METADATA_SIZE) as *mut ObjectHeader;
+
+            f(object);
+
+            let total_size = size + ALLOCATION_METADATA_SIZE;
+            let aligned_size =
+                (total_size + MIN_OBJECT_ALIGNMENT - 1) & !(MIN_OBJECT_ALIGNMENT - 1);
+            current = current.add(aligned_size);
+        }
+    }
+
+    unsafe fn scan_live_objects(&mut self) -> usize {
+        self.live_count = 0;
+        let mut live_count = 0;
+
+        self.for_each_object(|obj| {
+            if (*obj).is_marked() {
+                live_count += 1;
+                (*obj).clear_mark();
+            }
+        });
+        self.live_count = live_count;
         live_count
     }
 }
 
-struct BumpAllocator {
-    chunks: Vec<BumpChunk>,
+pub struct BumpAllocator {
+    chunks: Vec<Chunk>,
     current_chunk_idx: usize,
-}
-
-struct LargeAllocator {
-    objects: Vec<ptr::NonNull<Object>>,
-}
-
-pub struct GarbageCollector {
-    bump: BumpAllocator,
-    large: LargeAllocator,
-    roots: HashSet<ObjectRef>,
     total_allocated: usize,
-    threshold: usize,
-    specials: SpecialObjects,
+    alive_objects: usize,
 }
 
 impl BumpAllocator {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            chunks: unsafe { vec![BumpChunk::new()] },
+            chunks: vec![unsafe { Chunk::new() }],
             current_chunk_idx: 0,
+            total_allocated: 0,
+            alive_objects: 0,
         }
     }
 
-    unsafe fn allocate(&mut self, size: usize) -> *mut u8 {
-        debug_assert!(size <= SMALL_OBJECT_MAX_SIZE);
-        debug_assert!(size >= MIN_OBJECT_SIZE);
-        let aligned_size = (size + 7) & !7;
+    pub unsafe fn allocate(&mut self, size: usize) -> *mut u8 {
+        debug_assert!(size >= MIN_OBJECT_ALIGNMENT);
 
-        if self.chunks[self.current_chunk_idx].remaining_space() < aligned_size {
-            let mut found = false;
-            for (idx, chunk) in self.chunks.iter().enumerate() {
-                if chunk.remaining_space() >= aligned_size {
-                    self.current_chunk_idx = idx;
-                    found = true;
-                    break;
-                }
-            }
+        if let Some(ptr) = self.chunks[self.current_chunk_idx].allocate(size) {
+            self.total_allocated += size;
+            return ptr;
+        }
 
-            if !found {
-                unsafe {
-                    self.chunks.push(BumpChunk::new());
-                }
-
-                self.current_chunk_idx = self.chunks.len() - 1;
+        for (idx, chunk) in self.chunks.iter_mut().enumerate() {
+            if let Some(ptr) = chunk.allocate(size) {
+                self.current_chunk_idx = idx;
+                self.total_allocated += size;
+                return ptr;
             }
         }
 
-        let chunk = &mut self.chunks[self.current_chunk_idx];
-        let result = chunk.current;
-        chunk.current = unsafe { chunk.current.add(aligned_size) };
-        result
+        self.chunks.push(unsafe { Chunk::new() });
+        self.current_chunk_idx = self.chunks.len() - 1;
+
+        let ptr = self.chunks[self.current_chunk_idx]
+            .allocate(size)
+            .expect("New chunk should have space");
+
+        self.total_allocated += size;
+        ptr
     }
 
-    unsafe fn collect_empty_chunks(&mut self) {
+    pub fn contains_address(&self, addr: *mut u8) -> bool {
+        self.chunks.iter().any(|chunk| chunk.contains_address(addr))
+    }
+
+    pub unsafe fn post_collection(&mut self) {
+        self.total_allocated = 0;
+        self.alive_objects = 0;
         let mut i = 0;
         while i < self.chunks.len() {
             let live_count = unsafe { self.chunks[i].scan_live_objects() };
-
+            self.alive_objects += live_count;
             if live_count == 0 {
-                let layout =
-                    unsafe { alloc::Layout::from_size_align_unchecked(BUMP_CHUNK_SIZE, 8) };
-                unsafe { alloc::dealloc(self.chunks[i].start, layout) };
-
                 self.chunks.swap_remove(i);
 
                 if i <= self.current_chunk_idx {
@@ -127,10 +164,40 @@ impl BumpAllocator {
         }
 
         if self.chunks.is_empty() {
-            self.chunks.push(unsafe { BumpChunk::new() });
+            self.chunks.push(unsafe { Chunk::new() });
             self.current_chunk_idx = 0;
         }
     }
+
+    pub fn stats(&self) -> AllocatorStats {
+        let mut total_objects = 0;
+        let mut live_objects = 0;
+
+        for chunk in &self.chunks {
+            total_objects += chunk.object_count;
+            live_objects += chunk.live_count;
+        }
+
+        AllocatorStats {
+            chunk_count: self.chunks.len(),
+            total_allocated: self.total_allocated,
+            total_objects,
+            live_objects,
+        }
+    }
+}
+
+pub struct LargeAllocator {
+    objects: Vec<ptr::NonNull<Object>>,
+}
+
+pub struct GarbageCollector {
+    pub bump: BumpAllocator,
+    pub large: LargeAllocator,
+    pub roots: HashSet<ObjectRef>,
+    pub total_allocated: usize,
+    threshold: usize,
+    pub specials: SpecialObjects,
 }
 
 impl LargeAllocator {
@@ -140,7 +207,7 @@ impl LargeAllocator {
         }
     }
 
-    unsafe fn allocate(&mut self, size: usize) -> *mut Object {
+    pub unsafe fn allocate(&mut self, size: usize) -> *mut Object {
         let layout = unsafe { alloc::Layout::from_size_align_unchecked(size, 8) };
         let ptr = unsafe { alloc::alloc(layout) as *mut Object };
         unsafe {
@@ -149,7 +216,7 @@ impl LargeAllocator {
         ptr
     }
 
-    unsafe fn deallocate(&mut self, ptr: *mut Object) {
+    pub unsafe fn deallocate(&mut self, ptr: *mut Object) {
         let map = unsafe { (*ptr).get_map() };
         let size = (*map).object_size;
         let layout = unsafe {
@@ -320,7 +387,7 @@ impl GarbageCollector {
 
         unsafe { self.sweep() };
 
-        unsafe { self.bump.collect_empty_chunks() };
+        unsafe { self.bump.post_collection() };
 
         self.total_allocated = unsafe { self.calculate_live_size() };
     }
@@ -413,15 +480,8 @@ impl GarbageCollector {
 
     unsafe fn calculate_live_size(&self) -> usize {
         let mut total = 0;
-
-        for obj in &self.large.objects {
-            let map = unsafe { (*obj.as_ptr()).get_map() };
-            total += unsafe { (*map).object_size.as_int_unchecked() } as usize;
-        }
-
-        for chunk in &self.bump.chunks {
-            total += unsafe { chunk.scan_live_objects() };
-        }
+        total += self.large.objects.len();
+        total += self.bump.alive_objects;
 
         total
     }
@@ -710,15 +770,16 @@ mod tests {
     #[test]
     fn test_chunk_scanning() {
         unsafe {
-            let mut chunk = BumpChunk::new();
-            let layout = alloc::Layout::from_size_align(32, 8).unwrap();
+            let mut chunk = Chunk::new();
 
-            let obj1 = chunk.current as *mut ObjectHeader;
-            chunk.current = chunk.current.add(layout.size());
+            let obj1 =
+                chunk.allocate(32).expect("First allocation should succeed") as *mut ObjectHeader;
+            let obj2 = chunk
+                .allocate(32)
+                .expect("Second allocation should succeed")
+                as *mut ObjectHeader;
+
             *obj1 = ObjectHeader::new(0x1000 as *mut Map);
-
-            let obj2 = chunk.current as *mut ObjectHeader;
-            chunk.current = chunk.current.add(layout.size());
             *obj2 = ObjectHeader::new(0x2000 as *mut Map);
 
             assert_eq!(
@@ -734,6 +795,7 @@ mod tests {
                 "Should find one marked object"
             );
 
+            (*obj1).set_mark();
             (*obj2).set_mark();
             assert_eq!(
                 chunk.scan_live_objects(),
