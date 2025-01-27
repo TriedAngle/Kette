@@ -16,8 +16,8 @@ pub struct Context {
 }
 
 pub struct ContextConfig {
-    datastack_size: usize,
-    retainstack_size: usize,
+    pub datastack_size: usize,
+    pub retainstack_size: usize,
 }
 
 impl Context {

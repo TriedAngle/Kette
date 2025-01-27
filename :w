@@ -1,0 +1,49 @@
+use crate::context::Context;
+
+impl Context {
+    fn drop(&mut self) {
+        let _ = self.pop();
+    }
+
+    fn push_fixnum(&mut self, num: i64) {
+
+    }
+
+    fn pop_fixnum(&mut self) -> i64 {
+        let obj = self.pop();
+        let num = unsafe { obj.as_int_unchecked() };
+        num
+    }
+    fn pop_2fixnum(&mut self) -> (i64, i64) {
+        let obj_y = self.pop();
+        let obj_x = self.pop();
+        let x = unsafe { obj_x.as_int_unchecked() };
+        let y = unsafe { obj_y.as_int_unchecked() };
+        (x, y)
+    }
+
+    fn fixnum_add(&mut self) {
+        let (x, y) = self.pop_2fixnum()
+    }
+
+    fn fixnum_to_string(&mut self) {
+        let obj = self.pop();
+        let num = unsafe { obj.as_int_unchecked() };
+        let bytearray = unsafe { self.gc.allocate_string(&format!("{}", num)) };
+        self.push(bytearray.into());
+    }
+
+    fn byterray_print_utf8(&mut self) {
+        let obj = self.pop();
+        let bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
+        let s = unsafe { (*bytearray).as_str().unwrap() };
+        print!("{}", s);
+    }
+
+    fn byterray_println_utf8(&mut self) {
+        let obj = self.pop();
+        let bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
+        let s = unsafe { (*bytearray).as_str().unwrap() };
+        println!("{}", s);
+    }
+}

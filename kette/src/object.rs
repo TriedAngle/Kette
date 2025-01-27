@@ -29,6 +29,12 @@ pub enum ObjectType {
     // 6-15 available for future use
 }
 
+impl From<u64> for ObjectType {
+    fn from(value: u64) -> Self {
+        unsafe { mem::transmute(value) }
+    }
+}
+
 pub const MAP_MASK: u64 = !(TYPE_MASK | ALIGN_MASK);
 
 #[repr(C)]
@@ -162,7 +168,7 @@ impl ObjectRef {
     }
 
     pub unsafe fn as_int_unchecked(&self) -> i64 {
-        (self.0 >> 1) as i64
+        unsafe { mem::transmute::<_, i64>(self.0) >> 1 }
     }
 
     pub fn is_false(&self) -> bool {
@@ -219,6 +225,14 @@ impl ObjectRef {
 
     pub unsafe fn as_ptr_unchecked(&self) -> *mut Object {
         (self.0 & MAP_MASK) as *mut Object
+    }
+
+    pub unsafe fn as_array_ptr_unchecked(&self) -> *mut Array {
+        (self.0 & MAP_MASK) as *mut Array
+    }
+
+    pub unsafe fn as_bytearray_ptr_unchecked(&self) -> *mut ByteArray {
+        (self.0 & MAP_MASK) as *mut ByteArray
     }
 }
 
@@ -740,6 +754,12 @@ impl fmt::Debug for Slot {
 impl From<*mut Array> for ObjectRef {
     fn from(value: *mut Array) -> Self {
         Self::from_array_ptr(value)
+    }
+}
+
+impl From<*mut ByteArray> for ObjectRef {
+    fn from(value: *mut ByteArray) -> Self {
+        Self::from_bytearray_ptr(value)
     }
 }
 
