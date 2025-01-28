@@ -1,6 +1,6 @@
 use crate::{
     context::Context,
-    object::{Array, ByteArray, Object, ObjectRef, ObjectType},
+    object::{Array, ByteArray, Object, ObjectRef, ObjectType, SpecialObjects},
 };
 
 impl Context {
@@ -217,6 +217,24 @@ impl Context {
             std::ptr::copy(src_ptr, dst_ptr, size);
         }
     }
+}
+
+fn primitive_word(
+    ctx: &mut Context,
+    name: &str,
+    _stack_effect: &[&str],
+    fp: fn(&mut Context),
+) -> ObjectRef {
+    let body = ObjectRef::from_int(fp as i64);
+
+    let name = unsafe { ctx.gc.allocate_string(name) };
+    let word = unsafe { ctx.gc.allocate_word(None, true) };
+    unsafe { (*word).name = name.into() };
+    unsafe { (*word).body = body }
+    let flags = unsafe { (*word).flags.as_array_ptr().unwrap() };
+    unsafe { (*flags).set_element(0, SpecialObjects::word_primitive()) };
+
+    ObjectRef::from_word_ptr(word)
 }
 
 #[cfg(test)]

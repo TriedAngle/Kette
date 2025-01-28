@@ -5,7 +5,8 @@ use std::{
 };
 
 use crate::object::{
-    Array, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot, SpecialObjects, Word
+    Array, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot, SpecialObjects,
+    Word,
 };
 
 const SMALL_OBJECT_MAX_SIZE: usize = 64;
@@ -283,8 +284,7 @@ impl GarbageCollector {
         };
 
         unsafe {
-            (*ptr).header =
-                ObjectHeader::new(self.specials.get_array_map());
+            (*ptr).header = ObjectHeader::new(self.specials.get_array_map());
             (*ptr).size = ObjectRef::from_int(length as i64);
         }
 
@@ -310,8 +310,7 @@ impl GarbageCollector {
         };
 
         unsafe {
-            (*ptr).header =
-                ObjectHeader::new(self.specials.get_bytearray_map());
+            (*ptr).header = ObjectHeader::new(self.specials.get_bytearray_map());
             (*ptr).size = length;
         }
 
@@ -333,9 +332,7 @@ impl GarbageCollector {
         kind: ObjectRef,
         index: ObjectRef, // integer
     ) -> *mut Slot {
-        let slot = unsafe {
-            self.allocate(self.specials.get_slot_map()) as *mut Slot
-        };
+        let slot = unsafe { self.allocate(self.specials.get_slot_map()) as *mut Slot };
         unsafe { (*slot).name = name };
         unsafe { (*slot).kind = kind };
         unsafe { (*slot).index = index };
@@ -362,8 +359,7 @@ impl GarbageCollector {
         let ptr = unsafe { self.large.allocate(map_size) as *mut Map };
 
         unsafe {
-            (*ptr).header =
-                ObjectHeader::new(self.specials.get_map_map());
+            (*ptr).header = ObjectHeader::new(self.specials.get_map_map());
         };
         unsafe { (*ptr).object_size = ObjectRef::from_int(object_size as i64) };
         unsafe { (*ptr).slot_count = ObjectRef::from_int(0) };
@@ -377,31 +373,30 @@ impl GarbageCollector {
     }
 
     pub unsafe fn allocate_quotation(&mut self, size: Option<usize>) -> *mut Quotation {
-        let ptr = self.allocate(self.specials.get_quotation_map())
-            as *mut Quotation;
+        let ptr = self.allocate(self.specials.get_quotation_map()) as *mut Quotation;
 
         (*ptr).body = ObjectRef::null();
         (*ptr).stack_effect = ObjectRef::null();
         (*ptr).compiled = ObjectRef::null();
 
         if let Some(size) = size {
-            let body = unsafe { self.allocate_array(size) }; 
+            let body = unsafe { self.allocate_array(size) };
             unsafe { (*ptr).body = ObjectRef::from_array_ptr(body) };
         }
 
         ptr
     }
 
-    pub unsafe fn allocate_word(&mut self, size: Option<usize>) -> *mut Word {
-        let ptr =
-            self.allocate(self.specials.get_word_map()) as *mut Word;
+    pub unsafe fn allocate_word(&mut self, size: Option<usize>, flags: bool) -> *mut Word {
+        let ptr = self.allocate(self.specials.get_word_map()) as *mut Word;
 
         let body = self.allocate_quotation(size);
         (*ptr).body = ObjectRef::from_quotation_ptr(body);
 
-        let flags = self.allocate_array(4);
-        (*ptr).flags = ObjectRef::from_array_ptr(flags);
-
+        if flags {
+            let flags = self.allocate_array(4);
+            (*ptr).flags = ObjectRef::from_array_ptr(flags);
+        }
         (*ptr).stack_effect = ObjectRef::null();
 
         ptr
@@ -794,10 +789,7 @@ mod tests {
         gc.init_special_objects();
 
         unsafe {
-            assert!(
-                !gc.specials.map_map.is_int(),
-                "Map map should be a pointer"
-            );
+            assert!(!gc.specials.map_map.is_int(), "Map map should be a pointer");
 
             let map_map_ptr = gc.specials.get_map_map();
             assert_eq!((*map_map_ptr).header.map(), map_map_ptr as *mut Map);
@@ -805,7 +797,7 @@ mod tests {
             gc.collect();
 
             assert!(SpecialObjects::get_false() == ObjectRef::null());
-            assert_eq!(gc.specials.get_map_map(),map_map_ptr);
+            assert_eq!(gc.specials.get_map_map(), map_map_ptr);
         }
     }
 

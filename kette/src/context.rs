@@ -112,7 +112,7 @@ impl Context {
                             unsafe { mem::transmute(primitive_fn_raw) };
                         primitive_fn(self);
                     } else {
-                        let quotation_clone = unsafe { self.gc.deep_clone(body_obj, 2) };
+                        let quotation_clone = unsafe { self.gc.deep_clone(body_obj, 1) };
                         self.gc.add_root(quotation_clone);
 
                         let body_quotation = quotation_clone.as_quotation_ptr().unwrap();

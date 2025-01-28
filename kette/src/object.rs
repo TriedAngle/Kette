@@ -137,14 +137,13 @@ impl ObjectRef {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Box)
     }
 
-    pub fn from_quotation_ptr(ptr: *mut Quotation) -> Self { 
+    pub fn from_quotation_ptr(ptr: *mut Quotation) -> Self {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Quotation)
     }
 
     pub fn from_word_ptr(ptr: *mut Word) -> Self {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Word)
     }
-
 
     pub fn is_int(&self) -> bool {
         self.0 & TAG_MASK == TAG_INT
@@ -338,7 +337,7 @@ impl SpecialObjects {
         unsafe { self.slot_map.as_ptr_unchecked() as *mut _ }
     }
 
-    pub fn get_word_map(&self) -> *mut Map { 
+    pub fn get_word_map(&self) -> *mut Map {
         unsafe { self.word_map.as_ptr_unchecked() as *mut _ }
     }
 
@@ -747,6 +746,7 @@ pub struct Quotation {
 #[repr(C)]
 pub struct Word {
     pub header: ObjectHeader,
+    pub name: ObjectRef, // ByteArray
     pub body: ObjectRef, // Quotation
     // declared stack effect
     pub stack_effect: ObjectRef, // Array
