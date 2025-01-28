@@ -52,6 +52,12 @@ impl Context {
         self.push(obj);
     }
 
+    fn quotation_call(&mut self) {
+        let quotation_obj = self.pop();
+        let quotation = quotation_obj.as_quotation_ptr().unwrap();
+        let body = unsafe { (*quotation).body.as_array_ptr().unwrap() };
+    }
+
     // -- FIXNUM
     fn fixnum_add(&mut self) {
         let (x, y) = self.pop_2fixnum();

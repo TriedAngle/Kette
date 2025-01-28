@@ -1,6 +1,12 @@
-use std::{alloc, collections::HashSet, ptr, usize};
+use std::{
+    alloc,
+    collections::{HashMap, HashSet},
+    ptr, usize,
+};
 
-use crate::object::{Array, ByteArray, Map, Object, ObjectHeader, ObjectRef, Slot, SpecialObjects};
+use crate::object::{
+    Array, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot, SpecialObjects, Word
+};
 
 const SMALL_OBJECT_MAX_SIZE: usize = 64;
 const BUMP_CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
@@ -145,7 +151,7 @@ impl BumpAllocator {
         self.chunks.iter().any(|chunk| chunk.contains_address(addr))
     }
 
-    pub unsafe fn post_collection(&mut self) {
+    pub unsafe fn sweep(&mut self) {
         self.total_allocated = 0;
         self.alive_objects = 0;
         let mut i = 0;
@@ -191,15 +197,6 @@ pub struct LargeAllocator {
     objects: Vec<ptr::NonNull<Object>>,
 }
 
-pub struct GarbageCollector {
-    pub bump: BumpAllocator,
-    pub large: LargeAllocator,
-    pub roots: HashSet<ObjectRef>,
-    pub total_allocated: usize,
-    threshold: usize,
-    pub specials: SpecialObjects,
-}
-
 impl LargeAllocator {
     fn new() -> Self {
         Self {
@@ -224,6 +221,15 @@ impl LargeAllocator {
         };
         unsafe { alloc::dealloc(ptr as *mut u8, layout) };
     }
+}
+
+pub struct GarbageCollector {
+    pub bump: BumpAllocator,
+    pub large: LargeAllocator,
+    pub roots: HashSet<ObjectRef>,
+    pub total_allocated: usize,
+    pub threshold: usize,
+    pub specials: SpecialObjects,
 }
 
 impl GarbageCollector {
@@ -278,7 +284,7 @@ impl GarbageCollector {
 
         unsafe {
             (*ptr).header =
-                ObjectHeader::new(self.specials.get_array_map().as_ptr_unchecked() as _);
+                ObjectHeader::new(self.specials.get_array_map());
             (*ptr).size = ObjectRef::from_int(length as i64);
         }
 
@@ -305,7 +311,7 @@ impl GarbageCollector {
 
         unsafe {
             (*ptr).header =
-                ObjectHeader::new(self.specials.get_bytearray_map().as_ptr_unchecked() as _);
+                ObjectHeader::new(self.specials.get_bytearray_map());
             (*ptr).size = length;
         }
 
@@ -328,7 +334,7 @@ impl GarbageCollector {
         index: ObjectRef, // integer
     ) -> *mut Slot {
         let slot = unsafe {
-            self.allocate(self.specials.get_slot_map().as_ptr_unchecked() as *mut Map) as *mut Slot
+            self.allocate(self.specials.get_slot_map()) as *mut Slot
         };
         unsafe { (*slot).name = name };
         unsafe { (*slot).kind = kind };
@@ -357,7 +363,7 @@ impl GarbageCollector {
 
         unsafe {
             (*ptr).header =
-                ObjectHeader::new(self.specials.get_map_map().as_ptr_unchecked() as *mut Map);
+                ObjectHeader::new(self.specials.get_map_map());
         };
         unsafe { (*ptr).object_size = ObjectRef::from_int(object_size as i64) };
         unsafe { (*ptr).slot_count = ObjectRef::from_int(0) };
@@ -366,6 +372,37 @@ impl GarbageCollector {
 
         let slots_array = unsafe { self.allocate_array(init_slot_capacity) };
         unsafe { (*ptr).slots = ObjectRef::from_array_ptr(slots_array) };
+
+        ptr
+    }
+
+    pub unsafe fn allocate_quotation(&mut self, size: Option<usize>) -> *mut Quotation {
+        let ptr = self.allocate(self.specials.get_quotation_map())
+            as *mut Quotation;
+
+        (*ptr).body = ObjectRef::null();
+        (*ptr).stack_effect = ObjectRef::null();
+        (*ptr).compiled = ObjectRef::null();
+
+        if let Some(size) = size {
+            let body = unsafe { self.allocate_array(size) }; 
+            unsafe { (*ptr).body = ObjectRef::from_array_ptr(body) };
+        }
+
+        ptr
+    }
+
+    pub unsafe fn allocate_word(&mut self, size: Option<usize>) -> *mut Word {
+        let ptr =
+            self.allocate(self.specials.get_word_map()) as *mut Word;
+
+        let body = self.allocate_quotation(size);
+        (*ptr).body = ObjectRef::from_quotation_ptr(body);
+
+        let flags = self.allocate_array(4);
+        (*ptr).flags = ObjectRef::from_array_ptr(flags);
+
+        (*ptr).stack_effect = ObjectRef::null();
 
         ptr
     }
@@ -386,8 +423,6 @@ impl GarbageCollector {
         unsafe { self.mark() };
 
         unsafe { self.sweep() };
-
-        unsafe { self.bump.post_collection() };
 
         self.total_allocated = unsafe { self.calculate_live_size() };
     }
@@ -439,25 +474,35 @@ impl GarbageCollector {
                 let map_ref = ObjectRef::from_map(map_ptr);
                 if map_ptr as *mut Object != object && !map_ref.is_false() {
                     unsafe { self.mark_object(map_ref, work_list) };
+                    return;
                 }
             }
-
-            if let Some(arr) = obj.as_array_ptr() {
-                let size = unsafe { (*arr).size.as_int_unchecked() as usize };
-
-                if unsafe { !(*arr).size.is_int() } && unsafe { !(*arr).size.is_false() } {
-                    unsafe { self.mark_object((*arr).size, work_list) };
-                }
-
-                for i in 0..size {
-                    let element = unsafe { (*arr).get_element_unsafe(i) };
-                    if !element.is_int() && !element.is_false() {
-                        unsafe { self.mark_object(element, work_list) };
-                    }
-                }
-            } else {
-                work_list.push(obj);
+            if obj.as_bytearray_ptr().is_some()
+                || map_ptr == self.specials.bytearray_map.as_map_ptr()
+            {
+                return;
             }
+
+            if let Some(array) = obj.as_array_ptr() {
+                self.mark_array(array, work_list);
+            }
+
+            if map_ptr == self.specials.array_map.as_map_ptr() {
+                let array = obj.as_ptr_unchecked() as *mut Array;
+                self.mark_array(array, work_list);
+                return;
+            }
+
+            work_list.push(obj);
+        }
+    }
+
+    unsafe fn mark_array(&self, array: *mut Array, work_list: &mut Vec<ObjectRef>) {
+        let size = unsafe { (*array).size.as_int_unchecked() as usize };
+
+        for i in 0..size {
+            let element = unsafe { (*array).get_element_unsafe(i) };
+            unsafe { self.mark_object(element, work_list) };
         }
     }
 
@@ -476,6 +521,8 @@ impl GarbageCollector {
                 i += 1;
             }
         }
+
+        unsafe { self.bump.sweep() };
     }
 
     unsafe fn calculate_live_size(&self) -> usize {
@@ -484,6 +531,96 @@ impl GarbageCollector {
         total += self.bump.alive_objects;
 
         total
+    }
+}
+
+impl GarbageCollector {
+    pub unsafe fn deep_clone(&mut self, obj: ObjectRef, levels: usize) -> ObjectRef {
+        let mut cache = std::collections::HashMap::new();
+        self.deep_clone_with_cache(obj, &mut cache, 0, levels)
+    }
+
+    unsafe fn deep_clone_with_cache(
+        &mut self,
+        obj: ObjectRef,
+        cache: &mut HashMap<*mut Object, ObjectRef>,
+        current_level: usize,
+        levels: usize,
+    ) -> ObjectRef {
+        if current_level > levels && current_level == 0 {
+            return obj;
+        }
+        if obj.is_int() || obj.is_false() {
+            return obj;
+        }
+
+        let obj_ptr = obj.as_ptr_unchecked();
+
+        if let Some(&cloned) = cache.get(&obj_ptr) {
+            return cloned;
+        }
+
+        if let Some(array) = obj.as_array_ptr() {
+            let size = (*array).size.as_int_unchecked() as usize;
+            let new_array = self.allocate_array(size);
+
+            cache.insert(obj_ptr, ObjectRef::from_array_ptr(new_array));
+
+            if !(*array).size.is_int() {
+                (*new_array).size =
+                    self.deep_clone_with_cache((*array).size, cache, current_level + 1, levels);
+            } else {
+                (*new_array).size = (*array).size;
+            }
+
+            for i in 0..size {
+                let elem = (*array).get_element_unsafe(i);
+                let cloned_elem =
+                    self.deep_clone_with_cache(elem, cache, current_level + 1, levels);
+                (*new_array).set_element_unsafe(i, cloned_elem);
+            }
+
+            return ObjectRef::from_array_ptr(new_array);
+        }
+
+        if let Some(bytearray) = obj.as_bytearray_ptr() {
+            let size = (*bytearray).size;
+            let new_bytearray = self.allocate_bytearray(size);
+
+            let src = (bytearray as *const u8).add(std::mem::size_of::<ByteArray>());
+            let dst = (new_bytearray as *mut u8).add(std::mem::size_of::<ByteArray>());
+            std::ptr::copy_nonoverlapping(src, dst, size);
+
+            return ObjectRef::from_bytearray_ptr(new_bytearray);
+        }
+
+        if let Some(float) = obj.as_float_ptr() {
+            let new_float = self.allocate((*float).header.map()) as *mut Float;
+            (*new_float).float = (*float).float;
+            return ObjectRef::from_float_ptr(new_float);
+        }
+
+        let map = (*obj_ptr).get_map_mut();
+        let slot_count = map.slot_count.as_int_unchecked() as usize;
+
+        let new_obj = self.allocate(map);
+
+        cache.insert(obj_ptr, ObjectRef::from_ptr(new_obj));
+
+        for i in 0..slot_count {
+            if let Some(slot_ref) = map.get_slot(i) {
+                let slot = slot_ref.as_ptr_unchecked() as *const Slot;
+                if (*slot).is_data_slot() {
+                    let idx = (*slot).index.as_int_unchecked() as usize;
+                    let value = (*obj_ptr).get_slot_value(idx).unwrap();
+                    let cloned_value =
+                        self.deep_clone_with_cache(value, cache, current_level + 1, levels);
+                    (*new_obj).set_slot_value(idx, cloned_value);
+                }
+            }
+        }
+
+        ObjectRef::from_ptr(new_obj)
     }
 }
 
@@ -527,20 +664,11 @@ impl GarbageCollector {
 
             (*(*map_map).slots.as_array_ptr().unwrap()).header = ObjectHeader::new(array_map);
 
-            let object_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Object"));
-            let basic_obj_map = self.allocate_map(
-                object_map_name,
-                0,
-                std::mem::size_of::<Object>(),
-                ObjectRef::null(),
-            );
-            (*basic_obj_map).header = ObjectHeader::new(map_map);
-
             let slot_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Slot"));
             let slot_map = self.allocate_map(
                 slot_map_name,
                 5,
-                std::mem::size_of::<Object>(),
+                std::mem::size_of::<Slot>(),
                 ObjectRef::null(),
             );
             self.specials.slot_map = ObjectRef::from_map(slot_map);
@@ -649,7 +777,6 @@ impl GarbageCollector {
             self.add_root_object(map_map as *mut Object);
             self.add_root_object(array_map as *mut Object);
             self.add_root_object(bytearray_map as *mut Object);
-            self.add_root_object(basic_obj_map as *mut Object);
             self.add_root_object(slot_map as *mut Object);
         }
     }
@@ -668,17 +795,17 @@ mod tests {
 
         unsafe {
             assert!(
-                !gc.specials.get_map_map().is_int(),
+                !gc.specials.map_map.is_int(),
                 "Map map should be a pointer"
             );
 
-            let map_map_ptr = gc.specials.get_map_map().as_ptr_unchecked();
+            let map_map_ptr = gc.specials.get_map_map();
             assert_eq!((*map_map_ptr).header.map(), map_map_ptr as *mut Map);
 
             gc.collect();
 
             assert!(SpecialObjects::get_false() == ObjectRef::null());
-            assert_eq!(gc.specials.get_map_map().as_ptr(), Some(map_map_ptr));
+            assert_eq!(gc.specials.get_map_map(),map_map_ptr);
         }
     }
 
@@ -688,9 +815,9 @@ mod tests {
         gc.init_special_objects();
 
         unsafe {
-            let map_map = gc.specials.get_map_map().as_ptr_unchecked() as *const Map;
-            let array_map = gc.specials.get_array_map().as_ptr_unchecked() as *const Map;
-            let bytearray_map = gc.specials.get_bytearray_map().as_ptr_unchecked() as *const Map;
+            let map_map = gc.specials.get_map_map();
+            let array_map = gc.specials.get_array_map();
+            let bytearray_map = gc.specials.get_bytearray_map();
 
             assert_eq!(
                 (*map_map)
@@ -820,12 +947,26 @@ mod tests {
 
         unsafe {
             let name = gc.allocate_string("TestObject");
+            let slot1 = gc.allocate_slot(
+                SpecialObjects::get_false(),
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+            let slot2 = gc.allocate_slot(
+                SpecialObjects::get_false(),
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(1),
+            );
             let map = gc.allocate_map(
                 ObjectRef::from_ptr(name as _),
                 2,
                 32,
                 SpecialObjects::get_false(),
             );
+
+            (*map).slot_count = ObjectRef::from_int(2);
+            (*map).set_slot(ObjectRef::from_ptr(slot1 as _), 0);
+            (*map).set_slot(ObjectRef::from_ptr(slot2 as _), 1);
 
             let mut our_roots = Vec::new();
 
@@ -927,7 +1068,7 @@ mod tests {
         gc.init_special_objects();
 
         unsafe {
-            let map_map = gc.specials.get_map_map().as_ptr_unchecked() as *mut Map;
+            let map_map = gc.specials.get_map_map();
             let initial_map_map_ptr = map_map;
 
             let old_slot_count = (*map_map).slot_count;
@@ -935,7 +1076,7 @@ mod tests {
 
             gc.collect();
 
-            let map_map_after = gc.specials.get_map_map().as_ptr_unchecked() as *mut Map;
+            let map_map_after = gc.specials.get_map_map();
             assert_eq!(
                 map_map_after, initial_map_map_ptr,
                 "map_map should survive collection"
@@ -1135,6 +1276,136 @@ mod tests {
 
             assert_eq!(array_ref2.get_type(), Some(ObjectType::Array));
             assert_eq!(bytearray_ref2.get_type(), Some(ObjectType::ByteArray));
+        }
+    }
+
+    #[test]
+    fn test_clone_simple_object() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let map_name = ObjectRef::from_bytearray_ptr(gc.allocate_string("Test Type"));
+            let slot_name = ObjectRef::from_bytearray_ptr(gc.allocate_string("value"));
+
+            let map = gc.allocate_map(
+                map_name,
+                1,
+                std::mem::size_of::<Object>() + std::mem::size_of::<ObjectRef>(),
+                ObjectRef::null(),
+            );
+            let slot = gc.allocate_slot(
+                slot_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+
+            (*map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
+            (*map).slot_count = ObjectRef::from_int(1);
+
+            let obj = gc.allocate(map);
+            let value = ObjectRef::from_int(42);
+            (*obj).set_slot_value(0, value);
+            assert_eq!((*obj).get_slot_value(0), Some(ObjectRef::from_int(42)));
+
+            let cloned = gc.deep_clone(ObjectRef::from_ptr(obj), 0);
+
+            assert!(cloned.as_ptr().is_some());
+            let cloned_obj = cloned.as_ptr_unchecked();
+            assert_eq!(
+                (*cloned_obj).get_slot_value(0),
+                Some(ObjectRef::from_int(42))
+            );
+            assert_ne!(cloned_obj, obj);
+        }
+    }
+
+    #[test]
+    fn test_clone_array() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let array = gc.allocate_array(3);
+            (*array).set_element(0, ObjectRef::from_int(1));
+            (*array).set_element(1, ObjectRef::from_int(2));
+            (*array).set_element(2, ObjectRef::from_int(3));
+
+            let cloned = gc.deep_clone(ObjectRef::from_array_ptr(array), 0);
+
+            assert!(cloned.as_array_ptr().is_some());
+            let cloned_array = cloned.as_array_ptr().unwrap();
+            assert_ne!(cloned_array, array);
+
+            assert_eq!((*cloned_array).get_element(0), Some(ObjectRef::from_int(1)));
+            assert_eq!((*cloned_array).get_element(1), Some(ObjectRef::from_int(2)));
+            assert_eq!((*cloned_array).get_element(2), Some(ObjectRef::from_int(3)));
+        }
+    }
+
+    #[test]
+    fn test_clone_bytearray() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let original = gc.allocate_string("Hello, World!");
+            let cloned = gc.deep_clone(ObjectRef::from_bytearray_ptr(original), 0);
+
+            assert!(cloned.as_bytearray_ptr().is_some());
+            let cloned_ba = cloned.as_bytearray_ptr().unwrap();
+            assert_ne!(cloned_ba, original);
+
+            assert_eq!((*cloned_ba).as_str(), Some("Hello, World!"));
+        }
+    }
+
+    #[test]
+    fn test_clone_cyclic_references() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let map = gc.allocate_map(
+                ObjectRef::null(),
+                1,
+                std::mem::size_of::<Object>() + std::mem::size_of::<ObjectRef>(),
+                ObjectRef::null(),
+            );
+
+            let slot_name = gc.allocate_string("next");
+            let slot_name_ref = ObjectRef::from_bytearray_ptr(slot_name);
+
+            let slot = gc.allocate_slot(
+                slot_name_ref,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+
+            (*map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
+            (*map).slot_count = ObjectRef::from_int(1);
+
+            let obj1 = gc.allocate(map);
+            let obj2 = gc.allocate(map);
+            let obj3 = gc.allocate(map);
+
+            (*obj1).set_slot_value(0, ObjectRef::from_ptr(obj2));
+            (*obj2).set_slot_value(0, ObjectRef::from_ptr(obj3));
+            (*obj3).set_slot_value(0, ObjectRef::from_ptr(obj1));
+
+            let cloned1 = gc.deep_clone(ObjectRef::from_ptr(obj1), 0);
+            let cloned1_ptr = cloned1.as_ptr_unchecked();
+
+            let cloned2 = (*cloned1_ptr).get_slot_value(0).unwrap();
+            let cloned2_ptr = cloned2.as_ptr_unchecked();
+            let cloned3 = (*cloned2_ptr).get_slot_value(0).unwrap();
+            let cloned3_ptr = cloned3.as_ptr_unchecked();
+            let back_to_cloned1 = (*cloned3_ptr).get_slot_value(0).unwrap();
+
+            assert_eq!(back_to_cloned1.as_ptr_unchecked(), cloned1_ptr);
+            assert_ne!(cloned1_ptr, obj1);
+            assert_ne!(cloned2_ptr, obj2);
+            assert_ne!(cloned3_ptr, obj3);
         }
     }
 }

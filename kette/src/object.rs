@@ -1,4 +1,4 @@
-use std::{fmt, mem};
+use std::{fmt, marker::PhantomData, mem};
 
 // Basic type tag (LSB)
 pub const TAG_MASK: u64 = 0x1;
@@ -26,7 +26,9 @@ pub enum ObjectType {
     Float = 3,
     Alien = 4,
     Box = 5,
-    // 6-15 available for future use
+    Quotation = 6,
+    Word = 7,
+    // 8-15 available for future use
 }
 
 impl From<u64> for ObjectType {
@@ -135,6 +137,15 @@ impl ObjectRef {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Box)
     }
 
+    pub fn from_quotation_ptr(ptr: *mut Quotation) -> Self { 
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::Quotation)
+    }
+
+    pub fn from_word_ptr(ptr: *mut Word) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::Word)
+    }
+
+
     pub fn is_int(&self) -> bool {
         self.0 & TAG_MASK == TAG_INT
     }
@@ -143,8 +154,12 @@ impl ObjectRef {
         (self.0 & ALIGN_MASK) == HEADER_TAG
     }
 
+    pub fn as_map_ptr(&self) -> *mut Map {
+        (self.0 & MAP_MASK) as *mut Map
+    }
+
     pub fn get_type(&self) -> Option<ObjectType> {
-        if self.is_int() || self.is_header() {
+        if self.is_int() || self.is_false() || self.is_header() {
             return None;
         }
         let type_bits = (self.0 & TYPE_MASK) >> TYPE_SHIFT;
@@ -155,6 +170,8 @@ impl ObjectRef {
             3 => Some(ObjectType::Float),
             4 => Some(ObjectType::Alien),
             5 => Some(ObjectType::Box),
+            6 => Some(ObjectType::Quotation),
+            7 => Some(ObjectType::Word),
             _ => None,
         }
     }
@@ -223,6 +240,22 @@ impl ObjectRef {
         }
     }
 
+    pub fn as_quotation_ptr(&self) -> Option<*mut Quotation> {
+        if self.get_type() == Some(ObjectType::Quotation) {
+            Some((self.0 & MAP_MASK) as *mut Quotation)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_word_ptr(&self) -> Option<*mut Word> {
+        if self.get_type() == Some(ObjectType::Word) {
+            Some((self.0 & MAP_MASK) as *mut Word)
+        } else {
+            None
+        }
+    }
+
     pub unsafe fn as_ptr_unchecked(&self) -> *mut Object {
         (self.0 & MAP_MASK) as *mut Object
     }
@@ -241,6 +274,8 @@ pub struct SpecialObjects {
     pub array_map: ObjectRef,
     pub bytearray_map: ObjectRef,
     pub slot_map: ObjectRef,
+    pub quotation_map: ObjectRef,
+    pub word_map: ObjectRef,
 }
 
 impl SpecialObjects {
@@ -250,6 +285,8 @@ impl SpecialObjects {
             array_map: ObjectRef::null(),
             bytearray_map: ObjectRef::null(),
             slot_map: ObjectRef::null(),
+            quotation_map: ObjectRef::null(),
+            word_map: ObjectRef::null(),
         }
     }
 
@@ -273,43 +310,40 @@ impl SpecialObjects {
         ObjectRef::from_int(3)
     }
 
-    pub fn get_map_map(&self) -> ObjectRef {
-        self.map_map
+    pub fn word_primitive() -> ObjectRef {
+        ObjectRef::from_int(0)
     }
 
-    pub fn get_array_map(&self) -> ObjectRef {
-        self.array_map
+    pub fn word_inline() -> ObjectRef {
+        ObjectRef::from_int(1)
     }
 
-    pub fn get_bytearray_map(&self) -> ObjectRef {
-        self.bytearray_map
+    pub fn word_recursive() -> ObjectRef {
+        ObjectRef::from_int(2)
     }
 
-    pub fn get_slot_map(&self) -> ObjectRef {
-        self.slot_map
+    pub fn get_map_map(&self) -> *mut Map {
+        unsafe { self.map_map.as_ptr_unchecked() as *mut _ }
     }
-}
 
-impl fmt::Debug for ObjectRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_int() {
-            write!(f, "Int({})", unsafe { self.as_int_unchecked() })
-        } else if self.is_header() {
-            write!(f, "Header({:#x})", self.0 & MAP_MASK)
-        } else if *self == SpecialObjects::get_false() {
-            write!(f, "f")
-        } else {
-            let type_name = match self.get_type() {
-                Some(ObjectType::Normal) => "Object",
-                Some(ObjectType::Array) => "Array",
-                Some(ObjectType::ByteArray) => "ByteArray",
-                Some(ObjectType::Float) => "Float",
-                Some(ObjectType::Alien) => "Alien",
-                Some(ObjectType::Box) => "Box",
-                None => "Invalid",
-            };
-            write!(f, "{}({:#x})", type_name, self.0 & MAP_MASK)
-        }
+    pub fn get_array_map(&self) -> *mut Map {
+        unsafe { self.array_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_bytearray_map(&self) -> *mut Map {
+        unsafe { self.bytearray_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_slot_map(&self) -> *mut Map {
+        unsafe { self.slot_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_word_map(&self) -> *mut Map { 
+        unsafe { self.word_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_quotation_map(&self) -> *mut Map {
+        unsafe { self.quotation_map.as_ptr_unchecked() as *mut _ }
     }
 }
 
@@ -325,6 +359,10 @@ impl Object {
 
     pub fn get_map_mut(&mut self) -> &mut Map {
         unsafe { &mut *self.header.map() }
+    }
+
+    pub fn get_map_ptr(&self) -> *mut Map {
+        self.header.map()
     }
 
     pub unsafe fn get_slot_value(&self, index: usize) -> Option<ObjectRef> {
@@ -431,6 +469,50 @@ impl Array {
     }
 }
 
+pub struct ArrayIterator<'a> {
+    array: &'a Array,
+    current_index: usize,
+    _phantom: PhantomData<&'a ()>,
+}
+
+impl<'a> ArrayIterator<'a> {
+    pub fn new(array: &'a Array) -> Self {
+        Self {
+            array,
+            current_index: 0,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a> Iterator for ArrayIterator<'a> {
+    type Item = ObjectRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let size = unsafe { self.array.size.as_int_unchecked() } as usize;
+        if self.current_index >= size {
+            return None;
+        }
+
+        let element = self.array.get_element(self.current_index);
+        self.current_index += 1;
+        element
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = unsafe { self.array.size.as_int_unchecked() } as usize;
+        let remaining = size.saturating_sub(self.current_index);
+        (remaining, Some(remaining))
+    }
+}
+
+// Add iterator functionality to Array
+impl Array {
+    pub fn iter(&self) -> ArrayIterator<'_> {
+        ArrayIterator::new(self)
+    }
+}
+
 #[repr(C)]
 pub struct ByteArray {
     pub header: ObjectHeader,
@@ -527,7 +609,7 @@ pub struct Slot {
 
 impl Slot {
     pub fn get_name(&self) -> Option<&ByteArray> {
-        unsafe { self.name.as_ptr().map(|ptr| &*(ptr as *const ByteArray)) }
+        self.name.as_bytearray_ptr().map(|ptr| unsafe { &*ptr })
     }
 
     pub fn is_data_slot(&self) -> bool {
@@ -653,6 +735,53 @@ impl Map {
     }
 }
 
+#[repr(C)]
+pub struct Quotation {
+    pub header: ObjectHeader,
+    pub body: ObjectRef, // Array
+    // inferred stack effect
+    pub stack_effect: ObjectRef, // Array
+    pub compiled: ObjectRef,     // ptr
+}
+
+#[repr(C)]
+pub struct Word {
+    pub header: ObjectHeader,
+    pub body: ObjectRef, // Quotation
+    // declared stack effect
+    pub stack_effect: ObjectRef, // Array
+    pub flags: ObjectRef,        // Array
+}
+
+impl fmt::Debug for ObjectRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_int() {
+            write!(f, "Int({})", unsafe { self.as_int_unchecked() })
+        } else if self.is_header() {
+            write!(f, "Header({:#x})", self.0 & MAP_MASK)
+        } else if *self == SpecialObjects::get_false() {
+            write!(f, "f")
+        } else {
+            let type_name = match self.get_type() {
+                Some(ObjectType::Normal) => "Object",
+                Some(ObjectType::Array) => "Array",
+                Some(ObjectType::ByteArray) => {
+                    return write!(f, "ByteArray: {:?}", unsafe {
+                        &*self.as_bytearray_ptr_unchecked()
+                    })
+                }
+                Some(ObjectType::Float) => "Float",
+                Some(ObjectType::Alien) => "Alien",
+                Some(ObjectType::Box) => "Box",
+                Some(ObjectType::Quotation) => "Quotation",
+                Some(ObjectType::Word) => "Word",
+                None => "Invalid",
+            };
+            write!(f, "{}({:#x})", type_name, self.0 & MAP_MASK)
+        }
+    }
+}
+
 impl fmt::Debug for Map {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut slot_debug = f.debug_struct("Map");
@@ -685,6 +814,7 @@ impl fmt::Debug for Map {
                 unsafe {
                     if let Some(ptr) = slot_ref.as_ptr() {
                         let slot = &*(ptr as *const Slot);
+
                         formatted_slots.push(slot);
                     }
                 }
@@ -1048,6 +1178,34 @@ mod tests {
                 Some(ObjectRef::from_int(300)),
                 "updated y value mismatch"
             );
+        }
+    }
+
+    #[test]
+    fn test_array_iterator() {
+        unsafe {
+            let array = create_test_array(3);
+            let array_ref = &*array;
+
+            array_ref.set_element(0, ObjectRef::from_int(1));
+            array_ref.set_element(1, ObjectRef::from_int(2));
+            array_ref.set_element(2, ObjectRef::from_int(3));
+
+            let mut values = Vec::new();
+            for obj_ref in array_ref.iter() {
+                values.push(obj_ref.as_int().unwrap());
+            }
+
+            assert_eq!(values, vec![1, 2, 3]);
+
+            let mut iter = array_ref.iter();
+            assert_eq!(iter.size_hint(), (3, Some(3)));
+            iter.next();
+            assert_eq!(iter.size_hint(), (2, Some(2)));
+            iter.next();
+            assert_eq!(iter.size_hint(), (1, Some(1)));
+            iter.next();
+            assert_eq!(iter.size_hint(), (0, Some(0)));
         }
     }
 }
