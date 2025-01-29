@@ -63,3 +63,11 @@ impl From<*mut Array> for MemoryRegion<ObjectRef> {
         Self::new(data_ptr, size)
     }
 }
+
+impl From<*mut Array> for MemoryRegion<(ObjectRef, ObjectRef)> {
+    fn from(value: *mut Array) -> Self {
+        let data_ptr = unsafe { (*value).data_ptr_mut() } as _;
+        let size = unsafe { (*value).size.as_int_unchecked() as usize };
+        Self::new(data_ptr, size)
+    }
+}

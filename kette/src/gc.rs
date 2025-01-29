@@ -836,6 +836,98 @@ impl GarbageCollector {
             );
             self.specials.bignum_map = ObjectRef::from_map(bignum_map);
 
+            let quotation_map_name =
+                ObjectRef::from_bytearray_ptr(self.allocate_string("Quotation"));
+            let quotation_map = self.allocate_map(
+                quotation_map_name,
+                3, // body, stack_effect, compiled
+                std::mem::size_of::<Quotation>(),
+                ObjectRef::null(),
+            );
+            (*quotation_map).header = ObjectHeader::new(map_map);
+            self.specials.quotation_map = ObjectRef::from_map(quotation_map);
+
+            let body_name = ObjectRef::from_bytearray_ptr(self.allocate_string("body"));
+            let stack_effect_name =
+                ObjectRef::from_bytearray_ptr(self.allocate_string("stack-effect"));
+            let compiled_name = ObjectRef::from_bytearray_ptr(self.allocate_string("compiled"));
+
+            let quotation_body_slot = self.allocate_slot(
+                body_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+            let quotation_stack_effect_slot = self.allocate_slot(
+                stack_effect_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(1),
+            );
+            let quotation_compiled_slot = self.allocate_slot(
+                compiled_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(2),
+            );
+
+            (*quotation_map).slot_count = ObjectRef::from_int(3);
+            let quotation_slots = (*quotation_map).slots.as_array_ptr().unwrap();
+            (*quotation_slots)
+                .set_element(0, ObjectRef::from_ptr(quotation_body_slot as *mut Object));
+            (*quotation_slots).set_element(
+                1,
+                ObjectRef::from_ptr(quotation_stack_effect_slot as *mut Object),
+            );
+            (*quotation_slots).set_element(
+                2,
+                ObjectRef::from_ptr(quotation_compiled_slot as *mut Object),
+            );
+
+            let word_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Word"));
+            let word_map = self.allocate_map(
+                word_map_name,
+                4, // name, body (Quotation), stack_effect, flags
+                std::mem::size_of::<Word>(),
+                ObjectRef::null(),
+            );
+            (*word_map).header = ObjectHeader::new(map_map);
+            self.specials.word_map = ObjectRef::from_map(word_map);
+
+            let word_name_slot_name = ObjectRef::from_bytearray_ptr(self.allocate_string("name"));
+            let word_body_slot_name = ObjectRef::from_bytearray_ptr(self.allocate_string("body"));
+            let word_stack_effect_slot_name =
+                ObjectRef::from_bytearray_ptr(self.allocate_string("stack-effect"));
+            let word_flags_slot_name = ObjectRef::from_bytearray_ptr(self.allocate_string("flags"));
+
+            let word_name_slot = self.allocate_slot(
+                word_name_slot_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+            let word_body_slot = self.allocate_slot(
+                word_body_slot_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(1),
+            );
+            let word_stack_effect_slot = self.allocate_slot(
+                word_stack_effect_slot_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(2),
+            );
+            let word_flags_slot = self.allocate_slot(
+                word_flags_slot_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(3),
+            );
+
+            (*word_map).slot_count = ObjectRef::from_int(4);
+            let word_slots = (*word_map).slots.as_array_ptr().unwrap();
+            (*word_slots).set_element(0, ObjectRef::from_ptr(word_name_slot as *mut Object));
+            (*word_slots).set_element(1, ObjectRef::from_ptr(word_body_slot as *mut Object));
+            (*word_slots).set_element(
+                2,
+                ObjectRef::from_ptr(word_stack_effect_slot as *mut Object),
+            );
+            (*word_slots).set_element(3, ObjectRef::from_ptr(word_flags_slot as *mut Object));
+
             self.add_root_object(map_map as *mut Object);
             self.add_root_object(array_map as *mut Object);
             self.add_root_object(bytearray_map as *mut Object);
@@ -844,6 +936,8 @@ impl GarbageCollector {
             self.add_root_object(true_object);
             self.add_root_object(float_map as *mut Object);
             self.add_root_object(bignum_map as *mut Object);
+            self.add_root_object(quotation_map as *mut Object);
+            self.add_root_object(word_map as *mut Object);
         }
     }
 }

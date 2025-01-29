@@ -207,6 +207,7 @@ impl ObjectRef {
         }
     }
 
+    // TODO: make unchecked variants
     pub fn as_array_ptr(&self) -> Option<*mut Array> {
         if self.get_type() == Some(ObjectType::Array) {
             Some((self.0 & MAP_MASK) as *mut Array)
@@ -333,16 +334,21 @@ impl SpecialObjects {
         ObjectRef::from_int(3)
     }
 
+    // TODO: make these objects
     pub fn word_primitive() -> ObjectRef {
         ObjectRef::from_int(0)
     }
 
-    pub fn word_inline() -> ObjectRef {
+    pub fn word_parser() -> ObjectRef {
         ObjectRef::from_int(1)
     }
 
-    pub fn word_recursive() -> ObjectRef {
+    pub fn word_inline() -> ObjectRef {
         ObjectRef::from_int(2)
+    }
+
+    pub fn word_recursive() -> ObjectRef {
+        ObjectRef::from_int(3)
     }
 
     pub fn get_map_map(&self) -> *mut Map {

@@ -1,5 +1,5 @@
 use crate::{
-    context::Context,
+    context::{Context, Parser},
     object::{Array, ByteArray, Object, ObjectRef, ObjectType, SpecialObjects},
 };
 
@@ -25,9 +25,15 @@ fn add_primities(ctx: &mut Context) {
         
         ("@parse-fixnum", &["str", "--", "n/?"], Context::parse_fixnum),
         ("@parse-float", &["str", "--", "n/?"], Context::parse_float),
+        ("@parse-until", &["end", "--", "array"], Context::parse_until),
         
         ("@r>", &["x", "--"], Context::data_retain),
         ("<r@", &["--", "x"], Context::retain_data),
+        ("@let-me-cook", &["--", "ctx"], Context::get_context),
+
+        ("@namestack-lookup", &["name", "--", "obj/f"], Context::lookup_namestack),
+        ("@namestack-push", &["name", "obj", "--"], Context::define_namestack),
+        ("@namestack-delete", &["name", "--", "obj/f"], Context::remove_namestack),
 
         ("array-nth", &["n", "array", "--", "x"], Context::array_nth),
         ("array-set-nth", &["x", "n", "array", "--"], Context::array_set_nth),
@@ -101,6 +107,11 @@ fn add_primities(ctx: &mut Context) {
         ("alien-u16>fixnum", &["bytes", "--", "n"], Context::alien_u16_to_fixnum),
         ("alien-u32>fixnum", &["bytes", "--", "n"], Context::alien_u32_to_fixnum),
         ("alien-u64>fixnum", &["bytes", "--", "n"], Context::alien_u64_to_fixnum),
+    ];
+
+    let parser_words: &[(&str, &[&str], fn(&mut Context))] = &[
+        // ("@parser:", &["--", "obj/-"], Context::parse_parser),
+        ("[", &["--", "quot"], Context::parse_quotation),
     ];
 
     for (name, stack_effect, fp) in words {
@@ -277,7 +288,7 @@ impl Context {
     }
 
     // -- PARSING
-    fn parse_fixnum(&mut self) {
+    pub fn parse_fixnum(&mut self) {
         let obj = self.pop();
         let bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
         let bytes = unsafe { (*bytearray).as_bytes() };
@@ -306,7 +317,7 @@ impl Context {
         }
     }
 
-    fn parse_float(&mut self) {
+    pub fn parse_float(&mut self) {
         let obj = self.pop();
         let bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
         let bytes = unsafe { (*bytearray).as_bytes() };
@@ -337,7 +348,65 @@ impl Context {
         }
     }
 
+    fn next_word(&mut self) {
+        let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
+        let (word, success) = unsafe { (*parser).next_word(&mut self.gc) };
+        if success {
+            self.push(word);
+            return;
+        }
+        self.push(SpecialObjects::get_false());
+    }
+
+    fn parse_until(&mut self) {
+        let end = self.pop();
+        let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
+        let res = unsafe { (*parser).parse_until(self, end) };
+        self.push(res);
+    }
+
+    fn parse_quotation(&mut self) {
+        let end_word = unsafe { self.gc.allocate_string("]") };
+
+        let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
+        let res = unsafe { (*parser).parse_until(self, ObjectRef::from_bytearray_ptr(end_word)) };
+
+        if res.is_false() {
+            self.push(SpecialObjects::get_false());
+            return;
+        }
+
+        let quotation = unsafe { self.gc.allocate_quotation(None) };
+        unsafe { (*quotation).body = res };
+        self.push(ObjectRef::from_quotation_ptr(quotation));
+    }
+
     // -- GENERAL
+    fn lookup_namestack(&mut self) {
+        let name = self.pop();
+        match self.namestack_lookup(name) {
+            Some(object) => self.push(object),
+            None => self.push(SpecialObjects::get_false()),
+        }
+    }
+
+    fn define_namestack(&mut self) {
+        let object = self.pop();
+        let name = self.pop();
+        self.namestack_push_or_replace(name, object);
+    }
+
+    fn remove_namestack(&mut self) {
+        let name = self.pop();
+        let result = self.namestack_remove(name);
+        self.push(result);
+    }
+
+    fn get_context(&mut self) {
+        let ctx = self as *mut Self as *mut Object;
+        self.push(ObjectRef::from_ptr(ctx));
+    }
+
     fn array_nth(&mut self) {
         let array_obj = self.pop();
         let idx = self.pop_fixnum() as usize;
@@ -404,6 +473,7 @@ impl Context {
 
         self.push(SpecialObjects::get_false());
     }
+
     fn object_to_pointer(&mut self) {
         let obj = self.pop();
         let ptr = unsafe { obj.as_ptr_unchecked() };
@@ -1042,6 +1112,25 @@ fn primitive_word(
     ObjectRef::from_word_ptr(word)
 }
 
+fn primitive_parser_word(
+    ctx: &mut Context,
+    name: &str,
+    _stack_effect: &[&str],
+    fp: fn(&mut Context),
+) -> ObjectRef {
+    let body = ObjectRef::from_int(fp as i64);
+
+    let name = unsafe { ctx.gc.allocate_string(name) };
+    let word = unsafe { ctx.gc.allocate_word(None, true) };
+    unsafe { (*word).name = name.into() };
+    unsafe { (*word).body = body }
+    let flags = unsafe { (*word).flags.as_array_ptr().unwrap() };
+    unsafe { (*flags).set_element(0, SpecialObjects::word_primitive()) };
+    unsafe { (*flags).set_element(1, SpecialObjects::word_parser()) };
+
+    ObjectRef::from_word_ptr(word)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1051,6 +1140,7 @@ mod tests {
         let config = ContextConfig {
             datastack_size: 512,
             retainstack_size: 512,
+            namestack_size: 512,
         };
         Context::new(&config)
     }
@@ -1395,27 +1485,6 @@ mod tests {
         assert!(ctx.pop_bool());
     }
 
-    // #[test]
-    // fn test_stack_dip() {
-    //     let mut ctx = create_test_context();
-    //
-    //     unsafe {
-    //         let quotation = ctx.gc.allocate_quotation(None);
-    //         let body = ctx.gc.allocate_array(1);
-    //         (*body).set_element(0, ObjectRef::from_int(1));
-    //         (*quotation).body = ObjectRef::from_array_ptr(body);
-    //
-    //         ctx.push(ObjectRef::from_int(5));
-    //         ctx.push(ObjectRef::from_int(10));
-    //         ctx.push(ObjectRef::from_quotation_ptr(quotation));
-    //
-    //         ctx.stack_dip();
-    //
-    //         assert_eq!(ctx.data.nth(1).as_int(), Some(6));
-    //         assert_eq!(ctx.data.nth(0).as_int(), Some(10));
-    //     }
-    // }
-
     #[test]
     fn test_byte_array_operations() {
         let mut ctx = create_test_context();
@@ -1589,6 +1658,121 @@ mod tests {
             ctx.push(ObjectRef::from_ptr(obj as *mut _));
             ctx.object_nth();
             assert!(ctx.pop().is_false());
+        }
+    }
+    #[test]
+    fn test_namestack_primitives() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let name = ctx.gc.allocate_string("test");
+            let obj = ObjectRef::from_int(42);
+
+            ctx.push(name.into());
+            ctx.push(obj);
+            ctx.define_namestack();
+
+            ctx.push(name.into());
+            ctx.lookup_namestack();
+            assert_eq!(ctx.pop(), obj);
+
+            ctx.push(name.into());
+            ctx.remove_namestack();
+            assert_eq!(ctx.pop(), obj);
+
+            ctx.push(name.into());
+            ctx.lookup_namestack();
+            assert!(ctx.pop().is_false());
+        }
+    }
+
+    #[test]
+    fn test_parse_quotation() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("[ 42 3.14 word ]");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+
+            ctx.next_word();
+            ctx.stack_drop();
+
+            ctx.parse_quotation();
+            let result = ctx.pop();
+            assert!(!result.is_false());
+
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(3));
+
+            let first = (*array).get_element(0).unwrap();
+            assert_eq!(first.as_int(), Some(42));
+
+            let second = (*array).get_element(1).unwrap();
+            assert!(second.as_float_ptr().is_some());
+
+            let third = (*array).get_element(2).unwrap();
+            assert_eq!((*third.as_bytearray_ptr().unwrap()).as_str(), Some("word"));
+        }
+    }
+
+    #[test]
+    fn test_parse_quotation_unclosed() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("[ 42 3.14 word");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+            ctx.next_word();
+            ctx.stack_drop();
+
+            ctx.parse_quotation();
+            let result = ctx.pop();
+            assert!(result.is_false());
+        }
+    }
+
+    #[test]
+    fn test_parse_quotation_empty() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("[ ]");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+
+            ctx.next_word();
+            ctx.stack_drop();
+
+            ctx.parse_quotation();
+            let result = ctx.pop();
+            assert!(!result.is_false());
+
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+            assert_eq!((*array).size.as_int(), Some(0));
+        }
+    }
+
+    #[test]
+    fn test_quotation_primitive() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("[ 42 ]");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+            let (_, _) = (*parser).next_word(&mut ctx.gc);
+
+            ctx.parse_quotation();
+
+            let result = ctx.pop();
+            assert!(!result.is_false());
+
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(1));
+            let first = (*array).get_element(0).unwrap();
+            assert_eq!(first.as_int(), Some(42));
         }
     }
 }
