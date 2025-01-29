@@ -558,6 +558,11 @@ impl ByteArray {
         (total + 7) & !7
     }
 
+    pub unsafe fn as_bytes(&self) -> &[u8] {
+        let ptr = (self as *const Self).add(1) as *const u8;
+        std::slice::from_raw_parts(ptr, self.size)
+    }
+
     pub fn get_element(&self, index: usize) -> Option<u8> {
         if index >= self.size {
             return None;
@@ -1239,6 +1244,28 @@ mod tests {
             assert_eq!(iter.size_hint(), (1, Some(1)));
             iter.next();
             assert_eq!(iter.size_hint(), (0, Some(0)));
+        }
+    }
+
+    #[test]
+    fn test_as_bytes() {
+        let size = 5;
+        let required_size = ByteArray::required_size(size);
+        let mut memory = vec![0u8; required_size];
+
+        let bytearray = memory.as_mut_ptr() as *mut ByteArray;
+        unsafe {
+            (*bytearray).size = size;
+
+            for i in 0..size {
+                (*bytearray).set_element(i, (i + 1) as u8);
+            }
+
+            let bytes = (*bytearray).as_bytes();
+            assert_eq!(bytes.len(), size);
+            for i in 0..size {
+                assert_eq!(bytes[i], (i + 1) as u8);
+            }
         }
     }
 }

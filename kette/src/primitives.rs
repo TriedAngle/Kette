@@ -23,15 +23,22 @@ fn add_primities(ctx: &mut Context) {
         ("swapd", &["x", "y", "--", "y", "x"], Context::stack_swapd),
         ("tuck", &["x", "y", "--", "y", "x", "y"], Context::stack_tuck),
         
+        ("@parse-fixnum", &["str", "--", "n/?"], Context::parse_fixnum),
+        ("@parse-float", &["str", "--", "n/?"], Context::parse_float),
+        
         ("@r>", &["x", "--"], Context::data_retain),
         ("<r@", &["--", "x"], Context::retain_data),
-        ("(dip)", &["..a", "x", "[..a ..b]", "--", "..b", "x"], Context::stack_dip),
 
+        ("array-nth", &["n", "array", "--", "x"], Context::array_nth),
+        ("array-set-nth", &["x", "n", "array", "--"], Context::array_set_nth),
+        ("get-slot", &["n", "object", "--", "x"], Context::object_nth),
+        ("set-slot", &["x", "n", "object", "--"], Context::object_set_nth),
         ("object>ptr", &["obj", "--", "ptr"], Context::object_to_pointer),
         ("ptr>object", &["ptr", "--", "obj"], Context::pointer_to_object),
         ("ptr@>object", &["ptr", "T", "--", "obj"], Context::pointer_to_object_special),
         ("(call)", &["..a", "q", "--", "..b"], Context::quotation_call),
         ("if", &["..a", "[..a ..b]", "[..a ..b]", "?", "--", "..b"], Context::stack_tuck),
+
 
         ("fixnum+", &["x", "y", "--", "z"], Context::fixnum_add),
         ("fixnum-", &["x", "y", "--", "z"], Context::fixnum_sub),
@@ -39,14 +46,14 @@ fn add_primities(ctx: &mut Context) {
         ("fixnum/", &["x", "y", "--", "z"], Context::fixnum_div),
         ("fixnum%", &["x", "y", "--", "z"], Context::fixnum_mod),
         ("-fixnum", &["n", "--", "-n"], Context::fixnum_neg),
-        ("fixnum-and", &["x", "y", "--", "z"], Context::fixnum_and),
-        ("fixnum-or", &["x", "y", "--", "z"], Context::fixnum_or), 
-        ("fixnum-xor", &["x", "y", "--", "z"], Context::fixnum_xor),
-        ("fixnum-not", &["x", "--", "y"], Context::fixnum_not),
-        ("fixnum-shift-left", &["x", "n", "--", "y"], Context::fixnum_shift_left),
-        ("fixnum-shift-right", &["x", "n", "--", "y"], Context::fixnum_shift_right),
-        ("fixnum-rotate-left", &["x", "n", "--", "y"], Context::fixnum_rotate_left),
-        ("fixnum-rotate-right", &["x", "n", "--", "y"], Context::fixnum_rotate_right),
+        ("fixnum&", &["x", "y", "--", "z"], Context::fixnum_and),
+        ("fixnum|", &["x", "y", "--", "z"], Context::fixnum_or), 
+        ("fixnum^", &["x", "y", "--", "z"], Context::fixnum_xor),
+        ("fixnum!", &["x", "--", "y"], Context::fixnum_not),
+        ("fixnum<<", &["x", "n", "--", "y"], Context::fixnum_shift_left),
+        ("fixnum>>", &["x", "n", "--", "y"], Context::fixnum_shift_right),
+        ("fixnum<~", &["x", "n", "--", "y"], Context::fixnum_rotate_left),
+        ("fixnum~>", &["x", "n", "--", "y"], Context::fixnum_rotate_right),
         ("fixnum=", &["x", "y", "--", "?"], Context::fixnum_eq),
         ("fixnum<>", &["x", "y", "--", "?"], Context::fixnum_neq),
         ("fixnum<", &["x", "y", "--", "?"], Context::fixnum_lt),
@@ -237,14 +244,6 @@ impl Context {
         self.push(y);
     }
 
-    fn stack_dip(&mut self) {
-        let quot_obj = self.pop();
-        let quot = quot_obj.as_quotation_ptr().unwrap();
-        self.data_retain();
-        self.execute(quot);
-        self.retain_data();
-    }
-
     fn stack_clear(&mut self) {
         let current = self.data.current;
         let start = self.data.start;
@@ -277,8 +276,134 @@ impl Context {
         self.data.set_nth(0, b);
     }
 
-    // -- GENERAL
+    // -- PARSING
+    fn parse_fixnum(&mut self) {
+        let obj = self.pop();
+        let bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
+        let bytes = unsafe { (*bytearray).as_bytes() };
 
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            if s.is_empty() {
+                self.push(SpecialObjects::get_false());
+                return;
+            }
+
+            if !s.chars().next().unwrap().is_ascii_digit() {
+                self.push(SpecialObjects::get_false());
+                return;
+            }
+
+            match s.parse::<i64>() {
+                Ok(num) => {
+                    self.push_fixnum(num);
+                }
+                Err(_) => {
+                    self.push(SpecialObjects::get_false());
+                }
+            }
+        } else {
+            self.push(SpecialObjects::get_false());
+        }
+    }
+
+    fn parse_float(&mut self) {
+        let obj = self.pop();
+        let bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
+        let bytes = unsafe { (*bytearray).as_bytes() };
+
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            let s = s.trim();
+
+            if s.is_empty() {
+                self.push(SpecialObjects::get_false());
+                return;
+            }
+
+            if !s.chars().next().unwrap().is_ascii_digit() {
+                self.push(SpecialObjects::get_false());
+                return;
+            }
+
+            match s.parse::<f64>() {
+                Ok(num) => {
+                    self.push_float(num);
+                }
+                Err(_) => {
+                    self.push(SpecialObjects::get_false());
+                }
+            }
+        } else {
+            self.push(SpecialObjects::get_false());
+        }
+    }
+
+    // -- GENERAL
+    fn array_nth(&mut self) {
+        let array_obj = self.pop();
+        let idx = self.pop_fixnum() as usize;
+
+        if let Some(array_ptr) = array_obj.as_array_ptr() {
+            unsafe {
+                let array = &*array_ptr;
+                if let Some(value) = array.get_element(idx) {
+                    self.push(value);
+                    return;
+                }
+            }
+        }
+
+        self.push(SpecialObjects::get_false());
+    }
+
+    fn array_set_nth(&mut self) {
+        let array_obj = self.pop();
+        let idx = self.pop_fixnum() as usize;
+        let value = self.pop();
+
+        if let Some(array_ptr) = array_obj.as_array_ptr() {
+            unsafe {
+                let array = &*array_ptr;
+                if array.set_element(idx, value) {
+                    return;
+                }
+            }
+        }
+
+        self.push(SpecialObjects::get_false());
+    }
+
+    fn object_nth(&mut self) {
+        let obj = self.pop();
+        let idx = self.pop_fixnum() as usize;
+
+        if let Some(ptr) = obj.as_ptr() {
+            unsafe {
+                let object = &*ptr;
+                if let Some(value) = object.get_slot_value(idx) {
+                    self.push(value);
+                    return;
+                }
+            }
+        }
+
+        self.push(SpecialObjects::get_false());
+    }
+
+    fn object_set_nth(&mut self) {
+        let obj = self.pop();
+        let idx = self.pop_fixnum() as usize;
+        let value = self.pop();
+
+        if let Some(ptr) = obj.as_ptr() {
+            unsafe {
+                let object = &mut *ptr;
+                object.set_slot_value(idx, value);
+                return;
+            }
+        }
+
+        self.push(SpecialObjects::get_false());
+    }
     fn object_to_pointer(&mut self) {
         let obj = self.pop();
         let ptr = unsafe { obj.as_ptr_unchecked() };
@@ -1342,5 +1467,128 @@ mod tests {
         ctx.push_fixnum(2);
         ctx.fixnum_shift_right();
         assert_eq!(ctx.pop_fixnum(), 0b0011);
+    }
+
+    #[test]
+    fn test_parse_fixnum() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let valid = ctx.gc.allocate_string("123");
+            ctx.push(ObjectRef::from_bytearray_ptr(valid));
+            ctx.parse_fixnum();
+            assert_eq!(ctx.pop_fixnum(), 123);
+
+            let invalid = ctx.gc.allocate_string("abc");
+            ctx.push(ObjectRef::from_bytearray_ptr(invalid));
+            ctx.parse_fixnum();
+            assert!(ctx.pop().is_false());
+
+            let empty = ctx.gc.allocate_string("");
+            ctx.push(ObjectRef::from_bytearray_ptr(empty));
+            ctx.parse_fixnum();
+            assert!(ctx.pop().is_false());
+
+            let non_numeric = ctx.gc.allocate_string("-123");
+            ctx.push(ObjectRef::from_bytearray_ptr(non_numeric));
+            ctx.parse_fixnum();
+            assert!(ctx.pop().is_false());
+        }
+    }
+
+    #[test]
+    fn test_parse_float() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let valid = ctx.gc.allocate_string("123.456");
+            ctx.push(ObjectRef::from_bytearray_ptr(valid));
+            ctx.parse_float();
+            assert!((ctx.pop_float() - 123.456).abs() < f64::EPSILON);
+
+            let invalid = ctx.gc.allocate_string("abc");
+            ctx.push(ObjectRef::from_bytearray_ptr(invalid));
+            ctx.parse_float();
+            assert!(ctx.pop().is_false());
+
+            let empty = ctx.gc.allocate_string("");
+            ctx.push(ObjectRef::from_bytearray_ptr(empty));
+            ctx.parse_float();
+            assert!(ctx.pop().is_false());
+
+            let non_numeric = ctx.gc.allocate_string("-123.456");
+            ctx.push(ObjectRef::from_bytearray_ptr(non_numeric));
+            ctx.parse_float();
+            assert!(ctx.pop().is_false());
+        }
+    }
+    #[test]
+    fn test_array_nth_primitives() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let array = ctx.gc.allocate_array(3);
+            (*array).set_element(0, ObjectRef::from_int(10));
+            (*array).set_element(1, ObjectRef::from_int(20));
+            (*array).set_element(2, ObjectRef::from_int(30));
+
+            ctx.push_fixnum(1);
+            ctx.push(ObjectRef::from_array_ptr(array));
+            ctx.array_nth();
+            assert_eq!(ctx.pop_fixnum(), 20);
+
+            ctx.push(ObjectRef::from_int(25));
+            ctx.push_fixnum(1);
+            ctx.push(ObjectRef::from_array_ptr(array));
+            ctx.array_set_nth();
+
+            ctx.push_fixnum(1);
+            ctx.push(ObjectRef::from_array_ptr(array));
+            ctx.array_nth();
+            assert_eq!(ctx.pop_fixnum(), 25);
+
+            ctx.push_fixnum(5);
+            ctx.push(ObjectRef::from_array_ptr(array));
+            ctx.array_nth();
+            assert!(ctx.pop().is_false());
+        }
+    }
+
+    #[test]
+    fn test_object_nth_primitives() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let map = ctx.gc.allocate_map(
+                SpecialObjects::get_false(),
+                2,
+                32,
+                SpecialObjects::get_false(),
+            );
+            let obj = ctx.gc.allocate(map);
+
+            (*obj).set_slot_value(0, ObjectRef::from_int(100));
+            (*obj).set_slot_value(1, ObjectRef::from_int(200));
+
+            ctx.push_fixnum(1);
+            ctx.push(ObjectRef::from_ptr(obj as *mut _));
+            ctx.object_nth();
+            assert_eq!(ctx.pop_fixnum(), 200);
+
+            ctx.push(ObjectRef::from_int(250));
+            ctx.push_fixnum(1);
+            ctx.push(ObjectRef::from_ptr(obj as *mut _));
+            ctx.object_set_nth();
+
+            ctx.push_fixnum(1);
+            ctx.push(ObjectRef::from_ptr(obj as *mut _));
+            ctx.object_nth();
+            assert_eq!(ctx.pop_fixnum(), 250);
+
+            ctx.push_fixnum(5);
+            ctx.push(ObjectRef::from_ptr(obj as *mut _));
+            ctx.object_nth();
+            assert!(ctx.pop().is_false());
+        }
     }
 }
