@@ -1,3 +1,4 @@
+pub mod bignum;
 pub mod context;
 pub mod gc;
 pub mod object;

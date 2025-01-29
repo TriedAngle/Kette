@@ -4,9 +4,12 @@ use std::{
     ptr, usize,
 };
 
-use crate::object::{
-    Array, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot, SpecialObjects,
-    Word,
+use crate::{
+    bignum::BigNum,
+    object::{
+        Array, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot,
+        SpecialObjects, Word,
+    },
 };
 
 const SMALL_OBJECT_MAX_SIZE: usize = 64;
@@ -409,6 +412,30 @@ impl GarbageCollector {
         ptr
     }
 
+    pub unsafe fn allocate_bignum(&mut self, num_size: u64, negative: bool) -> *mut BigNum {
+        let size = BigNum::required_size(num_size as usize);
+
+        self.total_allocated += size;
+        if self.total_allocated > self.threshold {
+            unsafe { self.collect() };
+            self.threshold = self.total_allocated * 2;
+        }
+
+        let ptr = if size <= SMALL_OBJECT_MAX_SIZE {
+            unsafe { self.bump.allocate(size) as *mut BigNum }
+        } else {
+            unsafe { self.large.allocate(size) as *mut BigNum }
+        };
+
+        unsafe { std::ptr::write_bytes(ptr as *mut u8, 0, size) };
+
+        unsafe {
+            (*ptr).header = ObjectHeader::new(self.specials.get_bignum_map());
+            (*ptr).meta = BigNum::encode_meta(num_size as u64, negative);
+        }
+        ptr
+    }
+
     pub fn add_root_object(&mut self, obj: *mut Object) {
         let object = ObjectRef::from_ptr(obj);
         self.add_root(object);
@@ -482,6 +509,9 @@ impl GarbageCollector {
             if obj.as_bytearray_ptr().is_some()
                 || map_ptr == self.specials.bytearray_map.as_map_ptr()
             {
+                return;
+            }
+            if obj.as_bignum_ptr().is_some() || map_ptr == self.specials.bignum_map.as_map_ptr() {
                 return;
             }
 
@@ -795,8 +825,16 @@ impl GarbageCollector {
                 std::mem::size_of::<Float>(),
                 ObjectRef::null(),
             );
-
             self.specials.float_map = ObjectRef::from_map(float_map);
+
+            let bignum_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("ByteArray"));
+            let bignum_map = self.allocate_map(
+                bignum_map_name,
+                1,
+                std::mem::size_of::<BigNum>(),
+                ObjectRef::null(),
+            );
+            self.specials.bignum_map = ObjectRef::from_map(bignum_map);
 
             self.add_root_object(map_map as *mut Object);
             self.add_root_object(array_map as *mut Object);
@@ -805,6 +843,7 @@ impl GarbageCollector {
             self.add_root_object(true_map as *mut Object);
             self.add_root_object(true_object);
             self.add_root_object(float_map as *mut Object);
+            self.add_root_object(bignum_map as *mut Object);
         }
     }
 }

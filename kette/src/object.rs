@@ -1,5 +1,7 @@
 use std::{fmt, marker::PhantomData, mem};
 
+use crate::bignum::BigNum;
+
 // Basic type tag (LSB)
 pub const TAG_MASK: u64 = 0x1;
 pub const TAG_INT: u64 = 0x1; // Integers have LSB = 1
@@ -24,11 +26,12 @@ pub enum ObjectType {
     Array = 1,
     ByteArray = 2,
     Float = 3,
-    Alien = 4,
-    Box = 5,
-    Quotation = 6,
-    Word = 7,
-    // 8-15 available for future use
+    BigNum = 4,
+    Alien = 5,
+    Box = 6,
+    Quotation = 7,
+    Word = 8,
+    // 9-15 available for future use
 }
 
 impl From<u64> for ObjectType {
@@ -129,6 +132,10 @@ impl ObjectRef {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Float)
     }
 
+    pub fn from_bignum_ptr(ptr: *mut BigNum) -> Self {
+        Self::from_typed_ptr(ptr as *mut Object, ObjectType::BigNum)
+    }
+
     pub fn from_alien_ptr(ptr: *mut Alien) -> Self {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Alien)
     }
@@ -167,10 +174,11 @@ impl ObjectRef {
             1 => Some(ObjectType::Array),
             2 => Some(ObjectType::ByteArray),
             3 => Some(ObjectType::Float),
-            4 => Some(ObjectType::Alien),
-            5 => Some(ObjectType::Box),
-            6 => Some(ObjectType::Quotation),
-            7 => Some(ObjectType::Word),
+            4 => Some(ObjectType::BigNum),
+            5 => Some(ObjectType::Alien),
+            6 => Some(ObjectType::Box),
+            7 => Some(ObjectType::Quotation),
+            8 => Some(ObjectType::Word),
             _ => None,
         }
     }
@@ -218,6 +226,14 @@ impl ObjectRef {
     pub fn as_float_ptr(&self) -> Option<*mut Float> {
         if self.get_type() == Some(ObjectType::Float) {
             Some((self.0 & MAP_MASK) as *mut Float)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_bignum_ptr(&self) -> Option<*mut BigNum> {
+        if self.get_type() == Some(ObjectType::BigNum) {
+            Some((self.0 & MAP_MASK) as *mut BigNum)
         } else {
             None
         }
@@ -276,6 +292,7 @@ pub struct SpecialObjects {
     pub quotation_map: ObjectRef,
     pub word_map: ObjectRef,
     pub float_map: ObjectRef,
+    pub bignum_map: ObjectRef,
 
     pub true_object: ObjectRef,
 }
@@ -290,6 +307,7 @@ impl SpecialObjects {
             quotation_map: ObjectRef::null(),
             word_map: ObjectRef::null(),
             float_map: ObjectRef::null(),
+            bignum_map: ObjectRef::null(),
 
             true_object: ObjectRef::null(),
         }
@@ -353,6 +371,10 @@ impl SpecialObjects {
 
     pub fn get_float_map(&self) -> *mut Map {
         unsafe { self.float_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_bignum_map(&self) -> *mut Map {
+        unsafe { self.bignum_map.as_ptr_unchecked() as *mut _ }
     }
 }
 
@@ -781,6 +803,7 @@ impl fmt::Debug for ObjectRef {
                     })
                 }
                 Some(ObjectType::Float) => "Float",
+                Some(ObjectType::BigNum) => "BigNum",
                 Some(ObjectType::Alien) => "Alien",
                 Some(ObjectType::Box) => "Box",
                 Some(ObjectType::Quotation) => "Quotation",
