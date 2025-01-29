@@ -45,6 +45,17 @@ impl<T> MemoryRegion<T> {
     }
 }
 
+impl<T: Copy> MemoryRegion<T> {
+    pub fn nth(&self, n: usize) -> T {
+        unsafe { *self.current.sub(n + 1) }
+    }
+    pub fn set_nth(&mut self, n: usize, value: T) {
+        unsafe {
+            *self.current.sub(n + 1) = value;
+        }
+    }
+}
+
 impl From<*mut Array> for MemoryRegion<ObjectRef> {
     fn from(value: *mut Array) -> Self {
         let data_ptr = unsafe { (*value).data_ptr_mut() };

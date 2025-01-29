@@ -402,6 +402,13 @@ impl GarbageCollector {
         ptr
     }
 
+    pub unsafe fn allocate_float(&mut self, value: f64) -> *mut Float {
+        let ptr = self.allocate(self.specials.get_float_map()) as *mut Float;
+
+        unsafe { (*ptr).float = value }
+        ptr
+    }
+
     pub fn add_root_object(&mut self, obj: *mut Object) {
         let object = ObjectRef::from_ptr(obj);
         self.add_root(object);
@@ -769,10 +776,35 @@ impl GarbageCollector {
             (*slot_slots).set_element(3, ObjectRef::from_ptr(slot_kind_slot as *mut Object));
             (*slot_slots).set_element(4, ObjectRef::from_ptr(slot_guard_slot as *mut Object));
 
+            let slot_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("True"));
+            let true_map = self.allocate_map(
+                slot_map_name,
+                5,
+                std::mem::size_of::<Object>(),
+                ObjectRef::null(),
+            );
+
+            let true_object = self.allocate(true_map);
+            (*true_map).default = ObjectRef::from_ptr(true_object);
+            self.specials.true_object = ObjectRef::from_ptr(true_object);
+
+            let float_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Float"));
+            let float_map = self.allocate_map(
+                float_map_name,
+                5,
+                std::mem::size_of::<Float>(),
+                ObjectRef::null(),
+            );
+
+            self.specials.float_map = ObjectRef::from_map(float_map);
+
             self.add_root_object(map_map as *mut Object);
             self.add_root_object(array_map as *mut Object);
             self.add_root_object(bytearray_map as *mut Object);
             self.add_root_object(slot_map as *mut Object);
+            self.add_root_object(true_map as *mut Object);
+            self.add_root_object(true_object);
+            self.add_root_object(float_map as *mut Object);
         }
     }
 }

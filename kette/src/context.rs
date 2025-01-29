@@ -77,7 +77,7 @@ impl Context {
         self.push(value);
     }
 
-    fn execute(&mut self, quotation: *mut Quotation) {
+    pub fn execute(&mut self, quotation: *mut Quotation) {
         let code = unsafe { (*quotation).body.as_ptr_unchecked() } as *mut Array;
         let data_ptr = unsafe { (*code).data_ptr_mut() };
         let count = unsafe { (*code).size.as_int_unchecked() as usize };

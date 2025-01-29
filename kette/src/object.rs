@@ -275,6 +275,9 @@ pub struct SpecialObjects {
     pub slot_map: ObjectRef,
     pub quotation_map: ObjectRef,
     pub word_map: ObjectRef,
+    pub float_map: ObjectRef,
+
+    pub true_object: ObjectRef,
 }
 
 impl SpecialObjects {
@@ -286,6 +289,9 @@ impl SpecialObjects {
             slot_map: ObjectRef::null(),
             quotation_map: ObjectRef::null(),
             word_map: ObjectRef::null(),
+            float_map: ObjectRef::null(),
+
+            true_object: ObjectRef::null(),
         }
     }
 
@@ -343,6 +349,10 @@ impl SpecialObjects {
 
     pub fn get_quotation_map(&self) -> *mut Map {
         unsafe { self.quotation_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_float_map(&self) -> *mut Map {
+        unsafe { self.float_map.as_ptr_unchecked() as *mut _ }
     }
 }
 
