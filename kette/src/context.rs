@@ -133,13 +133,8 @@ impl Context {
                             unsafe { mem::transmute(primitive_fn_raw) };
                         primitive_fn(self);
                     } else {
-                        let quotation_clone = unsafe { self.gc.deep_clone(body_obj, 1) };
-                        self.gc.add_root(quotation_clone);
-
-                        let body_quotation = quotation_clone.as_quotation_ptr().unwrap();
-                        self.execute(body_quotation);
-
-                        self.gc.remove_root(quotation_clone);
+                        let quot = body_obj.as_quotation_ptr().unwrap();
+                        self.execute(quot);
                     }
                 }
                 ObjectType::Quotation => {
@@ -152,6 +147,13 @@ impl Context {
             }
         }
     }
+
+    pub fn compile_string(&mut self, text: ObjectRef) -> ObjectRef {
+        let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
+        unsafe { (*parser).set_text(text) };
+        unsafe { (*parser).compile_string(self) }
+    }
+
     pub fn namestack_push_or_replace(&mut self, name: ObjectRef, object: ObjectRef) {
         if name.is_false() {
             return;
@@ -371,26 +373,41 @@ impl Parser {
                     Some(obj) => {
                         if let Some(word_ptr) = obj.as_word_ptr() {
                             unsafe {
-                                let flags = (*word_ptr).flags.as_array_ptr().unwrap_unchecked();
-                                let mut is_parser = false;
-                                for flag in (*flags).iter() {
-                                    if flag == SpecialObjects::get_false() {
-                                        break;
+                                if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
+                                    let mut is_primitive = false;
+                                    let mut is_parser = false;
+
+                                    for flag in (*flags).iter() {
+                                        if flag == SpecialObjects::get_false() {
+                                            break;
+                                        }
+                                        if flag == SpecialObjects::word_primitive() {
+                                            is_primitive = true;
+                                        }
+                                        if flag == SpecialObjects::word_parser() {
+                                            is_parser = true;
+                                        }
                                     }
-                                    if flag == SpecialObjects::word_parser() {
-                                        is_parser = true;
-                                        break;
+                                    if is_parser {
+                                        if is_primitive {
+                                            let primitive_fn_raw =
+                                                (*word_ptr).body.as_int_unchecked();
+                                            let primitive_fn: fn(&mut Context) =
+                                                mem::transmute(primitive_fn_raw);
+                                            primitive_fn(ctx);
+                                            let result = ctx.pop();
+                                            objects.push(result);
+                                        } else {
+                                            let quot = (*word_ptr).body.as_quotation_ptr().unwrap();
+                                            ctx.execute(quot);
+                                            let result = ctx.pop();
+                                            if !result.is_false() {
+                                                objects.push(result);
+                                            }
+                                        }
+                                    } else {
+                                        objects.push(obj);
                                     }
-                                }
-                                if is_parser {
-                                    let quotation_clone = ctx.gc.deep_clone((*word_ptr).body, 1);
-                                    ctx.gc.add_root(quotation_clone);
-                                    let body_quotation =
-                                        quotation_clone.as_quotation_ptr().unwrap();
-                                    ctx.execute(body_quotation);
-                                    ctx.gc.remove_root(quotation_clone);
-                                    let result = ctx.pop();
-                                    objects.push(result);
                                 } else {
                                     objects.push(obj);
                                 }
@@ -405,6 +422,101 @@ impl Parser {
                 }
             }
         }
+    }
+
+    pub fn compile_string(&mut self, ctx: &mut Context) -> ObjectRef {
+        let mut objects = Vec::new();
+
+        loop {
+            let (word, success) = self.next_word(&mut ctx.gc);
+            if !success {
+                break;
+            }
+
+            let mut parsed = false;
+
+            ctx.push(word);
+            ctx.parse_fixnum();
+            let result = ctx.pop();
+            if !result.is_false() {
+                objects.push(result);
+                parsed = true;
+            }
+
+            if !parsed {
+                ctx.push(word);
+                ctx.parse_float();
+                let result = ctx.pop();
+                if !result.is_false() {
+                    objects.push(result);
+                    parsed = true;
+                }
+            }
+
+            if !parsed {
+                match ctx.namestack_lookup(word) {
+                    Some(obj) => {
+                        if let Some(word_ptr) = obj.as_word_ptr() {
+                            unsafe {
+                                if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
+                                    let mut is_primitive = false;
+                                    let mut is_parser = false;
+
+                                    for flag in (*flags).iter() {
+                                        if flag == SpecialObjects::get_false() {
+                                            break;
+                                        }
+                                        if flag == SpecialObjects::word_primitive() {
+                                            is_primitive = true;
+                                        }
+                                        if flag == SpecialObjects::word_parser() {
+                                            is_parser = true;
+                                        }
+                                    }
+                                    if is_parser {
+                                        if is_primitive {
+                                            let primitive_fn_raw =
+                                                (*word_ptr).body.as_int_unchecked();
+                                            let primitive_fn: fn(&mut Context) =
+                                                mem::transmute(primitive_fn_raw);
+                                            primitive_fn(ctx);
+                                            let result = ctx.pop();
+                                            objects.push(result);
+                                        } else {
+                                            let quot = (*word_ptr).body.as_quotation_ptr().unwrap();
+                                            ctx.execute(quot);
+                                            let result = ctx.pop();
+                                            if !result.is_false() {
+                                                objects.push(result);
+                                            }
+                                        }
+                                    } else {
+                                        objects.push(obj);
+                                    }
+                                } else {
+                                    objects.push(obj);
+                                }
+                            }
+                        } else {
+                            objects.push(obj);
+                        }
+                    }
+                    None => {
+                        objects.push(word);
+                    }
+                }
+            }
+        }
+
+        let array = unsafe { ctx.gc.allocate_array(objects.len()) };
+        for (i, obj) in objects.iter().enumerate() {
+            unsafe { (*array).set_element(i, *obj) };
+        }
+
+        let quotation = unsafe { ctx.gc.allocate_quotation(None) };
+        unsafe { (*quotation).body = ObjectRef::from_array_ptr(array) };
+
+        ObjectRef::from_quotation_ptr(quotation)
     }
 
     pub fn set_text(&mut self, text: ObjectRef) {

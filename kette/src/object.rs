@@ -140,7 +140,7 @@ impl ObjectRef {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Alien)
     }
 
-    pub fn from_box_ptr(ptr: *mut Box) -> Self {
+    pub fn from_box_ptr(ptr: *mut BoxObject) -> Self {
         Self::from_typed_ptr(ptr as *mut Object, ObjectType::Box)
     }
 
@@ -248,9 +248,9 @@ impl ObjectRef {
         }
     }
 
-    pub fn as_box_ptr(&self) -> Option<*mut Box> {
+    pub fn as_box_ptr(&self) -> Option<*mut BoxObject> {
         if self.get_type() == Some(ObjectType::Box) {
-            Some((self.0 & MAP_MASK) as *mut Box)
+            Some((self.0 & MAP_MASK) as *mut BoxObject)
         } else {
             None
         }
@@ -290,6 +290,7 @@ pub struct SpecialObjects {
     pub array_map: ObjectRef,
     pub bytearray_map: ObjectRef,
     pub slot_map: ObjectRef,
+    pub box_map: ObjectRef,
     pub quotation_map: ObjectRef,
     pub word_map: ObjectRef,
     pub float_map: ObjectRef,
@@ -305,6 +306,7 @@ impl SpecialObjects {
             array_map: ObjectRef::null(),
             bytearray_map: ObjectRef::null(),
             slot_map: ObjectRef::null(),
+            box_map: ObjectRef::null(),
             quotation_map: ObjectRef::null(),
             word_map: ObjectRef::null(),
             float_map: ObjectRef::null(),
@@ -369,6 +371,10 @@ impl SpecialObjects {
 
     pub fn get_word_map(&self) -> *mut Map {
         unsafe { self.word_map.as_ptr_unchecked() as *mut _ }
+    }
+
+    pub fn get_box_map(&self) -> *mut Map {
+        unsafe { self.box_map.as_ptr_unchecked() as *mut _ }
     }
 
     pub fn get_quotation_map(&self) -> *mut Map {
@@ -448,8 +454,9 @@ pub struct Alien {
 }
 
 #[repr(C)]
-pub struct Box {
+pub struct BoxObject {
     pub header: ObjectHeader,
+    pub boxed: ObjectRef,
 }
 
 #[repr(C)]

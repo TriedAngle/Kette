@@ -7,7 +7,7 @@ use std::{
 use crate::{
     bignum::BigNum,
     object::{
-        Array, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot,
+        Array, BoxObject, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot,
         SpecialObjects, Word,
     },
 };
@@ -329,7 +329,7 @@ impl GarbageCollector {
         ptr
     }
 
-    unsafe fn allocate_slot(
+    pub unsafe fn allocate_slot(
         &mut self,
         name: ObjectRef,
         kind: ObjectRef,
@@ -372,6 +372,12 @@ impl GarbageCollector {
         let slots_array = unsafe { self.allocate_array(init_slot_capacity) };
         unsafe { (*ptr).slots = ObjectRef::from_array_ptr(slots_array) };
 
+        ptr
+    }
+
+    pub unsafe fn allocate_box(&mut self, value: ObjectRef) -> *mut BoxObject {
+        let ptr = self.allocate(self.specials.get_box_map()) as *mut BoxObject;
+        (*ptr).boxed = value;
         ptr
     }
 
@@ -928,6 +934,28 @@ impl GarbageCollector {
             );
             (*word_slots).set_element(3, ObjectRef::from_ptr(word_flags_slot as *mut Object));
 
+            let box_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Box"));
+            let box_map = self.allocate_map(
+                box_map_name,
+                1,
+                std::mem::size_of::<BoxObject>(),
+                ObjectRef::null(),
+            );
+            (*box_map).header = ObjectHeader::new(map_map);
+            self.specials.box_map = ObjectRef::from_map(box_map);
+
+            // Add box value slot
+            let value_name = ObjectRef::from_bytearray_ptr(self.allocate_string("value"));
+            let value_slot = self.allocate_slot(
+                value_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+
+            (*box_map).slot_count = ObjectRef::from_int(1);
+            let box_slots = (*box_map).slots.as_array_ptr().unwrap();
+            (*box_slots).set_element(0, ObjectRef::from_ptr(value_slot as *mut Object));
+
             self.add_root_object(map_map as *mut Object);
             self.add_root_object(array_map as *mut Object);
             self.add_root_object(bytearray_map as *mut Object);
@@ -938,6 +966,7 @@ impl GarbageCollector {
             self.add_root_object(bignum_map as *mut Object);
             self.add_root_object(quotation_map as *mut Object);
             self.add_root_object(word_map as *mut Object);
+            self.add_root_object(box_map as *mut Object);
         }
     }
 }
@@ -1563,6 +1592,77 @@ mod tests {
             assert_ne!(cloned1_ptr, obj1);
             assert_ne!(cloned2_ptr, obj2);
             assert_ne!(cloned3_ptr, obj3);
+        }
+    }
+    #[test]
+    fn test_box_allocation() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let value = ObjectRef::from_int(42);
+            let box_ptr = gc.allocate_box(value);
+
+            assert_eq!((*box_ptr).boxed, value);
+            assert_eq!((*box_ptr).boxed.as_int(), Some(42));
+
+            // Test boxing survives GC
+            gc.add_root_object(box_ptr as *mut Object);
+            gc.collect();
+
+            assert_eq!((*box_ptr).boxed.as_int(), Some(42));
+
+            let str_ptr = gc.allocate_string("test");
+            let str_value = ObjectRef::from_bytearray_ptr(str_ptr);
+            let str_box = gc.allocate_box(str_value);
+
+            gc.add_root_object(str_box as *mut Object);
+            gc.collect();
+
+            let boxed_str = (*str_box).boxed;
+            assert!(boxed_str.as_bytearray_ptr().is_some());
+            assert_eq!(
+                (*boxed_str.as_bytearray_ptr().unwrap()).as_str(),
+                Some("test")
+            );
+        }
+    }
+
+    #[test]
+    fn test_nested_boxes() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let value = ObjectRef::from_int(42);
+            let box1 = gc.allocate_box(value);
+            let box2 = gc.allocate_box(ObjectRef::from_box_ptr(box1));
+
+            gc.add_root_object(box2 as *mut Object);
+            gc.collect();
+
+            let inner_box = (*box2).boxed.as_box_ptr().unwrap();
+            assert_eq!((*inner_box).boxed.as_int(), Some(42));
+        }
+    }
+
+    #[test]
+    fn test_box_gc_behavior() {
+        let mut gc = GarbageCollector::new();
+        gc.init_special_objects();
+
+        unsafe {
+            let value = ObjectRef::from_int(42);
+            let box1 = gc.allocate_box(value);
+            let _box2 = gc.allocate_box(value);
+
+            gc.add_root_object(box1 as *mut Object);
+
+            let initial_allocated = gc.total_allocated;
+            gc.collect();
+
+            assert!(gc.total_allocated < initial_allocated);
+            assert_eq!((*box1).boxed.as_int(), Some(42));
         }
     }
 }

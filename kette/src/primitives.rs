@@ -1,9 +1,9 @@
 use crate::{
     context::{Context, Parser},
-    object::{Array, ByteArray, Object, ObjectRef, ObjectType, SpecialObjects},
+    object::{Array, ByteArray, Object, ObjectRef, ObjectType, Slot, SpecialObjects},
 };
 
-fn add_primities(ctx: &mut Context) {
+fn add_primitives(ctx: &mut Context) {
     #[rustfmt::skip]
     let words: &[(&str, &[&str], fn(&mut Context))] = &[
         ("drop", &["x","--"], Context::stack_drop),
@@ -25,16 +25,21 @@ fn add_primities(ctx: &mut Context) {
         
         ("@parse-fixnum", &["str", "--", "n/?"], Context::parse_fixnum),
         ("@parse-float", &["str", "--", "n/?"], Context::parse_float),
+        ("@parse-next", &["--", "str/?"], Context::parse_next_word),
         ("@parse-until", &["end", "--", "array"], Context::parse_until),
         
         ("@r>", &["x", "--"], Context::data_retain),
         ("<r@", &["--", "x"], Context::retain_data),
         ("@let-me-cook", &["--", "ctx"], Context::get_context),
+        ("@create-new-tuple", &["name", "slots", "--", "map"], Context::create_new_tuple),
+        ("@create-new-instance", &["...values", "map", "--", "object"], Context::create_new_instance),
 
         ("@namestack-lookup", &["name", "--", "obj/f"], Context::lookup_namestack),
         ("@namestack-push", &["name", "obj", "--"], Context::define_namestack),
         ("@namestack-delete", &["name", "--", "obj/f"], Context::remove_namestack),
 
+        (">box", &["x", "--", "box"], Context::create_box),
+        (">box<", &["box", "--", "x"], Context::open_box),
         ("array-nth", &["n", "array", "--", "x"], Context::array_nth),
         ("array-set-nth", &["x", "n", "array", "--"], Context::array_set_nth),
         ("get-slot", &["n", "object", "--", "x"], Context::object_nth),
@@ -44,7 +49,6 @@ fn add_primities(ctx: &mut Context) {
         ("ptr@>object", &["ptr", "T", "--", "obj"], Context::pointer_to_object_special),
         ("(call)", &["..a", "q", "--", "..b"], Context::quotation_call),
         ("if", &["..a", "[..a ..b]", "[..a ..b]", "?", "--", "..b"], Context::stack_tuck),
-
 
         ("fixnum+", &["x", "y", "--", "z"], Context::fixnum_add),
         ("fixnum-", &["x", "y", "--", "z"], Context::fixnum_sub),
@@ -109,13 +113,22 @@ fn add_primities(ctx: &mut Context) {
         ("alien-u64>fixnum", &["bytes", "--", "n"], Context::alien_u64_to_fixnum),
     ];
 
+    // TODO: remove quotation
     let parser_words: &[(&str, &[&str], fn(&mut Context))] = &[
-        // ("@parser:", &["--", "obj/-"], Context::parse_parser),
+        ("@syntax:", &["--", "obj/-"], Context::parse_syntax),
         ("[", &["--", "quot"], Context::parse_quotation),
     ];
 
+    for (name, stack_effect, fp) in parser_words {
+        let word = primitive_parser_word(ctx, name, stack_effect, *fp);
+        let name = unsafe { (*word.as_word_ptr().unwrap()).name };
+        ctx.namestack_push_or_replace(name, word);
+    }
+
     for (name, stack_effect, fp) in words {
         let word = primitive_word(ctx, name, stack_effect, *fp);
+        let name = unsafe { (*word.as_word_ptr().unwrap()).name };
+        ctx.namestack_push_or_replace(name, word);
     }
 }
 
@@ -348,7 +361,7 @@ impl Context {
         }
     }
 
-    fn next_word(&mut self) {
+    fn parse_next_word(&mut self) {
         let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
         let (word, success) = unsafe { (*parser).next_word(&mut self.gc) };
         if success {
@@ -405,6 +418,89 @@ impl Context {
     fn get_context(&mut self) {
         let ctx = self as *mut Self as *mut Object;
         self.push(ObjectRef::from_ptr(ctx));
+    }
+
+    fn create_new_tuple(&mut self) {
+        let slots_array = self.pop();
+        let type_name = self.pop();
+
+        let Some(slots_ptr) = slots_array.as_array_ptr() else {
+            self.push(ObjectRef::null());
+            return;
+        };
+
+        let Some(name_ptr) = type_name.as_bytearray_ptr() else {
+            self.push(ObjectRef::null());
+            return;
+        };
+
+        unsafe {
+            let slots_len = (*slots_ptr).size.as_int_unchecked() as usize;
+            let mut data_slot_count = 0;
+
+            for i in 0..slots_len {
+                let slot = (*slots_ptr).get_element(i).unwrap();
+                let slot_ptr = slot.as_ptr_unchecked() as *const Slot;
+                if (*slot_ptr).kind == SpecialObjects::get_slot_kind_data() {
+                    data_slot_count += 1;
+                }
+            }
+
+            let object_size = std::mem::size_of::<Object>()
+                + (data_slot_count * std::mem::size_of::<ObjectRef>());
+
+            let map = self.gc.allocate_map(
+                ObjectRef::from_bytearray_ptr(name_ptr),
+                slots_len,
+                object_size,
+                ObjectRef::null(),
+            );
+
+            (*map).slot_count = ObjectRef::from_int(slots_len as i64);
+            let map_slots = (*map).slots.as_array_ptr().unwrap();
+
+            for i in 0..slots_len {
+                let slot = (*slots_ptr).get_element(i).unwrap();
+                (*map_slots).set_element(i, slot);
+            }
+
+            self.push(ObjectRef::from_map(map));
+        }
+    }
+
+    fn create_new_instance(&mut self) {
+        let map_obj = self.pop();
+        let map_ptr = map_obj.as_map_ptr();
+        if map_obj.is_int() || map_obj.is_false() {
+            return self.push(SpecialObjects::get_false());
+        }
+        if unsafe { (*map_ptr).header.map() } != self.gc.specials.map_map.as_map_ptr() {
+            self.push(SpecialObjects::get_false());
+            return;
+        }
+
+        unsafe {
+            let obj = self.gc.allocate(map_ptr);
+
+            let slot_count = (*map_ptr).slot_count.as_int_unchecked() as usize;
+            let slots = (*map_ptr).slots.as_array_ptr().unwrap();
+
+            let mut data_slots = Vec::new();
+            for i in 0..slot_count {
+                let slot_obj = (*slots).get_element(i).unwrap();
+                let slot = slot_obj.as_ptr_unchecked() as *const Slot;
+                if (*slot).kind == SpecialObjects::get_slot_kind_data() {
+                    data_slots.push((i, (*slot).index.as_int_unchecked() as usize));
+                }
+            }
+
+            for (_slot_idx, data_idx) in data_slots.iter().rev() {
+                let value = self.pop();
+                (*obj).set_slot_value(*data_idx, value);
+            }
+
+            self.push(ObjectRef::from_ptr(obj));
+        }
     }
 
     fn array_nth(&mut self) {
@@ -472,6 +568,73 @@ impl Context {
         }
 
         self.push(SpecialObjects::get_false());
+    }
+
+    fn create_box(&mut self) {
+        let value = self.pop();
+        let box_obj = unsafe { self.gc.allocate_box(value) };
+        self.push(ObjectRef::from_box_ptr(box_obj))
+    }
+
+    fn open_box(&mut self) {
+        let box_obj = self.pop();
+        if let Some(box_ptr) = box_obj.as_box_ptr() {
+            unsafe {
+                let value = (*box_ptr).boxed;
+                self.push(value);
+            }
+        } else {
+            self.push(ObjectRef::null());
+        }
+    }
+
+    fn parse_syntax(&mut self) {
+        let (name_obj, success) = unsafe {
+            let parser = self.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).next_word(&mut self.gc)
+        };
+
+        if !success {
+            self.push(ObjectRef::null());
+            return;
+        }
+
+        let word = unsafe {
+            let word = self.gc.allocate_word(None, true);
+            (*word).name = name_obj;
+
+            let flags = (*word).flags.as_array_ptr().unwrap();
+            (*flags).set_element(0, SpecialObjects::word_parser());
+
+            word
+        };
+
+        let end_word = unsafe {
+            let semicolon = self.gc.allocate_string(";");
+            ObjectRef::from_bytearray_ptr(semicolon)
+        };
+
+        let body = unsafe {
+            let parser = self.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).parse_until(self, end_word)
+        };
+
+        if body.is_false() {
+            self.push(ObjectRef::null());
+            return;
+        }
+
+        let quotation = unsafe {
+            let quot = self.gc.allocate_quotation(None);
+            (*quot).body = body;
+            quot
+        };
+
+        unsafe {
+            (*word).body = ObjectRef::from_quotation_ptr(quotation);
+        }
+
+        self.namestack_push_or_replace(name_obj, ObjectRef::from_word_ptr(word));
     }
 
     fn object_to_pointer(&mut self) {
@@ -1693,7 +1856,7 @@ mod tests {
             let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
             (*parser).set_text(text.into());
 
-            ctx.next_word();
+            ctx.parse_next_word();
             ctx.stack_drop();
 
             ctx.parse_quotation();
@@ -1723,7 +1886,7 @@ mod tests {
             let text = ctx.gc.allocate_string("[ 42 3.14 word");
             let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
             (*parser).set_text(text.into());
-            ctx.next_word();
+            ctx.parse_next_word();
             ctx.stack_drop();
 
             ctx.parse_quotation();
@@ -1740,7 +1903,7 @@ mod tests {
             let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
             (*parser).set_text(text.into());
 
-            ctx.next_word();
+            ctx.parse_next_word();
             ctx.stack_drop();
 
             ctx.parse_quotation();
@@ -1773,6 +1936,410 @@ mod tests {
             assert_eq!((*array).size.as_int(), Some(1));
             let first = (*array).get_element(0).unwrap();
             assert_eq!(first.as_int(), Some(42));
+        }
+    }
+
+    #[test]
+    fn test_create_tuple_and_instance() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let name_name = ObjectRef::from_bytearray_ptr(ctx.gc.allocate_string("name"));
+            let name_slot = ctx.gc.allocate_slot(
+                name_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+
+            let age_name = ObjectRef::from_bytearray_ptr(ctx.gc.allocate_string("age"));
+            let age_slot = ctx.gc.allocate_slot(
+                age_name,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(1),
+            );
+
+            let meta_name = ObjectRef::from_bytearray_ptr(ctx.gc.allocate_string("meta"));
+            let meta_slot = ctx.gc.allocate_slot(
+                meta_name,
+                ObjectRef::from_int(99), // Non-data slot
+                ObjectRef::from_int(2),
+            );
+
+            let slots_array = ctx.gc.allocate_array(3);
+            (*slots_array).set_element(0, ObjectRef::from_ptr(name_slot as *mut _));
+            (*slots_array).set_element(1, ObjectRef::from_ptr(age_slot as *mut _));
+            (*slots_array).set_element(2, ObjectRef::from_ptr(meta_slot as *mut _));
+
+            let type_name = ctx.gc.allocate_string("Person");
+
+            ctx.push(ObjectRef::from_bytearray_ptr(type_name));
+            ctx.push(ObjectRef::from_array_ptr(slots_array));
+            ctx.create_new_tuple();
+
+            let map_obj = ctx.pop();
+            assert!(!map_obj.is_false(), "Map creation should succeed");
+            let map = map_obj.as_map_ptr();
+
+            assert_eq!((*map).slot_count.as_int(), Some(3));
+            assert_eq!(
+                (*(*map).name.as_bytearray_ptr().unwrap()).as_str(),
+                Some("Person")
+            );
+
+            let name_value = ctx.gc.allocate_string("John");
+            let age_value = ObjectRef::from_int(42);
+
+            ctx.push(ObjectRef::from_bytearray_ptr(name_value));
+            ctx.push(age_value);
+            ctx.push(map_obj);
+            ctx.create_new_instance();
+
+            let instance = ctx.pop();
+            assert!(!instance.is_false(), "Instance creation should succeed");
+            let obj = instance.as_ptr().unwrap();
+
+            let stored_name = (*obj).get_slot_value(0).unwrap();
+            let stored_age = (*obj).get_slot_value(1).unwrap();
+
+            assert_eq!(
+                (*stored_name.as_bytearray_ptr().unwrap()).as_str(),
+                Some("John")
+            );
+            assert_eq!(stored_age.as_int(), Some(42));
+        }
+    }
+
+    #[test]
+    fn test_tuple_creation_invalid_inputs() {
+        let mut ctx = create_test_context();
+
+        ctx.push(ObjectRef::from_int(42)); // Not a bytearray
+        ctx.push(ObjectRef::from_int(123)); // Not an array
+        ctx.create_new_tuple();
+        assert!(ctx.pop().is_false());
+
+        ctx.push(ObjectRef::from_int(42)); // Not a map
+        ctx.create_new_instance();
+
+        assert!(ctx.pop().is_false());
+    }
+
+    #[test]
+    fn test_tuple_with_only_data_slots() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let slot_name1 = ObjectRef::from_bytearray_ptr(ctx.gc.allocate_string("field1"));
+            let slot1 = ctx.gc.allocate_slot(
+                slot_name1,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(0),
+            );
+
+            let slot_name2 = ObjectRef::from_bytearray_ptr(ctx.gc.allocate_string("field2"));
+            let slot2 = ctx.gc.allocate_slot(
+                slot_name2,
+                SpecialObjects::get_slot_kind_data(),
+                ObjectRef::from_int(1),
+            );
+
+            let slots_array = ctx.gc.allocate_array(2);
+            (*slots_array).set_element(0, ObjectRef::from_ptr(slot1 as *mut _));
+            (*slots_array).set_element(1, ObjectRef::from_ptr(slot2 as *mut _));
+
+            let type_name = ctx.gc.allocate_string("DataOnly");
+            ctx.push(ObjectRef::from_bytearray_ptr(type_name));
+            ctx.push(ObjectRef::from_array_ptr(slots_array));
+            ctx.create_new_tuple();
+
+            let map_obj = ctx.pop();
+            assert!(!map_obj.is_false());
+
+            ctx.push(ObjectRef::from_int(1));
+            ctx.push(ObjectRef::from_int(2));
+            ctx.push(map_obj);
+            ctx.create_new_instance();
+
+            let instance = ctx.pop();
+            assert!(!instance.is_false());
+
+            let obj = instance.as_ptr().unwrap();
+            assert_eq!((*obj).get_slot_value(0).unwrap().as_int(), Some(1));
+            assert_eq!((*obj).get_slot_value(1).unwrap().as_int(), Some(2));
+        }
+    }
+
+    #[test]
+    fn test_tuple_with_no_data_slots() {
+        let mut ctx = create_test_context();
+
+        unsafe {
+            let slot_name = ObjectRef::from_bytearray_ptr(ctx.gc.allocate_string("meta"));
+            let slot = ctx.gc.allocate_slot(
+                slot_name,
+                ObjectRef::from_int(99), // Non-data slot
+                ObjectRef::from_int(0),
+            );
+
+            let slots_array = ctx.gc.allocate_array(1);
+            (*slots_array).set_element(0, ObjectRef::from_ptr(slot as *mut _));
+
+            let type_name = ctx.gc.allocate_string("NoData");
+            ctx.push(ObjectRef::from_bytearray_ptr(type_name));
+            ctx.push(ObjectRef::from_array_ptr(slots_array));
+            ctx.create_new_tuple();
+
+            let map_obj = ctx.pop();
+            assert!(!map_obj.is_false());
+
+            ctx.push(map_obj);
+            ctx.create_new_instance();
+
+            let instance = ctx.pop();
+            assert!(!instance.is_false());
+        }
+    }
+
+    #[test]
+    fn test_compile_string_basic() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("42 3.14 hello");
+            let result = ctx.compile_string(text.into());
+
+            assert!(!result.is_false());
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(3));
+
+            // Check first element is integer 42
+            let first = (*array).get_element(0).unwrap();
+            assert_eq!(first.as_int(), Some(42));
+
+            // Check second element is float 3.14
+            let second = (*array).get_element(1).unwrap();
+            let float_ptr = second.as_float_ptr().unwrap();
+            assert!(((*float_ptr).float - 3.14).abs() < f64::EPSILON);
+
+            // Check third element is bytearray "hello"
+            let third = (*array).get_element(2).unwrap();
+            let bytearray = third.as_bytearray_ptr().unwrap();
+            assert_eq!((*bytearray).as_str(), Some("hello"));
+        }
+    }
+
+    #[test]
+    fn test_compile_string_empty() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("");
+            let result = ctx.compile_string(text.into());
+
+            assert!(!result.is_false());
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+            assert_eq!((*array).size.as_int(), Some(0));
+        }
+    }
+
+    #[test]
+    fn test_compile_string_nested_quotations() {
+        let mut ctx = create_test_context();
+        add_primitives(&mut ctx);
+        unsafe {
+            let text = ctx.gc.allocate_string("1 [ 2 [ 3 ] 4 ] 5");
+            let result = ctx.compile_string(text.into());
+
+            assert!(!result.is_false());
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(3));
+
+            let first = (*array).get_element(0).unwrap();
+            assert_eq!(first.as_int(), Some(1));
+
+            let middle = (*array).get_element(1).unwrap();
+            let middle_quotation = middle.as_quotation_ptr().unwrap();
+            let middle_array = (*middle_quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*middle_array).size.as_int(), Some(3));
+
+            let nested_first = (*middle_array).get_element(0).unwrap();
+            assert_eq!(nested_first.as_int(), Some(2));
+
+            let nested_middle = (*middle_array).get_element(1).unwrap();
+            let nested_quotation = nested_middle.as_quotation_ptr().unwrap();
+            let nested_array = (*nested_quotation).body.as_array_ptr().unwrap();
+            assert_eq!((*nested_array).get_element(0).unwrap().as_int(), Some(3));
+
+            let nested_last = (*middle_array).get_element(2).unwrap();
+            assert_eq!(nested_last.as_int(), Some(4));
+
+            let last = (*array).get_element(2).unwrap();
+            assert_eq!(last.as_int(), Some(5));
+        }
+    }
+
+    #[test]
+    fn test_compile_string_with_namestack() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let name = ctx.gc.allocate_string("test-var");
+            let value = ObjectRef::from_int(42);
+            ctx.namestack_push_or_replace(name.into(), value);
+
+            let text = ctx.gc.allocate_string("1 test-var 2");
+            let result = ctx.compile_string(text.into());
+
+            assert!(!result.is_false());
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(3));
+            assert_eq!((*array).get_element(0).unwrap().as_int(), Some(1));
+            assert_eq!((*array).get_element(1).unwrap().as_int(), Some(42)); // The variable's value
+            assert_eq!((*array).get_element(2).unwrap().as_int(), Some(2));
+        }
+    }
+
+    #[test]
+    fn test_compile_string_with_primitives() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let name = ctx.gc.allocate_string("+");
+            let word = ctx.gc.allocate_word(None, true);
+            (*word).name = name.into();
+            (*word).body = ObjectRef::from_int(Context::fixnum_add as i64);
+            let flags = (*word).flags.as_array_ptr().unwrap();
+            (*flags).set_element(0, SpecialObjects::word_primitive());
+
+            ctx.namestack_push_or_replace(name.into(), ObjectRef::from_word_ptr(word));
+
+            let text = ctx.gc.allocate_string("40 2 +");
+            let result = ctx.compile_string(text.into());
+
+            assert!(!result.is_false());
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(3));
+
+            assert_eq!((*array).get_element(0).unwrap().as_int(), Some(40));
+            assert_eq!((*array).get_element(1).unwrap().as_int(), Some(2));
+
+            let primitive = (*array).get_element(2).unwrap();
+            let word_ptr = primitive.as_word_ptr().unwrap();
+            assert_eq!((*word_ptr).body.as_int(), Some(Context::fixnum_add as i64));
+
+            ctx.execute(quotation);
+
+            assert_eq!(ctx.pop().as_int(), Some(42));
+        }
+    }
+
+    #[test]
+    fn test_compile_string_with_mixed_primitives() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let add_name = ctx.gc.allocate_string("prim-add");
+            let add_word = ctx.gc.allocate_word(None, true);
+            (*add_word).name = add_name.into();
+            (*add_word).body = ObjectRef::from_int(Context::fixnum_add as i64);
+            let add_flags = (*add_word).flags.as_array_ptr().unwrap();
+            (*add_flags).set_element(0, SpecialObjects::word_primitive());
+
+            let dup_name = ctx.gc.allocate_string("prim-dup");
+            let dup_word = ctx.gc.allocate_word(None, true);
+            (*dup_word).name = dup_name.into();
+            (*dup_word).body = ObjectRef::from_int(Context::stack_dup as i64);
+            let dup_flags = (*dup_word).flags.as_array_ptr().unwrap();
+            (*dup_flags).set_element(0, SpecialObjects::word_primitive());
+
+            ctx.namestack_push_or_replace(add_name.into(), ObjectRef::from_word_ptr(add_word));
+            ctx.namestack_push_or_replace(dup_name.into(), ObjectRef::from_word_ptr(dup_word));
+
+            let parser_name = ctx.gc.allocate_string("parser-word");
+            let parser_word = ctx.gc.allocate_word(None, true);
+            (*parser_word).name = parser_name.into();
+            let parser_flags = (*parser_word).flags.as_array_ptr().unwrap();
+            (*parser_flags).set_element(0, SpecialObjects::word_parser());
+
+            let parser_body = ctx.gc.allocate_quotation(Some(1));
+            (*parser_word).body = ObjectRef::from_quotation_ptr(parser_body);
+            (*(*parser_body).body.as_array_ptr_unchecked())
+                .set_element(0, ObjectRef::from_int(100));
+
+            ctx.namestack_push_or_replace(
+                parser_name.into(),
+                ObjectRef::from_word_ptr(parser_word),
+            );
+            let text = ctx.gc.allocate_string("21 prim-dup prim-add parser-word");
+            let result = ctx.compile_string(text.into());
+            let quotation = result.as_quotation_ptr().unwrap();
+            let array = (*quotation).body.as_array_ptr().unwrap();
+
+            assert_eq!((*array).size.as_int(), Some(4));
+
+            assert_eq!((*array).get_element(0).unwrap().as_int(), Some(21));
+
+            let dup_prim = (*array).get_element(1).unwrap();
+            let add_prim = (*array).get_element(2).unwrap();
+            assert!(dup_prim.as_word_ptr().is_some());
+            assert!(add_prim.as_word_ptr().is_some());
+
+            let normal = (*array).get_element(3).unwrap();
+            assert_eq!(normal.as_int(), Some(100));
+
+            ctx.execute(quotation);
+
+            assert_eq!(ctx.pop().as_int(), Some(100));
+            assert_eq!(ctx.pop().as_int(), Some(42));
+        }
+    }
+
+    #[test]
+    fn test_box_primitives() {
+        let mut ctx = create_test_context();
+
+        ctx.push(ObjectRef::from_int(42));
+        ctx.create_box();
+        let box_obj = ctx.pop();
+        assert!(box_obj.as_box_ptr().is_some());
+
+        ctx.push(box_obj);
+        ctx.open_box();
+        assert_eq!(ctx.pop_fixnum(), 42);
+    }
+
+    #[test]
+    fn test_syntax_definition() {
+        let mut ctx = create_test_context();
+        add_primitives(&mut ctx);
+
+        unsafe {
+            let syntax_def = ctx
+                .gc
+                .allocate_string("@syntax: \\ @parse-next @namestack-lookup >box ;");
+            let test_value = ObjectRef::from_int(42);
+            let value_name = ctx.gc.allocate_string("test-value");
+
+            ctx.namestack_push_or_replace(ObjectRef::from_bytearray_ptr(value_name), test_value);
+
+            let result = ctx.compile_string(syntax_def.into());
+            assert!(!result.is_false());
+            ctx.execute(result.as_quotation_ptr().unwrap());
+
+            let test_code = ctx.gc.allocate_string("\\ test-value");
+            let test_result = ctx.compile_string(test_code.into());
+            assert!(!test_result.is_false());
+            ctx.execute(test_result.as_quotation_ptr().unwrap());
+
+            let result = ctx.pop();
+            assert!(result.as_box_ptr().is_some());
+            let box_ptr = result.as_box_ptr().unwrap();
+            assert_eq!((*box_ptr).boxed.as_int(), Some(42));
         }
     }
 }
