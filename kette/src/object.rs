@@ -565,7 +565,7 @@ impl Array {
 #[repr(C)]
 pub struct ByteArray {
     pub header: ObjectHeader,
-    pub size: usize,
+    pub size: ObjectRef,
     // [u8; length] elements follow here
 }
 
@@ -578,11 +578,13 @@ impl ByteArray {
 
     pub unsafe fn as_bytes(&self) -> &[u8] {
         let ptr = (self as *const Self).add(1) as *const u8;
-        std::slice::from_raw_parts(ptr, self.size)
+        let size = self.size.as_int_unchecked() as usize;
+        std::slice::from_raw_parts(ptr, size)
     }
 
     pub fn get_element(&self, index: usize) -> Option<u8> {
-        if index >= self.size {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
+        if index >= size {
             return None;
         }
 
@@ -590,7 +592,8 @@ impl ByteArray {
     }
 
     pub fn set_element(&self, index: usize, value: u8) -> bool {
-        if index >= self.size {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
+        if index >= size {
             return false;
         }
         unsafe {
@@ -621,8 +624,9 @@ impl ByteArray {
         unsafe {
             let self_bytes = (self as *const Self).add(1) as *const u8;
             let other_bytes = (other as *const ByteArray).add(1) as *const u8;
+            let size = self.size.as_int_unchecked() as usize;
 
-            for offset in 0..self.size {
+            for offset in 0..size {
                 if *self_bytes.add(offset) != *other_bytes.add(offset) {
                     return false;
                 }
@@ -632,7 +636,8 @@ impl ByteArray {
     }
 
     pub unsafe fn set_from_str(&mut self, s: &str) {
-        debug_assert!(self.size >= s.len(), "ByteArray too small for string");
+        let size = unsafe { self.size.as_int_unchecked() as usize };
+        debug_assert!(size >= s.len(), "ByteArray too small for string");
         let bytes = s.as_bytes();
         unsafe {
             let base_ptr = self as *const Self as *const u8 as *mut u8;
@@ -643,9 +648,9 @@ impl ByteArray {
     }
 
     pub fn as_str(&self) -> Option<&str> {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
         unsafe {
-            let bytes =
-                std::slice::from_raw_parts((self as *const Self).add(1) as *const u8, self.size);
+            let bytes = std::slice::from_raw_parts((self as *const Self).add(1) as *const u8, size);
             std::str::from_utf8(bytes).ok()
         }
     }
@@ -884,8 +889,9 @@ impl fmt::Debug for Map {
 
 impl fmt::Debug for ByteArray {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes = Vec::with_capacity(self.size);
-        for i in 0..self.size {
+        let size = unsafe { self.size.as_int_unchecked() as usize };
+        let mut bytes = Vec::with_capacity(size);
+        for i in 0..size {
             if let Some(byte) = self.get_element(i) {
                 bytes.push(byte);
             }
@@ -985,7 +991,7 @@ mod tests {
 
         unsafe {
             let ptr = alloc(layout) as *mut ByteArray;
-            (*ptr).size = length;
+            (*ptr).size = ObjectRef::from_int(length as i64);
             (*ptr).header = ObjectHeader::null();
             ptr
         }
@@ -1273,7 +1279,7 @@ mod tests {
 
         let bytearray = memory.as_mut_ptr() as *mut ByteArray;
         unsafe {
-            (*bytearray).size = size;
+            (*bytearray).size = ObjectRef::from_int(size as i64);
 
             for i in 0..size {
                 (*bytearray).set_element(i, (i + 1) as u8);

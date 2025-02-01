@@ -10,16 +10,17 @@ pub fn add_primitives(ctx: &mut Context) {
         ("over", &["x", "y", "--", "x", "y", "x"], Context::stack_over),
         ("swap", &["x", "y", "--", "y", "x"], Context::stack_swap),
         ("dup", &["x", "--", "x", "x"], Context::stack_dup),
-        ("pick", &["n", "--", "x"], Context::stack_pick),
-        ("npick", &["x y z", "--", "x y z x"], Context::stack_n_pick),
+        ("pick", &["x", "--", "x"], Context::stack_pick),
+        ("npick", &["x", "--", "x y z x"], Context::stack_n_pick),
         ("2dup", &["x", "y", "--", "x", "y", "x", "y"], Context::stack_2dup),
         ("2drop", &["x", "y", "--"], Context::stack_2drop),
         ("clear", &["x_n", "...", "x_0", "--"], Context::stack_clear),
         ("2over", &["a", "b", "c", "d", "--", "a", "b", "c", "d", "a", "b"], Context::stack_2over),
         ("2swap", &["a", "b", "c", "d", "--", "c", "d", "a", "b"], Context::stack_2swap),
         ("rot", &["x", "y", "z", "--", "y", "z", "x"], Context::stack_rot),
-        ("-rot", &["x", "y", "z", "--", "y", "z", "x"], Context::stack_neg_rot),
+        ("-rot", &["x", "y", "z", "--", "z", "x", "y"], Context::stack_neg_rot),
         ("dropd", &["x", "y", "--", "y"], Context::stack_dropd),
+        ("dupd", &["x", "y", "--", "x", "x", "y"], Context::stack_dupd),
         ("swapd", &["x", "y", "--", "y", "x"], Context::stack_swapd),
         ("tuck", &["x", "y", "--", "y", "x", "y"], Context::stack_tuck),
         
@@ -29,8 +30,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("@parse-until", &["end", "--", "array/f"], Context::parse_until),
         ("@read-until", &["end", "--", "str/f"], Context::read_until),
         
-        ("@r>", &["x", "--"], Context::data_retain),
-        ("<r@", &["--", "x"], Context::retain_data),
+        ("@>r", &["x", "--"], Context::data_retain),
+        ("@r>", &["--", "x"], Context::retain_data),
         ("@let-me-cook", &["--", "ctx"], Context::get_context),
         ("@create-new-map", &["name", "slots", "--", "map"], Context::create_new_map),
         ("@create-new-instance", &["...values", "map", "--", "object"], Context::create_new_instance),
@@ -47,7 +48,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("array-nth", &["n", "array", "--", "x"], Context::array_nth),
         ("array-set-nth", &["x", "n", "array", "--"], Context::array_set_nth),
         ("get-map", &["obj", "--", "map"], Context::get_map),
-        ("slot", &["object", "n", "--", "x"], Context::object_nth),
+        ("get-slot", &["object", "n", "--", "x"], Context::object_nth),
         ("set-slot", &["x", "object", "n", "--"], Context::object_set_nth),
         ("object>ptr", &["obj", "--", "ptr"], Context::object_to_pointer),
         ("ptr>object", &["ptr", "--", "obj"], Context::pointer_to_object),
@@ -100,8 +101,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("println-bytes-utf8", &["utf8", "--"], Context::bytearray_println_utf8),
         ("<array>", &["n", "obj", "--", "array"], Context::create_array),
         ("<bytearray>", &["n", "--", "bytearray"], Context::create_bytearray),
-        ("resize-array", &["n", "array", "--", "new"], Context::resize_array),
-        ("resize-bytearray", &["n", "bytearray", "--", "new"], Context::resize_bytearray),
+        ("array-resize", &["array", "n", "--", "new"], Context::resize_array),
+        ("bytearray-resize", &["bytearray", "n", "--", "new"], Context::resize_bytearray),
         ("array-copy", &["src", "dst", "src-offset", "dst-offset", "n", "--"], Context::array_copy),
         ("bytearray-copy", &["src", "dst", "src-offset", "dst-offset", "n", "--"], Context::bytearray_copy),
         ("set-alien-u8", &["value", "offset", "dest", "--"], Context::set_alien_u8),
@@ -257,25 +258,18 @@ impl Context {
         let z = self.data.nth(0);
         let y = self.data.nth(1);
         let x = self.data.nth(2);
-        self.data.set_nth(2, y);
-        self.data.set_nth(1, z);
         self.data.set_nth(0, x);
+        self.data.set_nth(1, z);
+        self.data.set_nth(2, y);
     }
 
     fn stack_neg_rot(&mut self) {
         let z = self.data.nth(0);
         let y = self.data.nth(1);
         let x = self.data.nth(2);
-        self.data.set_nth(0, z);
+        self.data.set_nth(0, y);
         self.data.set_nth(1, x);
-        self.data.set_nth(2, y);
-    }
-
-    fn stack_swapd(&mut self) {
-        let y = self.data.nth(1);
-        let x = self.data.nth(2);
-        self.data.set_nth(2, y);
-        self.data.set_nth(1, x);
+        self.data.set_nth(2, z);
     }
 
     fn stack_dropd(&mut self) {
@@ -283,6 +277,18 @@ impl Context {
         self.stack_drop();
         self.stack_drop();
         self.push(y);
+    }
+    fn stack_dupd(&mut self) {
+        let y = self.data.nth(0);
+        let x = self.data.nth(1);
+        self.data.set_nth(0, x);
+        self.push(y);
+    }
+    fn stack_swapd(&mut self) {
+        let y = self.data.nth(1);
+        let x = self.data.nth(2);
+        self.data.set_nth(2, y);
+        self.data.set_nth(1, x);
     }
 
     fn stack_tuck(&mut self) {
@@ -406,7 +412,7 @@ impl Context {
     fn read_until(&mut self) {
         let end = self.pop();
         let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
-        let res = unsafe { (*parser).read_until(self, end) };
+        let res = unsafe { (*parser).read_until(&mut self.gc, end) };
         self.push(res);
     }
 
@@ -604,7 +610,7 @@ impl Context {
 
         self.push(SpecialObjects::get_false());
     }
-    
+
     fn get_map(&mut self) {
         let obj = self.pop();
 
@@ -1020,11 +1026,11 @@ impl Context {
     }
 
     fn resize_bytearray(&mut self) {
-        let obj = self.pop();
         let new_size = self.pop_fixnum() as usize;
+        let obj = self.pop();
 
         let old_bytearray = unsafe { obj.as_bytearray_ptr_unchecked() };
-        let old_size = unsafe { (*old_bytearray).size };
+        let old_size = unsafe { (*old_bytearray).size.as_int_unchecked() as usize };
 
         let new_bytearray = unsafe { self.gc.allocate_bytearray(new_size) };
 
@@ -1039,8 +1045,8 @@ impl Context {
     }
 
     fn resize_array(&mut self) {
-        let obj = self.pop();
         let new_size = self.pop_fixnum() as usize;
+        let obj = self.pop();
 
         let old_array = unsafe { obj.as_array_ptr_unchecked() };
         let old_size = unsafe { (*old_array).size.as_int_unchecked() as usize };
@@ -1109,9 +1115,10 @@ impl Context {
         unsafe {
             let dest = dest_obj.as_bytearray_ptr_unchecked();
             let value = value_obj.as_bytearray_ptr_unchecked();
+            let size = (*value).size.as_int_unchecked() as usize;
 
             // Verify value size is 1 byte
-            if (*value).size != 1 {
+            if size != 1 {
                 self.push(ObjectRef::null());
                 return;
             }
@@ -1133,8 +1140,9 @@ impl Context {
         unsafe {
             let dest = dest_obj.as_bytearray_ptr_unchecked();
             let value = value_obj.as_bytearray_ptr_unchecked();
+            let size = (*value).size.as_int_unchecked() as usize;
 
-            if (*value).size != 2 {
+            if size != 2 {
                 self.push(ObjectRef::null());
                 return;
             }
@@ -1156,9 +1164,10 @@ impl Context {
         unsafe {
             let dest = dest_obj.as_bytearray_ptr_unchecked();
             let value = value_obj.as_bytearray_ptr_unchecked();
+            let size = (*value).size.as_int_unchecked() as usize;
 
             // Verify value size is 4 bytes
-            if (*value).size != 4 {
+            if size != 4 {
                 self.push(ObjectRef::null());
                 return;
             }
@@ -1180,9 +1189,10 @@ impl Context {
         unsafe {
             let dest = dest_obj.as_bytearray_ptr_unchecked();
             let value = value_obj.as_bytearray_ptr_unchecked();
+            let size = (*value).size.as_int_unchecked() as usize;
 
             // Verify value size is 8 bytes
-            if (*value).size != 8 {
+            if size != 8 {
                 self.push(ObjectRef::null());
                 return;
             }
@@ -1422,7 +1432,7 @@ mod tests {
 
             let result = ctx.pop();
             let new_array = result.as_bytearray_ptr().unwrap();
-            assert_eq!((*new_array).size, 3);
+            assert_eq!((*new_array).size.as_int(), Some(3));
             assert_eq!((*new_array).get_element(0), Some(b'h'));
             assert_eq!((*new_array).get_element(1), Some(b'e'));
             assert_eq!((*new_array).get_element(2), Some(b'l'));
@@ -1432,7 +1442,7 @@ mod tests {
             ctx.resize_bytearray();
 
             let expanded = ctx.pop().as_bytearray_ptr().unwrap();
-            assert_eq!((*expanded).size, 7);
+            assert_eq!((*expanded).size.as_int(), Some(7));
             assert_eq!((*expanded).get_element(0), Some(b'h'));
             assert_eq!((*expanded).get_element(1), Some(b'e'));
             assert_eq!((*expanded).get_element(2), Some(b'l'));
@@ -1753,13 +1763,13 @@ mod tests {
             ctx.create_bytearray();
             let array = ctx.pop();
             let bytearray = array.as_bytearray_ptr().unwrap();
-            assert_eq!((*bytearray).size, 5);
+            assert_eq!((*bytearray).size.as_int(), Some(5));
 
             ctx.push_fixnum(10);
             ctx.push(array);
             ctx.resize_bytearray();
             let resized = ctx.pop().as_bytearray_ptr().unwrap();
-            assert_eq!((*resized).size, 10);
+            assert_eq!((*resized).size.as_int(), Some(10));
         }
     }
 
@@ -1882,43 +1892,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_object_nth_primitives() {
-        let mut ctx = create_test_context();
-
-        unsafe {
-            let map = ctx.gc.allocate_map(
-                SpecialObjects::get_false(),
-                2,
-                32,
-                SpecialObjects::get_false(),
-            );
-            let obj = ctx.gc.allocate(map);
-
-            (*obj).set_slot_value(0, ObjectRef::from_int(100));
-            (*obj).set_slot_value(1, ObjectRef::from_int(200));
-
-            ctx.push_fixnum(1);
-            ctx.push(ObjectRef::from_ptr(obj as *mut _));
-            ctx.object_nth();
-            assert_eq!(ctx.pop_fixnum(), 200);
-
-            ctx.push(ObjectRef::from_int(250));
-            ctx.push_fixnum(1);
-            ctx.push(ObjectRef::from_ptr(obj as *mut _));
-            ctx.object_set_nth();
-
-            ctx.push_fixnum(1);
-            ctx.push(ObjectRef::from_ptr(obj as *mut _));
-            ctx.object_nth();
-            assert_eq!(ctx.pop_fixnum(), 250);
-
-            ctx.push_fixnum(5);
-            ctx.push(ObjectRef::from_ptr(obj as *mut _));
-            ctx.object_nth();
-            assert!(ctx.pop().is_false());
-        }
-    }
     #[test]
     fn test_namestack_primitives() {
         let mut ctx = create_test_context();

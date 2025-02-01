@@ -268,7 +268,7 @@ impl Parser {
     pub fn next_word(&mut self, gc: &mut GarbageCollector) -> (ObjectRef, bool) {
         let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
         let mut offset = unsafe { self.offset.as_int_unchecked() as usize };
-        let text_size = unsafe { (*text_ptr).size };
+        let text_size = unsafe { (*text_ptr).size.as_int_unchecked() as usize };
 
         while offset < text_size {
             let ch = unsafe { (*text_ptr).get_element(offset).unwrap() };
@@ -322,6 +322,85 @@ impl Parser {
         self.offset = ObjectRef::from_int(offset as i64);
 
         (ObjectRef::from_bytearray_ptr(word), true)
+    }
+
+    pub fn read_until(&mut self, gc: &mut GarbageCollector, end_pattern: ObjectRef) -> ObjectRef {
+        let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
+        let end_ptr = unsafe { end_pattern.as_bytearray_ptr_unchecked() };
+
+        let mut offset = unsafe { self.offset.as_int_unchecked() as usize };
+        let text_size = unsafe { (*text_ptr).size.as_int_unchecked() as usize };
+        let pattern_size = unsafe { (*end_ptr).size.as_int_unchecked() as usize };
+
+        let initial_offset = offset;
+
+        if pattern_size == 0 || pattern_size > (text_size - offset) {
+            return ObjectRef::null();
+        }
+
+        while offset <= text_size - pattern_size {
+            let mut found = true;
+
+            for i in 0..pattern_size {
+                let text_ch = unsafe { (*text_ptr).get_element(offset + i).unwrap() };
+                let pattern_ch = unsafe { (*end_ptr).get_element(i).unwrap() };
+
+                if text_ch != pattern_ch {
+                    found = false;
+                    break;
+                }
+            }
+
+            if found {
+                let result_size = offset - initial_offset;
+                let result = unsafe { gc.allocate_bytearray(result_size - 1) };
+
+                unsafe {
+                    let src = (text_ptr as *const u8)
+                        .add(std::mem::size_of::<ByteArray>())
+                        .add(initial_offset + 1);
+                    let dst = (result as *mut u8).add(std::mem::size_of::<ByteArray>());
+                    std::ptr::copy_nonoverlapping(src, dst, result_size);
+                }
+
+                for i in initial_offset..offset {
+                    let ch = unsafe { (*text_ptr).get_element(i).unwrap() };
+                    if ch == b'\n' {
+                        unsafe {
+                            self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
+                            self.column = ObjectRef::from_int(1);
+                        }
+                    } else {
+                        unsafe {
+                            self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
+                        }
+                    }
+                }
+
+                for i in 0..pattern_size {
+                    let ch = unsafe { (*text_ptr).get_element(offset + i).unwrap() };
+                    if ch == b'\n' {
+                        unsafe {
+                            self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
+                            self.column = ObjectRef::from_int(1);
+                        }
+                    } else {
+                        unsafe {
+                            self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
+                        }
+                    }
+                }
+
+                self.offset = ObjectRef::from_int((offset + pattern_size) as i64);
+
+                return ObjectRef::from_bytearray_ptr(result);
+            }
+
+            offset += 1;
+        }
+
+        self.offset = ObjectRef::from_int(initial_offset as i64);
+        ObjectRef::null()
     }
 
     pub fn parse_until(&mut self, ctx: &mut Context, end_word: ObjectRef) -> ObjectRef {
@@ -425,61 +504,6 @@ impl Parser {
                 }
             }
         }
-    }
-
-    pub fn read_until(&mut self, ctx: &mut Context, end_word: ObjectRef) -> ObjectRef {
-        let initial_offset = self.offset;
-        let initial_line = self.line;
-        let initial_column = self.column;
-
-        let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
-        let end_bytearray = unsafe { end_word.as_bytearray_ptr_unchecked() };
-        let start_offset = unsafe { self.offset.as_int_unchecked() as usize };
-
-        let mut end_word_start = None;
-        let mut current_offset = start_offset;
-
-        while current_offset < unsafe { (*text_ptr).size } {
-            let (word, success) = self.next_word(&mut ctx.gc);
-            if !success {
-                self.offset = initial_offset;
-                self.line = initial_line;
-                self.column = initial_column;
-                return ObjectRef::null();
-            }
-
-            let word_ptr = unsafe { word.as_bytearray_ptr_unchecked() };
-            if unsafe { (*word_ptr).equal(&*end_bytearray) } {
-                end_word_start = Some(
-                    unsafe { self.offset.as_int_unchecked() as usize }
-                        - unsafe { (*word_ptr).size },
-                );
-                break;
-            }
-
-            current_offset = unsafe { self.offset.as_int_unchecked() as usize };
-        }
-
-        let Some(end_pos) = end_word_start else {
-            self.offset = initial_offset;
-            self.line = initial_line;
-            self.column = initial_column;
-            return ObjectRef::null();
-        };
-
-        let content_size = end_pos - start_offset;
-
-        let result = unsafe { ctx.gc.allocate_bytearray(content_size) };
-
-        unsafe {
-            let src = (text_ptr as *const u8)
-                .add(std::mem::size_of::<ByteArray>())
-                .add(start_offset);
-            let dst = (result as *mut u8).add(std::mem::size_of::<ByteArray>());
-            std::ptr::copy_nonoverlapping(src, dst, content_size);
-        }
-
-        ObjectRef::from_bytearray_ptr(result)
     }
 
     pub fn compile_string(&mut self, ctx: &mut Context) -> ObjectRef {
@@ -603,19 +627,21 @@ mod tests {
     fn test_push_pop_integers() {
         let mut ctx = create_test_context();
 
-        let value = ObjectRef::from_int(42);
-        ctx.push(value);
-        let result = ctx.pop();
-        assert_eq!(result.as_int(), Some(42));
-
-        let values = vec![1, -5, 100, -42, 0];
-        for &v in &values {
-            ctx.push(ObjectRef::from_int(v));
-        }
-
-        for &expected in values.iter().rev() {
+        unsafe {
+            let value = ObjectRef::from_int(42);
+            ctx.push(value);
             let result = ctx.pop();
-            assert_eq!(result.as_int(), Some(expected));
+            assert_eq!(result.as_int(), Some(42));
+
+            let values = vec![1, -5, 100, -42, 0];
+            for &v in &values {
+                ctx.push(ObjectRef::from_int(v));
+            }
+
+            for &expected in values.iter().rev() {
+                let result = ctx.pop();
+                assert_eq!(result.as_int(), Some(expected));
+            }
         }
     }
 
@@ -1002,6 +1028,63 @@ mod tests {
 
             let second = (*array).get_element(1).unwrap();
             assert_eq!(second.as_int(), Some(999));
+        }
+    }
+
+    #[test]
+    fn test_read_until_basic() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("Hello World END test");
+            let end = ctx.gc.allocate_string("END");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+
+            let result = (*parser).read_until(&mut ctx.gc, end.into());
+            assert!(!result.is_false());
+
+            let result_str = (*result.as_bytearray_ptr().unwrap()).as_str();
+            assert_eq!(result_str, Some("Hello World "));
+
+            assert_eq!((*parser).offset.as_int(), Some(15));
+        }
+    }
+
+    #[test]
+    fn test_read_until_with_newlines() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("First line\nSecond line\nEND more");
+            let end = ctx.gc.allocate_string("END");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+
+            let result = (*parser).read_until(&mut ctx.gc, end.into());
+            assert!(!result.is_false());
+
+            let result_str = (*result.as_bytearray_ptr().unwrap()).as_str();
+            assert_eq!(result_str, Some("First line\nSecond line\n"));
+
+            // Check line and column counting
+            assert_eq!((*parser).line.as_int(), Some(3));
+            assert_eq!((*parser).column.as_int(), Some(4));
+        }
+    }
+
+    #[test]
+    fn test_read_until_pattern_not_found() {
+        let mut ctx = create_test_context();
+        unsafe {
+            let text = ctx.gc.allocate_string("Hello World");
+            let end = ctx.gc.allocate_string("END");
+            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
+            (*parser).set_text(text.into());
+
+            let initial_offset = (*parser).offset;
+            let result = (*parser).read_until(&mut ctx.gc, end.into());
+
+            assert!(result.is_false());
+            assert_eq!((*parser).offset, initial_offset);
         }
     }
 }

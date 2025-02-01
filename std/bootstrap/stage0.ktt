@@ -14,7 +14,7 @@
     ] if f ;
 
 @syntax: { \\ } @parse-until ;
-@syntax: $[ \\ ] @parse-until 0 slot (call) ;
+@syntax: $[ \\ ] @parse-until 0 get-slot (call) ;
 
 
 const: TAG_NORMAL 0
@@ -27,11 +27,6 @@ const: TAG_BOX 6
 const: TAG_QUOTATION 7
 const: TAG_WORD 8
 
-!/ 
-    word: name body effect flags 
-    quotation: body effect compiled 
-/!
-
 @syntax: : 
     @parse-next dup \\ ) @read-until drop  
     \\ ; @parse-until f f quotation @create-new-instance
@@ -39,14 +34,13 @@ const: TAG_WORD 8
     f f word @create-new-instance
     TAG_WORD swap @set-special-tag @namestack-push f ;
 
-@syntax @map:
-    @parse-next ;
 
-: dip ( x p -- x ) swap @r> (call) <r@ ;
+: dip ( x p -- x ) swap @>r (call) @r> ;
 : keep ( x [ x -- ..a ] -- ..a x ) over [ (call) ] dip ;
+: bi ( x p q -- ) [ keep ] dip (call) ;
+: bi* ( x y p q -- ) [ dip ] dip (call) ;
+: bi@ ( x y p -- ) dup bi* ;
 
-: find-or-create-todos ( -- todo ) ;
-@syntax: TODO: \\ ; @read-until drop f ;
 
 : is-bytearray? ( obj -- ? ) @get-special-tag TAG_BYTEARRAY fixnum= ;
 
@@ -55,9 +49,16 @@ const: TAG_WORD 8
     println-bytes-utf8 ;
 
 
-TODO: implement dynamic dispatch in false case ;
 : + ( x y -- z ) 2dup is-fixnum2? [ fixnum+ ] [ 2drop f ] if ;
 
-!/ s" Stevejones likes elixir" . /!
-10 10 5 [ fixnum* ] dip + .
-3 [ 2 + ] keep + .
+: bytearray-copy-full ( src dst dst-offset -- ) pick 0 get-slot 0 -rot bytearray-copy ;
+
+: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 get-slot ] bi@ + ] keep 0 get-slot ;
+
+: <|> ( s1 s2 -- s1s2 ) 
+    2dup merge|size&offset [ swapd bytearray-resize ] dip
+    swap [ swap bytearray-copy-full ] keep ;
+
+s" likes to write elixir "  s" recommends to write elixir!" [ s" Stevejones " swap <|> . ] bi@
+
+

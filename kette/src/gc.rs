@@ -314,7 +314,7 @@ impl GarbageCollector {
 
         unsafe {
             (*ptr).header = ObjectHeader::new(self.specials.get_bytearray_map());
-            (*ptr).size = length;
+            (*ptr).size = ObjectRef::from_int(length as i64);
         }
 
         let elements = unsafe { (ptr as *mut u8).add(std::mem::size_of::<ByteArray>()) };
@@ -622,7 +622,7 @@ impl GarbageCollector {
         }
 
         if let Some(bytearray) = obj.as_bytearray_ptr() {
-            let size = (*bytearray).size;
+            let size = (*bytearray).size.as_int_unchecked() as usize;
             let new_bytearray = self.allocate_bytearray(size);
 
             let src = (bytearray as *const u8).add(std::mem::size_of::<ByteArray>());
@@ -1060,7 +1060,10 @@ mod tests {
             let test_str = "Hello, World!";
             let bytearray = gc.allocate_string(test_str);
 
-            assert_eq!((*bytearray).size, test_str.len());
+            assert_eq!(
+                (*bytearray).size.as_int_unchecked() as usize,
+                test_str.len()
+            );
             assert_eq!((*bytearray).as_str(), Some(test_str));
         }
     }
