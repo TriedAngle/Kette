@@ -183,6 +183,11 @@ impl ObjectRef {
         }
     }
 
+    pub unsafe fn special_tagged(self, tag: ObjectType) -> Self {
+        let ptr = unsafe { self.as_ptr_unchecked() };
+        Self::from_typed_ptr(ptr, tag)
+    }
+
     pub fn as_int(&self) -> Option<i64> {
         if self.is_int() {
             Some(unsafe { mem::transmute::<_, i64>(self.0) >> 1 })

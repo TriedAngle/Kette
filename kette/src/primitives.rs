@@ -3,7 +3,7 @@ use crate::{
     object::{Array, ByteArray, Object, ObjectRef, ObjectType, Slot, SpecialObjects},
 };
 
-fn add_primitives(ctx: &mut Context) {
+pub fn add_primitives(ctx: &mut Context) {
     #[rustfmt::skip]
     let words: &[(&str, &[&str], fn(&mut Context))] = &[
         ("drop", &["x","--"], Context::stack_drop),
@@ -26,30 +26,39 @@ fn add_primitives(ctx: &mut Context) {
         ("@parse-fixnum", &["str", "--", "n/?"], Context::parse_fixnum),
         ("@parse-float", &["str", "--", "n/?"], Context::parse_float),
         ("@parse-next", &["--", "str/?"], Context::parse_next_word),
-        ("@parse-until", &["end", "--", "array"], Context::parse_until),
+        ("@parse-until", &["end", "--", "array/f"], Context::parse_until),
+        ("@read-until", &["end", "--", "str/f"], Context::read_until),
         
         ("@r>", &["x", "--"], Context::data_retain),
         ("<r@", &["--", "x"], Context::retain_data),
         ("@let-me-cook", &["--", "ctx"], Context::get_context),
-        ("@create-new-tuple", &["name", "slots", "--", "map"], Context::create_new_tuple),
+        ("@create-new-map", &["name", "slots", "--", "map"], Context::create_new_map),
         ("@create-new-instance", &["...values", "map", "--", "object"], Context::create_new_instance),
+        ("@create-new-empty-instance", &["map", "--", "object"], Context::create_new_empty_instance),
+        ("@set-special-tag", &["tag", "obj", "--", "tagged"], Context::tag_ref),
+        ("@get-special-tag", &["obj", "--", "tag"], Context::get_tag),
 
         ("@namestack-lookup", &["name", "--", "obj/f"], Context::lookup_namestack),
         ("@namestack-push", &["name", "obj", "--"], Context::define_namestack),
         ("@namestack-delete", &["name", "--", "obj/f"], Context::remove_namestack),
 
         (">box", &["x", "--", "box"], Context::create_box),
-        (">box<", &["box", "--", "x"], Context::open_box),
+        ("unbox", &["box", "--", "x"], Context::open_box),
         ("array-nth", &["n", "array", "--", "x"], Context::array_nth),
         ("array-set-nth", &["x", "n", "array", "--"], Context::array_set_nth),
-        ("get-slot", &["n", "object", "--", "x"], Context::object_nth),
-        ("set-slot", &["x", "n", "object", "--"], Context::object_set_nth),
+        ("get-map", &["obj", "--", "map"], Context::get_map),
+        ("slot", &["object", "n", "--", "x"], Context::object_nth),
+        ("set-slot", &["x", "object", "n", "--"], Context::object_set_nth),
         ("object>ptr", &["obj", "--", "ptr"], Context::object_to_pointer),
         ("ptr>object", &["ptr", "--", "obj"], Context::pointer_to_object),
         ("ptr@>object", &["ptr", "T", "--", "obj"], Context::pointer_to_object_special),
         ("(call)", &["..a", "q", "--", "..b"], Context::quotation_call),
-        ("if", &["..a", "[..a ..b]", "[..a ..b]", "?", "--", "..b"], Context::stack_tuck),
+        ("if", &["..a", "[..a ..b]", "[..a ..b]", "?", "--", "..b"], Context::call_if),
+        ("t", &["--", "t"], Context::push_true),
+        ("f", &["--", "t"], Context::push_false),
 
+        ("is-fixnum?", &["obj", "--", "?"], Context::is_fixnum),
+        ("is-fixnum2?", &["obj1", "obj2", "--", "?"], Context::is_fixnum2),
         ("fixnum+", &["x", "y", "--", "z"], Context::fixnum_add),
         ("fixnum-", &["x", "y", "--", "z"], Context::fixnum_sub),
         ("fixnum*", &["x", "y", "--", "z"], Context::fixnum_mul),
@@ -112,6 +121,22 @@ fn add_primitives(ctx: &mut Context) {
         ("alien-u32>fixnum", &["bytes", "--", "n"], Context::alien_u32_to_fixnum),
         ("alien-u64>fixnum", &["bytes", "--", "n"], Context::alien_u64_to_fixnum),
     ];
+
+    let default_names = &[
+        ("slot", ctx.gc.specials.slot_map),
+        ("map", ctx.gc.specials.map_map),
+        ("quotation", ctx.gc.specials.quotation_map),
+        ("word", ctx.gc.specials.word_map),
+        ("box", ctx.gc.specials.box_map),
+        ("float", ctx.gc.specials.float_map),
+        ("array", ctx.gc.specials.array_map),
+        ("bytearray", ctx.gc.specials.bytearray_map),
+    ];
+
+    for (name, object) in *default_names {
+        let name = unsafe { ctx.gc.allocate_string(name) };
+        ctx.namestack_push_or_replace(name.into(), object);
+    }
 
     // TODO: remove quotation
     let parser_words: &[(&str, &[&str], fn(&mut Context))] = &[
@@ -378,6 +403,13 @@ impl Context {
         self.push(res);
     }
 
+    fn read_until(&mut self) {
+        let end = self.pop();
+        let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
+        let res = unsafe { (*parser).read_until(self, end) };
+        self.push(res);
+    }
+
     fn parse_quotation(&mut self) {
         let end_word = unsafe { self.gc.allocate_string("]") };
 
@@ -420,7 +452,7 @@ impl Context {
         self.push(ObjectRef::from_ptr(ctx));
     }
 
-    fn create_new_tuple(&mut self) {
+    fn create_new_map(&mut self) {
         let slots_array = self.pop();
         let type_name = self.pop();
 
@@ -494,13 +526,49 @@ impl Context {
                 }
             }
 
-            for (_slot_idx, data_idx) in data_slots.iter().rev() {
+            data_slots.sort_by(|lhs, rhs| rhs.1.cmp(&lhs.1));
+
+            for (_slot_idx, data_idx) in data_slots.iter() {
                 let value = self.pop();
                 (*obj).set_slot_value(*data_idx, value);
             }
 
             self.push(ObjectRef::from_ptr(obj));
         }
+    }
+
+    fn create_new_empty_instance(&mut self) {
+        let map_obj = self.pop();
+        let map_ptr = map_obj.as_map_ptr();
+        if map_obj.is_int() || map_obj.is_false() {
+            return self.push(SpecialObjects::get_false());
+        }
+        if unsafe { (*map_ptr).header.map() } != self.gc.specials.map_map.as_map_ptr() {
+            self.push(SpecialObjects::get_false());
+            return;
+        }
+
+        let obj = unsafe { self.gc.allocate(map_ptr) };
+
+        self.push(ObjectRef::from_ptr(obj))
+    }
+
+    pub fn tag_ref(&mut self) {
+        let obj = self.pop();
+        let tag_id = unsafe { self.pop().as_int_unchecked() };
+        let tag = ObjectType::from(tag_id as u64);
+        let tagged = unsafe { obj.special_tagged(tag) };
+        self.push(tagged);
+    }
+
+    pub fn get_tag(&mut self) {
+        let obj = self.pop();
+        let Some(tag) = obj.get_type() else {
+            self.push(SpecialObjects::get_false());
+            return;
+        };
+        let id = tag as u64;
+        self.push(ObjectRef::from_int(id as i64));
     }
 
     fn array_nth(&mut self) {
@@ -536,10 +604,19 @@ impl Context {
 
         self.push(SpecialObjects::get_false());
     }
+    
+    fn get_map(&mut self) {
+        let obj = self.pop();
+
+        let ptr = unsafe { obj.as_ptr_unchecked() };
+        let map = unsafe { (*ptr).get_map_ptr() };
+
+        self.push(ObjectRef::from_map(map));
+    }
 
     fn object_nth(&mut self) {
-        let obj = self.pop();
         let idx = self.pop_fixnum() as usize;
+        let obj = self.pop();
 
         if let Some(ptr) = obj.as_ptr() {
             unsafe {
@@ -555,8 +632,8 @@ impl Context {
     }
 
     fn object_set_nth(&mut self) {
-        let obj = self.pop();
         let idx = self.pop_fixnum() as usize;
+        let obj = self.pop();
         let value = self.pop();
 
         if let Some(ptr) = obj.as_ptr() {
@@ -663,13 +740,13 @@ impl Context {
     fn quotation_call(&mut self) {
         let quotation_obj = self.pop();
         let quotation = quotation_obj.as_quotation_ptr().unwrap();
-        let body = unsafe { (*quotation).body.as_array_ptr().unwrap() };
+        self.execute(quotation);
     }
 
     fn call_if(&mut self) {
-        let cond = self.pop_bool();
         let false_branch = self.pop();
         let true_branch = self.pop();
+        let cond = self.pop_bool();
         if cond {
             let quot = true_branch.as_quotation_ptr().unwrap();
             self.execute(quot);
@@ -679,7 +756,26 @@ impl Context {
         }
     }
 
+    fn push_false(&mut self) {
+        self.push_bool(false);
+    }
+
+    fn push_true(&mut self) {
+        self.push_bool(true);
+    }
+
     // -- FIXNUM
+    fn is_fixnum(&mut self) {
+        let x = self.pop();
+        self.push_bool(x.is_int());
+    }
+
+    fn is_fixnum2(&mut self) {
+        let y = self.pop();
+        let x = self.pop();
+        self.push_bool(x.is_int() && y.is_int());
+    }
+
     fn fixnum_add(&mut self) {
         let (x, y) = self.pop_2fixnum();
         let z = x + y;
@@ -1940,7 +2036,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_tuple_and_instance() {
+    fn test_create_map_and_instance() {
         let mut ctx = create_test_context();
 
         unsafe {
@@ -1974,7 +2070,7 @@ mod tests {
 
             ctx.push(ObjectRef::from_bytearray_ptr(type_name));
             ctx.push(ObjectRef::from_array_ptr(slots_array));
-            ctx.create_new_tuple();
+            ctx.create_new_map();
 
             let map_obj = ctx.pop();
             assert!(!map_obj.is_false(), "Map creation should succeed");
@@ -2010,12 +2106,12 @@ mod tests {
     }
 
     #[test]
-    fn test_tuple_creation_invalid_inputs() {
+    fn test_map_creation_invalid_inputs() {
         let mut ctx = create_test_context();
 
         ctx.push(ObjectRef::from_int(42)); // Not a bytearray
         ctx.push(ObjectRef::from_int(123)); // Not an array
-        ctx.create_new_tuple();
+        ctx.create_new_map();
         assert!(ctx.pop().is_false());
 
         ctx.push(ObjectRef::from_int(42)); // Not a map
@@ -2025,7 +2121,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tuple_with_only_data_slots() {
+    fn test_map_with_only_data_slots() {
         let mut ctx = create_test_context();
 
         unsafe {
@@ -2050,7 +2146,7 @@ mod tests {
             let type_name = ctx.gc.allocate_string("DataOnly");
             ctx.push(ObjectRef::from_bytearray_ptr(type_name));
             ctx.push(ObjectRef::from_array_ptr(slots_array));
-            ctx.create_new_tuple();
+            ctx.create_new_map();
 
             let map_obj = ctx.pop();
             assert!(!map_obj.is_false());
@@ -2070,7 +2166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tuple_with_no_data_slots() {
+    fn test_map_with_no_data_slots() {
         let mut ctx = create_test_context();
 
         unsafe {
@@ -2087,7 +2183,7 @@ mod tests {
             let type_name = ctx.gc.allocate_string("NoData");
             ctx.push(ObjectRef::from_bytearray_ptr(type_name));
             ctx.push(ObjectRef::from_array_ptr(slots_array));
-            ctx.create_new_tuple();
+            ctx.create_new_map();
 
             let map_obj = ctx.pop();
             assert!(!map_obj.is_false());

@@ -1,0 +1,63 @@
+@syntax: \\ @parse-next ;
+
+@syntax: \ @parse-next @namestack-lookup >box ;
+
+@syntax: !/ \\ /! @read-until drop f ; 
+
+@syntax: s" \\ " @read-until ; 
+
+@syntax: const: 
+    @parse-next @parse-next @parse-fixnum dup [ 
+        @namestack-push
+    ] [
+        @parse-float dup [ @namestack-push ] [ drop @namestack-push ] if
+    ] if f ;
+
+@syntax: { \\ } @parse-until ;
+@syntax: $[ \\ ] @parse-until 0 slot (call) ;
+
+
+const: TAG_NORMAL 0
+const: TAG_ARRAY 1
+const: TAG_BYTEARRAY 2
+const: TAG_FLOAT 3
+const: TAG_BIGNUM 4
+const: TAG_ALIEN 5
+const: TAG_BOX 6
+const: TAG_QUOTATION 7
+const: TAG_WORD 8
+
+!/ 
+    word: name body effect flags 
+    quotation: body effect compiled 
+/!
+
+@syntax: : 
+    @parse-next dup \\ ) @read-until drop  
+    \\ ; @parse-until f f quotation @create-new-instance
+    TAG_QUOTATION swap @set-special-tag 
+    f f word @create-new-instance
+    TAG_WORD swap @set-special-tag @namestack-push f ;
+
+@syntax @map:
+    @parse-next ;
+
+: dip ( x p -- x ) swap @r> (call) <r@ ;
+: keep ( x [ x -- ..a ] -- ..a x ) over [ (call) ] dip ;
+
+: find-or-create-todos ( -- todo ) ;
+@syntax: TODO: \\ ; @read-until drop f ;
+
+: is-bytearray? ( obj -- ? ) @get-special-tag TAG_BYTEARRAY fixnum= ;
+
+: . ( obj -- )
+    dup is-fixnum? [ fixnum>bytes-utf8 ] [ ] if
+    println-bytes-utf8 ;
+
+
+TODO: implement dynamic dispatch in false case ;
+: + ( x y -- z ) 2dup is-fixnum2? [ fixnum+ ] [ 2drop f ] if ;
+
+!/ s" Stevejones likes elixir" . /!
+10 10 5 [ fixnum* ] dip + .
+3 [ 2 + ] keep + .

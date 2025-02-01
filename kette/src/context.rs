@@ -115,23 +115,26 @@ impl Context {
             match ty {
                 ObjectType::Word => {
                     let word = current.as_word_ptr().unwrap();
-                    let flags = unsafe { (*word).flags.as_array_ptr().unwrap_unchecked() };
                     let body_obj = unsafe { (*word).body };
-
-                    let mut is_primitive = false;
-                    for flag in unsafe { (*flags).iter() } {
-                        if flag == SpecialObjects::get_false() {
-                            break;
-                        };
-                        if flag == SpecialObjects::word_primitive() {
-                            is_primitive = true;
+                    if let Some(flags) = unsafe { (*word).flags.as_array_ptr() } {
+                        let mut is_primitive = false;
+                        for flag in unsafe { (*flags).iter() } {
+                            if flag == SpecialObjects::get_false() {
+                                break;
+                            };
+                            if flag == SpecialObjects::word_primitive() {
+                                is_primitive = true;
+                            }
                         }
-                    }
-                    if is_primitive {
-                        let primitive_fn_raw = unsafe { body_obj.as_int_unchecked() };
-                        let primitive_fn: fn(&mut Context) =
-                            unsafe { mem::transmute(primitive_fn_raw) };
-                        primitive_fn(self);
+                        if is_primitive {
+                            let primitive_fn_raw = unsafe { body_obj.as_int_unchecked() };
+                            let primitive_fn: fn(&mut Context) =
+                                unsafe { mem::transmute(primitive_fn_raw) };
+                            primitive_fn(self);
+                        } else {
+                            let quot = body_obj.as_quotation_ptr().unwrap();
+                            self.execute(quot);
+                        }
                     } else {
                         let quot = body_obj.as_quotation_ptr().unwrap();
                         self.execute(quot);
@@ -422,6 +425,61 @@ impl Parser {
                 }
             }
         }
+    }
+
+    pub fn read_until(&mut self, ctx: &mut Context, end_word: ObjectRef) -> ObjectRef {
+        let initial_offset = self.offset;
+        let initial_line = self.line;
+        let initial_column = self.column;
+
+        let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
+        let end_bytearray = unsafe { end_word.as_bytearray_ptr_unchecked() };
+        let start_offset = unsafe { self.offset.as_int_unchecked() as usize };
+
+        let mut end_word_start = None;
+        let mut current_offset = start_offset;
+
+        while current_offset < unsafe { (*text_ptr).size } {
+            let (word, success) = self.next_word(&mut ctx.gc);
+            if !success {
+                self.offset = initial_offset;
+                self.line = initial_line;
+                self.column = initial_column;
+                return ObjectRef::null();
+            }
+
+            let word_ptr = unsafe { word.as_bytearray_ptr_unchecked() };
+            if unsafe { (*word_ptr).equal(&*end_bytearray) } {
+                end_word_start = Some(
+                    unsafe { self.offset.as_int_unchecked() as usize }
+                        - unsafe { (*word_ptr).size },
+                );
+                break;
+            }
+
+            current_offset = unsafe { self.offset.as_int_unchecked() as usize };
+        }
+
+        let Some(end_pos) = end_word_start else {
+            self.offset = initial_offset;
+            self.line = initial_line;
+            self.column = initial_column;
+            return ObjectRef::null();
+        };
+
+        let content_size = end_pos - start_offset;
+
+        let result = unsafe { ctx.gc.allocate_bytearray(content_size) };
+
+        unsafe {
+            let src = (text_ptr as *const u8)
+                .add(std::mem::size_of::<ByteArray>())
+                .add(start_offset);
+            let dst = (result as *mut u8).add(std::mem::size_of::<ByteArray>());
+            std::ptr::copy_nonoverlapping(src, dst, content_size);
+        }
+
+        ObjectRef::from_bytearray_ptr(result)
     }
 
     pub fn compile_string(&mut self, ctx: &mut Context) -> ObjectRef {
