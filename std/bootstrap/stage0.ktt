@@ -41,24 +41,74 @@ const: TAG_WORD 8
 : bi* ( x y p q -- ) [ dip ] dip (call) ;
 : bi@ ( x y p -- ) dup bi* ;
 
+: ? ( ? t f -- ? ) rot [ drop ] [ dropd ] if ;
+: and? ( obj1 obj2 -- ? ) over ? ;
+: or? ( obj1 obj2 -- ? ) dupd ? ;
+
+: ref-eq? ( obj1 obj2 -- ? ) 2dup is-fixnum2? [ ] [ [ object>ptr ] bi@ ] if fixnum= ; 
 
 : is-bytearray? ( obj -- ? ) @get-special-tag TAG_BYTEARRAY fixnum= ;
+: is-bool? ( obj -- ? ) dup [ t ref-eq? ] [ drop t ] if ;
 
-: . ( obj -- )
-    dup is-fixnum? [ fixnum>bytes-utf8 ] [ ] if
-    println-bytes-utf8 ;
-
-
-: + ( x y -- z ) 2dup is-fixnum2? [ fixnum+ ] [ 2drop f ] if ;
+: bool>bytes-utf8 ( ? -- str ) [ s" t" ] [ s" f" ] if ; 
 
 : bytearray-copy-full ( src dst dst-offset -- ) pick 0 get-slot 0 -rot bytearray-copy ;
 
-: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 get-slot ] bi@ + ] keep 0 get-slot ;
+: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 get-slot ] bi@ fixnum+ ] keep 0 get-slot ;
 
 : <|> ( s1 s2 -- s1s2 ) 
     2dup merge|size&offset [ swapd bytearray-resize ] dip
     swap [ swap bytearray-copy-full ] keep ;
 
-s" likes to write elixir "  s" recommends to write elixir!" [ s" Stevejones " swap <|> . ] bi@
+: (1array) ( x arr -- arr ) [ 0 swap array-set-nth ] keep ;
+: (2array) ( x y arr -- arr ) [ 1 swap array-set-nth ] keep (1array)  ;
+: (3array) ( x y z arr -- arr ) [ 2 swap array-set-nth ] keep (2array)  ;
+: (4array) ( x y z w arr -- arr ) [ 3 swap array-set-nth ] keep (3array) ;
+: (5array) ( x y z w v arr -- arr ) [ 4 swap array-set-nth ] keep (4array) ;
+: 1array ( x -- arr ) 1 <array> (1array) ;
+: 2array ( x y -- arr ) 2 <array> (2array) ;
+: 3array ( x y z -- arr ) 3 <array> (3array) ;
+: 4array ( x y z w -- arr ) 4 <array> (4array)  ;
 
 
+: namestack-full? ( -- ? ) let-me-cook ;
+
+: . ( obj -- )
+    dup is-bytearray? [ ] [ 
+    dup is-fixnum? [ fixnum>bytes-utf8 ] [ 
+    dup is-bool? [ bool>bytes-utf8 ] [ drop f
+    ] if ] if ] if println-bytes-utf8 ;
+
+!/ s" likes to write elixir "  s" recommends to write elixir!" [ s" Stevejones " swap <|> . ] bi@ /!
+
+!/
+: 六六六 ( -- 666 ) 666 ;
+
+: 比 ( -- ) ;
+
+: 八 ( -- ) 8 ;
+
+: 大吗? ( -- ) fixnum>= ;
+
+: 如果 ( ..a t f -- ..b ) if ;
+
+666 比 8 大吗? [ s" 对" ] [ s" 错" ] 如果 说!
+/! 
+
+: array>quotation ( array -- quotation ) 
+    f f quotation @create-new-instance
+    TAG_QUOTATION swap @set-special-tag ;
+
+: 说! ( a -- ) . ;
+
+@syntax: 如果
+    \\ 则 @parse-until array>quotation (call) 
+    \\ 否则 @parse-until array>quotation 
+    \\ 。 @parse-until array>quotation if ;
+
+@syntax: ” \\ “ @read-until ;
+
+: 比 ( -- ) ;
+: 大的 ( -- ) fixnum>= ;
+
+如果 666 比 8 大的 则 ” 对“ 说! 否则 ” 错“ 说! 。 

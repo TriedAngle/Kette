@@ -215,7 +215,8 @@ impl Context {
     }
 
     fn stack_dup(&mut self) {
-        let x = self.data.nth(0);
+        let x = self.pop();
+        self.push(x);
         self.push(x);
     }
 
