@@ -1,64 +1,66 @@
-use kette::VM;
+use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 
-fn main() {
-    let mut vm = VM::new();
-    vm.init();
+use kette::ObjectRef;
+use kette::{Context, ContextConfig};
 
-    // accessing vm special objects example: let-me-cook 1 slot 8 + get^ ^object 0 slot utf8. -> prints "world"
+fn execute_file(ctx: &mut Context, path: &Path) -> io::Result<()> {
+    let content = fs::read_to_string(path)?;
 
-    unsafe {
-        let stage0 = vm.compile_source_file("std/core/stage-0.ktt");
-        vm.execute_quotation(stage0.as_quotation());
+    let text = unsafe {
+        let bytearray = ctx.gc.allocate_string(&content);
+        ObjectRef::from_bytearray_ptr(bytearray)
+    };
 
-        let stage1 = vm.compile_source_file("std/core/stage-1.ktt");
-        vm.execute_quotation(stage1.as_quotation());
+    let quotation = ctx.compile_string(text);
+    if !quotation.is_false() {
+        let quot = quotation.as_quotation_ptr().unwrap();
+        ctx.execute(quot);
     }
 
-    let testing = r#"
-        "#;
-    unsafe {
-        let quot = vm.compile_string(testing);
-        vm.execute_quotation(quot.as_quotation());
-    }
+    Ok(())
+}
 
-    let mut step_mode = false;
+fn main() -> io::Result<()> {
+    let config = ContextConfig {
+        datastack_size: 1024,
+        retainstack_size: 1024,
+        namestack_size: 1024,
+    };
 
+    let mut ctx = Context::new(&config);
+    kette::add_primitives(&mut ctx);
+
+    let _ = execute_file(&mut ctx, Path::new("std/bootstrap/stage0.ktt"));
+
+    let mut input = String::new();
     loop {
-        io::stdout().flush().unwrap();
-        print!("IN: ");
-        io::stdout().flush().unwrap();
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read line");
-        if input == "S\n" {
-            // \x13 is Ctrl+S in ASCII
-            step_mode = !step_mode;
-            println!(
-                "Step mode {}",
-                if step_mode {
-                    "activated"
-                } else {
-                    "deactivated"
-                }
-            );
-            continue;
-        }
+        print!("> ");
+        io::stdout().flush()?;
 
-        if input == "E\n" {
+        input.clear();
+        if io::stdin().read_line(&mut input)? == 0 {
             break;
         }
 
+        if input.trim().is_empty() {
+            continue;
+        }
+
         unsafe {
-            let quot = vm.compile_string(&input);
-            vm.execute_quotation(quot.as_quotation());
-            let ctx = vm.ctx();
-            let stack2 = ctx.data_array;
-            let len2 = ctx.len();
-            vm.print_array(stack2, len2);
+            let text = {
+                let bytearray = ctx.gc.allocate_string(&input);
+                ObjectRef::from_bytearray_ptr(bytearray)
+            };
+
+            let quotation = ctx.compile_string(text);
+            if !quotation.is_false() {
+                let quot = quotation.as_quotation_ptr().unwrap();
+                ctx.execute(quot);
+            }
         }
     }
 
-    vm.deinit();
+    Ok(())
 }
