@@ -157,12 +157,21 @@ impl Context {
         unsafe { (*parser).compile_string(self) }
     }
 
+    unsafe fn name_or_word_string(obj: ObjectRef) -> *mut ByteArray {
+        if let Some(word) = obj.as_word_ptr() {
+            let name = unsafe { (*word).name };
+            unsafe { name.as_bytearray_ptr_unchecked() }
+        } else {
+            unsafe { obj.as_bytearray_ptr_unchecked() }
+        }
+    }
+
     pub fn namestack_push_or_replace(&mut self, name: ObjectRef, object: ObjectRef) {
         if name.is_false() {
             return;
         }
 
-        let name_ptr = unsafe { name.as_bytearray_ptr_unchecked() };
+        let name_ptr = unsafe { Self::name_or_word_string(name) };
 
         let mut current = self.names.current;
         let mut found = false;
@@ -178,7 +187,7 @@ impl Context {
                     break;
                 }
 
-                let existing_name_ptr = existing_name.as_bytearray_ptr_unchecked();
+                let existing_name_ptr = Self::name_or_word_string(existing_name);
                 if (*name_ptr).equal(&*existing_name_ptr) {
                     *current = (name, object);
                     found = true;
@@ -193,12 +202,13 @@ impl Context {
         }
     }
 
-    pub fn namestack_lookup(&self, name: ObjectRef) -> Option<ObjectRef> {
+    pub fn namestack_lookup(&self, name: ObjectRef) -> Option<(ObjectRef, ObjectRef)> {
         if name.is_false() {
             return None;
         }
 
-        let name_ptr = unsafe { name.as_bytearray_ptr_unchecked() };
+        let name_ptr = unsafe { Self::name_or_word_string(name) };
+
         let mut current = self.names.current;
 
         while current > self.names.start {
@@ -210,10 +220,10 @@ impl Context {
                     continue;
                 }
 
-                let existing_ptr = existing_name.as_bytearray_ptr_unchecked();
+                let existing_ptr =  Self::name_or_word_string(existing_name);
 
                 if (*name_ptr).equal(&*existing_ptr) {
-                    return Some(object);
+                    return Some((existing_name, object));
                 }
             }
         }
@@ -225,7 +235,8 @@ impl Context {
             return ObjectRef::null();
         }
 
-        let name_ptr = unsafe { name.as_bytearray_ptr_unchecked() };
+        let name_ptr = unsafe { Self::name_or_word_string(name) };
+
         let mut current = self.names.current;
 
         while current > self.names.start {
@@ -237,7 +248,7 @@ impl Context {
                     continue;
                 }
 
-                let existing_ptr = existing_name.as_bytearray_ptr_unchecked();
+                let existing_ptr = Self::name_or_word_string(existing_name);
 
                 if (*name_ptr).equal(&*existing_ptr) {
                     *current = (ObjectRef::null(), ObjectRef::null());
@@ -452,7 +463,12 @@ impl Parser {
 
             if !parsed {
                 match ctx.namestack_lookup(word) {
-                    Some(obj) => {
+                    Some((name, value)) => {
+                        let obj = if name.as_word_ptr().is_some() {
+                            name
+                        } else {
+                            value
+                        };
                         if let Some(word_ptr) = obj.as_word_ptr() {
                             unsafe {
                                 if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
@@ -537,7 +553,12 @@ impl Parser {
 
             if !parsed {
                 match ctx.namestack_lookup(word) {
-                    Some(obj) => {
+                    Some((name, value)) => {
+                        let obj = if name.as_word_ptr().is_some() {
+                            name
+                        } else {
+                            value
+                        };
                         if let Some(word_ptr) = obj.as_word_ptr() {
                             unsafe {
                                 if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
@@ -806,16 +827,31 @@ mod tests {
             let obj2 = ObjectRef::from_int(84);
 
             ctx.namestack_push_or_replace(name1.into(), obj1);
-            assert_eq!(ctx.namestack_lookup(name1.into()), Some(obj1));
+            assert_eq!(
+                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
+                Some(obj1)
+            );
 
             ctx.namestack_push_or_replace(name2.into(), obj2);
-            assert_eq!(ctx.namestack_lookup(name2.into()), Some(obj2));
-            assert_eq!(ctx.namestack_lookup(name1.into()), Some(obj1));
+            assert_eq!(
+                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
+                Some(obj2)
+            );
+            assert_eq!(
+                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
+                Some(obj1)
+            );
 
             let removed = ctx.namestack_remove(name1.into());
             assert_eq!(removed, obj1);
-            assert_eq!(ctx.namestack_lookup(name1.into()), None);
-            assert_eq!(ctx.namestack_lookup(name2.into()), Some(obj2));
+            assert_eq!(
+                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
+                None
+            );
+            assert_eq!(
+                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
+                Some(obj2)
+            );
         }
     }
 
@@ -828,10 +864,16 @@ mod tests {
             let obj2 = ObjectRef::from_int(84);
 
             ctx.namestack_push_or_replace(name.into(), obj1);
-            assert_eq!(ctx.namestack_lookup(name.into()), Some(obj1));
+            assert_eq!(
+                ctx.namestack_lookup(name.into()).map(|(_, value)| value),
+                Some(obj1)
+            );
 
             ctx.namestack_push_or_replace(name.into(), obj2);
-            assert_eq!(ctx.namestack_lookup(name.into()), Some(obj2));
+            assert_eq!(
+                ctx.namestack_lookup(name.into()).map(|(_, value)| value),
+                Some(obj2)
+            );
         }
     }
 
@@ -857,10 +899,22 @@ mod tests {
             let obj4 = ObjectRef::from_int(4);
             ctx.namestack_push_or_replace(name4.into(), obj4);
 
-            assert_eq!(ctx.namestack_lookup(name1.into()), Some(obj1));
-            assert_eq!(ctx.namestack_lookup(name2.into()), None);
-            assert_eq!(ctx.namestack_lookup(name3.into()), Some(obj3));
-            assert_eq!(ctx.namestack_lookup(name4.into()), Some(obj4));
+            assert_eq!(
+                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
+                Some(obj1)
+            );
+            assert_eq!(
+                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
+                None
+            );
+            assert_eq!(
+                ctx.namestack_lookup(name3.into()).map(|(_, value)| value),
+                Some(obj3)
+            );
+            assert_eq!(
+                ctx.namestack_lookup(name4.into()).map(|(_, value)| value),
+                Some(obj4)
+            );
         }
     }
 
@@ -885,8 +939,14 @@ mod tests {
             ctx.namestack_push_or_replace(name1.into(), obj1);
             ctx.namestack_push_or_replace(name2.into(), obj2);
 
-            assert_eq!(ctx.namestack_lookup(name1.into()), Some(obj2));
-            assert_eq!(ctx.namestack_lookup(name2.into()), Some(obj2));
+            assert_eq!(
+                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
+                Some(obj2)
+            );
+            assert_eq!(
+                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
+                Some(obj2)
+            );
         }
     }
 
@@ -1014,6 +1074,10 @@ mod tests {
             let name = ctx.gc.allocate_string("test-var");
             let value = ObjectRef::from_int(999);
             ctx.namestack_push_or_replace(name.into(), value);
+            assert_eq!(
+                ctx.namestack_lookup(name.into()).map(|(_, val)| val),
+                Some(value)
+            );
 
             let text = ctx.gc.allocate_string("42 test-var ]");
             let end = ctx.gc.allocate_string("]");

@@ -1,6 +1,6 @@
 @syntax: \\ @parse-next ;
 
-@syntax: \ @parse-next @namestack-lookup >box ;
+@syntax: \ @parse-next @namestack-lookup dropd >box ;
 
 @syntax: !/ \\ /! @read-until drop f ; 
 
@@ -28,37 +28,17 @@ const: TAG_QUOTATION 7
 const: TAG_WORD 8
 
 @syntax: : 
-    @parse-next dup \\ ) @read-until drop  
+    @parse-next \\ ) @read-until drop  
     \\ ; @parse-until f f quotation @create-new-instance
-    TAG_QUOTATION swap @set-special-tag 
+    TAG_QUOTATION @set-special-tag 
     f f word @create-new-instance
-    TAG_WORD swap @set-special-tag @namestack-push f ;
-
+    TAG_WORD @set-special-tag f @namestack-push f ;
 
 : dip ( x p -- x ) swap @>r (call) @r> ;
 : keep ( x [ x -- ..a ] -- ..a x ) over [ (call) ] dip ;
 : bi ( x p q -- ) [ keep ] dip (call) ;
 : bi* ( x y p q -- ) [ dip ] dip (call) ;
 : bi@ ( x y p -- ) dup bi* ;
-
-: ? ( ? t f -- ? ) rot [ drop ] [ dropd ] if ;
-: and? ( obj1 obj2 -- ? ) over ? ;
-: or? ( obj1 obj2 -- ? ) dupd ? ;
-
-: ref-eq? ( obj1 obj2 -- ? ) 2dup is-fixnum2? [ ] [ [ object>ptr ] bi@ ] if fixnum= ; 
-
-: is-bytearray? ( obj -- ? ) @get-special-tag TAG_BYTEARRAY fixnum= ;
-: is-bool? ( obj -- ? ) dup [ t ref-eq? ] [ drop t ] if ;
-
-: bool>bytes-utf8 ( ? -- str ) [ s" t" ] [ s" f" ] if ; 
-
-: bytearray-copy-full ( src dst dst-offset -- ) pick 0 get-slot 0 -rot bytearray-copy ;
-
-: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 get-slot ] bi@ fixnum+ ] keep 0 get-slot ;
-
-: <|> ( s1 s2 -- s1s2 ) 
-    2dup merge|size&offset [ swapd bytearray-resize ] dip
-    swap [ swap bytearray-copy-full ] keep ;
 
 : (1array) ( x arr -- arr ) [ 0 swap array-set-nth ] keep ;
 : (2array) ( x y arr -- arr ) [ 1 swap array-set-nth ] keep (1array)  ;
@@ -71,7 +51,52 @@ const: TAG_WORD 8
 : 4array ( x y z w -- arr ) 4 <array> (4array)  ;
 
 
-: namestack-full? ( -- ? ) let-me-cook ;
+: array>quotation ( array -- quotation ) 
+    f f quotation @create-new-instance
+    TAG_QUOTATION @set-special-tag ;
+
+: define-empty-word ( name -- word ) 
+    f f f word @create-new-instance TAG_WORD @set-special-tag 
+    dup f @namestack-push ;
+
+: define-symbol ( word -- ) 
+    dup >box 1array array>quotation swap 1 set-slot ;
+
+
+: ? ( ? t f -- ? ) rot [ drop ] [ dropd ] if ;
+: and? ( obj1 obj2 -- ? ) over ? ;
+: or? ( obj1 obj2 -- ? ) dupd ? ;
+
+: ref-eq? ( obj1 obj2 -- ? ) 2dup is-fixnum2? [ ] [ [ object>ptr ] bi@ ] if fixnum= ; 
+
+: is-bytearray? ( obj -- ? ) @get-special-tag TAG_BYTEARRAY fixnum= ;
+: is-box? ( obj -- ? ) @get-special-tag TAG_BOX fixnum= ;
+: is-bool? ( obj -- ? ) dup [ t ref-eq? ] [ drop t ] if ;
+
+@syntax: sym: 
+    @parse-next define-empty-word define-symbol ;
+
+: ?unbox ( boxed? -- value ) 
+    dup is-box? [ 0 get-slot ] [ ] if ;
+
+: set! ( value symbol -- ) 
+    ?unbox swap @namestack-push ;
+
+: get! ( symbol -- value/f )
+    ?unbox @namestack-lookup dup [ drop ] [ ] if ;
+
+: bool>bytes-utf8 ( ? -- str ) [ s" t" ] [ s" f" ] if ; 
+
+: bytearray-copy-full ( src dst dst-offset -- ) pick 0 get-slot 0 -rot bytearray-copy ;
+
+: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 get-slot ] bi@ fixnum+ ] keep 0 get-slot ;
+
+: <|> ( s1 s2 -- s1s2 ) 
+    2dup merge|size&offset [ swapd bytearray-resize ] dip
+    swap [ swap bytearray-copy-full ] keep ;
+
+
+
 
 : . ( obj -- )
     dup is-bytearray? [ ] [ 
@@ -95,9 +120,7 @@ const: TAG_WORD 8
 666 比 8 大吗? [ s" 对" ] [ s" 错" ] 如果 说!
 /! 
 
-: array>quotation ( array -- quotation ) 
-    f f quotation @create-new-instance
-    TAG_QUOTATION swap @set-special-tag ;
+
 
 : 说! ( a -- ) . ;
 

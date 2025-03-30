@@ -36,10 +36,10 @@ pub fn add_primitives(ctx: &mut Context) {
         ("@create-new-map", &["name", "slots", "--", "map"], Context::create_new_map),
         ("@create-new-instance", &["...values", "map", "--", "object"], Context::create_new_instance),
         ("@create-new-empty-instance", &["map", "--", "object"], Context::create_new_empty_instance),
-        ("@set-special-tag", &["tag", "obj", "--", "tagged"], Context::tag_ref),
+        ("@set-special-tag", &["obj", "tag", "--", "tagged"], Context::tag_ref),
         ("@get-special-tag", &["obj", "--", "tag"], Context::get_tag),
 
-        ("@namestack-lookup", &["name", "--", "obj/f"], Context::lookup_namestack),
+        ("@namestack-lookup", &["name", "--", "val key / f"], Context::lookup_namestack),
         ("@namestack-push", &["name", "obj", "--"], Context::define_namestack),
         ("@namestack-delete", &["name", "--", "obj/f"], Context::remove_namestack),
 
@@ -147,14 +147,12 @@ pub fn add_primitives(ctx: &mut Context) {
 
     for (name, stack_effect, fp) in parser_words {
         let word = primitive_parser_word(ctx, name, stack_effect, *fp);
-        let name = unsafe { (*word.as_word_ptr().unwrap()).name };
-        ctx.namestack_push_or_replace(name, word);
+        ctx.namestack_push_or_replace(word, SpecialObjects::get_false());
     }
 
     for (name, stack_effect, fp) in words {
         let word = primitive_word(ctx, name, stack_effect, *fp);
-        let name = unsafe { (*word.as_word_ptr().unwrap()).name };
-        ctx.namestack_push_or_replace(name, word);
+        ctx.namestack_push_or_replace(word, SpecialObjects::get_false());
     }
 }
 
@@ -437,7 +435,10 @@ impl Context {
     fn lookup_namestack(&mut self) {
         let name = self.pop();
         match self.namestack_lookup(name) {
-            Some(object) => self.push(object),
+            Some((key, value)) => {
+                self.push(value);
+                self.push(key);
+            }
             None => self.push(SpecialObjects::get_false()),
         }
     }
@@ -561,8 +562,8 @@ impl Context {
     }
 
     pub fn tag_ref(&mut self) {
-        let obj = self.pop();
         let tag_id = unsafe { self.pop().as_int_unchecked() };
+        let obj = self.pop();
         let tag = ObjectType::from(tag_id as u64);
         let tagged = unsafe { obj.special_tagged(tag) };
         self.push(tagged);
