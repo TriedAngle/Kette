@@ -1,4 +1,4 @@
-use crate::object::{Array, ObjectRef};
+use crate::{Array, Tagged};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct MemoryRegion<T> {
@@ -56,18 +56,18 @@ impl<T: Copy> MemoryRegion<T> {
     }
 }
 
-impl From<*mut Array> for MemoryRegion<ObjectRef> {
+impl From<*mut Array> for MemoryRegion<Tagged> {
     fn from(value: *mut Array) -> Self {
-        let data_ptr = unsafe { (*value).data_ptr_mut() };
-        let size = unsafe { (*value).size.as_int_unchecked() as usize };
+        let data_ptr = unsafe { (*value).data_ptr() };
+        let size = unsafe { (*value).size.to_int() as usize };
         Self::new(data_ptr, size)
     }
 }
 
-impl From<*mut Array> for MemoryRegion<(ObjectRef, ObjectRef)> {
+impl From<*mut Array> for MemoryRegion<(Tagged, Tagged)> {
     fn from(value: *mut Array) -> Self {
-        let data_ptr = unsafe { (*value).data_ptr_mut() } as _;
-        let size = unsafe { (*value).size.as_int_unchecked() as usize };
+        let data_ptr = unsafe { (*value).data_ptr() } as _;
+        let size = unsafe { (*value).size.to_int() as usize };
         Self::new(data_ptr, size)
     }
 }

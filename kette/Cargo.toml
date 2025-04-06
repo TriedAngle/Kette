@@ -1,8 +1,6 @@
 [package]
 name = "kette"
 version = "0.1.0"
-edition = "2021"
-
-default-run="kette"
+edition = "2024"
 
 [dependencies]
