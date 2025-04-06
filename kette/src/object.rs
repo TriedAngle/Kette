@@ -1,5 +1,7 @@
 use std::mem;
 
+use crate::StackFn;
+
 pub const TAG_INT: u64 = 0b1;
 pub const TAG_MASK_FULL: u64 = 0b11;
 pub const TAG_OBJECT: u64 = 0b00;
@@ -101,11 +103,6 @@ impl Tagged {
         Self(ptr as u64)
     }
 
-    pub fn to_ptr(self) -> *mut Object {
-        debug_assert!(self.0 & TAG_MASK_FULL == TAG_OBJECT);
-        self.0 as *mut Object
-    }
-
     pub fn from_int(value: i64) -> Self {
         debug_assert!(
             value <= (i64::MAX >> 1) && value >= (i64::MIN >> 1),
@@ -116,11 +113,27 @@ impl Tagged {
         Self(transmuted | TAG_INT)
     }
 
+    pub fn from_fn(fun: StackFn) -> Tagged { 
+        let val: i64 = unsafe { mem::transmute(fun) };
+        Self::from_int(val)
+    }
+
+    pub fn to_ptr(self) -> *mut Object {
+        debug_assert!(self.0 & TAG_MASK_FULL == TAG_OBJECT);
+        self.0 as *mut Object
+    }
+
     pub fn to_int(self) -> i64 {
         debug_assert!(self.0 & TAG_INT == TAG_INT, "Not an integer value");
         let transmuted: i64 = unsafe { mem::transmute(self.0) };
         let value = transmuted >> 1;
         value
+    }
+
+    pub fn to_fn(self) -> StackFn { 
+        let val = self.to_int();
+        let fun: StackFn = unsafe { mem::transmute(val) };
+        fun
     }
 
     pub fn is_int(&self) -> bool {
