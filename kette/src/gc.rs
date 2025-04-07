@@ -4,7 +4,7 @@ use std::mem;
 use std::str;
 
 use crate::{
-    Array, ByteArray, Map, Object, ObjectHeader, SLOT_CONST_DATA, SLOT_DATA, Slot, StackFn, Tagged,
+    Array, ByteArray, Map, Object, ObjectHeader, SLOT_CONST_DATA, SLOT_DATA, Slot, Tagged,
 };
 
 pub struct SpecialObjects {
@@ -656,7 +656,7 @@ impl GarbageCollector {
         new_ba
     }
 
-    pub fn allocate_quotation(&mut self, items: Vec<Tagged>) -> Tagged {
+    pub fn allocate_quotation(&mut self, items: &[Tagged]) -> Tagged {
         let array = self.allocate_array(items.len());
         let array_ptr = array.to_ptr() as *mut Array;
 
@@ -680,7 +680,7 @@ impl GarbageCollector {
         &mut self,
         name: &str,
         effect: Tagged,
-        fun: StackFn,
+        fun: Tagged,
         is_parse: bool,
     ) -> Tagged {
         let tags = self.allocate_array(if is_parse { 2 } else { 1 });
@@ -692,8 +692,6 @@ impl GarbageCollector {
                 (*tags_ptr).set(1, self.specials.parser_tag);
             }
         }
-
-        let fun = Tagged::from_fn(fun);
 
         let name = self.allocate_string(name);
 

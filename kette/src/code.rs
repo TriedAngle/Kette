@@ -1,18 +1,17 @@
 use std::{collections::HashMap, ptr::NonNull};
 
 use crate::{
-    Array, ByteArray, Context, LinkedListAllocator, Node, Object, Quotation,
-    StackFn, Tagged, Word,
+    Array, ByteArray, Context, LinkedListAllocator, Node, Object, Quotation, StackFn, Tagged, Word,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub enum Code {
     Push(Tagged), // any object
     CallQuotation,
-    Call(Word),
+    Call(*const Word), // TODO: introduce callable
     SendWord(*const ByteArray),
     CallPrimitive(StackFn),
-    Branch,
+    Branch, // TODO introduce callable
     // TODO: Remove and actually inline this
     BranchInline(*const Quotation, *const Quotation),
 }
@@ -23,13 +22,18 @@ pub struct CodeHeap {
 }
 
 impl Context {
-    fn compile(
-        &self,
-        heap: &mut CodeHeap,
-        quot: *const Quotation,
-    ) -> NonNull<Node> {
-        if let Some(node_ptr) = heap.artifacts.get(&quot) {
-            return *node_ptr;
+    pub fn compile_word(&self, word: *const Word) -> NonNull<Node> {
+        let body = unsafe { (*word).body };
+        let quot = body.to_ptr() as _;
+        self.compile(quot)
+    }
+
+    pub fn compile(&self, quot: *const Quotation) -> NonNull<Node> {
+        {
+            let heap = self.codes.lock();
+            if let Some(node_ptr) = heap.artifacts.get(&quot) {
+                return *node_ptr;
+            }
         }
 
         let body = unsafe { (*quot).body }.to_ptr() as *const Array;
@@ -52,25 +56,21 @@ impl Context {
             let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
 
             // Check for if-pattern: quotation, quotation
-            if i + 2 < body_len && map_tagged == self.gc.specials.quotation_map
-            {
+            if i + 2 < body_len && map_tagged == self.gc.specials.quotation_map {
                 let next = unsafe { (*body).get(i + 1) };
                 let next_next = unsafe { (*body).get(i + 2) };
 
                 if self.is_quotation(next) && self.is_word(next_next) {
                     if let Some(fun) = self.word_primitive(next_next) {
+                        #[allow(unpredictable_function_pointer_comparisons)]
                         if fun == crate::primitives::iff {
                             let true_branch = item.to_ptr() as *const Quotation;
-                            let false_branch =
-                                next.to_ptr() as *const Quotation;
+                            let false_branch = next.to_ptr() as *const Quotation;
 
-                            self.compile(heap, true_branch);
-                            self.compile(heap, false_branch);
+                            self.compile(true_branch);
+                            self.compile(false_branch);
 
-                            code.push(Code::BranchInline(
-                                true_branch,
-                                false_branch,
-                            ));
+                            code.push(Code::BranchInline(true_branch, false_branch));
                             i += 3;
                             continue;
                         }
@@ -80,16 +80,14 @@ impl Context {
 
             if map_tagged == self.gc.specials.quotation_map {
                 let quotation_ptr = obj_ptr as *const Quotation;
-                self.compile(heap, quotation_ptr);
+                self.compile(quotation_ptr);
                 code.push(Code::Push(item));
             } else if map_tagged == self.gc.specials.word_map {
                 if let Some(primitive) = self.word_primitive(item) {
                     code.push(Code::CallPrimitive(primitive));
                 } else {
                     let word_ptr = obj_ptr as *const Word;
-                    code.push(Code::Call(unsafe {
-                        *(word_ptr as *const Word)
-                    }));
+                    code.push(Code::Call(word_ptr));
                 }
             } else {
                 code.push(Code::Push(item));
@@ -98,10 +96,65 @@ impl Context {
             i += 1;
         }
 
+        let mut heap = self.codes.lock();
         let node = heap.write_slice(&code);
         heap.map_artifact(quot, node);
 
         node
+    }
+
+    pub fn execute_word(&mut self, word: *const Word) {
+        if let Some(fun) = self.word_primitive(Tagged::from_ptr(word as _)) {
+            fun(self);
+            return;
+        }
+
+        let quot_obj = unsafe { (*word).body };
+        let quot = quot_obj.to_ptr() as _;
+        self.execute(quot);
+    }
+
+    pub fn execute(&mut self, quot: *const Quotation) {
+        let artifact = self.compile(quot);
+        let code = unsafe { artifact.as_ref().data_as::<Code>() };
+
+        for &instr in code {
+            match instr {
+                Code::Push(obj) => self.push(obj),
+                Code::CallQuotation => {
+                    let quot_obj = self.pop();
+                    let quot = quot_obj.to_ptr() as *const Quotation;
+                    self.execute(quot);
+                }
+                Code::Call(word) => {
+                    self.execute_word(word);
+                }
+                Code::CallPrimitive(fun) => {
+                    fun(self);
+                }
+                Code::Branch => {
+                    let false_branch_obj = self.pop();
+                    let true_branch_obj = self.pop();
+                    let condition = self.pop();
+                    if condition.is_false() {
+                        let false_branch = false_branch_obj.to_ptr() as _;
+                        self.execute(false_branch);
+                    } else {
+                        let true_branch = true_branch_obj.to_ptr() as _;
+                        self.execute(true_branch);
+                    }
+                }
+                Code::BranchInline(false_branch, true_branch) => {
+                    let condition = self.pop();
+                    if condition.is_false() {
+                        self.execute(false_branch);
+                    } else {
+                        self.execute(true_branch);
+                    }
+                }
+                _ => unimplemented!("Not implemented yet: {:?}", instr),
+            }
+        }
     }
 }
 
@@ -125,18 +178,11 @@ impl CodeHeap {
         allocated_bytes
     }
 
-    pub fn map_artifact(
-        &mut self,
-        quotation: *const Quotation,
-        node: NonNull<Node>,
-    ) {
+    pub fn map_artifact(&mut self, quotation: *const Quotation, node: NonNull<Node>) {
         self.artifacts.insert(quotation, node);
     }
 
-    pub fn get_code_for_quotation(
-        &self,
-        quotation: *const Quotation,
-    ) -> Option<&[Code]> {
+    pub fn get_code_for_quotation(&self, quotation: *const Quotation) -> Option<&[Code]> {
         self.artifacts.get(&quotation).map(|&node_ptr| {
             let node = unsafe { node_ptr.as_ref() };
             let data_size = node.data_size;
@@ -150,6 +196,10 @@ impl CodeHeap {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
     use crate::Context;
     use crate::ContextConfig;
     use crate::DEFAULT_BLOCK_SIZE;
@@ -185,7 +235,7 @@ mod test {
         let code1 = [
             Code::Push(Tagged::default()),
             Code::CallQuotation,
-            Code::Call(Word::default()),
+            Code::Call(std::ptr::null()),
         ];
 
         let code2 = [Code::Branch, Code::CallPrimitive(mock_primitive)];
@@ -193,10 +243,8 @@ mod test {
         let allocated_node1 = code_heap.write_slice(&code1);
         let allocated_node2 = code_heap.write_slice(&code2);
 
-        let allocated_code1 =
-            unsafe { allocated_node1.as_ref().data_as::<Code>() };
-        let allocated_code2 =
-            unsafe { allocated_node2.as_ref().data_as::<Code>() };
+        let allocated_code1 = unsafe { allocated_node1.as_ref().data_as::<Code>() };
+        let allocated_code2 = unsafe { allocated_node2.as_ref().data_as::<Code>() };
 
         assert_eq!(allocated_code1.len(), code1.len());
         assert_eq!(allocated_code2.len(), code2.len());
@@ -223,7 +271,7 @@ mod test {
         let code1 = [
             Code::Push(Tagged::default()),
             Code::CallQuotation,
-            Code::Call(Word::default()),
+            Code::Call(std::ptr::null()),
         ];
 
         let code2 = [Code::Branch, Code::CallPrimitive(mock_primitive)];
@@ -232,17 +280,14 @@ mod test {
         let allocated_code2 = code_heap.write_slice(&code2);
 
         let quotation1: *const Quotation = std::ptr::null();
-        let quotation2 = unsafe {
-            &*std::ptr::addr_of!(quotation1) as *const _ as *const Quotation
-        };
+        let quotation2 =
+            unsafe { &*std::ptr::addr_of!(quotation1) as *const _ as *const Quotation };
 
         code_heap.map_artifact(quotation1, allocated_code1);
         code_heap.map_artifact(quotation2, allocated_code2);
 
-        let retrieved_code1 =
-            code_heap.get_code_for_quotation(quotation1).unwrap();
-        let retrieved_code2 =
-            code_heap.get_code_for_quotation(quotation2).unwrap();
+        let retrieved_code1 = code_heap.get_code_for_quotation(quotation1).unwrap();
+        let retrieved_code2 = code_heap.get_code_for_quotation(quotation2).unwrap();
 
         assert_eq!(retrieved_code1.len(), code1.len());
         assert_eq!(retrieved_code2.len(), code2.len());
@@ -263,9 +308,8 @@ mod test {
 
         let quotation3: *const Quotation = std::ptr::null();
 
-        let non_existent = unsafe {
-            &*std::ptr::addr_of!(quotation3) as *const _ as *const Quotation
-        };
+        let non_existent =
+            unsafe { &*std::ptr::addr_of!(quotation3) as *const _ as *const Quotation };
         assert!(code_heap.get_code_for_quotation(non_existent).is_none());
     }
 
@@ -285,16 +329,14 @@ mod test {
         }
 
         let allocated_large_node = code_heap.write_slice(&large_code);
-        let allocated_large_code =
-            unsafe { allocated_large_node.as_ref().data_as::<Code>() };
+        let allocated_large_code = unsafe { allocated_large_node.as_ref().data_as::<Code>() };
 
         assert_eq!(allocated_large_code.len(), large_code.len());
 
         let quotation = std::ptr::null();
         code_heap.map_artifact(quotation, allocated_large_node);
 
-        let retrieved_code =
-            code_heap.get_code_for_quotation(quotation).unwrap();
+        let retrieved_code = code_heap.get_code_for_quotation(quotation).unwrap();
         assert_eq!(retrieved_code.len(), large_code.len());
 
         assert_eq!(
@@ -340,8 +382,7 @@ mod test {
         }
 
         for (i, &quotation) in quotations.iter().enumerate() {
-            let retrieved_code =
-                code_heap.get_code_for_quotation(quotation).unwrap();
+            let retrieved_code = code_heap.get_code_for_quotation(quotation).unwrap();
             assert_eq!(retrieved_code.len(), codes[i].len());
 
             for j in 0..retrieved_code.len() {
@@ -353,19 +394,19 @@ mod test {
         }
     }
 
-    fn setup_context() -> Context {
+    fn setup_context(heap: Arc<Mutex<CodeHeap>>) -> Context {
         let config = ContextConfig {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
         };
-        Context::new(&config)
+        Context::new(&config, heap)
     }
 
     #[test]
     fn test_compile_simple_quotation() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let quotation_array = ctx.gc.allocate_array(1);
         unsafe {
@@ -380,10 +421,10 @@ mod test {
             (*quotation_ptr).set_slot(1, quotation_array);
         }
 
-        let node =
-            ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        let _node = ctx.compile(quotation.to_ptr() as *const Quotation);
 
-        let code = code_heap
+        let heap = code_heap.lock();
+        let code = heap
             .get_code_for_quotation(quotation.to_ptr() as *const Quotation)
             .unwrap();
 
@@ -396,8 +437,8 @@ mod test {
 
     #[test]
     fn test_compile_multi_item_quotation() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let quotation_array = ctx.gc.allocate_array(3);
         unsafe {
@@ -414,9 +455,10 @@ mod test {
             (*quotation_ptr).set_slot(1, quotation_array);
         }
 
-        ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        ctx.compile(quotation.to_ptr() as *const Quotation);
 
-        let code = code_heap
+        let heap = code_heap.lock();
+        let code = heap
             .get_code_for_quotation(quotation.to_ptr() as *const Quotation)
             .unwrap();
 
@@ -437,8 +479,8 @@ mod test {
 
     #[test]
     fn test_compile_nested_quotation() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let inner_array = ctx.gc.allocate_array(1);
         unsafe {
@@ -446,8 +488,7 @@ mod test {
             (*array_ptr).set(0, Tagged::from_int(42));
         }
 
-        let inner_quotation =
-            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let inner_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = inner_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -460,31 +501,22 @@ mod test {
             (*array_ptr).set(0, inner_quotation);
         }
 
-        let outer_quotation =
-            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let outer_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = outer_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
             (*quotation_ptr).set_slot(1, outer_array);
         }
 
-        ctx.compile(
-            &mut code_heap,
-            outer_quotation.to_ptr() as *const Quotation,
-        );
+        ctx.compile(outer_quotation.to_ptr() as *const Quotation);
 
-        let outer_code =
-            code_heap
-                .get_code_for_quotation(
-                    outer_quotation.to_ptr() as *const Quotation
-                )
-                .unwrap();
-        let inner_code =
-            code_heap
-                .get_code_for_quotation(
-                    inner_quotation.to_ptr() as *const Quotation
-                )
-                .unwrap();
+        let heap = code_heap.lock();
+        let outer_code = heap
+            .get_code_for_quotation(outer_quotation.to_ptr() as *const Quotation)
+            .unwrap();
+        let inner_code = heap
+            .get_code_for_quotation(inner_quotation.to_ptr() as *const Quotation)
+            .unwrap();
 
         assert_eq!(outer_code.len(), 1);
         match outer_code[0] {
@@ -503,8 +535,8 @@ mod test {
 
     #[test]
     fn test_compile_word_call() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let word_name = ctx.gc.allocate_string("test_word");
         let word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
@@ -528,16 +560,17 @@ mod test {
             (*quotation_ptr).set_slot(1, quotation_array);
         }
 
-        ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        ctx.compile(quotation.to_ptr() as *const Quotation);
 
-        let code = code_heap
+        let heap = code_heap.lock();
+        let code = heap
             .get_code_for_quotation(quotation.to_ptr() as *const Quotation)
             .unwrap();
 
         assert_eq!(code.len(), 1);
         match code[0] {
             Code::Call(ref w) => unsafe {
-                let name_ptr = w.name.to_ptr() as *const ByteArray;
+                let name_ptr = (**w).name.to_ptr() as *const ByteArray;
                 assert_eq!((*name_ptr).as_str(), "test_word");
             },
             _ => panic!("Expected Call operation"),
@@ -546,8 +579,8 @@ mod test {
 
     #[test]
     fn test_compile_primitive_word_call() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let word_name = ctx.gc.allocate_string("primitive_word");
         let word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
@@ -579,9 +612,10 @@ mod test {
             (*quotation_ptr).set_slot(1, quotation_array);
         }
 
-        ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        ctx.compile(quotation.to_ptr() as *const Quotation);
 
-        let code = code_heap
+        let heap = code_heap.lock();
+        let code = heap
             .get_code_for_quotation(quotation.to_ptr() as *const Quotation)
             .unwrap();
 
@@ -594,8 +628,8 @@ mod test {
 
     #[test]
     fn test_compile_if_pattern() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let true_array = ctx.gc.allocate_array(1);
         unsafe {
@@ -603,8 +637,7 @@ mod test {
             (*array_ptr).set(0, Tagged::from_int(1));
         }
 
-        let true_quotation =
-            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let true_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = true_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -617,8 +650,7 @@ mod test {
             (*array_ptr).set(0, Tagged::from_int(0));
         }
 
-        let false_quotation =
-            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let false_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = false_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -650,43 +682,31 @@ mod test {
             (*array_ptr).set(2, if_word);
         }
 
-        let main_quotation =
-            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let main_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = main_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
             (*quotation_ptr).set_slot(1, main_array);
         }
 
-        ctx.compile(
-            &mut code_heap,
-            main_quotation.to_ptr() as *const Quotation,
-        );
+        ctx.compile(main_quotation.to_ptr() as *const Quotation);
 
-        let main_code = code_heap
+        let heap = code_heap.lock();
+        let main_code = heap
             .get_code_for_quotation(main_quotation.to_ptr() as *const Quotation)
             .unwrap();
-        let true_code = code_heap
+        let true_code = heap
             .get_code_for_quotation(true_quotation.to_ptr() as *const Quotation)
             .unwrap();
-        let false_code =
-            code_heap
-                .get_code_for_quotation(
-                    false_quotation.to_ptr() as *const Quotation
-                )
-                .unwrap();
+        let false_code = heap
+            .get_code_for_quotation(false_quotation.to_ptr() as *const Quotation)
+            .unwrap();
 
         assert_eq!(main_code.len(), 1);
         match main_code[0] {
             Code::BranchInline(true_branch, false_branch) => {
-                assert_eq!(
-                    true_branch,
-                    true_quotation.to_ptr() as *const Quotation
-                );
-                assert_eq!(
-                    false_branch,
-                    false_quotation.to_ptr() as *const Quotation
-                );
+                assert_eq!(true_branch, true_quotation.to_ptr() as *const Quotation);
+                assert_eq!(false_branch, false_quotation.to_ptr() as *const Quotation);
             }
             _ => panic!("Expected BranchInline operation"),
         }
@@ -706,8 +726,8 @@ mod test {
 
     #[test]
     fn test_compile_reuse() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let quotation_array = ctx.gc.allocate_array(1);
         unsafe {
@@ -722,19 +742,17 @@ mod test {
             (*quotation_ptr).set_slot(1, quotation_array);
         }
 
-        let first_node =
-            ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        let first_node = ctx.compile(quotation.to_ptr() as *const Quotation);
 
-        let second_node =
-            ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        let second_node = ctx.compile(quotation.to_ptr() as *const Quotation);
 
         assert_eq!(first_node.as_ptr(), second_node.as_ptr());
     }
 
     #[test]
     fn test_compile_mixed_types() {
-        let mut ctx = setup_context();
-        let mut code_heap = CodeHeap::new();
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = setup_context(code_heap.clone());
 
         let word_name = ctx.gc.allocate_string("test_word");
         let word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
@@ -763,9 +781,10 @@ mod test {
             (*quotation_ptr).set_slot(1, quotation_array);
         }
 
-        ctx.compile(&mut code_heap, quotation.to_ptr() as *const Quotation);
+        ctx.compile(quotation.to_ptr() as *const Quotation);
 
-        let code = code_heap
+        let heap = code_heap.lock();
+        let code = heap
             .get_code_for_quotation(quotation.to_ptr() as *const Quotation)
             .unwrap();
 
@@ -786,7 +805,7 @@ mod test {
 
         match code[2] {
             Code::Call(ref w) => unsafe {
-                let name_ptr = w.name.to_ptr() as *const ByteArray;
+                let name_ptr = (**w).name.to_ptr() as *const ByteArray;
                 assert_eq!((*name_ptr).as_str(), "test_word");
             },
             _ => panic!("Expected Call operation for word"),

@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::StackFn;
+use crate::{ParseStackFn, StackFn};
 
 pub const TAG_INT: u64 = 0b1;
 pub const TAG_MASK_FULL: u64 = 0b11;
@@ -113,7 +113,12 @@ impl Tagged {
         Self(transmuted | TAG_INT)
     }
 
-    pub fn from_fn(fun: StackFn) -> Tagged { 
+    pub fn from_fn(fun: StackFn) -> Tagged {
+        let val: i64 = unsafe { mem::transmute(fun) };
+        Self::from_int(val)
+    }
+
+    pub fn from_parse_fn(fun: ParseStackFn) -> Tagged {
         let val: i64 = unsafe { mem::transmute(fun) };
         Self::from_int(val)
     }
@@ -130,9 +135,15 @@ impl Tagged {
         value
     }
 
-    pub fn to_fn(self) -> StackFn { 
+    pub fn to_fn(self) -> StackFn {
         let val = self.to_int();
         let fun: StackFn = unsafe { mem::transmute(val) };
+        fun
+    }
+
+    pub fn to_parse_fn(self) -> ParseStackFn {
+        let val = self.to_int();
+        let fun: ParseStackFn = unsafe { mem::transmute(val) };
         fun
     }
 
@@ -148,8 +159,7 @@ impl Tagged {
 impl Object {
     pub unsafe fn get_slot(&self, idx: usize) -> Tagged {
         let ptr = (self as *const Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
+        let offset = mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
 
         let slot_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe { *slot_ptr }
@@ -157,8 +167,7 @@ impl Object {
 
     pub unsafe fn set_slot(&mut self, idx: usize, value: Tagged) {
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
+        let offset = mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
         let slot_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe {
             *slot_ptr = value;
@@ -204,8 +213,7 @@ impl Array {
     pub unsafe fn get(&self, idx: usize) -> Tagged {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *const Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
+        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
         let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe { *element_ptr }
     }
@@ -213,8 +221,7 @@ impl Array {
     pub unsafe fn set(&mut self, idx: usize, value: Tagged) {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
+        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
         let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe {
             *element_ptr = value;
@@ -238,8 +245,7 @@ impl ByteArray {
     pub unsafe fn get_byte(&self, idx: usize) -> u8 {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *const Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
+        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
         let byte_ptr = unsafe { ptr.add(offset) };
         unsafe { *byte_ptr }
     }
@@ -247,8 +253,7 @@ impl ByteArray {
     pub unsafe fn set_byte(&mut self, idx: usize, value: u8) {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
+        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
         let byte_ptr = unsafe { ptr.add(offset) };
         unsafe {
             *byte_ptr = value;
@@ -259,8 +264,7 @@ impl ByteArray {
         let ptr = (self as *const Self).cast::<u8>();
         let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>();
         let byte_ptr = unsafe { ptr.add(offset) };
-        let bytes =
-            unsafe { std::slice::from_raw_parts(byte_ptr, self.len() - 1) };
+        let bytes = unsafe { std::slice::from_raw_parts(byte_ptr, self.len() - 1) };
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 }
@@ -316,12 +320,7 @@ impl Map {
         let first_slot_tagged = unsafe { (*slots_ptr).get(0) };
         let first_slot_ptr = first_slot_tagged.to_ptr() as *mut Slot;
 
-        unsafe {
-            std::slice::from_raw_parts(
-                &first_slot_ptr as *const *mut Slot,
-                slot_count,
-            )
-        }
+        unsafe { std::slice::from_raw_parts(&first_slot_ptr as *const *mut Slot, slot_count) }
     }
 
     pub unsafe fn iter_slots<'a>(&'a self) -> MapSlotIterator<'a> {

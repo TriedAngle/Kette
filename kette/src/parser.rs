@@ -109,7 +109,12 @@ impl<'a> Parser<'a> {
             let token = self.parse_token(ctx);
 
             if ctx.is_word(token) && ctx.is_parsing_word(token) {
-                println!("Found parsing word - would execute it here");
+                if let Some(func) = ctx.word_primitive_parse(token) {
+                    func(ctx, self)
+                } else {
+                    let word = token.to_ptr() as _;
+                    ctx.execute_word(word);
+                }
             } else {
                 result.push(token);
             }
@@ -122,7 +127,7 @@ impl<'a> Parser<'a> {
 
     pub fn parse_string(&mut self, ctx: &mut Context) -> Tagged {
         let items = self.parse_until(ctx, None);
-        ctx.gc.allocate_quotation(items)
+        ctx.gc.allocate_quotation(&items)
     }
 }
 
@@ -135,63 +140,67 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
     use super::*;
-    use crate::{Context, ContextConfig};
+    use crate::{CodeHeap, Context, ContextConfig};
 
     fn setup_context() -> Context {
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
         let config = ContextConfig {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
         };
-        Context::new(&config)
+        Context::new(&config, code_heap)
     }
-    
+
     #[test]
     fn test_parse_integers() {
         let mut parser = Parser::new("123 -456 0");
         let mut ctx = setup_context();
-        
+
         let token = parser.read_next(&mut ctx);
         let result = parser.parse_int(token).unwrap();
         assert_eq!(result.to_int(), 123);
-        
+
         let token = parser.read_next(&mut ctx);
         let result = parser.parse_int(token).unwrap();
         assert_eq!(result.to_int(), -456);
-        
+
         let token = parser.read_next(&mut ctx);
         let result = parser.parse_int(token).unwrap();
         assert_eq!(result.to_int(), 0);
     }
-    
+
     #[test]
     fn test_read_next() {
         let mut parser = Parser::new("hello world");
         let mut ctx = setup_context();
-        
+
         let token1 = parser.read_next(&mut ctx);
         let token1_ptr = token1.to_ptr() as *const ByteArray;
         let token1_str = unsafe { (*token1_ptr).as_str() };
         assert_eq!(token1_str, "hello");
-        
+
         let token2 = parser.read_next(&mut ctx);
         let token2_ptr = token2.to_ptr() as *const ByteArray;
         let token2_str = unsafe { (*token2_ptr).as_str() };
         assert_eq!(token2_str, "world");
     }
-    
+
     #[test]
     fn test_parse_until() {
         let mut parser = Parser::new("123 456 789");
         let mut ctx = setup_context();
-        
+
         let results = parser.parse_until(&mut ctx, None);
-        
+
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].to_int(), 123);
         assert_eq!(results[1].to_int(), 456);
         assert_eq!(results[2].to_int(), 789);
     }
 }
-

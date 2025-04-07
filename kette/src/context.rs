@@ -1,8 +1,8 @@
 use crate::{
-    Array, ByteArray, GarbageCollector, MemoryRegion, Object, ObjectHeader, SLOT_CONST_DATA,
-    StackFn, Tagged, Word,
+    Array, ByteArray, CodeHeap, GarbageCollector, MemoryRegion, Mutex, Object, ObjectHeader,
+    ParseStackFn, SLOT_CONST_DATA, StackFn, Tagged, Word,
 };
-use std::mem;
+use std::{mem, sync::Arc};
 
 pub struct Context {
     pub header: ObjectHeader,
@@ -12,6 +12,7 @@ pub struct Context {
     pub callstack: Tagged,
 
     pub gc: GarbageCollector,
+    pub codes: Arc<Mutex<CodeHeap>>,
 
     pub data: MemoryRegion<Tagged>,
     pub retain: MemoryRegion<Tagged>,
@@ -25,7 +26,7 @@ pub struct ContextConfig {
 }
 
 impl Context {
-    pub fn new(config: &ContextConfig) -> Self {
+    pub fn new(config: &ContextConfig, codes: Arc<Mutex<CodeHeap>>) -> Self {
         let mut gc = GarbageCollector::new();
         let datastack = gc.allocate_array(config.data_size);
         let retainstack = gc.allocate_array(config.retian_size);
@@ -59,6 +60,7 @@ impl Context {
             data,
             retain,
             name,
+            codes,
             gc,
         }
     }
@@ -261,6 +263,23 @@ impl Context {
         Some(ptr)
     }
 
+    pub fn word_primitive_parse(&self, tagged: Tagged) -> Option<ParseStackFn> {
+        if !self.is_word(tagged) {
+            return None;
+        }
+
+        let word = tagged.to_ptr() as *const Word;
+
+        if unsafe { !(*word).has_tag(self.gc.specials.primitive_tag) } {
+            return None;
+        }
+
+        let body = unsafe { (*word).body };
+        let num = body.to_int();
+        let ptr = unsafe { mem::transmute(num) };
+        Some(ptr)
+    }
+
     fn get_name_bytearray(&self, tagged: Tagged) -> Option<(Tagged, bool)> {
         if tagged.is_int() || tagged == Tagged::null() {
             return None;
@@ -284,15 +303,20 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Context, ContextConfig, Tagged};
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use crate::{CodeHeap, Context, ContextConfig, Tagged};
 
     fn setup_context() -> Context {
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
         let config = ContextConfig {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
         };
-        Context::new(&config)
+        Context::new(&config, code_heap)
     }
 
     #[test]
@@ -488,7 +512,8 @@ mod tests {
             retian_size: 10,
             name_size: 2,
         };
-        let mut ctx = Context::new(&config);
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = Context::new(&config, code_heap);
 
         let key1 = ctx.gc.allocate_string("key1");
         let key2 = ctx.gc.allocate_string("key2");

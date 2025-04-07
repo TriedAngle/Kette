@@ -3,15 +3,19 @@ mod context;
 mod gc;
 mod linked_list;
 mod object;
+mod parser;
 mod primitives;
 mod region;
-mod parser;
 
+pub use code::*;
 pub use context::*;
 pub use gc::*;
 pub use linked_list::*;
 pub use object::*;
-pub use region::*;
 pub use parser::*;
+pub use region::*;
 
-pub type StackFn = fn(&mut Context);
+pub use parking_lot::{Mutex, RwLock};
+
+pub type StackFn = fn(ctx: &mut Context);
+pub type ParseStackFn = fn(ctx: &mut Context, parser: &mut Parser);
