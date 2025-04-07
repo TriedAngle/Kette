@@ -8,13 +8,13 @@ use clap::{ArgAction, Parser};
 use parking_lot::Mutex;
 
 use kette::{
-    CodeHeap, Context, ContextConfig, Parser as LangParser, Quotation, Tagged, add_primitives,
+    CodeHeap, Context, ContextConfig, Quotation, Tagged,
+    add_primitives,
 };
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "A stack-based language interpreter")]
 struct Args {
-    /// Path to startup file (default: <workspace>/core/stage0.ktt)
     #[arg(short, long, value_name = "FILE")]
     file: Option<PathBuf>,
 
@@ -37,7 +37,6 @@ fn main() {
     let mut ctx = Context::new(&config, code_heap);
     add_primitives(&mut ctx);
 
-
     println!("Started Kette in Terminal");
 
     let mut loaded_file = false;
@@ -47,7 +46,7 @@ fn main() {
         startup_file.push("..");
         startup_file.push("core");
         startup_file.push("stage0.ktt");
-        if Path::new(&startup_file).exists() { 
+        if Path::new(&startup_file).exists() {
             match load_and_execute_file(&mut ctx, &startup_file) {
                 Ok(_) => {
                     println!("Loaded startup file: {}", startup_file.display());
@@ -57,7 +56,7 @@ fn main() {
                     process::exit(1);
                 }
             }
-        } else { 
+        } else {
             eprintln!("Startup File not found: {}", startup_file.display());
             process::exit(1);
         }
@@ -89,11 +88,14 @@ fn main() {
     }
 }
 
-fn load_and_execute_file(ctx: &mut Context, file_path: &Path) -> io::Result<()> {
+fn load_and_execute_file(
+    ctx: &mut Context,
+    file_path: &Path,
+) -> io::Result<()> {
     let content = fs::read_to_string(file_path)?;
-    let mut parser = LangParser::new(&content);
-
-    let tokens = parser.parse_until(ctx, None);
+    let input = ctx.gc.allocate_string(&content);
+    ctx.reset_parser(input);
+    let tokens = ctx.parse_until(None);
     if !tokens.is_empty() {
         let quotation = ctx.gc.allocate_quotation(&tokens);
         ctx.execute(quotation.to_ptr() as *const Quotation);
@@ -110,7 +112,7 @@ fn run_repl(ctx: &mut Context) {
     let mut line_num = 1;
 
     loop {
-        print!("{} > ", line_num);
+        print!("IN #{}> ", line_num);
         stdout.flush().unwrap();
 
         input.clear();
@@ -138,20 +140,27 @@ fn run_repl(ctx: &mut Context) {
 }
 
 fn execute_string(ctx: &mut Context, input: &str) {
-    let mut parser = LangParser::new(input);
+    let input = ctx.gc.allocate_string(input);
+    ctx.reset_parser(input);
 
-    let tokens = parser.parse_until(ctx, None);
-    if !tokens.is_empty() {
+    let tokens = ctx.parse_until(None);
         let quotation = ctx.gc.allocate_quotation(&tokens);
         ctx.execute(quotation.to_ptr() as *const Quotation);
-    }
+        let codes = ctx.codes.lock();
+        let code = codes
+            .get_code_for_quotation(quotation.to_ptr() as _)
+            .unwrap();
+
+        println!("parsed: {:?}", tokens);
+        println!("compiled: {:?}", code);
 }
 
 fn print_stack(ctx: &Context) {
     let stack_size = {
         let data_ptr = ctx.data.current;
         let data_start = ctx.data.start;
-        (data_ptr as usize - data_start as usize) / std::mem::size_of::<Tagged>()
+        (data_ptr as usize - data_start as usize)
+            / std::mem::size_of::<Tagged>()
     };
 
     println!("Stack size: {}", stack_size);

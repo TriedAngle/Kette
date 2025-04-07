@@ -1,4 +1,4 @@
-use std::mem;
+use std::{collections::VecDeque, mem};
 
 use crate::{ParseStackFn, StackFn};
 
@@ -17,7 +17,7 @@ pub const SLOT_DYNAMIC: i64 = 3;
 pub const SLOT_PARENT: i64 = 4;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Tagged(u64);
 
 #[repr(C)]
@@ -159,7 +159,8 @@ impl Tagged {
 impl Object {
     pub unsafe fn get_slot(&self, idx: usize) -> Tagged {
         let ptr = (self as *const Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
+        let offset =
+            mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
 
         let slot_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe { *slot_ptr }
@@ -167,7 +168,8 @@ impl Object {
 
     pub unsafe fn set_slot(&mut self, idx: usize, value: Tagged) {
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
+        let offset =
+            mem::size_of::<ObjectHeader>() + idx * mem::size_of::<Tagged>();
         let slot_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe {
             *slot_ptr = value;
@@ -213,7 +215,8 @@ impl Array {
     pub unsafe fn get(&self, idx: usize) -> Tagged {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *const Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
+        let offset =
+            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
         let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe { *element_ptr }
     }
@@ -221,7 +224,8 @@ impl Array {
     pub unsafe fn set(&mut self, idx: usize, value: Tagged) {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
+        let offset =
+            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
         let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe {
             *element_ptr = value;
@@ -245,7 +249,8 @@ impl ByteArray {
     pub unsafe fn get_byte(&self, idx: usize) -> u8 {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *const Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
+        let offset =
+            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
         let byte_ptr = unsafe { ptr.add(offset) };
         unsafe { *byte_ptr }
     }
@@ -253,7 +258,8 @@ impl ByteArray {
     pub unsafe fn set_byte(&mut self, idx: usize, value: u8) {
         debug_assert!(idx < self.len(), "Index out of bounds");
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
+        let offset =
+            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx;
         let byte_ptr = unsafe { ptr.add(offset) };
         unsafe {
             *byte_ptr = value;
@@ -264,7 +270,8 @@ impl ByteArray {
         let ptr = (self as *const Self).cast::<u8>();
         let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>();
         let byte_ptr = unsafe { ptr.add(offset) };
-        let bytes = unsafe { std::slice::from_raw_parts(byte_ptr, self.len() - 1) };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(byte_ptr, self.len() - 1) };
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 }
@@ -320,7 +327,12 @@ impl Map {
         let first_slot_tagged = unsafe { (*slots_ptr).get(0) };
         let first_slot_ptr = first_slot_tagged.to_ptr() as *mut Slot;
 
-        unsafe { std::slice::from_raw_parts(&first_slot_ptr as *const *mut Slot, slot_count) }
+        unsafe {
+            std::slice::from_raw_parts(
+                &first_slot_ptr as *const *mut Slot,
+                slot_count,
+            )
+        }
     }
 
     pub unsafe fn iter_slots<'a>(&'a self) -> MapSlotIterator<'a> {
@@ -331,11 +343,126 @@ impl Map {
         }
     }
 
-    pub unsafe fn find_slot(&self, name: &str) -> Option<*mut Slot> {
+    unsafe fn get_slot_name(slot_ptr: *const Slot) -> &'static str {
+        let name_tagged = unsafe { (*slot_ptr).name };
+        let name_ptr = name_tagged.to_ptr() as *const ByteArray;
+        unsafe { (*name_ptr).as_str() }
+    }
+
+    unsafe fn is_slot_match(
+        slot_ptr: *const Slot,
+        name: &str,
+        kind: Option<i64>,
+    ) -> bool {
+        let slot_name = unsafe { Self::get_slot_name(slot_ptr) };
+        slot_name == name
+            && (kind.is_none()
+                || unsafe { (*slot_ptr).kind.to_int() == kind.unwrap() })
+    }
+
+    unsafe fn find_slot_in_map(
+        map_ptr: *const Map,
+        name: &str,
+        kind: Option<i64>,
+    ) -> Option<*mut Slot> {
+        let slot_count = unsafe { (*map_ptr).slot_count.to_int() as usize };
+
+        if unsafe { (*map_ptr).slots == Tagged::null() } || slot_count == 0 {
+            return None;
+        }
+
+        let slots_ptr = unsafe { (*map_ptr).slots.to_ptr() as *mut Array };
+
+        for i in 0..slot_count {
+            let slot_tagged = unsafe { (*slots_ptr).get(i) };
+            let slot_ptr = slot_tagged.to_ptr() as *mut Slot;
+
+            if unsafe { Self::is_slot_match(slot_ptr, name, kind) } {
+                return Some(slot_ptr);
+            }
+        }
+
+        None
+    }
+
+    unsafe fn get_parent_map_from_slot(
+        parent_slot: *const Slot,
+    ) -> Option<*mut Map> {
+        let parent_tagged = unsafe { (*parent_slot).value };
+        if parent_tagged != Tagged::null() {
+            Some(parent_tagged.to_ptr() as *mut Map)
+        } else {
+            None
+        }
+    }
+
+    pub fn find_slot(
+        &self,
+        name: &str,
+        kind: Option<i64>,
+    ) -> Option<*mut Slot> {
+        if let Some(slot_ptr) =
+            unsafe { Self::find_slot_in_map(self, name, kind) }
+        {
+            return Some(slot_ptr);
+        }
+
+        unsafe { self.find_in_parents(name, kind) }
+    }
+
+    pub fn find_super(
+        &self,
+        name: &str,
+        kind: Option<i64>,
+    ) -> Option<*mut Slot> {
+        unsafe { self.find_in_parents(name, kind) }
+    }
+
+    unsafe fn find_in_parents(
+        &self,
+        name: &str,
+        kind: Option<i64>,
+    ) -> Option<*mut Slot> {
+        let parent_slots = unsafe { self.get_parent_slots() };
+        if parent_slots.is_empty() {
+            return None;
+        }
+
+        let mut queue = VecDeque::new();
+
+        for parent_slot in parent_slots {
+            if let Some(parent_map) =
+                unsafe { Self::get_parent_map_from_slot(parent_slot) }
+            {
+                queue.push_back(parent_map);
+            }
+        }
+
+        while let Some(parent_map) = queue.pop_front() {
+            if let Some(slot_ptr) =
+                unsafe { Self::find_slot_in_map(parent_map, name, kind) }
+            {
+                return Some(slot_ptr);
+            }
+
+            for parent_slot in unsafe { (*parent_map).get_parent_slots() } {
+                if let Some(parent_map) =
+                    unsafe { Self::get_parent_map_from_slot(parent_slot) }
+                {
+                    queue.push_back(parent_map);
+                }
+            }
+        }
+
+        None
+    }
+
+    unsafe fn get_parent_slots(&self) -> Vec<*mut Slot> {
+        let mut parent_slots = Vec::new();
         let slot_count = self.slot_count.to_int() as usize;
 
         if self.slots == Tagged::null() || slot_count == 0 {
-            return None;
+            return parent_slots;
         }
 
         let slots_ptr = self.slots.to_ptr() as *mut Array;
@@ -344,16 +471,12 @@ impl Map {
             let slot_tagged = unsafe { (*slots_ptr).get(i) };
             let slot_ptr = slot_tagged.to_ptr() as *mut Slot;
 
-            let name_tagged = unsafe { (*slot_ptr).name };
-            let name_ptr = name_tagged.to_ptr() as *mut ByteArray;
-            let slot_name = unsafe { (*name_ptr).as_str() };
-
-            if slot_name == name {
-                return Some(slot_ptr);
+            if unsafe { (*slot_ptr).kind.to_int() == SLOT_PARENT } {
+                parent_slots.push(slot_ptr);
             }
         }
 
-        None
+        parent_slots
     }
 }
 
@@ -407,6 +530,33 @@ impl Word {
         }
 
         false
+    }
+}
+
+impl std::fmt::Debug for Tagged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_int() {
+            write!(f, "{}", self.to_int())
+        } else if *self == Self::ffalse() {
+            write!(f, "f")
+        } else if self.0 & TAG_MASK_FULL == TAG_OBJECT {
+            let obj_ptr = self.to_ptr();
+            unsafe {
+                let header = &(*obj_ptr).header;
+                let map_ptr = header.get_map();
+
+                let name_tagged = (*map_ptr).name;
+                if name_tagged == Tagged::null() {
+                    write!(f, "<unnamed>")
+                } else {
+                    let name_ptr = name_tagged.to_ptr() as *const ByteArray;
+                    let name = (*name_ptr).as_str();
+                    write!(f, "{{{}}}", name)
+                }
+            }
+        } else {
+            write!(f, "<invalid>")
+        }
     }
 }
 

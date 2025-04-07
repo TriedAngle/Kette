@@ -1,12 +1,9 @@
 use std::mem;
 
 use crate::{
-    gc::GarbageCollector,
-    object::{
-        Array, ByteArray, ObjectHeader, ObjectRef, ObjectType, Quotation,
-        SpecialObjects,
-    },
     MemoryRegion, MutArc,
+    gc::GarbageCollector,
+    object::{Array, ByteArray, ObjectHeader, ObjectRef, ObjectType, Quotation, SpecialObjects},
 };
 
 pub struct Context {
@@ -102,8 +99,7 @@ impl Context {
     }
 
     pub fn execute(&mut self, quotation: *mut Quotation) {
-        let code =
-            unsafe { (*quotation).body.as_ptr_unchecked() } as *mut Array;
+        let code = unsafe { (*quotation).body.as_ptr_unchecked() } as *mut Array;
         let data_ptr = unsafe { (*code).data_ptr_mut() };
         let count = unsafe { (*code).size.as_int_unchecked() as usize };
 
@@ -120,8 +116,7 @@ impl Context {
                 ObjectType::Word => {
                     let word = current.as_word_ptr().unwrap();
                     let body_obj = unsafe { (*word).body };
-                    if let Some(flags) = unsafe { (*word).flags.as_array_ptr() }
-                    {
+                    if let Some(flags) = unsafe { (*word).flags.as_array_ptr() } {
                         let mut is_primitive = false;
                         for flag in unsafe { (*flags).iter() } {
                             if flag == SpecialObjects::get_false() {
@@ -132,8 +127,7 @@ impl Context {
                             }
                         }
                         if is_primitive {
-                            let primitive_fn_raw =
-                                unsafe { body_obj.as_int_unchecked() };
+                            let primitive_fn_raw = unsafe { body_obj.as_int_unchecked() };
                             let primitive_fn: fn(&mut Context) =
                                 unsafe { mem::transmute(primitive_fn_raw) };
                             primitive_fn(self);
@@ -172,11 +166,7 @@ impl Context {
         }
     }
 
-    pub fn namestack_push_or_replace(
-        &mut self,
-        name: ObjectRef,
-        object: ObjectRef,
-    ) {
+    pub fn namestack_push_or_replace(&mut self, name: ObjectRef, object: ObjectRef) {
         if name.is_false() {
             return;
         }
@@ -197,8 +187,7 @@ impl Context {
                     break;
                 }
 
-                let existing_name_ptr =
-                    Self::name_or_word_string(existing_name);
+                let existing_name_ptr = Self::name_or_word_string(existing_name);
                 if (*name_ptr).equal(&*existing_name_ptr) {
                     *current = (name, object);
                     found = true;
@@ -213,10 +202,7 @@ impl Context {
         }
     }
 
-    pub fn namestack_lookup(
-        &self,
-        name: ObjectRef,
-    ) -> Option<(ObjectRef, ObjectRef)> {
+    pub fn namestack_lookup(&self, name: ObjectRef) -> Option<(ObjectRef, ObjectRef)> {
         if name.is_false() {
             return None;
         }
@@ -277,9 +263,7 @@ impl Context {
 
 impl Parser {
     pub fn new(gc: &mut GarbageCollector) -> *mut Self {
-        let map = unsafe {
-            gc.allocate_map(ObjectRef::null(), 4, 32, ObjectRef::null())
-        };
+        let map = unsafe { gc.allocate_map(ObjectRef::null(), 4, 32, ObjectRef::null()) };
         let parser = unsafe { gc.allocate(map) } as *mut Parser;
 
         unsafe {
@@ -292,10 +276,7 @@ impl Parser {
         parser
     }
 
-    pub fn next_word(
-        &mut self,
-        gc: &mut GarbageCollector,
-    ) -> (ObjectRef, bool) {
+    pub fn next_word(&mut self, gc: &mut GarbageCollector) -> (ObjectRef, bool) {
         let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
         let mut offset = unsafe { self.offset.as_int_unchecked() as usize };
         let text_size = unsafe { (*text_ptr).size.as_int_unchecked() as usize };
@@ -306,17 +287,13 @@ impl Parser {
                 b' ' | b'\t' => {
                     offset += 1;
                     unsafe {
-                        self.column = ObjectRef::from_int(
-                            self.column.as_int_unchecked() + 1,
-                        );
+                        self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
                     }
                 }
                 b'\n' => {
                     offset += 1;
                     unsafe {
-                        self.line = ObjectRef::from_int(
-                            self.line.as_int_unchecked() + 1,
-                        );
+                        self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
                         self.column = ObjectRef::from_int(1);
                     }
                 }
@@ -336,9 +313,7 @@ impl Parser {
                 _ => {
                     offset += 1;
                     unsafe {
-                        self.column = ObjectRef::from_int(
-                            self.column.as_int_unchecked() + 1,
-                        );
+                        self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
                     }
                 }
             }
@@ -360,18 +335,13 @@ impl Parser {
         (ObjectRef::from_bytearray_ptr(word), true)
     }
 
-    pub fn read_until(
-        &mut self,
-        gc: &mut GarbageCollector,
-        end_pattern: ObjectRef,
-    ) -> ObjectRef {
+    pub fn read_until(&mut self, gc: &mut GarbageCollector, end_pattern: ObjectRef) -> ObjectRef {
         let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
         let end_ptr = unsafe { end_pattern.as_bytearray_ptr_unchecked() };
 
         let mut offset = unsafe { self.offset.as_int_unchecked() as usize };
         let text_size = unsafe { (*text_ptr).size.as_int_unchecked() as usize };
-        let pattern_size =
-            unsafe { (*end_ptr).size.as_int_unchecked() as usize };
+        let pattern_size = unsafe { (*end_ptr).size.as_int_unchecked() as usize };
 
         let initial_offset = offset;
 
@@ -383,8 +353,7 @@ impl Parser {
             let mut found = true;
 
             for i in 0..pattern_size {
-                let text_ch =
-                    unsafe { (*text_ptr).get_element(offset + i).unwrap() };
+                let text_ch = unsafe { (*text_ptr).get_element(offset + i).unwrap() };
                 let pattern_ch = unsafe { (*end_ptr).get_element(i).unwrap() };
 
                 if text_ch != pattern_ch {
@@ -401,8 +370,7 @@ impl Parser {
                     let src = (text_ptr as *const u8)
                         .add(std::mem::size_of::<ByteArray>())
                         .add(initial_offset + 1);
-                    let dst = (result as *mut u8)
-                        .add(std::mem::size_of::<ByteArray>());
+                    let dst = (result as *mut u8).add(std::mem::size_of::<ByteArray>());
                     std::ptr::copy_nonoverlapping(src, dst, result_size);
                 }
 
@@ -410,41 +378,31 @@ impl Parser {
                     let ch = unsafe { (*text_ptr).get_element(i).unwrap() };
                     if ch == b'\n' {
                         unsafe {
-                            self.line = ObjectRef::from_int(
-                                self.line.as_int_unchecked() + 1,
-                            );
+                            self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
                             self.column = ObjectRef::from_int(1);
                         }
                     } else {
                         unsafe {
-                            self.column = ObjectRef::from_int(
-                                self.column.as_int_unchecked() + 1,
-                            );
+                            self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
                         }
                     }
                 }
 
                 for i in 0..pattern_size {
-                    let ch =
-                        unsafe { (*text_ptr).get_element(offset + i).unwrap() };
+                    let ch = unsafe { (*text_ptr).get_element(offset + i).unwrap() };
                     if ch == b'\n' {
                         unsafe {
-                            self.line = ObjectRef::from_int(
-                                self.line.as_int_unchecked() + 1,
-                            );
+                            self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
                             self.column = ObjectRef::from_int(1);
                         }
                     } else {
                         unsafe {
-                            self.column = ObjectRef::from_int(
-                                self.column.as_int_unchecked() + 1,
-                            );
+                            self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
                         }
                     }
                 }
 
-                self.offset =
-                    ObjectRef::from_int((offset + pattern_size) as i64);
+                self.offset = ObjectRef::from_int((offset + pattern_size) as i64);
 
                 return ObjectRef::from_bytearray_ptr(result);
             }
@@ -456,11 +414,7 @@ impl Parser {
         ObjectRef::null()
     }
 
-    pub fn parse_until(
-        &mut self,
-        ctx: &mut Context,
-        end_word: ObjectRef,
-    ) -> ObjectRef {
+    pub fn parse_until(&mut self, ctx: &mut Context, end_word: ObjectRef) -> ObjectRef {
         let initial_offset = self.offset;
         let initial_line = self.line;
         let initial_column = self.column;
@@ -517,9 +471,7 @@ impl Parser {
                         };
                         if let Some(word_ptr) = obj.as_word_ptr() {
                             unsafe {
-                                if let Some(flags) =
-                                    (*word_ptr).flags.as_array_ptr()
-                                {
+                                if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
                                     let mut is_primitive = false;
                                     let mut is_parser = false;
 
@@ -527,31 +479,24 @@ impl Parser {
                                         if flag == SpecialObjects::get_false() {
                                             break;
                                         }
-                                        if flag
-                                            == SpecialObjects::word_primitive()
-                                        {
+                                        if flag == SpecialObjects::word_primitive() {
                                             is_primitive = true;
                                         }
-                                        if flag == SpecialObjects::word_parser()
-                                        {
+                                        if flag == SpecialObjects::word_parser() {
                                             is_parser = true;
                                         }
                                     }
                                     if is_parser {
                                         if is_primitive {
-                                            let primitive_fn_raw = (*word_ptr)
-                                                .body
-                                                .as_int_unchecked();
+                                            let primitive_fn_raw =
+                                                (*word_ptr).body.as_int_unchecked();
                                             let primitive_fn: fn(&mut Context) =
                                                 mem::transmute(primitive_fn_raw);
                                             primitive_fn(ctx);
                                             let result = ctx.pop();
                                             objects.push(result);
                                         } else {
-                                            let quot = (*word_ptr)
-                                                .body
-                                                .as_quotation_ptr()
-                                                .unwrap();
+                                            let quot = (*word_ptr).body.as_quotation_ptr().unwrap();
                                             ctx.execute(quot);
                                             let result = ctx.pop();
                                             if !result.is_false() {
@@ -616,9 +561,7 @@ impl Parser {
                         };
                         if let Some(word_ptr) = obj.as_word_ptr() {
                             unsafe {
-                                if let Some(flags) =
-                                    (*word_ptr).flags.as_array_ptr()
-                                {
+                                if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
                                     let mut is_primitive = false;
                                     let mut is_parser = false;
 
@@ -626,31 +569,24 @@ impl Parser {
                                         if flag == SpecialObjects::get_false() {
                                             break;
                                         }
-                                        if flag
-                                            == SpecialObjects::word_primitive()
-                                        {
+                                        if flag == SpecialObjects::word_primitive() {
                                             is_primitive = true;
                                         }
-                                        if flag == SpecialObjects::word_parser()
-                                        {
+                                        if flag == SpecialObjects::word_parser() {
                                             is_parser = true;
                                         }
                                     }
                                     if is_parser {
                                         if is_primitive {
-                                            let primitive_fn_raw = (*word_ptr)
-                                                .body
-                                                .as_int_unchecked();
+                                            let primitive_fn_raw =
+                                                (*word_ptr).body.as_int_unchecked();
                                             let primitive_fn: fn(&mut Context) =
                                                 mem::transmute(primitive_fn_raw);
                                             primitive_fn(ctx);
                                             let result = ctx.pop();
                                             objects.push(result);
                                         } else {
-                                            let quot = (*word_ptr)
-                                                .body
-                                                .as_quotation_ptr()
-                                                .unwrap();
+                                            let quot = (*word_ptr).body.as_quotation_ptr().unwrap();
                                             ctx.execute(quot);
                                             let result = ctx.pop();
                                             if !result.is_false() {
@@ -749,24 +685,12 @@ mod tests {
             let popped_array = ctx.pop();
             assert_eq!(popped_array.get_type(), Some(ObjectType::Array));
             let array_ptr = popped_array.as_array_ptr().unwrap();
-            assert_eq!(
-                (*array_ptr).get_element(0),
-                Some(ObjectRef::from_int(1))
-            );
-            assert_eq!(
-                (*array_ptr).get_element(1),
-                Some(ObjectRef::from_int(2))
-            );
-            assert_eq!(
-                (*array_ptr).get_element(2),
-                Some(ObjectRef::from_int(3))
-            );
+            assert_eq!((*array_ptr).get_element(0), Some(ObjectRef::from_int(1)));
+            assert_eq!((*array_ptr).get_element(1), Some(ObjectRef::from_int(2)));
+            assert_eq!((*array_ptr).get_element(2), Some(ObjectRef::from_int(3)));
 
             let popped_bytearray = ctx.pop();
-            assert_eq!(
-                popped_bytearray.get_type(),
-                Some(ObjectType::ByteArray)
-            );
+            assert_eq!(popped_bytearray.get_type(), Some(ObjectType::ByteArray));
             let bytearray_ptr = popped_bytearray.as_bytearray_ptr().unwrap();
             assert_eq!((*bytearray_ptr).as_str(), Some("test string"));
         }
@@ -998,10 +922,7 @@ mod tests {
     fn test_namestack_null_operations() {
         let mut ctx = create_test_context();
 
-        ctx.namestack_push_or_replace(
-            ObjectRef::null(),
-            ObjectRef::from_int(42),
-        );
+        ctx.namestack_push_or_replace(ObjectRef::null(), ObjectRef::from_int(42));
         assert_eq!(ctx.namestack_lookup(ObjectRef::null()), None);
         assert_eq!(ctx.namestack_remove(ObjectRef::null()), ObjectRef::null());
     }
@@ -1039,19 +960,13 @@ mod tests {
 
             let (word1, success1) = (*parser).next_word(&mut ctx.gc);
             assert!(success1);
-            assert_eq!(
-                (*word1.as_bytearray_ptr().unwrap()).as_str(),
-                Some("hello")
-            );
+            assert_eq!((*word1.as_bytearray_ptr().unwrap()).as_str(), Some("hello"));
             assert_eq!((*parser).line.as_int(), Some(1));
             assert_eq!((*parser).column.as_int(), Some(6));
 
             let (word2, success2) = (*parser).next_word(&mut ctx.gc);
             assert!(success2);
-            assert_eq!(
-                (*word2.as_bytearray_ptr().unwrap()).as_str(),
-                Some("world")
-            );
+            assert_eq!((*word2.as_bytearray_ptr().unwrap()).as_str(), Some("world"));
 
             let (_, success3) = (*parser).next_word(&mut ctx.gc);
             assert!(!success3);
@@ -1067,26 +982,17 @@ mod tests {
             (*parser).set_text(text.into());
 
             let (word1, _) = (*parser).next_word(&mut ctx.gc);
-            assert_eq!(
-                (*word1.as_bytearray_ptr().unwrap()).as_str(),
-                Some("word1")
-            );
+            assert_eq!((*word1.as_bytearray_ptr().unwrap()).as_str(), Some("word1"));
             assert_eq!((*parser).line.as_int(), Some(1));
             assert_eq!((*parser).column.as_int(), Some(6));
 
             let (word2, _) = (*parser).next_word(&mut ctx.gc);
-            assert_eq!(
-                (*word2.as_bytearray_ptr().unwrap()).as_str(),
-                Some("word2")
-            );
+            assert_eq!((*word2.as_bytearray_ptr().unwrap()).as_str(), Some("word2"));
             assert_eq!((*parser).line.as_int(), Some(2));
             assert_eq!((*parser).column.as_int(), Some(8));
 
             let (word3, _) = (*parser).next_word(&mut ctx.gc);
-            assert_eq!(
-                (*word3.as_bytearray_ptr().unwrap()).as_str(),
-                Some("word3")
-            );
+            assert_eq!((*word3.as_bytearray_ptr().unwrap()).as_str(), Some("word3"));
             assert_eq!((*parser).line.as_int(), Some(2));
         }
     }
@@ -1140,10 +1046,7 @@ mod tests {
             assert!(second.as_float_ptr().is_some());
 
             let third = (*array).get_element(2).unwrap();
-            assert_eq!(
-                (*third.as_bytearray_ptr().unwrap()).as_str(),
-                Some("word")
-            );
+            assert_eq!((*third.as_bytearray_ptr().unwrap()).as_str(), Some("word"));
         }
     }
 
@@ -1215,8 +1118,7 @@ mod tests {
     fn test_read_until_with_newlines() {
         let mut ctx = create_test_context();
         unsafe {
-            let text =
-                ctx.gc.allocate_string("First line\nSecond line\nEND more");
+            let text = ctx.gc.allocate_string("First line\nSecond line\nEND more");
             let end = ctx.gc.allocate_string("END");
             let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
             (*parser).set_text(text.into());

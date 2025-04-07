@@ -1,7 +1,8 @@
 use std::{collections::HashMap, ptr::NonNull};
 
 use crate::{
-    Array, ByteArray, Context, LinkedListAllocator, Node, Object, Quotation, StackFn, Tagged, Word,
+    Array, ByteArray, Context, LinkedListAllocator, Node, Object, Quotation,
+    StackFn, Tagged, Word,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -9,11 +10,10 @@ pub enum Code {
     Push(Tagged), // any object
     CallQuotation,
     Call(*const Word), // TODO: introduce callable
-    SendWord(*const ByteArray),
     CallPrimitive(StackFn),
     Branch, // TODO introduce callable
-    // TODO: Remove and actually inline this
-    BranchInline(*const Quotation, *const Quotation),
+    BranchRelative(i16),
+    JumpRelative(i16),
 }
 
 pub struct CodeHeap {
@@ -56,21 +56,47 @@ impl Context {
             let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
 
             // Check for if-pattern: quotation, quotation
-            if i + 2 < body_len && map_tagged == self.gc.specials.quotation_map {
+            if i + 2 < body_len && map_tagged == self.gc.specials.quotation_map
+            {
                 let next = unsafe { (*body).get(i + 1) };
                 let next_next = unsafe { (*body).get(i + 2) };
 
                 if self.is_quotation(next) && self.is_word(next_next) {
-                    if let Some(fun) = self.word_primitive(next_next) {
-                        #[allow(unpredictable_function_pointer_comparisons)]
-                        if fun == crate::primitives::iff {
+                    if let Some(_) = self.word_primitive(next_next) {
+                        let word = next_next.to_ptr() as *const Word;
+                        let name = unsafe {
+                            (*word).name.to_ptr() as *const ByteArray
+                        };
+                        let name = unsafe { (*name).as_str() };
+                        if name == "if" {
                             let true_branch = item.to_ptr() as *const Quotation;
-                            let false_branch = next.to_ptr() as *const Quotation;
+                            let false_branch =
+                                next.to_ptr() as *const Quotation;
 
-                            self.compile(true_branch);
-                            self.compile(false_branch);
+                            // Compile both branches to get their code
+                            let node_true = self.compile(true_branch);
+                            let true_code =
+                                unsafe { node_true.as_ref().data_as::<Code>() };
+                            let node_false = self.compile(false_branch);
+                            let false_code = unsafe {
+                                node_false.as_ref().data_as::<Code>()
+                            };
 
-                            code.push(Code::BranchInline(true_branch, false_branch));
+                            let false_branch_size = false_code.len() as i16;
+                            let branch_offset = false_branch_size + 1;
+                            let true_branch_size = true_code.len() as i16;
+                            code.push(Code::BranchRelative(branch_offset));
+
+                            for &instr in false_code {
+                                code.push(instr);
+                            }
+
+                            code.push(Code::JumpRelative(true_branch_size + 1));
+
+                            for &instr in true_code {
+                                code.push(instr);
+                            }
+
                             i += 3;
                             continue;
                         }
@@ -118,8 +144,9 @@ impl Context {
         let artifact = self.compile(quot);
         let code = unsafe { artifact.as_ref().data_as::<Code>() };
 
-        for &instr in code {
-            match instr {
+        let mut i = 0;
+        while i < code.len() {
+            match code[i] {
                 Code::Push(obj) => self.push(obj),
                 Code::CallQuotation => {
                     let quot_obj = self.pop();
@@ -144,16 +171,19 @@ impl Context {
                         self.execute(true_branch);
                     }
                 }
-                Code::BranchInline(false_branch, true_branch) => {
+                Code::BranchRelative(offset) => {
                     let condition = self.pop();
-                    if condition.is_false() {
-                        self.execute(false_branch);
-                    } else {
-                        self.execute(true_branch);
+                    if !condition.is_false() {
+                        i += offset as usize;
+                        continue;
                     }
                 }
-                _ => unimplemented!("Not implemented yet: {:?}", instr),
+                Code::JumpRelative(offset) => {
+                    i += offset as usize;
+                    continue;
+                }
             }
+            i += 1;
         }
     }
 }
@@ -178,11 +208,18 @@ impl CodeHeap {
         allocated_bytes
     }
 
-    pub fn map_artifact(&mut self, quotation: *const Quotation, node: NonNull<Node>) {
+    pub fn map_artifact(
+        &mut self,
+        quotation: *const Quotation,
+        node: NonNull<Node>,
+    ) {
         self.artifacts.insert(quotation, node);
     }
 
-    pub fn get_code_for_quotation(&self, quotation: *const Quotation) -> Option<&[Code]> {
+    pub fn get_code_for_quotation(
+        &self,
+        quotation: *const Quotation,
+    ) -> Option<&[Code]> {
         self.artifacts.get(&quotation).map(|&node_ptr| {
             let node = unsafe { node_ptr.as_ref() };
             let data_size = node.data_size;
@@ -207,22 +244,7 @@ mod test {
 
     use super::*;
 
-    #[derive(Debug, Clone, Copy, Default)]
-    struct MockWord;
-
-    #[derive(Debug, Clone, Copy, Default)]
-    struct MockTagged;
-
-    #[derive(Debug, Clone, Copy)]
-    struct MockQuotation;
-
     fn mock_primitive(_ctx: &mut Context) {}
-    impl Word {
-        fn default() -> Self {
-            unsafe { std::mem::zeroed() }
-        }
-    }
-
     impl Tagged {
         fn default() -> Self {
             unsafe { std::mem::zeroed() }
@@ -243,8 +265,10 @@ mod test {
         let allocated_node1 = code_heap.write_slice(&code1);
         let allocated_node2 = code_heap.write_slice(&code2);
 
-        let allocated_code1 = unsafe { allocated_node1.as_ref().data_as::<Code>() };
-        let allocated_code2 = unsafe { allocated_node2.as_ref().data_as::<Code>() };
+        let allocated_code1 =
+            unsafe { allocated_node1.as_ref().data_as::<Code>() };
+        let allocated_code2 =
+            unsafe { allocated_node2.as_ref().data_as::<Code>() };
 
         assert_eq!(allocated_code1.len(), code1.len());
         assert_eq!(allocated_code2.len(), code2.len());
@@ -280,14 +304,17 @@ mod test {
         let allocated_code2 = code_heap.write_slice(&code2);
 
         let quotation1: *const Quotation = std::ptr::null();
-        let quotation2 =
-            unsafe { &*std::ptr::addr_of!(quotation1) as *const _ as *const Quotation };
+        let quotation2 = unsafe {
+            &*std::ptr::addr_of!(quotation1) as *const _ as *const Quotation
+        };
 
         code_heap.map_artifact(quotation1, allocated_code1);
         code_heap.map_artifact(quotation2, allocated_code2);
 
-        let retrieved_code1 = code_heap.get_code_for_quotation(quotation1).unwrap();
-        let retrieved_code2 = code_heap.get_code_for_quotation(quotation2).unwrap();
+        let retrieved_code1 =
+            code_heap.get_code_for_quotation(quotation1).unwrap();
+        let retrieved_code2 =
+            code_heap.get_code_for_quotation(quotation2).unwrap();
 
         assert_eq!(retrieved_code1.len(), code1.len());
         assert_eq!(retrieved_code2.len(), code2.len());
@@ -308,8 +335,9 @@ mod test {
 
         let quotation3: *const Quotation = std::ptr::null();
 
-        let non_existent =
-            unsafe { &*std::ptr::addr_of!(quotation3) as *const _ as *const Quotation };
+        let non_existent = unsafe {
+            &*std::ptr::addr_of!(quotation3) as *const _ as *const Quotation
+        };
         assert!(code_heap.get_code_for_quotation(non_existent).is_none());
     }
 
@@ -329,14 +357,16 @@ mod test {
         }
 
         let allocated_large_node = code_heap.write_slice(&large_code);
-        let allocated_large_code = unsafe { allocated_large_node.as_ref().data_as::<Code>() };
+        let allocated_large_code =
+            unsafe { allocated_large_node.as_ref().data_as::<Code>() };
 
         assert_eq!(allocated_large_code.len(), large_code.len());
 
         let quotation = std::ptr::null();
         code_heap.map_artifact(quotation, allocated_large_node);
 
-        let retrieved_code = code_heap.get_code_for_quotation(quotation).unwrap();
+        let retrieved_code =
+            code_heap.get_code_for_quotation(quotation).unwrap();
         assert_eq!(retrieved_code.len(), large_code.len());
 
         assert_eq!(
@@ -382,7 +412,8 @@ mod test {
         }
 
         for (i, &quotation) in quotations.iter().enumerate() {
-            let retrieved_code = code_heap.get_code_for_quotation(quotation).unwrap();
+            let retrieved_code =
+                code_heap.get_code_for_quotation(quotation).unwrap();
             assert_eq!(retrieved_code.len(), codes[i].len());
 
             for j in 0..retrieved_code.len() {
@@ -488,7 +519,8 @@ mod test {
             (*array_ptr).set(0, Tagged::from_int(42));
         }
 
-        let inner_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let inner_quotation =
+            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = inner_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -501,7 +533,8 @@ mod test {
             (*array_ptr).set(0, inner_quotation);
         }
 
-        let outer_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let outer_quotation =
+            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = outer_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -511,11 +544,15 @@ mod test {
         ctx.compile(outer_quotation.to_ptr() as *const Quotation);
 
         let heap = code_heap.lock();
-        let outer_code = heap
-            .get_code_for_quotation(outer_quotation.to_ptr() as *const Quotation)
+        let outer_code =
+            heap.get_code_for_quotation(
+                outer_quotation.to_ptr() as *const Quotation
+            )
             .unwrap();
-        let inner_code = heap
-            .get_code_for_quotation(inner_quotation.to_ptr() as *const Quotation)
+        let inner_code =
+            heap.get_code_for_quotation(
+                inner_quotation.to_ptr() as *const Quotation
+            )
             .unwrap();
 
         assert_eq!(outer_code.len(), 1);
@@ -636,8 +673,8 @@ mod test {
             let array_ptr = true_array.to_ptr() as *mut Array;
             (*array_ptr).set(0, Tagged::from_int(1));
         }
-
-        let true_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let true_quotation =
+            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = true_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -649,8 +686,8 @@ mod test {
             let array_ptr = false_array.to_ptr() as *mut Array;
             (*array_ptr).set(0, Tagged::from_int(0));
         }
-
-        let false_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let false_quotation =
+            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = false_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -660,11 +697,9 @@ mod test {
         let if_name = ctx.gc.allocate_string("if");
         let if_word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
         let tags = ctx.gc.allocate_array(1);
-
         unsafe {
             let tags_ptr = tags.to_ptr() as *mut Array;
             (*tags_ptr).set(0, ctx.gc.specials.primitive_tag);
-
             let word_ptr = if_word.to_ptr();
             (*word_ptr).set_slot(0, if_name);
             (*word_ptr).set_slot(1, Tagged::null());
@@ -681,8 +716,8 @@ mod test {
             (*array_ptr).set(1, false_quotation);
             (*array_ptr).set(2, if_word);
         }
-
-        let main_quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+        let main_quotation =
+            ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
         unsafe {
             let quotation_ptr = main_quotation.to_ptr();
             (*quotation_ptr).set_slot(0, Tagged::null());
@@ -690,7 +725,6 @@ mod test {
         }
 
         ctx.compile(main_quotation.to_ptr() as *const Quotation);
-
         let heap = code_heap.lock();
         let main_code = heap
             .get_code_for_quotation(main_quotation.to_ptr() as *const Quotation)
@@ -698,17 +732,43 @@ mod test {
         let true_code = heap
             .get_code_for_quotation(true_quotation.to_ptr() as *const Quotation)
             .unwrap();
-        let false_code = heap
-            .get_code_for_quotation(false_quotation.to_ptr() as *const Quotation)
+        let false_code =
+            heap.get_code_for_quotation(
+                false_quotation.to_ptr() as *const Quotation
+            )
             .unwrap();
 
-        assert_eq!(main_code.len(), 1);
+        // 1. BranchRelative(2) - Jump to true branch if condition is true (skipping false branch + jump)
+        // 2. Push(0) - False branch code
+        // 3. JumpRelative(1) - Skip over true branch after false branch
+        // 4. Push(1) - True branch code
+
+        assert_eq!(main_code.len(), 4);
+
         match main_code[0] {
-            Code::BranchInline(true_branch, false_branch) => {
-                assert_eq!(true_branch, true_quotation.to_ptr() as *const Quotation);
-                assert_eq!(false_branch, false_quotation.to_ptr() as *const Quotation);
+            Code::BranchRelative(offset) => {
+                assert_eq!(offset, 2);
             }
-            _ => panic!("Expected BranchInline operation"),
+            _ => {
+                panic!("Expected BranchRelative operation as first instruction")
+            }
+        }
+
+        match main_code[1] {
+            Code::Push(value) => assert_eq!(value.to_int(), 0),
+            _ => panic!("Expected Push(0) as second instruction"),
+        }
+
+        match main_code[2] {
+            Code::JumpRelative(offset) => {
+                assert_eq!(offset, 1);
+            }
+            _ => panic!("Expected JumpRelative operation as third instruction"),
+        }
+
+        match main_code[3] {
+            Code::Push(value) => assert_eq!(value.to_int(), 1),
+            _ => panic!("Expected Push(1) as fourth instruction"),
         }
 
         assert_eq!(true_code.len(), 1);

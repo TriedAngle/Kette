@@ -1,6 +1,6 @@
 use crate::{
-    Array, ByteArray, CodeHeap, GarbageCollector, MemoryRegion, Mutex, Object, ObjectHeader,
-    ParseStackFn, SLOT_CONST_DATA, StackFn, Tagged, Word,
+    Array, ByteArray, CodeHeap, GarbageCollector, MemoryRegion, Mutex, Object,
+    ObjectHeader, ParseStackFn, Parser, SLOT_CONST_DATA, StackFn, Tagged, Word,
 };
 use std::{mem, sync::Arc};
 
@@ -51,8 +51,11 @@ impl Context {
             ],
         );
 
+        let header = ObjectHeader::new(ctx_map.to_ptr() as *mut _);
+        gc.add_root(ctx_map);
+
         Self {
-            header: ObjectHeader::new(ctx_map.to_ptr() as *mut _),
+            header,
             datastack,
             retainstack,
             namestack,
@@ -132,7 +135,35 @@ impl Context {
         (Tagged::ffalse(), Tagged::ffalse())
     }
 
-    pub fn namestack_push(&mut self, key: Tagged, value: Tagged) -> (Tagged, Tagged) {
+    pub fn reset_parser_string(&mut self, input: &str) {
+        let input = self.gc.allocate_string(input);
+        self.reset_parser(input);
+    }
+    pub fn reset_parser(&mut self, input: Tagged) {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).reset(input); };
+    }
+
+    pub fn read_next(&mut self) -> Tagged {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).read_next(self) }
+    }
+
+    pub fn parse_until(&mut self, delimiter: Option<&str>) -> Vec<Tagged> {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).parse_until(self, delimiter) }
+    }
+
+    pub fn read_until(&mut self, end: &str) -> Tagged {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).read_until(self, end) }
+    }
+
+    pub fn namestack_push(
+        &mut self,
+        key: Tagged,
+        value: Tagged,
+    ) -> (Tagged, Tagged) {
         let Some(_) = self.get_name_bytearray(key) else {
             return (Tagged::ffalse(), Tagged::ffalse());
         };

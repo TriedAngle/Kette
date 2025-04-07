@@ -11,6 +11,8 @@ pub struct SpecialObjects {
     pub map_map: Tagged,
     pub object_map: Tagged,
     pub false_map: Tagged,
+    pub true_obj: Tagged,
+
     pub fixnum_map: Tagged,
     pub array_map: Tagged,
     pub bytearray_map: Tagged,
@@ -20,6 +22,8 @@ pub struct SpecialObjects {
 
     pub primitive_tag: Tagged,
     pub parser_tag: Tagged,
+
+    pub parser: Tagged,
 }
 
 impl SpecialObjects {
@@ -28,6 +32,7 @@ impl SpecialObjects {
             map_map: Tagged::null(),
             object_map: Tagged::null(),
             false_map: Tagged::null(),
+            true_obj: Tagged::null(),
             fixnum_map: Tagged::null(),
             array_map: Tagged::null(),
             bytearray_map: Tagged::null(),
@@ -37,6 +42,8 @@ impl SpecialObjects {
 
             primitive_tag: Tagged::null(),
             parser_tag: Tagged::null(),
+
+            parser: Tagged::null(),
         }
     }
 }
@@ -269,6 +276,21 @@ impl GarbageCollector {
         );
         self.specials.word_map = word_map;
 
+        let parser_map = self.create_map(
+            "Parser", 
+            &[
+                ("input", SLOT_CONST_DATA, Tagged::from_int(0)),
+                ("position", SLOT_CONST_DATA, Tagged::from_int(1))
+            ]
+        );
+
+        let parser = self.allocate_object(parser_map);
+        self.specials.parser = parser;
+
+        let true_map = self.create_map("True", &[]);
+        let true_obj = self.allocate_object(true_map);
+        self.specials.true_obj = true_obj;
+
         self.specials.primitive_tag = self.allocate_object(self.specials.object_map);
         self.specials.parser_tag = self.allocate_object(self.specials.object_map);
 
@@ -281,8 +303,10 @@ impl GarbageCollector {
         self.add_root(self.specials.slot_map);
         self.add_root(self.specials.quotation_map);
         self.add_root(self.specials.word_map);
+        self.add_root(self.specials.parser);
         self.add_root(self.specials.primitive_tag);
         self.add_root(self.specials.parser_tag);
+        self.add_root(self.specials.true_obj);
     }
 
     fn raw_allocate<T>(&mut self, size: usize) -> *mut T {
@@ -1164,25 +1188,18 @@ mod tests {
     fn test_garbage_collection() {
         let mut gc = GarbageCollector::new();
 
-        println!("test0");
         let _temp1 = gc.allocate_string("Temporary 1");
-        println!("test1");
         let _temp2 = gc.allocate_array(10);
-        println!("test2");
 
         let keep = gc.allocate_string("Keep me");
-        println!("test3");
         gc.add_root(keep);
-        println!("test4");
 
         gc.collect_garbage();
-        println!("test5");
 
         unsafe {
             let keep_ptr = keep.to_ptr() as *mut ByteArray;
             assert_eq!((*keep_ptr).as_str(), "Keep me");
         }
-        println!("test1");
 
         let alloc_count_before = gc.allocations.len();
 

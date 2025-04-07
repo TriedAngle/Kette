@@ -1,56 +1,106 @@
-use crate::{ByteArray, Context, Tagged};
+use crate::{ByteArray, Context, ObjectHeader, Tagged, Word};
 
-pub struct Parser<'a> {
-    input: &'a str,
-    position: usize,
+pub struct Parser {
+    _header: ObjectHeader,
+    input: Tagged,    // Points to a ByteArray
+    position: Tagged, // Fixnum
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(input: &'a str) -> Self {
-        Parser { input, position: 0 }
+impl Parser {
+    pub fn reset(&mut self, input: Tagged) {
+        self.input = input;
+        self.position = Tagged::from_int(0);
+    }
+
+    fn get_input_bytearray(&self) -> *const ByteArray {
+        self.input.to_ptr() as *const ByteArray
+    }
+
+    fn current_char(&self) -> Option<char> {
+        let pos = self.position.to_int() as usize;
+        let input_ptr = self.get_input_bytearray();
+        let input_len = unsafe { (*input_ptr).len() };
+
+        if pos >= input_len {
+            return None;
+        }
+
+        let byte = unsafe { (*input_ptr).get_byte(pos) };
+        Some(byte as char)
+    }
+
+    fn remaining_slice(&self) -> &str {
+        let pos = self.position.to_int() as usize;
+        let input_ptr = self.get_input_bytearray();
+        let input_str = unsafe { (*input_ptr).as_str() };
+
+        if pos >= input_str.len() {
+            return "";
+        }
+
+        &input_str[pos..]
     }
 
     fn skip_whitespace(&mut self) {
-        while self.position < self.input.len()
-            && self.input[self.position..]
-                .chars()
-                .next()
-                .unwrap()
-                .is_whitespace()
-        {
-            self.position += 1;
+        while let Some(c) = self.current_char() {
+            if !c.is_whitespace() {
+                break;
+            }
+            let new_pos = self.position.to_int() + 1;
+            self.position = Tagged::from_int(new_pos);
         }
+    }
+
+    fn advance_position(&mut self, by: i64) {
+        let new_pos = self.position.to_int() + by;
+        self.position = Tagged::from_int(new_pos);
+    }
+
+    fn input_len(&self) -> usize {
+        let input_ptr = self.get_input_bytearray();
+        unsafe { (*input_ptr).len() - 1 }
+    }
+
+    fn position_usize(&self) -> usize {
+        self.position.to_int() as usize
+    }
+
+    fn is_at_end(&self) -> bool {
+        self.position_usize() >= self.input_len()
     }
 
     pub fn read_next(&mut self, ctx: &mut Context) -> Tagged {
         self.skip_whitespace();
 
-        if self.position >= self.input.len() {
+        if self.is_at_end() {
             return Tagged::ffalse();
         }
 
-        let start = self.position;
+        let start_pos = self.position_usize();
 
-        while self.position < self.input.len()
-            && !self.input[self.position..]
-                .chars()
-                .next()
-                .unwrap()
-                .is_whitespace()
-        {
-            self.position += 1;
+        while !self.is_at_end() {
+            if let Some(c) = self.current_char() {
+                if c.is_whitespace() {
+                    break;
+                }
+            } else {
+                break;
+            }
+            self.advance_position(1);
         }
 
-        if start == self.position {
+        if start_pos == self.position_usize() {
             panic!("Unexpected end of input");
         }
 
-        let token = &self.input[start..self.position];
+        let input_ptr = self.get_input_bytearray();
+        let input_str = unsafe { (*input_ptr).as_str() };
+        let token = &input_str[start_pos..self.position_usize()];
 
         ctx.gc.allocate_string(token)
     }
 
-    pub fn parse_int(&self, token_tagged: Tagged) -> Option<Tagged> {
+    pub fn parse_int(token_tagged: Tagged) -> Option<Tagged> {
         let token_ptr = token_tagged.to_ptr() as *const ByteArray;
         let token = unsafe { (*token_ptr).as_str() };
 
@@ -60,7 +110,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_word(&self, ctx: &Context, token_tagged: Tagged) -> Option<Tagged> {
+    pub fn parse_word(
+        &self,
+        ctx: &Context,
+        token_tagged: Tagged,
+    ) -> Option<Tagged> {
         let (word, _value) = ctx.lookup(token_tagged);
 
         if word.is_false() {
@@ -76,11 +130,12 @@ impl<'a> Parser<'a> {
 
     pub fn parse_token(&mut self, ctx: &mut Context) -> Tagged {
         let token_tagged = self.read_next(ctx);
+
         if token_tagged.is_false() {
             return token_tagged;
         }
 
-        if let Some(int_value) = self.parse_int(token_tagged) {
+        if let Some(int_value) = Self::parse_int(token_tagged) {
             return int_value;
         }
 
@@ -93,15 +148,23 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_until(&mut self, ctx: &mut Context, delimiter: Option<&str>) -> Vec<Tagged> {
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.remaining_slice().starts_with(prefix)
+    }
+
+    pub fn parse_until(
+        &mut self,
+        ctx: &mut Context,
+        delimiter: Option<&str>,
+    ) -> Vec<Tagged> {
         let mut result = Vec::new();
 
         self.skip_whitespace();
 
-        while self.position < self.input.len() {
+        while !self.is_at_end() {
             if let Some(delim) = delimiter {
-                if self.input[self.position..].starts_with(delim) {
-                    self.position += delim.len();
+                if self.starts_with(delim) {
+                    self.advance_position(delim.len() as i64);
                     break;
                 }
             }
@@ -110,9 +173,11 @@ impl<'a> Parser<'a> {
 
             if ctx.is_word(token) && ctx.is_parsing_word(token) {
                 if let Some(func) = ctx.word_primitive_parse(token) {
-                    func(ctx, self)
+                    func(ctx, self);
+                    let res = ctx.pop();
+                    result.push(res);
                 } else {
-                    let word = token.to_ptr() as _;
+                    let word = token.to_ptr() as *mut Word;
                     ctx.execute_word(word);
                 }
             } else {
@@ -125,27 +190,47 @@ impl<'a> Parser<'a> {
         result
     }
 
-    pub fn parse_string(&mut self, ctx: &mut Context) -> Tagged {
-        let items = self.parse_until(ctx, None);
-        ctx.gc.allocate_quotation(&items)
-    }
-}
+    pub fn read_until(
+        &mut self,
+        ctx: &mut Context,
+        stop_sequence: &str,
+    ) -> Tagged {
+        if self.is_at_end() {
+            return Tagged::ffalse();
+        }
 
-impl Context {
-    pub fn parse(&mut self, input: &str) -> Tagged {
-        let mut parser = Parser::new(input);
-        parser.parse_string(self)
+        let start_pos = self.position_usize();
+        let input_ptr = self.get_input_bytearray();
+        let input_str = unsafe { (*input_ptr).as_str() };
+
+        let remaining = &input_str[start_pos..];
+
+        if let Some(end_index) = remaining.find(stop_sequence) {
+            let end_pos = start_pos + end_index;
+
+            let content = &input_str[start_pos..end_pos];
+
+            self.position = Tagged::from_int(
+                (start_pos + end_index + stop_sequence.len()) as i64,
+            );
+
+            return ctx.gc.allocate_string(content);
+        } else {
+            let content = &input_str[start_pos..];
+
+            self.position = Tagged::from_int(input_str.len() as i64);
+
+            return ctx.gc.allocate_string(content);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use parking_lot::Mutex;
-
     use super::*;
     use crate::{CodeHeap, Context, ContextConfig};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     fn setup_context() -> Context {
         let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
@@ -159,48 +244,132 @@ mod tests {
 
     #[test]
     fn test_parse_integers() {
-        let mut parser = Parser::new("123 -456 0");
         let mut ctx = setup_context();
+        ctx.reset_parser_string("123 -456 0");
 
-        let token = parser.read_next(&mut ctx);
-        let result = parser.parse_int(token).unwrap();
+        let token = ctx.read_next();
+        let result = Parser::parse_int(token).unwrap();
         assert_eq!(result.to_int(), 123);
 
-        let token = parser.read_next(&mut ctx);
-        let result = parser.parse_int(token).unwrap();
+        let token = ctx.read_next();
+        let result = Parser::parse_int(token).unwrap();
         assert_eq!(result.to_int(), -456);
 
-        let token = parser.read_next(&mut ctx);
-        let result = parser.parse_int(token).unwrap();
+        let token = ctx.read_next();
+        let result = Parser::parse_int(token).unwrap();
         assert_eq!(result.to_int(), 0);
     }
 
     #[test]
     fn test_read_next() {
-        let mut parser = Parser::new("hello world");
         let mut ctx = setup_context();
+        ctx.reset_parser_string("hello world");
 
-        let token1 = parser.read_next(&mut ctx);
+        let token1 = ctx.read_next();
         let token1_ptr = token1.to_ptr() as *const ByteArray;
         let token1_str = unsafe { (*token1_ptr).as_str() };
         assert_eq!(token1_str, "hello");
 
-        let token2 = parser.read_next(&mut ctx);
+        let token2 = ctx.read_next();
         let token2_ptr = token2.to_ptr() as *const ByteArray;
         let token2_str = unsafe { (*token2_ptr).as_str() };
         assert_eq!(token2_str, "world");
+
+        let eof_token = ctx.read_next();
+        assert!(eof_token.is_false());
     }
 
     #[test]
     fn test_parse_until() {
-        let mut parser = Parser::new("123 456 789");
         let mut ctx = setup_context();
+        ctx.reset_parser_string("123 456 789");
 
-        let results = parser.parse_until(&mut ctx, None);
+        let results = ctx.parse_until(None);
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].to_int(), 123);
         assert_eq!(results[1].to_int(), 456);
         assert_eq!(results[2].to_int(), 789);
+    }
+
+    #[test]
+    fn test_parse_until_with_delimiter() {
+        let mut ctx = setup_context();
+        ctx.reset_parser_string("123 456 ; 789");
+
+        let results = ctx.parse_until(Some(";"));
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].to_int(), 123);
+        assert_eq!(results[1].to_int(), 456);
+
+        let remaining = ctx.read_next();
+        let remaining_ptr = remaining.to_ptr() as *const ByteArray;
+        let remaining_str = unsafe { (*remaining_ptr).as_str() };
+        assert_eq!(remaining_str, "789");
+    }
+
+    #[test]
+    fn test_read_until() {
+        let mut ctx = setup_context();
+
+        ctx.reset_parser_string("Hello, world\" remaining text");
+
+        let result = ctx.read_until("\"");
+        let result_ptr = result.to_ptr() as *const ByteArray;
+        let result_str = unsafe { (*result_ptr).as_str() };
+
+        assert_eq!(result_str, "Hello, world");
+
+        let remaining = ctx.read_next();
+        let remaining_ptr = remaining.to_ptr() as *const ByteArray;
+        let remaining_str = unsafe { (*remaining_ptr).as_str() };
+
+        assert_eq!(remaining_str, "remaining");
+    }
+
+    #[test]
+    fn test_read_until_with_whitespace() {
+        let mut ctx = setup_context();
+
+        ctx.reset_parser_string("This is a comment\nNext line");
+
+        let result = ctx.read_until("\n");
+        let result_ptr = result.to_ptr() as *const ByteArray;
+        let result_str = unsafe { (*result_ptr).as_str() };
+
+        assert_eq!(result_str, "This is a comment");
+
+        let next_line = ctx.read_next();
+        let next_line_ptr = next_line.to_ptr() as *const ByteArray;
+        let next_line_str = unsafe { (*next_line_ptr).as_str() };
+
+        assert_eq!(next_line_str, "Next");
+    }
+
+    #[test]
+    fn test_read_until_end_of_input() {
+        let mut ctx = setup_context();
+
+        ctx.reset_parser_string("This text has no stop sequence");
+
+        let result = ctx.read_until("not found");
+        let result_ptr = result.to_ptr() as *const ByteArray;
+        let result_str = unsafe { (*result_ptr).as_str() };
+
+        assert_eq!(result_str, "This text has no stop sequence");
+
+        let eof = ctx.read_next();
+        assert!(eof.is_false());
+    }
+
+    #[test]
+    fn test_read_until_empty_string() {
+        let mut ctx = setup_context();
+
+        ctx.reset_parser_string("");
+
+        let result = ctx.read_until("stop");
+        assert!(result.is_false());
     }
 }

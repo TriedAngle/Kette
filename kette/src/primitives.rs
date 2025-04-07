@@ -1,43 +1,66 @@
-use crate::{ByteArray, Context, ParseStackFn, Parser, StackFn, Tagged};
+use crate::{
+    Array, ByteArray, Context, ParseStackFn, Parser, Quotation, SLOT_METHOD,
+    StackFn, Tagged, Word,
+};
 
 pub fn add_primitives(ctx: &mut Context) {
     let words: &[(&str, &str, StackFn)] = &[
-        ("fixnum+", "a b -- c", fixnum_add),
-        ("fixnum-", "a b -- c", fixnum_sub),
-        ("fixnum*", "a b -- c", fixnum_mul),
-        ("fixnum/", "a b -- c", fixnum_div),
-        ("fixnum>utf8", "num -- str", fixnum_to_string),
-        ("print-utf8", "str -- ", print_utf8),
-        ("println-utf8", "str -- ", println_utf8),
+        // stack
         ("dup", "x -- x x", dup),
         ("drop", "x -- ", drop),
         ("swap", "x y -- y x", swap),
         ("over", "x y -- x y x", over),
         ("rot", "x y z -- y z x", rot),
         ("dropd", "x y -- x", dropd),
-        // Stack transfer primitives
+        // fixnum
+        ("fixnum+", "a b -- c", fixnum_add),
+        ("fixnum-", "a b -- c", fixnum_sub),
+        ("fixnum*", "a b -- c", fixnum_mul),
+        ("fixnum/", "a b -- c", fixnum_div),
+        ("fixnum>utf8", "num -- str", fixnum_to_string),
+        ("fixnum=", "a b -- ?", fixnum_eq),
+        // general
+        ("if", "? t-branch f-branch -- t/f-called", iff),
+        ("array>quotation", "array -- q", array_to_quotation),
+        ("send-self", "..a obj name -- ..b", send_self),
+        ("send-super", "..a obj name -- ..b", send_super),
+        // vm
+        ("(call)", "..a q -- ..b", call),
+        ("(clone)", "a -- b", clone),
+        ("print-utf8", "str -- ", print_utf8),
+        ("println-utf8", "str -- ", println_utf8),
         (">r", "a -- ", data_to_retain),
         ("r>", " -- a", retain_to_data),
-        // Depth primitives
         ("depth", " -- n", data_depth),
         ("rdepth", " -- n", retain_depth),
+        // parser
+        ("@read-next", " -- str", read_next),
+        ("@read-until", "end -- str", read_until),
+        ("@parse-int", "str -- int/f", parse_int),
+        ("@parse-word", "str -- word/f", parse_word),
+        ("@parse-until", "end/f -- array/f", parse_until),
     ];
 
-    let syntaxes: &[(&str, ParseStackFn)] = &[("[", parse_quotation)];
+    let syntaxes: &[(&str, ParseStackFn)] = &[
+        ("[", parse_quotation),
+        ("@:", parse_syntax),
+        ("f", push_false),
+        ("t", push_true),
+    ];
 
     for &(name, _stack_effect, fun) in words {
         let fun = Tagged::from_fn(fun);
-        let word = ctx
-            .gc
-            .allocate_primitive_word(name, Tagged::null(), fun, false);
+        let word =
+            ctx.gc
+                .allocate_primitive_word(name, Tagged::null(), fun, false);
         ctx.namestack_push(word, Tagged::null());
     }
 
     for &(name, fun) in syntaxes {
         let fun = Tagged::from_parse_fn(fun);
-        let word = ctx
-            .gc
-            .allocate_primitive_word(name, Tagged::null(), fun, true);
+        let word =
+            ctx.gc
+                .allocate_primitive_word(name, Tagged::null(), fun, true);
         ctx.namestack_push(word, Tagged::null());
     }
 }
@@ -46,6 +69,105 @@ fn parse_quotation(ctx: &mut Context, parser: &mut Parser) {
     let res = parser.parse_until(ctx, Some("]"));
     let quot = ctx.gc.allocate_quotation(&res);
     ctx.push(quot);
+}
+
+fn push_false(ctx: &mut Context, _parser: &mut Parser) {
+    ctx.push(Tagged::ffalse());
+}
+
+fn push_true(ctx: &mut Context, _parser: &mut Parser) {
+    ctx.push(ctx.gc.specials.true_obj);
+}
+
+fn parse_syntax(ctx: &mut Context, parser: &mut Parser) {
+    let name = parser.read_next(ctx);
+    let res = parser.parse_until(ctx, Some(";"));
+    let quot = ctx.gc.allocate_quotation(&res);
+    let tags = ctx.gc.allocate_array(1);
+    let word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
+
+    let tags_ptr = tags.to_ptr() as *mut Array;
+    let word_ptr = word.to_ptr() as *mut Word;
+
+    unsafe {
+        (*tags_ptr).set(0, ctx.gc.specials.parser_tag);
+
+        (*word_ptr).name = name;
+        (*word_ptr).effect = Tagged::ffalse();
+        (*word_ptr).tags = tags;
+        (*word_ptr).body = quot;
+    }
+
+    ctx.namestack_push(word, Tagged::ffalse());
+}
+
+fn read_next(ctx: &mut Context) {
+    let next = ctx.read_next();
+    ctx.push(next);
+}
+
+fn parse_int(ctx: &mut Context) {
+    let value = ctx.pop();
+    if let Some(int) = Parser::parse_int(value) {
+        ctx.push(int);
+    } else {
+        ctx.push(Tagged::ffalse())
+    }
+}
+
+fn parse_word(ctx: &mut Context) {
+    let value = ctx.pop();
+    let parser = ctx.gc.specials.parser.to_ptr() as *mut Parser;
+    if let Some(word) = unsafe { (*parser).parse_word(ctx, value) } {
+        ctx.push(word);
+    } else {
+        ctx.push(Tagged::ffalse())
+    }
+}
+
+fn read_until(ctx: &mut Context) {
+    let end_obj = ctx.pop();
+    let end_ptr = end_obj.to_ptr() as *const ByteArray;
+    let end_str = unsafe { (*end_ptr).as_str() };
+
+    let word = ctx.read_until(end_str);
+    ctx.push(word);
+}
+
+fn parse_until(ctx: &mut Context) {
+    let delimiter_obj = ctx.pop();
+
+    let delimiter = if delimiter_obj.is_false() {
+        None
+    } else {
+        let ba = delimiter_obj.to_ptr() as *const ByteArray;
+        let s = unsafe { (*ba).as_str() };
+        Some(s)
+    };
+
+    let res = ctx.parse_until(delimiter);
+
+    let array = ctx.gc.allocate_array(res.len());
+    let array_ptr = array.to_ptr() as *mut Array;
+    for (i, item) in res.iter().enumerate() {
+        unsafe {
+            (*array_ptr).set(i, *item);
+        }
+    }
+
+    ctx.push(array);
+}
+
+fn call(ctx: &mut Context) {
+    let quot_obj = ctx.pop();
+    let quot = quot_obj.to_ptr() as *const Quotation;
+    ctx.execute(quot);
+}
+
+fn clone(ctx: &mut Context) {
+    let value = ctx.pop();
+    let cloned = ctx.gc.clone(value);
+    ctx.push(cloned);
 }
 
 fn pop1num(ctx: &mut Context) -> i64 {
@@ -67,14 +189,92 @@ fn push_num(ctx: &mut Context, num: i64) {
     ctx.push(tagged);
 }
 
+fn push_bool(ctx: &mut Context, val: bool) {
+    if val {
+        ctx.push(ctx.gc.specials.true_obj);
+    } else {
+        ctx.push(Tagged::ffalse());
+    }
+}
+
 fn pop_bytearray(ctx: &mut Context) -> *mut ByteArray {
     let obj = ctx.pop();
     let ptr = obj.to_ptr() as *mut ByteArray;
     ptr
 }
 
-pub fn iff(_ctx: &mut Context) {
-    panic!("this shouldn't be called");
+pub fn iff(ctx: &mut Context) {
+    let false_branch_obj = ctx.pop();
+    let true_branch_obj = ctx.pop();
+    let condition = ctx.pop();
+    if condition.is_false() {
+        let false_branch = false_branch_obj.to_ptr() as _;
+        ctx.execute(false_branch);
+    } else {
+        let true_branch = true_branch_obj.to_ptr() as _;
+        ctx.execute(true_branch);
+    }
+}
+
+fn array_to_quotation(ctx: &mut Context) {
+    let array = ctx.pop();
+    let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+    let quot_ptr = quotation.to_ptr() as *mut Quotation;
+
+    unsafe { (*quot_ptr).body = array };
+
+    ctx.push(quotation);
+}
+
+fn get_bytearray_str(tagged: Tagged) -> &'static str {
+    let ba_ptr = tagged.to_ptr() as *const ByteArray;
+    unsafe { (*ba_ptr).as_str() }
+}
+
+fn find_and_execute_method(
+    ctx: &mut Context,
+    obj: Tagged,
+    msg_name: &str,
+    use_super: bool,
+) {
+    let obj_ptr = obj.to_ptr();
+    let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+
+    let method_slot = if use_super {
+        unsafe { (*map_ptr).find_super(msg_name, Some(SLOT_METHOD)) }
+    } else {
+        unsafe { (*map_ptr).find_slot(msg_name, Some(SLOT_METHOD)) }
+    };
+
+    if let Some(slot) = method_slot {
+        let method = unsafe { (*slot).value };
+
+        ctx.push(obj);
+
+        ctx.push(method);
+
+        call(ctx);
+    } else {
+        ctx.push(Tagged::ffalse());
+    }
+}
+
+pub fn send_self(ctx: &mut Context) {
+    let msg = ctx.pop();
+    let obj = ctx.pop();
+
+    let msg_name = get_bytearray_str(msg);
+
+    find_and_execute_method(ctx, obj, msg_name, false);
+}
+
+pub fn send_super(ctx: &mut Context) {
+    let msg = ctx.pop();
+    let obj = ctx.pop();
+
+    let msg_name = get_bytearray_str(msg);
+
+    find_and_execute_method(ctx, obj, msg_name, true);
 }
 
 fn fixnum_add(ctx: &mut Context) {
@@ -99,6 +299,12 @@ fn fixnum_div(ctx: &mut Context) {
     let (a, b) = pop2num(ctx);
     let c = a / b;
     push_num(ctx, c);
+}
+
+fn fixnum_eq(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let res = a == b;
+    push_bool(ctx, res);
 }
 
 fn fixnum_to_string(ctx: &mut Context) {
@@ -172,7 +378,8 @@ fn data_depth(ctx: &mut Context) {
     let depth = {
         let data_ptr = ctx.data.current;
         let data_start = ctx.data.start;
-        let elements = (data_ptr as usize - data_start as usize) / std::mem::size_of::<Tagged>();
+        let elements = (data_ptr as usize - data_start as usize)
+            / std::mem::size_of::<Tagged>();
         elements as i64
     };
     push_num(ctx, depth);
@@ -182,8 +389,8 @@ fn retain_depth(ctx: &mut Context) {
     let depth = {
         let retain_ptr = ctx.retain.current;
         let retain_start = ctx.retain.start;
-        let elements =
-            (retain_ptr as usize - retain_start as usize) / std::mem::size_of::<Tagged>();
+        let elements = (retain_ptr as usize - retain_start as usize)
+            / std::mem::size_of::<Tagged>();
         elements as i64
     };
     push_num(ctx, depth);
@@ -191,7 +398,9 @@ fn retain_depth(ctx: &mut Context) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ByteArray, CodeHeap, Context, ContextConfig, Tagged, Word, primitives};
+    use crate::{
+        ByteArray, CodeHeap, Context, ContextConfig, Tagged, Word, primitives,
+    };
     use parking_lot::Mutex;
     use std::sync::Arc;
 
@@ -336,5 +545,83 @@ mod tests {
         ctx.execute_word(add_word.to_ptr() as *const crate::Word);
 
         assert_eq!(ctx.pop().to_int(), 8);
+    }
+
+    #[test]
+    fn test_send_methods() {
+        use crate::{
+            ByteArray, CodeHeap, Context, ContextConfig, SLOT_METHOD,
+            SLOT_PARENT,
+        };
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let config = ContextConfig {
+            data_size: 100,
+            retian_size: 100,
+            name_size: 100,
+        };
+        let mut ctx = Context::new(&config, code_heap);
+        primitives::add_primitives(&mut ctx);
+
+        let parent_map = ctx.gc.create_map("ParentClass", &[]);
+
+        let child_map = ctx.gc.create_map("ChildClass", &[]);
+        let child_obj = ctx.gc.allocate_object(child_map);
+
+        ctx.gc
+            .push_slot(child_map, "parent", SLOT_PARENT, parent_map);
+
+        let parent_greeting = ctx.gc.allocate_string("Hello from parent");
+        let parent_method_body = vec![parent_greeting];
+        let parent_method = ctx.gc.allocate_quotation(&parent_method_body);
+
+        ctx.gc
+            .push_slot(parent_map, "greet", SLOT_METHOD, parent_method);
+
+        let child_greeting = ctx.gc.allocate_string("Hello from child");
+        let child_method_body = vec![child_greeting];
+        let child_method = ctx.gc.allocate_quotation(&child_method_body);
+
+        ctx.gc
+            .push_slot(child_map, "greet", SLOT_METHOD, child_method);
+
+        let method_name = ctx.gc.allocate_string("greet");
+        ctx.push(child_obj);
+        ctx.push(method_name);
+
+        primitives::send_self(&mut ctx);
+
+        let result = ctx.pop();
+        assert!(!result.is_false());
+        let result_str = unsafe {
+            let ba_ptr = result.to_ptr() as *const ByteArray;
+            (*ba_ptr).as_str()
+        };
+        assert_eq!(result_str, "Hello from child");
+
+        let method_name = ctx.gc.allocate_string("greet");
+        ctx.push(child_obj);
+        ctx.push(method_name);
+
+        primitives::send_super(&mut ctx);
+
+        let result = ctx.pop();
+        assert!(!result.is_false());
+        let result_str = unsafe {
+            let ba_ptr = result.to_ptr() as *const ByteArray;
+            (*ba_ptr).as_str()
+        };
+        assert_eq!(result_str, "Hello from parent");
+
+        let method_name = ctx.gc.allocate_string("non_existent");
+        ctx.push(child_obj);
+        ctx.push(method_name);
+
+        primitives::send_self(&mut ctx);
+
+        let result = ctx.pop();
+        assert!(result.is_false());
     }
 }
