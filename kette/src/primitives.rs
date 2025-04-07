@@ -33,6 +33,9 @@ pub fn add_primitives(ctx: &mut Context) {
         ("r>", " -- a", retain_to_data),
         ("depth", " -- n", data_depth),
         ("rdepth", " -- n", retain_depth),
+        ("namestack|insert", "k v -- old-k old-v", namestack_push),
+        ("namestack|find", "k -- k v", namestack_lookup),
+        ("namestack|delete", "k -- k v", namestack_remove),
         // parser
         ("@read-next", " -- str", read_next),
         ("@read-until", "end -- str", read_until),
@@ -394,6 +397,28 @@ fn retain_depth(ctx: &mut Context) {
         elements as i64
     };
     push_num(ctx, depth);
+}
+
+fn namestack_push(ctx: &mut Context) {
+    let value = ctx.pop();
+    let key = ctx.pop();
+    let (old_key, old_value) = ctx.namestack_push(key, value);
+    ctx.push(old_key);
+    ctx.push(old_value);
+}
+
+fn namestack_lookup(ctx: &mut Context) {
+    let key = ctx.pop();
+    let (key, value) = ctx.lookup(key);
+    ctx.push(key);
+    ctx.push(value);
+}
+
+fn namestack_remove(ctx: &mut Context) {
+    let key = ctx.pop();
+    let (key, value) = ctx.namestack_remove(key);
+    ctx.push(key);
+    ctx.push(value);
 }
 
 #[cfg(test)]
