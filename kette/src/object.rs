@@ -40,9 +40,10 @@ pub struct Object {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Slot {
     pub header: ObjectHeader,
-    pub name: Tagged,  // ByteArray
-    pub kind: Tagged,  // Fixnum
-    pub value: Tagged, // depends on kind
+    pub name: Tagged,    // ByteArray
+    pub kind: Tagged,    // Fixnum
+    pub value: Tagged,   // depends on kind
+    pub default: Tagged, // default value for data slots
 }
 
 #[repr(C)]
@@ -53,6 +54,7 @@ pub struct Map {
     pub data_slots: Tagged, // Fixnum,
     pub slot_count: Tagged, // Fixnum,
     pub slots: Tagged,      // Array
+    pub prototype: Tagged,  // Prototype Instance
 }
 
 #[repr(C)]

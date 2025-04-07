@@ -1,6 +1,6 @@
 use crate::{
-    Array, ByteArray, Context, ParseStackFn, Parser, Quotation, SLOT_METHOD,
-    StackFn, Tagged, Word,
+    Array, ByteArray, Context, Map, ParseStackFn, Parser, Quotation,
+    SLOT_METHOD, StackFn, Tagged, Word,
 };
 
 pub fn add_primitives(ctx: &mut Context) {
@@ -24,6 +24,9 @@ pub fn add_primitives(ctx: &mut Context) {
         ("array>quotation", "array -- q", array_to_quotation),
         ("send-self", "..a obj name -- ..b", send_self),
         ("send-super", "..a obj name -- ..b", send_super),
+        ("(new)", "map -- obj", new_from_prototype),
+        ("(new-boa)", "map -- obj", new_by_order_of_args),
+        ("set-prototype", "obj map -- ", set_prototype),
         // vm
         ("(call)", "..a q -- ..b", call),
         ("(clone)", "a -- b", clone),
@@ -280,6 +283,53 @@ pub fn send_super(ctx: &mut Context) {
     find_and_execute_method(ctx, obj, msg_name, true);
 }
 
+fn new_from_prototype(ctx: &mut Context) {
+    let map_obj = ctx.pop();
+    let map_ptr = map_obj.to_ptr() as *mut Map;
+
+    unsafe {
+        let prototype = (*map_ptr).prototype;
+
+        if prototype == Tagged::null() {
+            let obj = ctx.gc.allocate_object(map_obj);
+            ctx.push(obj);
+        } else {
+            let cloned = ctx.gc.clone(prototype);
+            ctx.push(cloned);
+        }
+    }
+}
+
+fn new_by_order_of_args(ctx: &mut Context) {
+    let map_obj = ctx.pop();
+    let map_ptr = map_obj.to_ptr() as *mut Map;
+
+    let obj = ctx.gc.allocate_object(map_obj);
+    let obj_ptr = obj.to_ptr();
+
+    unsafe {
+        let data_slots = (*map_ptr).data_slots.to_int() as usize;
+
+        for i in (0..data_slots).rev() {
+            let value = ctx.pop();
+            (*obj_ptr).set_slot(i, value);
+        }
+    }
+
+    ctx.push(obj);
+}
+
+fn set_prototype(ctx: &mut Context) {
+    let map_obj = ctx.pop();
+    let instance = ctx.pop();
+
+    let map_ptr = map_obj.to_ptr() as *mut Map;
+
+    unsafe {
+        (*map_ptr).prototype = instance;
+    }
+}
+
 fn fixnum_add(ctx: &mut Context) {
     let (a, b) = pop2num(ctx);
     let c = a + b;
@@ -423,8 +473,10 @@ fn namestack_remove(ctx: &mut Context) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
-        ByteArray, CodeHeap, Context, ContextConfig, Tagged, Word, primitives,
+        ByteArray, CodeHeap, Context, ContextConfig, SLOT_CONST_DATA, Tagged,
+        Word, primitives,
     };
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -595,22 +647,37 @@ mod tests {
         let child_map = ctx.gc.create_map("ChildClass", &[]);
         let child_obj = ctx.gc.allocate_object(child_map);
 
-        ctx.gc
-            .push_slot(child_map, "parent", SLOT_PARENT, parent_map);
+        ctx.gc.push_slot(
+            child_map,
+            "parent",
+            SLOT_PARENT,
+            parent_map,
+            Tagged::ffalse(),
+        );
 
         let parent_greeting = ctx.gc.allocate_string("Hello from parent");
         let parent_method_body = vec![parent_greeting];
         let parent_method = ctx.gc.allocate_quotation(&parent_method_body);
 
-        ctx.gc
-            .push_slot(parent_map, "greet", SLOT_METHOD, parent_method);
+        ctx.gc.push_slot(
+            parent_map,
+            "greet",
+            SLOT_METHOD,
+            parent_method,
+            Tagged::ffalse(),
+        );
 
         let child_greeting = ctx.gc.allocate_string("Hello from child");
         let child_method_body = vec![child_greeting];
         let child_method = ctx.gc.allocate_quotation(&child_method_body);
 
-        ctx.gc
-            .push_slot(child_map, "greet", SLOT_METHOD, child_method);
+        ctx.gc.push_slot(
+            child_map,
+            "greet",
+            SLOT_METHOD,
+            child_method,
+            Tagged::ffalse(),
+        );
 
         let method_name = ctx.gc.allocate_string("greet");
         ctx.push(child_obj);
@@ -648,5 +715,68 @@ mod tests {
 
         let result = ctx.pop();
         assert!(result.is_false());
+    }
+
+    #[test]
+    fn test_new_primitives() {
+        let mut ctx = setup_context();
+
+        let person_map = ctx.gc.create_map(
+            "Person",
+            &[
+                (
+                    "name",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "age",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+
+        let name = ctx.gc.allocate_string("John");
+        ctx.push(name);
+        ctx.push(Tagged::from_int(30));
+
+        ctx.push(person_map);
+        new_by_order_of_args(&mut ctx);
+
+        let person1 = ctx.pop();
+        let person1_ptr = person1.to_ptr();
+
+        unsafe {
+            let name_slot = (*person1_ptr).get_slot(0);
+            let name_ptr = name_slot.to_ptr() as *const ByteArray;
+            assert_eq!((*name_ptr).as_str(), "John");
+
+            let age_slot = (*person1_ptr).get_slot(1);
+            assert_eq!(age_slot.to_int(), 30);
+        }
+
+        ctx.push(person1);
+        ctx.push(person_map);
+        set_prototype(&mut ctx);
+
+        ctx.push(person_map);
+        new_from_prototype(&mut ctx);
+
+        let person2 = ctx.pop();
+        let person2_ptr = person2.to_ptr();
+
+        assert!(person1.to_ptr() != person2.to_ptr());
+
+        unsafe {
+            let name_slot = (*person2_ptr).get_slot(0);
+            let name_ptr = name_slot.to_ptr() as *const ByteArray;
+            assert_eq!((*name_ptr).as_str(), "John");
+
+            let age_slot = (*person2_ptr).get_slot(1);
+            assert_eq!(age_slot.to_int(), 30);
+        }
     }
 }

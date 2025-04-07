@@ -4,7 +4,8 @@ use std::mem;
 use std::str;
 
 use crate::{
-    Array, ByteArray, Map, Object, ObjectHeader, SLOT_CONST_DATA, SLOT_DATA, Slot, Tagged,
+    Array, ByteArray, Map, Object, ObjectHeader, SLOT_CONST_DATA, SLOT_DATA,
+    Slot, Tagged,
 };
 
 pub struct SpecialObjects {
@@ -202,23 +203,28 @@ impl GarbageCollector {
         self.specials.map_map = Tagged::from_ptr(map_map_ptr as *mut Object);
 
         let object_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
-        self.specials.object_map = Tagged::from_ptr(object_map_ptr as *mut Object);
+        self.specials.object_map =
+            Tagged::from_ptr(object_map_ptr as *mut Object);
 
         let false_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
-        self.specials.false_map = Tagged::from_ptr(false_map_ptr as *mut Object);
+        self.specials.false_map =
+            Tagged::from_ptr(false_map_ptr as *mut Object);
 
         let fixnum_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
-        self.specials.fixnum_map = Tagged::from_ptr(fixnum_map_ptr as *mut Object);
+        self.specials.fixnum_map =
+            Tagged::from_ptr(fixnum_map_ptr as *mut Object);
 
         let array_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
-        self.specials.array_map = Tagged::from_ptr(array_map_ptr as *mut Object);
+        self.specials.array_map =
+            Tagged::from_ptr(array_map_ptr as *mut Object);
 
         let bytearray_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
-        self.specials.bytearray_map = Tagged::from_ptr(bytearray_map_ptr as *mut Object);
+        self.specials.bytearray_map =
+            Tagged::from_ptr(bytearray_map_ptr as *mut Object);
 
         unsafe {
             (*map_map_ptr).header = ObjectHeader::new(map_map_ptr);
-            (*map_map_ptr).data_slots = Tagged::from_int(4);
+            (*map_map_ptr).data_slots = Tagged::from_int(5);
         }
 
         unsafe {
@@ -249,9 +255,24 @@ impl GarbageCollector {
         let slot_map = self.create_map(
             "Slot",
             &[
-                ("name", SLOT_CONST_DATA, Tagged::from_int(0)),
-                ("kind", SLOT_CONST_DATA, Tagged::from_int(1)),
-                ("value", SLOT_CONST_DATA, Tagged::from_int(2)),
+                (
+                    "name",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "kind",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "value",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
             ],
         );
         self.specials.slot_map = slot_map;
@@ -259,8 +280,18 @@ impl GarbageCollector {
         let quotation_map = self.create_map(
             "Quotation",
             &[
-                ("effect", SLOT_CONST_DATA, Tagged::from_int(0)),
-                ("body", SLOT_CONST_DATA, Tagged::from_int(1)),
+                (
+                    "effect",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "body",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
             ],
         );
         self.specials.quotation_map = quotation_map;
@@ -268,20 +299,50 @@ impl GarbageCollector {
         let word_map = self.create_map(
             "Word",
             &[
-                ("name", SLOT_CONST_DATA, Tagged::from_int(0)),
-                ("effect", SLOT_CONST_DATA, Tagged::from_int(1)),
-                ("tags", SLOT_CONST_DATA, Tagged::from_int(2)),
-                ("body", SLOT_CONST_DATA, Tagged::from_int(3)),
+                (
+                    "name",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "effect",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "tags",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "body",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(3),
+                    Tagged::ffalse(),
+                ),
             ],
         );
         self.specials.word_map = word_map;
 
         let parser_map = self.create_map(
-            "Parser", 
+            "Parser",
             &[
-                ("input", SLOT_CONST_DATA, Tagged::from_int(0)),
-                ("position", SLOT_CONST_DATA, Tagged::from_int(1))
-            ]
+                (
+                    "input",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "position",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+            ],
         );
 
         let parser = self.allocate_object(parser_map);
@@ -291,8 +352,10 @@ impl GarbageCollector {
         let true_obj = self.allocate_object(true_map);
         self.specials.true_obj = true_obj;
 
-        self.specials.primitive_tag = self.allocate_object(self.specials.object_map);
-        self.specials.parser_tag = self.allocate_object(self.specials.object_map);
+        self.specials.primitive_tag =
+            self.allocate_object(self.specials.object_map);
+        self.specials.parser_tag =
+            self.allocate_object(self.specials.object_map);
 
         self.add_root(self.specials.map_map);
         self.add_root(self.specials.object_map);
@@ -310,7 +373,8 @@ impl GarbageCollector {
     }
 
     fn raw_allocate<T>(&mut self, size: usize) -> *mut T {
-        let layout = Layout::from_size_align(size, mem::align_of::<T>()).unwrap();
+        let layout =
+            Layout::from_size_align(size, mem::align_of::<T>()).unwrap();
         let ptr = unsafe { alloc(layout) };
 
         unsafe {
@@ -341,7 +405,9 @@ impl GarbageCollector {
         let slots_size = data_slots * mem::size_of::<Tagged>();
         let total_size = base_size + slots_size;
 
-        let layout = Layout::from_size_align(total_size, mem::align_of::<Object>()).unwrap();
+        let layout =
+            Layout::from_size_align(total_size, mem::align_of::<Object>())
+                .unwrap();
 
         let ptr = unsafe { alloc(layout) };
 
@@ -359,9 +425,16 @@ impl GarbageCollector {
         Tagged::from_ptr(obj)
     }
 
-    pub fn allocate_slot(&mut self, name: Tagged, kind: Tagged, value: Tagged) -> Tagged {
+    pub fn allocate_slot(
+        &mut self,
+        name: Tagged,
+        kind: Tagged,
+        value: Tagged,
+        default: Tagged,
+    ) -> Tagged {
         let size = mem::size_of::<Slot>();
-        let layout = Layout::from_size_align(size, mem::align_of::<Slot>()).unwrap();
+        let layout =
+            Layout::from_size_align(size, mem::align_of::<Slot>()).unwrap();
 
         let ptr = unsafe { alloc(layout) };
 
@@ -371,10 +444,12 @@ impl GarbageCollector {
 
         let slot = ptr as *mut Slot;
         unsafe {
-            (*slot).header = ObjectHeader::new(self.specials.slot_map.to_ptr() as *mut Map);
+            (*slot).header =
+                ObjectHeader::new(self.specials.slot_map.to_ptr() as *mut Map);
             (*slot).name = name;
             (*slot).kind = kind;
             (*slot).value = value;
+            (*slot).default = default;
         }
 
         self.allocations.insert(ptr, (size, layout));
@@ -382,9 +457,15 @@ impl GarbageCollector {
         Tagged::from_ptr(slot as *mut Object)
     }
 
-    pub fn allocate_map(&mut self, name: Tagged, slots: Tagged, slot_count: usize) -> Tagged {
+    pub fn allocate_map(
+        &mut self,
+        name: Tagged,
+        slots: Tagged,
+        slot_count: usize,
+    ) -> Tagged {
         let size = mem::size_of::<Map>();
-        let layout = Layout::from_size_align(size, mem::align_of::<Map>()).unwrap();
+        let layout =
+            Layout::from_size_align(size, mem::align_of::<Map>()).unwrap();
 
         let ptr = unsafe { alloc(layout) };
 
@@ -396,16 +477,47 @@ impl GarbageCollector {
 
         let map = ptr as *mut Map;
         unsafe {
-            (*map).header = ObjectHeader::new(self.specials.object_map.to_ptr() as *mut Map);
+            (*map).header = ObjectHeader::new(
+                self.specials.object_map.to_ptr() as *mut Map,
+            );
             (*map).name = name;
             (*map).slots = slots;
             (*map).slot_count = Tagged::from_int(slot_count as i64);
             (*map).data_slots = Tagged::from_int(data_slots as i64);
+            (*map).prototype = Tagged::null(); // Initially null, will set below
         }
 
         self.allocations.insert(ptr, (size, layout));
 
-        Tagged::from_ptr(map as *mut Object)
+        let map_tagged = Tagged::from_ptr(map as *mut Object);
+
+        let prototype = self.allocate_object(map_tagged);
+        let proto_ptr = prototype.to_ptr();
+
+        if data_slots > 0 && slots != Tagged::null() {
+            unsafe {
+                let slots_ptr = slots.to_ptr() as *mut Array;
+                let mut data_slot_index = 0;
+
+                for i in 0..slot_count {
+                    let slot_tagged = (*slots_ptr).get(i);
+                    let slot_ptr = slot_tagged.to_ptr() as *mut Slot;
+
+                    let kind = (*slot_ptr).kind.to_int();
+                    if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
+                        let default_value = (*slot_ptr).default;
+                        (*proto_ptr).set_slot(data_slot_index, default_value);
+                        data_slot_index += 1;
+                    }
+                }
+            }
+        }
+
+        unsafe {
+            (*map).prototype = prototype;
+        }
+
+        map_tagged
     }
 
     fn calculate_data_slots(&self, slots: Tagged, slot_count: usize) -> usize {
@@ -428,17 +540,26 @@ impl GarbageCollector {
         data_count
     }
 
-    pub fn create_map(&mut self, name: &str, slots: &[(&str, i64, Tagged)]) -> Tagged {
+    pub fn create_map(
+        &mut self,
+        name: &str,
+        slots: &[(&str, i64, Tagged, Tagged)],
+    ) -> Tagged {
         let name_tagged = self.allocate_string(name);
 
         let slots_tagged = self.allocate_array(slots.len());
         let slots_ptr = slots_tagged.to_ptr() as *mut Array;
 
-        for (i, (slot_name, kind, value)) in slots.iter().enumerate() {
+        for (i, (slot_name, kind, value, default)) in slots.iter().enumerate() {
             let slot_name_tagged = self.allocate_string(slot_name);
             let kind_tagged = Tagged::from_int(*kind);
 
-            let slot_tagged = self.allocate_slot(slot_name_tagged, kind_tagged, *value);
+            let slot_tagged = self.allocate_slot(
+                slot_name_tagged,
+                kind_tagged,
+                *value,
+                *default,
+            );
 
             unsafe {
                 (*slots_ptr).set(i, slot_tagged);
@@ -448,7 +569,14 @@ impl GarbageCollector {
         self.allocate_map(name_tagged, slots_tagged, slots.len())
     }
 
-    pub fn push_slot(&mut self, map: Tagged, slot_name: &str, kind: i64, value: Tagged) -> bool {
+    pub fn push_slot(
+        &mut self,
+        map: Tagged,
+        slot_name: &str,
+        kind: i64,
+        value: Tagged,
+        default: Tagged,
+    ) -> bool {
         let map_ptr = map.to_ptr() as *mut Map;
 
         unsafe {
@@ -458,7 +586,12 @@ impl GarbageCollector {
             if slots == Tagged::null() {
                 let new_slots = self.allocate_array(1);
                 let new_slot_name = self.allocate_string(slot_name);
-                let new_slot = self.allocate_slot(new_slot_name, Tagged::from_int(kind), value);
+                let new_slot = self.allocate_slot(
+                    new_slot_name,
+                    Tagged::from_int(kind),
+                    value,
+                    default,
+                );
 
                 let new_slots_ptr = new_slots.to_ptr() as *mut Array;
                 (*new_slots_ptr).set(0, new_slot);
@@ -493,14 +626,21 @@ impl GarbageCollector {
             }
 
             let new_slot_name = self.allocate_string(slot_name);
-            let new_slot = self.allocate_slot(new_slot_name, Tagged::from_int(kind), value);
+            let new_slot = self.allocate_slot(
+                new_slot_name,
+                Tagged::from_int(kind),
+                value,
+                default,
+            );
 
             (*slots_ptr).set(slot_count, new_slot);
             (*map_ptr).slot_count = Tagged::from_int((slot_count + 1) as i64);
 
             if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
-                let current_data_slots = (*map_ptr).data_slots.to_int() as usize;
-                (*map_ptr).data_slots = Tagged::from_int((current_data_slots + 1) as i64);
+                let current_data_slots =
+                    (*map_ptr).data_slots.to_int() as usize;
+                (*map_ptr).data_slots =
+                    Tagged::from_int((current_data_slots + 1) as i64);
             }
         }
 
@@ -533,7 +673,8 @@ impl GarbageCollector {
                 if slot_name_str == slot_name {
                     found_idx = Some(i);
                     let kind = (*slot_ptr).kind.to_int();
-                    was_data_slot = kind == SLOT_CONST_DATA || kind == SLOT_DATA;
+                    was_data_slot =
+                        kind == SLOT_CONST_DATA || kind == SLOT_DATA;
                     break;
                 }
             }
@@ -544,11 +685,14 @@ impl GarbageCollector {
                     (*slots_ptr).set(i, next_slot);
                 }
 
-                (*map_ptr).slot_count = Tagged::from_int((slot_count - 1) as i64);
+                (*map_ptr).slot_count =
+                    Tagged::from_int((slot_count - 1) as i64);
 
                 if was_data_slot {
-                    let current_data_slots = (*map_ptr).data_slots.to_int() as usize;
-                    (*map_ptr).data_slots = Tagged::from_int((current_data_slots - 1) as i64);
+                    let current_data_slots =
+                        (*map_ptr).data_slots.to_int() as usize;
+                    (*map_ptr).data_slots =
+                        Tagged::from_int((current_data_slots - 1) as i64);
                 }
 
                 return true;
@@ -563,7 +707,9 @@ impl GarbageCollector {
         let base_size = mem::size_of::<Array>();
         let total_size = base_size + (size * elem_size);
 
-        let layout = Layout::from_size_align(total_size, mem::align_of::<Array>()).unwrap();
+        let layout =
+            Layout::from_size_align(total_size, mem::align_of::<Array>())
+                .unwrap();
 
         let ptr = unsafe { alloc(layout) };
 
@@ -573,7 +719,8 @@ impl GarbageCollector {
 
         let array = ptr as *mut Array;
         unsafe {
-            (*array).header = ObjectHeader::new(self.specials.array_map.to_ptr() as *mut Map);
+            (*array).header =
+                ObjectHeader::new(self.specials.array_map.to_ptr() as *mut Map);
             (*array).size = Tagged::from_int(size as i64);
         }
 
@@ -585,7 +732,9 @@ impl GarbageCollector {
     pub fn allocate_bytearray(&mut self, size: usize) -> Tagged {
         let base_size = mem::size_of::<ByteArray>();
         let total_size = base_size + size;
-        let layout = Layout::from_size_align(total_size, mem::align_of::<ByteArray>()).unwrap();
+        let layout =
+            Layout::from_size_align(total_size, mem::align_of::<ByteArray>())
+                .unwrap();
 
         let ptr = unsafe { alloc(layout) };
 
@@ -595,8 +744,9 @@ impl GarbageCollector {
 
         let bytearray = ptr as *mut ByteArray;
         unsafe {
-            (*bytearray).header =
-                ObjectHeader::new(self.specials.bytearray_map.to_ptr() as *mut Map);
+            (*bytearray).header = ObjectHeader::new(
+                self.specials.bytearray_map.to_ptr() as *mut Map,
+            );
             (*bytearray).size = Tagged::from_int(size as i64);
         }
 
@@ -652,7 +802,11 @@ impl GarbageCollector {
         new_array
     }
 
-    pub fn resize_bytearray(&mut self, bytearray: Tagged, new_size: usize) -> Tagged {
+    pub fn resize_bytearray(
+        &mut self,
+        bytearray: Tagged,
+        new_size: usize,
+    ) -> Tagged {
         if bytearray.is_int() || bytearray == Tagged::null() {
             return self.allocate_bytearray(new_size);
         }
@@ -734,7 +888,10 @@ impl GarbageCollector {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Array, ByteArray, GarbageCollector, Map, Object, SLOT_CONST_DATA, Slot, Tagged};
+    use crate::{
+        Array, ByteArray, GarbageCollector, Map, Object, SLOT_CONST_DATA, Slot,
+        Tagged,
+    };
 
     #[test]
     fn test_initialize_special_objects() {
@@ -945,12 +1102,22 @@ mod tests {
         let name_slot_name = gc.allocate_string("name");
         let name_slot_kind = Tagged::from_int(0);
         let name_slot_value = Tagged::from_int(0);
-        let name_slot = gc.allocate_slot(name_slot_name, name_slot_kind, name_slot_value);
+        let name_slot = gc.allocate_slot(
+            name_slot_name,
+            name_slot_kind,
+            name_slot_value,
+            Tagged::ffalse(),
+        );
 
         let age_slot_name = gc.allocate_string("age");
         let age_slot_kind = Tagged::from_int(0);
         let age_slot_value = Tagged::from_int(1);
-        let age_slot = gc.allocate_slot(age_slot_name, age_slot_kind, age_slot_value);
+        let age_slot = gc.allocate_slot(
+            age_slot_name,
+            age_slot_kind,
+            age_slot_value,
+            Tagged::ffalse(),
+        );
 
         unsafe {
             let slots_ptr = slots_array.to_ptr() as *mut Array;
@@ -997,8 +1164,8 @@ mod tests {
         let person_map = gc.create_map(
             "Person",
             &[
-                ("name", 0, Tagged::from_int(0)),
-                ("age", 0, Tagged::from_int(1)),
+                ("name", 0, Tagged::from_int(0), Tagged::ffalse()),
+                ("age", 0, Tagged::from_int(1), Tagged::ffalse()),
             ],
         );
 
@@ -1034,8 +1201,20 @@ mod tests {
 
         let person_map = gc.create_map("Person", &[]);
 
-        gc.push_slot(person_map, "name", 0, Tagged::from_int(0));
-        gc.push_slot(person_map, "age", 0, Tagged::from_int(1));
+        gc.push_slot(
+            person_map,
+            "name",
+            0,
+            Tagged::from_int(0),
+            Tagged::ffalse(),
+        );
+        gc.push_slot(
+            person_map,
+            "age",
+            0,
+            Tagged::from_int(1),
+            Tagged::ffalse(),
+        );
 
         unsafe {
             let map_ptr = person_map.to_ptr() as *mut Map;
@@ -1059,7 +1238,13 @@ mod tests {
             assert_eq!((*age_slot_name_ptr).as_str(), "age");
         }
 
-        gc.push_slot(person_map, "get_name", 2, Tagged::null());
+        gc.push_slot(
+            person_map,
+            "get_name",
+            2,
+            Tagged::null(),
+            Tagged::ffalse(),
+        );
 
         unsafe {
             let map_ptr = person_map.to_ptr() as *mut Map;
@@ -1075,9 +1260,9 @@ mod tests {
         let person_map = gc.create_map(
             "Person",
             &[
-                ("name", 0, Tagged::from_int(0)),
-                ("age", 0, Tagged::from_int(1)),
-                ("address", 0, Tagged::from_int(2)),
+                ("name", 0, Tagged::from_int(0), Tagged::ffalse()),
+                ("age", 0, Tagged::from_int(1), Tagged::ffalse()),
+                ("address", 0, Tagged::from_int(2), Tagged::ffalse()),
             ],
         );
 
@@ -1149,8 +1334,18 @@ mod tests {
         let person_map = gc.create_map(
             "Person",
             &[
-                ("name", SLOT_CONST_DATA, Tagged::from_int(0)),
-                ("age", SLOT_CONST_DATA, Tagged::from_int(1)),
+                (
+                    "name",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "age",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
             ],
         );
 
@@ -1168,7 +1363,10 @@ mod tests {
             let orig_ptr = original_person.to_ptr();
             let clone_ptr = clone_person.to_ptr();
 
-            assert_eq!((*orig_ptr).header.get_map(), (*clone_ptr).header.get_map());
+            assert_eq!(
+                (*orig_ptr).header.get_map(),
+                (*clone_ptr).header.get_map()
+            );
 
             let name_slot_orig = (*orig_ptr).get_slot(0);
             let name_slot_clone = (*clone_ptr).get_slot(0);

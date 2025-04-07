@@ -44,10 +44,10 @@ impl Context {
         let ctx_map = gc.create_map(
             "Context",
             &[
-                ("datastack", SLOT_CONST_DATA, Tagged::from_int(0)),
-                ("retainstack", SLOT_CONST_DATA, Tagged::from_int(1)),
-                ("namestack", SLOT_CONST_DATA, Tagged::from_int(2)),
-                ("callstack", SLOT_CONST_DATA, Tagged::from_int(3)),
+                ("datastack", SLOT_CONST_DATA, Tagged::from_int(0), Tagged::ffalse()),
+                ("retainstack", SLOT_CONST_DATA, Tagged::from_int(1), Tagged::ffalse()),
+                ("namestack", SLOT_CONST_DATA, Tagged::from_int(2), Tagged::ffalse()),
+                ("callstack", SLOT_CONST_DATA, Tagged::from_int(3), Tagged::ffalse()),
             ],
         );
 

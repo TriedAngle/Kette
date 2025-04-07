@@ -761,7 +761,7 @@ mod test {
 
         match main_code[2] {
             Code::JumpRelative(offset) => {
-                assert_eq!(offset, 1);
+                assert_eq!(offset, 2);
             }
             _ => panic!("Expected JumpRelative operation as third instruction"),
         }
