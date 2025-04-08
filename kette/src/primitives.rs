@@ -22,14 +22,23 @@ pub fn add_primitives(ctx: &mut Context) {
         // general
         ("if", "? t-branch f-branch -- t/f-called", iff),
         ("array>quotation", "array -- q", array_to_quotation),
+        // objects
         ("send-self", "..a obj name -- ..b", send_self),
         ("send-super", "..a obj name -- ..b", send_super),
+        ("(clone)", "a -- b", clone),
         ("(new)", "map -- obj", new_from_prototype),
         ("(new-boa)", "map -- obj", new_by_order_of_args),
         ("set-prototype", "obj map -- ", set_prototype),
+        ("<array>", "n -- array", create_array),
+        ("<bytearray>", "n -- bytearray", create_bytearray),
+        ("resize-array", "array n -- new", resize_array),
+        ("resize-bytearray", "bytearray n -- new", resize_bytearray),
+        ("slot", "obj n -- value", get_slot),
+        ("set-slot", "value obj n -- ", set_slot),
+        ("get-u8", "obj n -- u8", get_u8),
+        ("set-u8", "u8 obj n -- ", set_u8),
         // vm
         ("(call)", "..a q -- ..b", call),
-        ("(clone)", "a -- b", clone),
         ("print-utf8", "str -- ", print_utf8),
         ("println-utf8", "str -- ", println_utf8),
         (">r", "a -- ", data_to_retain),
@@ -54,6 +63,17 @@ pub fn add_primitives(ctx: &mut Context) {
         ("t", push_true),
     ];
 
+    let maps: &[(&str, Tagged)] = &[
+        ("map", ctx.gc.specials.map_map),
+        ("object", ctx.gc.specials.object_map),
+        ("fixnum", ctx.gc.specials.fixnum_map),
+        ("array", ctx.gc.specials.array_map),
+        ("bytearray", ctx.gc.specials.bytearray_map),
+        ("slot-descriptor", ctx.gc.specials.slot_map),
+        ("quotation", ctx.gc.specials.quotation_map),
+        ("word", ctx.gc.specials.word_map),
+    ];
+
     for &(name, _stack_effect, fun) in words {
         let fun = Tagged::from_fn(fun);
         let word =
@@ -68,6 +88,17 @@ pub fn add_primitives(ctx: &mut Context) {
             ctx.gc
                 .allocate_primitive_word(name, Tagged::null(), fun, true);
         ctx.namestack_push(word, Tagged::null());
+    }
+
+    for &(name, map) in maps {
+        let name_obj = ctx.gc.allocate_string(name);
+        let quot = ctx.gc.allocate_quotation(&[map]);
+        let word_obj = ctx.gc.allocate_object(ctx.gc.specials.word_map);
+        let word = word_obj.to_ptr() as *mut Word;
+        unsafe {
+            (*word).name = name_obj;
+            (*word).body = quot;
+        }
     }
 }
 
@@ -330,6 +361,76 @@ fn set_prototype(ctx: &mut Context) {
     }
 }
 
+fn create_array(ctx: &mut Context) {
+    let len_obj = ctx.pop();
+    let len = len_obj.to_int();
+
+    let array = ctx.gc.allocate_array(len as usize);
+    ctx.push(array);
+}
+
+fn create_bytearray(ctx: &mut Context) {
+    let len_obj = ctx.pop();
+    let len = len_obj.to_int();
+
+    let bytearray = ctx.gc.allocate_bytearray(len as usize);
+    ctx.push(bytearray);
+}
+
+fn resize_array(ctx: &mut Context) {
+    let len_obj = ctx.pop();
+    let array = ctx.pop();
+    let len = len_obj.to_int();
+    let new = ctx.gc.resize_array(array, len as usize);
+    ctx.push(new)
+}
+
+fn resize_bytearray(ctx: &mut Context) {
+    let len_obj = ctx.pop();
+    let bytearray = ctx.pop();
+    let len = len_obj.to_int();
+    let new = ctx.gc.resize_bytearray(bytearray, len as usize);
+    ctx.push(new)
+}
+
+fn get_slot(ctx: &mut Context) {
+    let n_obj = ctx.pop();
+    let obj = ctx.pop();
+    let n = n_obj.to_int();
+    let obj_ptr = obj.to_ptr();
+    let value = unsafe { (*obj_ptr).get_slot(n as usize) };
+    ctx.push(value);
+}
+
+fn set_slot(ctx: &mut Context) {
+    let n_obj = ctx.pop();
+    let obj = ctx.pop();
+    let value = ctx.pop();
+    let n = n_obj.to_int();
+    let obj_ptr = obj.to_ptr();
+    unsafe { (*obj_ptr).set_slot(n as usize, value) };
+}
+
+fn get_u8(ctx: &mut Context) {
+    let n_obj = ctx.pop();
+    let obj = ctx.pop();
+    let n = n_obj.to_int();
+    let obj_ptr = obj.to_ptr() as *mut ByteArray;
+    let u8 = unsafe { (*obj_ptr).get_byte(n as usize) };
+    let fixnum = Tagged::from_int(u8 as i64);
+    ctx.push(fixnum);
+}
+
+fn set_u8(ctx: &mut Context) {
+    let n_obj = ctx.pop();
+    let obj = ctx.pop();
+    let value_obj = ctx.pop();
+    let n = n_obj.to_int();
+    let obj_ptr = obj.to_ptr() as *mut ByteArray;
+    let value = value_obj.to_int();
+    unsafe { (*obj_ptr).set_byte(n as usize, value as u8) };
+}
+
 fn fixnum_add(ctx: &mut Context) {
     let (a, b) = pop2num(ctx);
     let c = a + b;
@@ -475,7 +576,8 @@ fn namestack_remove(ctx: &mut Context) {
 mod tests {
     use super::*;
     use crate::{
-        primitives, ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Object, Tagged, Word, SLOT_CONST_DATA
+        ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Object,
+        SLOT_CONST_DATA, Tagged, Word, primitives,
     };
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -856,6 +958,329 @@ mod tests {
 
             let age_slot = (*person_ptr).get_slot(1);
             assert_eq!(age_slot.to_int(), 25);
+        }
+    }
+
+    #[test]
+    fn test_array_creation_and_resizing() {
+        let mut ctx = setup_context();
+
+        ctx.push(Tagged::from_int(5));
+        primitives::create_array(&mut ctx);
+
+        let array = ctx.pop();
+        assert!(!array.is_false());
+
+        let array_ptr = array.to_ptr() as *const crate::Array;
+        unsafe {
+            assert_eq!((*array_ptr).len(), 5);
+
+            for i in 0..5 {
+                assert_eq!((*array_ptr).get(i), Tagged::null());
+            }
+        }
+
+        ctx.push(array);
+        ctx.push(Tagged::from_int(8));
+        primitives::resize_array(&mut ctx);
+
+        let resized_array = ctx.pop();
+        assert!(!resized_array.is_false());
+
+        let resized_ptr = resized_array.to_ptr() as *const crate::Array;
+        unsafe {
+            assert_eq!((*resized_ptr).len(), 8);
+
+            for i in 0..5 {
+                assert_eq!((*resized_ptr).get(i), Tagged::null());
+            }
+            for i in 5..8 {
+                assert_eq!((*resized_ptr).get(i), Tagged::null());
+            }
+        }
+
+        ctx.push(resized_array);
+        ctx.push(Tagged::from_int(3));
+        primitives::resize_array(&mut ctx);
+
+        let shrunk_array = ctx.pop();
+        assert!(!shrunk_array.is_false());
+
+        let shrunk_ptr = shrunk_array.to_ptr() as *const crate::Array;
+        unsafe {
+            assert_eq!((*shrunk_ptr).len(), 3);
+
+            for i in 0..3 {
+                assert_eq!((*shrunk_ptr).get(i), Tagged::null());
+            }
+        }
+    }
+
+    #[test]
+    fn test_bytearray_creation_and_resizing() {
+        let mut ctx = setup_context();
+
+        ctx.push(Tagged::from_int(5));
+        primitives::create_bytearray(&mut ctx);
+
+        let bytearray = ctx.pop();
+        assert!(!bytearray.is_false());
+
+        let bytearray_ptr = bytearray.to_ptr() as *const crate::ByteArray;
+        unsafe {
+            assert_eq!((*bytearray_ptr).len(), 5);
+
+            for i in 0..5 {
+                assert_eq!((*bytearray_ptr).get_byte(i), 0);
+            }
+        }
+
+        ctx.push(bytearray);
+        ctx.push(Tagged::from_int(8));
+        primitives::resize_bytearray(&mut ctx);
+
+        let resized_bytearray = ctx.pop();
+        assert!(!resized_bytearray.is_false());
+
+        let resized_ptr = resized_bytearray.to_ptr() as *const crate::ByteArray;
+        unsafe {
+            assert_eq!((*resized_ptr).len(), 8);
+
+            for i in 0..5 {
+                assert_eq!((*resized_ptr).get_byte(i), 0);
+            }
+            for i in 5..8 {
+                assert_eq!((*resized_ptr).get_byte(i), 0);
+            }
+        }
+
+        ctx.push(resized_bytearray);
+        ctx.push(Tagged::from_int(3));
+        primitives::resize_bytearray(&mut ctx);
+
+        let shrunk_bytearray = ctx.pop();
+        assert!(!shrunk_bytearray.is_false());
+
+        let shrunk_ptr = shrunk_bytearray.to_ptr() as *const crate::ByteArray;
+        unsafe {
+            assert_eq!((*shrunk_ptr).len(), 3);
+
+            for i in 0..3 {
+                assert_eq!((*shrunk_ptr).get_byte(i), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_set_slot() {
+        let mut ctx = setup_context();
+
+        let map = ctx.gc.create_map("TestObject", &[]);
+        let obj = ctx.gc.allocate_object(map);
+
+        let values = [
+            Tagged::from_int(42),
+            ctx.gc.allocate_string("hello"),
+            ctx.gc.specials.true_obj,
+        ];
+
+        for (i, value) in values.iter().enumerate() {
+            ctx.push(*value);
+            ctx.push(obj);
+            ctx.push(Tagged::from_int(i as i64));
+            primitives::set_slot(&mut ctx);
+
+            ctx.push(obj);
+            ctx.push(Tagged::from_int(i as i64));
+            primitives::get_slot(&mut ctx);
+
+            let result = ctx.pop();
+            match i {
+                0 => assert_eq!(result.to_int(), 42),
+                1 => {
+                    let str_ptr = result.to_ptr() as *const crate::ByteArray;
+                    let string = unsafe { (*str_ptr).as_str() };
+                    assert_eq!(string, "hello");
+                }
+                2 => assert_eq!(result, ctx.gc.specials.true_obj),
+                _ => panic!("Unexpected index"),
+            }
+        }
+
+        ctx.push(Tagged::from_int(99));
+        ctx.push(obj);
+        ctx.push(Tagged::from_int(0));
+        primitives::set_slot(&mut ctx);
+
+        ctx.push(obj);
+        ctx.push(Tagged::from_int(0));
+        primitives::get_slot(&mut ctx);
+
+        let result = ctx.pop();
+        assert_eq!(result.to_int(), 99);
+    }
+
+    #[test]
+    fn test_get_set_u8() {
+        let mut ctx = setup_context();
+
+        ctx.push(Tagged::from_int(10));
+        primitives::create_bytearray(&mut ctx);
+        let bytearray = ctx.pop();
+
+        let test_bytes = [65, 66, 67, 68, 69];
+
+        for (i, &byte) in test_bytes.iter().enumerate() {
+            ctx.push(Tagged::from_int(byte as i64));
+            ctx.push(bytearray);
+            ctx.push(Tagged::from_int(i as i64));
+            primitives::set_u8(&mut ctx);
+        }
+
+        for (i, &expected) in test_bytes.iter().enumerate() {
+            ctx.push(bytearray);
+            ctx.push(Tagged::from_int(i as i64));
+            primitives::get_u8(&mut ctx);
+
+            let result = ctx.pop();
+            assert_eq!(result.to_int(), expected as i64);
+        }
+
+        let bytearray_ptr = bytearray.to_ptr() as *const crate::ByteArray;
+        let string = unsafe { (*bytearray_ptr).as_str() };
+        assert_eq!(string, "ABCDE\0\0\0\0");
+
+        ctx.push(Tagged::from_int(90));
+        ctx.push(bytearray);
+        ctx.push(Tagged::from_int(0));
+        primitives::set_u8(&mut ctx);
+
+        ctx.push(bytearray);
+        ctx.push(Tagged::from_int(0));
+        primitives::get_u8(&mut ctx);
+
+        let result = ctx.pop();
+        assert_eq!(result.to_int(), 90);
+    }
+
+    #[test]
+    fn test_array_operations_integration() {
+        let mut ctx = setup_context();
+
+        ctx.push(Tagged::from_int(3));
+        primitives::create_array(&mut ctx);
+        let array = ctx.pop();
+
+        for i in 0..3 {
+            ctx.push(Tagged::from_int(i * 10));
+            ctx.push(array);
+            ctx.push(Tagged::from_int(i + 1));
+            primitives::set_slot(&mut ctx);
+        }
+
+        for i in 0..3 {
+            ctx.push(array);
+            ctx.push(Tagged::from_int(i + 1));
+            primitives::get_slot(&mut ctx);
+
+            let result = ctx.pop();
+            assert_eq!(result.to_int(), i * 10);
+        }
+
+        ctx.push(array);
+        ctx.push(Tagged::from_int(5));
+        primitives::resize_array(&mut ctx);
+        let resized = ctx.pop();
+
+        for i in 0..3 {
+            ctx.push(resized);
+            ctx.push(Tagged::from_int(i + 1));
+            primitives::get_slot(&mut ctx);
+
+            let result = ctx.pop();
+            assert_eq!(result.to_int(), i * 10);
+        }
+
+        for i in 3..5 {
+            ctx.push(Tagged::from_int(i * 10));
+            ctx.push(resized);
+            ctx.push(Tagged::from_int(i + 1));
+            primitives::set_slot(&mut ctx);
+        }
+
+        for i in 0..5 {
+            ctx.push(resized);
+            ctx.push(Tagged::from_int(i + 1));
+            primitives::get_slot(&mut ctx);
+
+            let result = ctx.pop();
+            assert_eq!(result.to_int(), i * 10);
+        }
+    }
+
+    #[test]
+    fn test_bytearray_as_string() {
+        let mut ctx = setup_context();
+
+        let text = "Hello World";
+        ctx.push(Tagged::from_int((text.len() + 1) as i64));
+        primitives::create_bytearray(&mut ctx);
+        let bytearray = ctx.pop();
+
+        for (i, byte) in text.bytes().enumerate() {
+            ctx.push(Tagged::from_int(byte as i64));
+            ctx.push(bytearray);
+            ctx.push(Tagged::from_int(i as i64));
+            primitives::set_u8(&mut ctx);
+        }
+
+        for (i, expected) in text.bytes().enumerate() {
+            ctx.push(bytearray);
+            ctx.push(Tagged::from_int(i as i64));
+            primitives::get_u8(&mut ctx);
+
+            let result = ctx.pop();
+            assert_eq!(result.to_int(), expected as i64);
+        }
+
+        let bytearray_ptr = bytearray.to_ptr() as *const crate::ByteArray;
+        let string = unsafe { (*bytearray_ptr).as_str() };
+        assert_eq!(string, text);
+    }
+
+    #[test]
+    fn test_edge_cases() {
+        let mut ctx = setup_context();
+
+        ctx.push(Tagged::from_int(0));
+        primitives::create_array(&mut ctx);
+        let empty_array = ctx.pop();
+
+        ctx.push(Tagged::from_int(0));
+        primitives::create_bytearray(&mut ctx);
+        let empty_bytearray = ctx.pop();
+
+        unsafe {
+            let array_ptr = empty_array.to_ptr() as *const crate::Array;
+            let bytearray_ptr =
+                empty_bytearray.to_ptr() as *const crate::ByteArray;
+
+            assert_eq!((*array_ptr).len(), 0);
+            assert_eq!((*bytearray_ptr).len(), 0);
+        }
+
+        ctx.push(Tagged::from_int(5));
+        primitives::create_array(&mut ctx);
+        let array = ctx.pop();
+
+        ctx.push(array);
+        ctx.push(Tagged::from_int(0));
+        primitives::resize_array(&mut ctx);
+        let resized_array = ctx.pop();
+
+        unsafe {
+            let array_ptr = resized_array.to_ptr() as *const crate::Array;
+            assert_eq!((*array_ptr).len(), 0);
         }
     }
 }

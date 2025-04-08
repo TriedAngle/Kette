@@ -44,10 +44,30 @@ impl Context {
         let ctx_map = gc.create_map(
             "Context",
             &[
-                ("datastack", SLOT_CONST_DATA, Tagged::from_int(0), Tagged::ffalse()),
-                ("retainstack", SLOT_CONST_DATA, Tagged::from_int(1), Tagged::ffalse()),
-                ("namestack", SLOT_CONST_DATA, Tagged::from_int(2), Tagged::ffalse()),
-                ("callstack", SLOT_CONST_DATA, Tagged::from_int(3), Tagged::ffalse()),
+                (
+                    "datastack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "retainstack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "namestack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "callstack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(3),
+                    Tagged::ffalse(),
+                ),
             ],
         );
 
@@ -141,7 +161,9 @@ impl Context {
     }
     pub fn reset_parser(&mut self, input: Tagged) {
         let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
-        unsafe { (*parser).reset(input); };
+        unsafe {
+            (*parser).reset(input);
+        };
     }
 
     pub fn read_next(&mut self) -> Tagged {

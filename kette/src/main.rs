@@ -8,8 +8,7 @@ use clap::{ArgAction, Parser};
 use parking_lot::Mutex;
 
 use kette::{
-    CodeHeap, Context, ContextConfig, Quotation, Tagged,
-    add_primitives,
+    CodeHeap, Context, ContextConfig, Quotation, Tagged, add_primitives,
 };
 
 #[derive(Parser, Debug)]
@@ -144,15 +143,15 @@ fn execute_string(ctx: &mut Context, input: &str) {
     ctx.reset_parser(input);
 
     let tokens = ctx.parse_until(None);
-        let quotation = ctx.gc.allocate_quotation(&tokens);
-        ctx.execute(quotation.to_ptr() as *const Quotation);
-        let codes = ctx.codes.lock();
-        let code = codes
-            .get_code_for_quotation(quotation.to_ptr() as _)
-            .unwrap();
+    let quotation = ctx.gc.allocate_quotation(&tokens);
+    ctx.execute(quotation.to_ptr() as *const Quotation);
+    let codes = ctx.codes.lock();
+    let code = codes
+        .get_code_for_quotation(quotation.to_ptr() as _)
+        .unwrap();
 
-        println!("parsed: {:?}", tokens);
-        println!("compiled: {:?}", code);
+    println!("parsed: {:?}", tokens);
+    println!("compiled: {:?}", code);
 }
 
 fn print_stack(ctx: &Context) {

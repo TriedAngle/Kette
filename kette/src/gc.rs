@@ -550,9 +550,8 @@ impl GarbageCollector {
 
         let map = ptr as *mut Map;
         unsafe {
-            (*map).header = ObjectHeader::new(
-                self.specials.map_map.to_ptr() as *mut Map,
-            );
+            (*map).header =
+                ObjectHeader::new(self.specials.map_map.to_ptr() as *mut Map);
             (*map).name = name;
             (*map).slots = slots;
             (*map).slot_count = Tagged::from_int(slot_count as i64);
@@ -623,7 +622,8 @@ impl GarbageCollector {
         let slots_tagged = self.allocate_array(slots.len());
         let slots_ptr = slots_tagged.to_ptr() as *mut Array;
 
-        for (i, &(slot_name, kind, value, default)) in slots.iter().enumerate() {
+        for (i, &(slot_name, kind, value, default)) in slots.iter().enumerate()
+        {
             let slot_name_tagged = self.allocate_string(slot_name);
             let kind_tagged = Tagged::from_int(kind);
 
@@ -1533,7 +1533,6 @@ mod tests {
         assert_eq!(gc.allocations.len(), after + 1);
         gc.collect_garbage();
         assert_eq!(before, gc.allocations.len());
-
     }
     #[test]
     fn test_garbage_collection() {

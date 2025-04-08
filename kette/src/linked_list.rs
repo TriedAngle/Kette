@@ -41,11 +41,14 @@ impl Block {
     fn new(size: usize) -> Self {
         let aligned_size = (size + MIN_ALIGNMENT - 1) & !(MIN_ALIGNMENT - 1);
 
-        let layout = std::alloc::Layout::from_size_align(aligned_size, MIN_ALIGNMENT)
-            .expect("Invalid layout");
+        let layout =
+            std::alloc::Layout::from_size_align(aligned_size, MIN_ALIGNMENT)
+                .expect("Invalid layout");
 
-        let ptr =
-            unsafe { NonNull::new(std::alloc::alloc(layout)).expect("Memory allocation failed") };
+        let ptr = unsafe {
+            NonNull::new(std::alloc::alloc(layout))
+                .expect("Memory allocation failed")
+        };
 
         Block {
             ptr,
@@ -82,8 +85,9 @@ impl Block {
 impl Drop for Block {
     fn drop(&mut self) {
         unsafe {
-            let layout = std::alloc::Layout::from_size_align(self.size, MIN_ALIGNMENT)
-                .expect("Invalid layout in drop");
+            let layout =
+                std::alloc::Layout::from_size_align(self.size, MIN_ALIGNMENT)
+                    .expect("Invalid layout in drop");
             std::alloc::dealloc(self.ptr.as_ptr(), layout);
         }
     }
@@ -159,15 +163,17 @@ impl LinkedListAllocator {
         let mut block_ptr = self.get_or_create_block(required_size);
 
         let mut node_ptr = unsafe {
-            block_ptr
-                .as_mut()
-                .allocate_node(data_size)
-                .expect("Failed to allocate node in block that should have space")
+            block_ptr.as_mut().allocate_node(data_size).expect(
+                "Failed to allocate node in block that should have space",
+            )
         };
 
         let data_dest = unsafe {
             let node = node_ptr.as_ref();
-            std::slice::from_raw_parts_mut(node.data_ptr() as *mut u8, data_size)
+            std::slice::from_raw_parts_mut(
+                node.data_ptr() as *mut u8,
+                data_size,
+            )
         };
         data_dest.copy_from_slice(data);
 
@@ -212,8 +218,10 @@ mod tests {
         let data1 = [1, 2, 3, 4, 5];
         let data2 = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 
-        let allocated_data1 = unsafe { allocator.allocate(&data1).as_ref().data_as::<u8>() };
-        let allocated_data2 = unsafe { allocator.allocate(&data2).as_ref().data_as::<u8>() };
+        let allocated_data1 =
+            unsafe { allocator.allocate(&data1).as_ref().data_as::<u8>() };
+        let allocated_data2 =
+            unsafe { allocator.allocate(&data2).as_ref().data_as::<u8>() };
 
         assert_eq!(allocated_data1.len(), data1.len());
         assert_eq!(allocated_data2.len(), data2.len());
@@ -226,9 +234,11 @@ mod tests {
     fn test_linkedlist_allocator_large_data() {
         let mut allocator = LinkedListAllocator::new();
 
-        let large_data = vec![42; DEFAULT_BLOCK_SIZE - std::mem::size_of::<Node>()];
+        let large_data =
+            vec![42; DEFAULT_BLOCK_SIZE - std::mem::size_of::<Node>()];
 
-        let allocated_data = unsafe { allocator.allocate(&large_data).as_ref().data_as::<u8>() };
+        let allocated_data =
+            unsafe { allocator.allocate(&large_data).as_ref().data_as::<u8>() };
 
         assert_eq!(allocated_data.len(), large_data.len());
 
@@ -252,7 +262,9 @@ mod tests {
         for i in 0..total_items {
             let data = vec![(i % 256) as u8; item_size];
             original_data.push(data.clone());
-            allocated_data.push(unsafe { allocator.allocate(&data).as_ref() }.data_as::<u8>());
+            allocated_data.push(
+                unsafe { allocator.allocate(&data).as_ref() }.data_as::<u8>(),
+            );
         }
 
         for i in 0..total_items {
