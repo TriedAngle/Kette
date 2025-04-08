@@ -5,7 +5,7 @@ use std::str;
 
 use crate::{
     Array, ByteArray, Map, Object, ObjectHeader, SLOT_CONST_DATA, SLOT_DATA,
-    Slot, Tagged,
+    SLOT_PARENT, Slot, Tagged,
 };
 
 pub struct SpecialObjects {
@@ -131,7 +131,7 @@ impl GarbageCollector {
     }
 
     fn mark_object(&self, tagged: Tagged) {
-        if tagged.is_int() || tagged == Tagged::null() {
+        if tagged.is_int() || tagged.is_false() {
             return;
         }
 
@@ -201,81 +201,144 @@ impl GarbageCollector {
     unsafe fn initialize_special_objects(&mut self) {
         let map_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.map_map = Tagged::from_ptr(map_map_ptr as *mut Object);
+        self.add_root(self.specials.map_map);
 
         let object_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.object_map =
             Tagged::from_ptr(object_map_ptr as *mut Object);
+        self.add_root(self.specials.object_map);
 
         let false_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.false_map =
             Tagged::from_ptr(false_map_ptr as *mut Object);
+        self.add_root(self.specials.false_map);
 
         let fixnum_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.fixnum_map =
             Tagged::from_ptr(fixnum_map_ptr as *mut Object);
+        self.add_root(self.specials.fixnum_map);
 
         let array_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.array_map =
             Tagged::from_ptr(array_map_ptr as *mut Object);
+        self.add_root(self.specials.array_map);
 
         let bytearray_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.bytearray_map =
             Tagged::from_ptr(bytearray_map_ptr as *mut Object);
+        self.add_root(self.specials.bytearray_map);
+
+        let slot_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.slot_map = Tagged::from_ptr(slot_map_ptr as *mut Object);
+        self.add_root(self.specials.slot_map);
 
         unsafe {
             (*map_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*map_map_ptr).data_slots = Tagged::from_int(5);
-        }
 
-        unsafe {
             (*object_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*object_map_ptr).data_slots = Tagged::from_int(0);
-        }
 
-        unsafe {
             (*false_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*false_map_ptr).data_slots = Tagged::from_int(0);
-        }
 
-        unsafe {
             (*fixnum_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*fixnum_map_ptr).data_slots = Tagged::from_int(0);
-        }
 
-        unsafe {
             (*array_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*array_map_ptr).data_slots = Tagged::from_int(0);
-        }
 
-        unsafe {
             (*bytearray_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*bytearray_map_ptr).data_slots = Tagged::from_int(0);
+
+            (*slot_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*slot_map_ptr).data_slots = Tagged::from_int(4);
         }
 
-        let slot_map = self.create_map(
+        let null_tag = Tagged::null();
+
+        self.initialize_map_slots(
+            self.specials.slot_map,
             "Slot",
             &[
-                (
-                    "name",
-                    SLOT_CONST_DATA,
-                    Tagged::from_int(0),
-                    Tagged::ffalse(),
-                ),
-                (
-                    "kind",
-                    SLOT_CONST_DATA,
-                    Tagged::from_int(1),
-                    Tagged::ffalse(),
-                ),
-                (
-                    "value",
-                    SLOT_CONST_DATA,
-                    Tagged::from_int(2),
-                    Tagged::ffalse(),
-                ),
+                ("name", SLOT_CONST_DATA, Tagged::from_int(0), null_tag),
+                ("kind", SLOT_CONST_DATA, Tagged::from_int(1), null_tag),
+                ("value", SLOT_CONST_DATA, Tagged::from_int(2), null_tag),
+                ("default", SLOT_CONST_DATA, Tagged::from_int(3), null_tag),
             ],
         );
-        self.specials.slot_map = slot_map;
+
+        self.initialize_map_slots(
+            self.specials.map_map,
+            "Map",
+            &[
+                ("name", SLOT_CONST_DATA, Tagged::from_int(0), null_tag),
+                (
+                    "data_slots",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::from_int(0),
+                ),
+                ("slot_count", SLOT_CONST_DATA, Tagged::from_int(2), null_tag),
+                ("slots", SLOT_CONST_DATA, Tagged::from_int(3), null_tag),
+                ("prototype", SLOT_CONST_DATA, Tagged::from_int(4), null_tag),
+            ],
+        );
+
+        self.initialize_map_slots(
+            self.specials.object_map,
+            "Object",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.false_map,
+            "False",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.fixnum_map,
+            "Fixnum",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.array_map,
+            "Array",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.bytearray_map,
+            "ByteArray",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
 
         let quotation_map = self.create_map(
             "Quotation",
@@ -292,9 +355,16 @@ impl GarbageCollector {
                     Tagged::from_int(1),
                     Tagged::ffalse(),
                 ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
             ],
         );
         self.specials.quotation_map = quotation_map;
+        self.add_root(self.specials.quotation_map);
 
         let word_map = self.create_map(
             "Word",
@@ -323,9 +393,16 @@ impl GarbageCollector {
                     Tagged::from_int(3),
                     Tagged::ffalse(),
                 ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
             ],
         );
         self.specials.word_map = word_map;
+        self.add_root(self.specials.word_map);
 
         let parser_map = self.create_map(
             "Parser",
@@ -342,34 +419,30 @@ impl GarbageCollector {
                     Tagged::from_int(1),
                     Tagged::ffalse(),
                 ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
             ],
         );
-
         let parser = self.allocate_object(parser_map);
         self.specials.parser = parser;
+        self.add_root(parser);
 
         let true_map = self.create_map("True", &[]);
         let true_obj = self.allocate_object(true_map);
         self.specials.true_obj = true_obj;
+        self.add_root(self.specials.true_obj);
 
         self.specials.primitive_tag =
             self.allocate_object(self.specials.object_map);
         self.specials.parser_tag =
             self.allocate_object(self.specials.object_map);
 
-        self.add_root(self.specials.map_map);
-        self.add_root(self.specials.object_map);
-        self.add_root(self.specials.false_map);
-        self.add_root(self.specials.fixnum_map);
-        self.add_root(self.specials.array_map);
-        self.add_root(self.specials.bytearray_map);
-        self.add_root(self.specials.slot_map);
-        self.add_root(self.specials.quotation_map);
-        self.add_root(self.specials.word_map);
-        self.add_root(self.specials.parser);
         self.add_root(self.specials.primitive_tag);
         self.add_root(self.specials.parser_tag);
-        self.add_root(self.specials.true_obj);
     }
 
     fn raw_allocate<T>(&mut self, size: usize) -> *mut T {
@@ -478,7 +551,7 @@ impl GarbageCollector {
         let map = ptr as *mut Map;
         unsafe {
             (*map).header = ObjectHeader::new(
-                self.specials.object_map.to_ptr() as *mut Map,
+                self.specials.map_map.to_ptr() as *mut Map,
             );
             (*map).name = name;
             (*map).slots = slots;
@@ -550,15 +623,15 @@ impl GarbageCollector {
         let slots_tagged = self.allocate_array(slots.len());
         let slots_ptr = slots_tagged.to_ptr() as *mut Array;
 
-        for (i, (slot_name, kind, value, default)) in slots.iter().enumerate() {
+        for (i, &(slot_name, kind, value, default)) in slots.iter().enumerate() {
             let slot_name_tagged = self.allocate_string(slot_name);
-            let kind_tagged = Tagged::from_int(*kind);
+            let kind_tagged = Tagged::from_int(kind);
 
             let slot_tagged = self.allocate_slot(
                 slot_name_tagged,
                 kind_tagged,
-                *value,
-                *default,
+                value,
+                default,
             );
 
             unsafe {
@@ -883,6 +956,71 @@ impl GarbageCollector {
         }
 
         word
+    }
+
+    pub fn initialize_map_slots(
+        &mut self,
+        map: Tagged,
+        name: &str,
+        slots: &[(&str, i64, Tagged, Tagged)],
+    ) {
+        let map_ptr = map.to_ptr() as *mut Map;
+
+        unsafe {
+            (*map_ptr).name = self.allocate_string(name);
+        }
+
+        let slots_array = self.allocate_array(slots.len());
+
+        let slots_ptr = slots_array.to_ptr() as *mut Array;
+        for (i, &(slot_name, kind, value, default)) in slots.iter().enumerate()
+        {
+            let slot_name_tagged = self.allocate_string(slot_name);
+            let kind_tagged = Tagged::from_int(kind);
+
+            let slot_tagged = self.allocate_slot(
+                slot_name_tagged,
+                kind_tagged,
+                value,
+                default,
+            );
+
+            unsafe {
+                (*slots_ptr).set(i, slot_tagged);
+            }
+        }
+
+        unsafe {
+            (*map_ptr).slots = slots_array;
+            (*map_ptr).slot_count = Tagged::from_int(slots.len() as i64);
+        }
+
+        if map == self.specials.false_map
+            || map == self.specials.fixnum_map
+            || map == self.specials.array_map
+            || map == self.specials.bytearray_map
+        {
+            return;
+        }
+
+        let prototype = self.allocate_object(map);
+        let proto_ptr = prototype.to_ptr();
+
+        unsafe {
+            let data_slots = (*map_ptr).data_slots.to_int() as usize;
+            if data_slots > 0 {
+                let mut data_slot_index = 0;
+
+                for (_, kind, _, default) in slots {
+                    if *kind == SLOT_CONST_DATA || *kind == SLOT_DATA {
+                        (*proto_ptr).set_slot(data_slot_index, *default);
+                        data_slot_index += 1;
+                    }
+                }
+            }
+
+            (*map_ptr).prototype = prototype;
+        }
     }
 }
 
@@ -1382,6 +1520,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_garbage_collection_stable() {
+        let mut gc = GarbageCollector::new();
+
+        let before = gc.allocations.len();
+        gc.collect_garbage();
+        let after = gc.allocations.len();
+        assert_eq!(before, after);
+
+        let _temp1 = gc.allocate_string("Temporary 1");
+        assert_eq!(gc.allocations.len(), after + 1);
+        gc.collect_garbage();
+        assert_eq!(before, gc.allocations.len());
+
+    }
     #[test]
     fn test_garbage_collection() {
         let mut gc = GarbageCollector::new();

@@ -475,8 +475,7 @@ fn namestack_remove(ctx: &mut Context) {
 mod tests {
     use super::*;
     use crate::{
-        ByteArray, CodeHeap, Context, ContextConfig, SLOT_CONST_DATA, Tagged,
-        Word, primitives,
+        primitives, ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Object, Tagged, Word, SLOT_CONST_DATA
     };
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -777,6 +776,86 @@ mod tests {
 
             let age_slot = (*person2_ptr).get_slot(1);
             assert_eq!(age_slot.to_int(), 30);
+        }
+    }
+
+    #[test]
+    fn test_empty_map_always_has_prototype() {
+        let mut gc = GarbageCollector::new();
+
+        let empty_map = gc.create_map("EmptyClass", &[]);
+
+        unsafe {
+            let map_ptr = empty_map.to_ptr() as *mut Map;
+            let prototype = (*map_ptr).prototype;
+
+            assert!(!prototype.is_false());
+            assert!(prototype != Tagged::null());
+
+            let proto_ptr = prototype.to_ptr();
+            let proto_map_ptr = (*proto_ptr).header.get_map();
+
+            assert_eq!(proto_map_ptr as *mut Object, empty_map.to_ptr());
+        }
+
+        let mut ctx = setup_context();
+        ctx.push(empty_map);
+        new_from_prototype(&mut ctx);
+
+        let instance = ctx.pop();
+
+        unsafe {
+            let instance_ptr = instance.to_ptr();
+            let instance_map_ptr = (*instance_ptr).header.get_map();
+
+            assert!(instance.to_ptr() != empty_map.to_ptr());
+            assert_eq!(instance_map_ptr as *mut Object, empty_map.to_ptr());
+        }
+    }
+
+    #[test]
+    fn test_map_with_default_values() {
+        let mut gc = GarbageCollector::new();
+
+        let default_name = gc.allocate_string("Default Name");
+        let default_age = Tagged::from_int(25);
+
+        let person_map = gc.create_map(
+            "Person",
+            &[
+                ("name", SLOT_CONST_DATA, Tagged::from_int(0), default_name),
+                ("age", SLOT_CONST_DATA, Tagged::from_int(1), default_age),
+            ],
+        );
+
+        unsafe {
+            let map_ptr = person_map.to_ptr() as *mut Map;
+            let prototype = (*map_ptr).prototype;
+            assert!(!prototype.is_false());
+
+            let proto_ptr = prototype.to_ptr();
+
+            let name_slot = (*proto_ptr).get_slot(0);
+            let name_ptr = name_slot.to_ptr() as *const ByteArray;
+            assert_eq!((*name_ptr).as_str(), "Default Name");
+            let age_slot = (*proto_ptr).get_slot(1);
+            assert_eq!(age_slot.to_int(), 25);
+        }
+
+        let mut ctx = setup_context();
+        ctx.push(person_map);
+        new_from_prototype(&mut ctx);
+
+        let person = ctx.pop();
+
+        unsafe {
+            let person_ptr = person.to_ptr();
+            let name_slot = (*person_ptr).get_slot(0);
+            let name_ptr = name_slot.to_ptr() as *const ByteArray;
+            assert_eq!((*name_ptr).as_str(), "Default Name");
+
+            let age_slot = (*person_ptr).get_slot(1);
+            assert_eq!(age_slot.to_int(), 25);
         }
     }
 }

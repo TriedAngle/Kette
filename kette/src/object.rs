@@ -181,6 +181,11 @@ impl Object {
 
 impl ObjectHeader {
     pub fn new(map_ptr: *mut Map) -> Self {
+        debug_assert!(
+            (map_ptr as u64 & ((1 << 3) - 1)) == 0,
+            "Map pointer must be aligned to at least {} bytes",
+            1 << 3
+        );
         let header_value = TAG_HEADER | ((map_ptr as u64) << MAP_SHIFT);
         Self(header_value)
     }
@@ -198,7 +203,8 @@ impl ObjectHeader {
     }
 
     pub fn get_map(&self) -> *mut Map {
-        (self.0 >> MAP_SHIFT) as *mut Map
+        let value = self.0 & !TAG_MASK_FULL;
+        (value >> MAP_SHIFT) as *mut Map
     }
 }
 
