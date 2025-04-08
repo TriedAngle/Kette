@@ -16,6 +16,7 @@ pub struct Context {
 
     pub data: MemoryRegion<Tagged>,
     pub retain: MemoryRegion<Tagged>,
+    pub call: MemoryRegion<(Tagged, Tagged)>,
     pub name: MemoryRegion<(Tagged, Tagged)>,
 }
 
@@ -23,6 +24,7 @@ pub struct ContextConfig {
     pub data_size: usize,
     pub retian_size: usize,
     pub name_size: usize,
+    pub call_size: usize,
 }
 
 impl Context {
@@ -31,15 +33,17 @@ impl Context {
         let datastack = gc.allocate_array(config.data_size);
         let retainstack = gc.allocate_array(config.retian_size);
         let namestack = gc.allocate_array(config.name_size);
-        let callstack = Tagged::ffalse();
+        let callstack = gc.allocate_array(config.call_size);
 
         let data = (datastack.to_ptr() as *mut Array).into();
         let retain = (retainstack.to_ptr() as *mut Array).into();
         let name = (namestack.to_ptr() as *mut Array).into();
+        let call = (callstack.to_ptr() as *mut Array).into();
 
         gc.add_root(datastack);
         gc.add_root(retainstack);
         gc.add_root(namestack);
+        gc.add_root(callstack);
 
         let ctx_map = gc.create_map(
             "Context",
@@ -83,6 +87,7 @@ impl Context {
             data,
             retain,
             name,
+            call,
             codes,
             gc,
         }
@@ -368,6 +373,7 @@ mod tests {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
+            call_size: 100
         };
         Context::new(&config, code_heap)
     }
@@ -564,6 +570,7 @@ mod tests {
             data_size: 10,
             retian_size: 10,
             name_size: 2,
+            call_size: 0,
         };
         let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
         let mut ctx = Context::new(&config, code_heap);

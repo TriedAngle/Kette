@@ -576,8 +576,7 @@ fn namestack_remove(ctx: &mut Context) {
 mod tests {
     use super::*;
     use crate::{
-        ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Object,
-        SLOT_CONST_DATA, Tagged, Word, primitives,
+        primitives, ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Object, Tagged, Word, SLOT_CONST_DATA, SLOT_PARENT
     };
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -588,6 +587,7 @@ mod tests {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
+            call_size: 100,
         };
         let mut ctx = Context::new(&config, code_heap);
         primitives::add_primitives(&mut ctx);
@@ -727,21 +727,7 @@ mod tests {
 
     #[test]
     fn test_send_methods() {
-        use crate::{
-            ByteArray, CodeHeap, Context, ContextConfig, SLOT_METHOD,
-            SLOT_PARENT,
-        };
-        use parking_lot::Mutex;
-        use std::sync::Arc;
-
-        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
-        let config = ContextConfig {
-            data_size: 100,
-            retian_size: 100,
-            name_size: 100,
-        };
-        let mut ctx = Context::new(&config, code_heap);
-        primitives::add_primitives(&mut ctx);
+        let mut ctx = setup_context();
 
         let parent_map = ctx.gc.create_map("ParentClass", &[]);
 

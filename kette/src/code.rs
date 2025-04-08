@@ -430,6 +430,7 @@ mod test {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
+            call_size: 100,
         };
         Context::new(&config, heap)
     }
