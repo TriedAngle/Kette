@@ -9,7 +9,11 @@ pub struct MemoryRegion<T> {
 
 impl<T> MemoryRegion<T> {
     pub fn new(start: *mut T, size: usize) -> Self {
-        let end = if size > 0 { unsafe { start.add(size - 1) } } else { start };
+        let end = if size > 0 {
+            unsafe { start.add(size - 1) }
+        } else {
+            start
+        };
         let current = start;
         Self {
             start,

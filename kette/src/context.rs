@@ -1,8 +1,13 @@
 use crate::{
-    Array, ByteArray, CodeHeap, GarbageCollector, MemoryRegion, Mutex, Object,
-    ObjectHeader, ParseStackFn, Parser, SLOT_CONST_DATA, StackFn, Tagged, Word,
+    Array, ByteArray, CodeHeap, GarbageCollector, Handler, Map, MemoryRegion,
+    Mutex, Object, ObjectHeader, ParseStackFn, Parser, Quotation,
+    SLOT_CONST_DATA, StackFn, Tagged, Word,
 };
-use std::{mem, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+};
 
 pub struct Context {
     pub header: ObjectHeader,
@@ -10,14 +15,17 @@ pub struct Context {
     pub retainstack: Tagged,
     pub namestack: Tagged,
     pub callstack: Tagged,
+    pub handlerstack: Tagged,
 
     pub gc: GarbageCollector,
     pub codes: Arc<Mutex<CodeHeap>>,
 
     pub data: MemoryRegion<Tagged>,
     pub retain: MemoryRegion<Tagged>,
-    pub call: MemoryRegion<(Tagged, Tagged)>,
+    pub call: MemoryRegion<Tagged>,
     pub name: MemoryRegion<(Tagged, Tagged)>,
+    pub handlers: MemoryRegion<Tagged>,
+    pub supertypes: HashMap<*mut Map, HashSet<*mut Map>>,
 }
 
 pub struct ContextConfig {
@@ -25,6 +33,7 @@ pub struct ContextConfig {
     pub retian_size: usize,
     pub name_size: usize,
     pub call_size: usize,
+    pub handler_size: usize,
 }
 
 impl Context {
@@ -34,11 +43,13 @@ impl Context {
         let retainstack = gc.allocate_array(config.retian_size);
         let namestack = gc.allocate_array(config.name_size);
         let callstack = gc.allocate_array(config.call_size);
+        let handlerstack = gc.allocate_array(config.handler_size);
 
         let data = (datastack.to_ptr() as *mut Array).into();
         let retain = (retainstack.to_ptr() as *mut Array).into();
         let name = (namestack.to_ptr() as *mut Array).into();
         let call = (callstack.to_ptr() as *mut Array).into();
+        let handlers = (handlerstack.to_ptr() as *mut Array).into();
 
         gc.add_root(datastack);
         gc.add_root(retainstack);
@@ -72,25 +83,52 @@ impl Context {
                     Tagged::from_int(3),
                     Tagged::ffalse(),
                 ),
+                (
+                    "handlerstack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(4),
+                    Tagged::ffalse(),
+                ),
             ],
         );
 
         let header = ObjectHeader::new(ctx_map.to_ptr() as *mut _);
         gc.add_root(ctx_map);
+        let supertypes = HashMap::new();
 
-        Self {
+        let mut new = Self {
             header,
             datastack,
             retainstack,
             namestack,
             callstack,
+            handlerstack,
             data,
             retain,
             name,
             call,
+            handlers,
             codes,
             gc,
-        }
+            supertypes,
+        };
+
+        new.register_map_inheritance(new.gc.specials.object_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.false_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.map_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.fixnum_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.array_map.to_ptr() as _);
+        new.register_map_inheritance(
+            new.gc.specials.bytearray_map.to_ptr() as _
+        );
+        new.register_map_inheritance(new.gc.specials.slot_map.to_ptr() as _);
+        new.register_map_inheritance(
+            new.gc.specials.quotation_map.to_ptr() as _
+        );
+        new.register_map_inheritance(new.gc.specials.word_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.handler_map.to_ptr() as _);
+
+        new
     }
 
     pub fn push(&mut self, value: Tagged) {
@@ -121,6 +159,137 @@ impl Context {
     pub fn retain_data(&mut self) {
         let value = self.retain_pop();
         self.push(value);
+    }
+
+    pub fn push_handler(&mut self, handler: Tagged) {
+        self.handlers.replace(handler);
+        self.handlers.increment(1);
+    }
+
+    pub fn pop_handler(&mut self) -> Tagged {
+        if self.handlers.current <= self.handlers.start {
+            return Tagged::ffalse();
+        }
+
+        self.handlers.decrement(1);
+        self.handlers.replace(Tagged::null())
+    }
+
+    pub fn get_current_frame(&mut self) -> Tagged {
+        if self.call.current <= self.call.start {
+            return Tagged::ffalse();
+        }
+
+        let frame = unsafe { *self.call.current.sub(1) };
+        return frame;
+    }
+
+    pub fn unwind_to_frame(&mut self, frame: Tagged) {
+        let mut current_ptr = self.call.current;
+
+        while current_ptr >= self.call.start {
+            let frame_obj = unsafe { *current_ptr };
+            if frame_obj == frame {
+                self.call.current = unsafe { current_ptr.add(1) };
+                return;
+            }
+
+            unsafe { current_ptr = current_ptr.sub(1) };
+        }
+
+        panic!("Fatal VM State: unwinding target not found")
+    }
+
+    pub fn throw(&mut self, exception: Tagged) {
+        let handler_count = (self.handlers.current as usize
+            - self.handlers.start as usize)
+            / std::mem::size_of::<Tagged>();
+
+        if handler_count == 0 {
+            panic!("Fatal VM State: No handlers installed");
+        }
+
+        for i in (0..handler_count).rev() {
+            let handler = unsafe { *(self.handlers.start.add(i)) };
+            let handler_ptr = handler.to_ptr() as *mut Handler;
+
+            let tty = unsafe { (*handler_ptr).tty };
+            let handler_quot = unsafe { (*handler_ptr).handler };
+            let handler_frame = unsafe { (*handler_ptr).frame };
+
+            // TODO: support inheritance
+            if self.is_instance_of(exception, tty) {
+                self.push(handler_frame);
+                self.execute(handler_quot.to_ptr() as *const Quotation);
+                return;
+            }
+        }
+
+        panic!("Fatal VM State: No matching handler found");
+    }
+
+    pub fn create_map(
+        &mut self,
+        name: &str,
+        slots: &[(&str, i64, Tagged, Tagged)],
+    ) -> Tagged {
+        let map_tagged = self.gc.create_map(name, slots);
+
+        self.register_map_inheritance(map_tagged.to_ptr() as *mut Map);
+
+        map_tagged
+    }
+
+    fn register_map_inheritance(&mut self, map_ptr: *mut Map) {
+        if self.supertypes.contains_key(&map_ptr) {
+            return;
+        }
+
+        let mut parents = HashSet::new();
+        parents.insert(map_ptr);
+
+        let parent_slots = unsafe { (*map_ptr).get_parent_slots() };
+
+        for parent_slot in parent_slots {
+            let parent_tagged = unsafe { (*parent_slot).value };
+            if !parent_tagged.is_false() {
+                let parent_map_ptr = parent_tagged.to_ptr() as *mut Map;
+
+                self.register_map_inheritance(parent_map_ptr);
+
+                parents.insert(parent_map_ptr);
+
+                if let Some(parent_set) = self.supertypes.get(&parent_map_ptr) {
+                    for &ancestor in parent_set {
+                        parents.insert(ancestor);
+                    }
+                }
+            }
+        }
+
+        self.supertypes.insert(map_ptr, parents);
+    }
+
+    pub fn is_instance_of(&self, obj: Tagged, map: Tagged) -> bool {
+        if obj.is_int() || obj.is_false() {
+            if obj.is_false() && map == self.gc.specials.false_map {
+                return true;
+            }
+            return false;
+        }
+
+        let obj_ptr = obj.to_ptr();
+        let obj_map_ptr = unsafe { (*obj_ptr).header.get_map() };
+
+        self.is_subtype_of(obj_map_ptr, map.to_ptr() as _)
+    }
+
+    pub fn is_subtype_of(&self, map: *mut Map, parent: *mut Map) -> bool {
+        if let Some(parents) = self.supertypes.get(&map) {
+            parents.contains(&parent)
+        } else {
+            panic!("Fatal VM State: Map '{:?}' not registered", map);
+        }
     }
 
     pub fn lookup(&self, tagged: Tagged) -> (Tagged, Tagged) {
@@ -365,7 +534,7 @@ mod tests {
 
     use parking_lot::Mutex;
 
-    use crate::{CodeHeap, Context, ContextConfig, Tagged};
+    use crate::{CodeHeap, Context, ContextConfig, Map, SLOT_PARENT, Tagged};
 
     fn setup_context() -> Context {
         let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
@@ -373,7 +542,8 @@ mod tests {
             data_size: 100,
             retian_size: 100,
             name_size: 100,
-            call_size: 100
+            call_size: 100,
+            handler_size: 100,
         };
         Context::new(&config, code_heap)
     }
@@ -571,6 +741,7 @@ mod tests {
             retian_size: 10,
             name_size: 2,
             call_size: 0,
+            handler_size: 0,
         };
         let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
         let mut ctx = Context::new(&config, code_heap);
@@ -614,5 +785,104 @@ mod tests {
             ctx.namestack_remove(null_key),
             (Tagged::ffalse(), Tagged::ffalse())
         );
+    }
+
+    #[test]
+    fn test_map_inheritance() {
+        let mut ctx = setup_context();
+
+        let parent_map = ctx.create_map("Parent", &[]);
+        let child_map = ctx.create_map(
+            "Child",
+            &[("Parent", SLOT_PARENT, parent_map, Tagged::ffalse())],
+        );
+        let grandchild_map = ctx.create_map(
+            "Grandchild",
+            &[("Parent", SLOT_PARENT, child_map, Tagged::ffalse())],
+        );
+
+        let parent_obj = ctx.gc.allocate_object(parent_map);
+        let child_obj = ctx.gc.allocate_object(child_map);
+        let grandchild_obj = ctx.gc.allocate_object(grandchild_map);
+
+        assert!(ctx.is_instance_of(parent_obj, parent_map));
+        assert!(!ctx.is_instance_of(parent_obj, child_map));
+
+        assert!(ctx.is_instance_of(child_obj, child_map));
+        assert!(ctx.is_instance_of(child_obj, parent_map));
+        assert!(!ctx.is_instance_of(child_obj, grandchild_map));
+
+        assert!(ctx.is_instance_of(grandchild_obj, grandchild_map));
+        assert!(ctx.is_instance_of(grandchild_obj, child_map));
+        assert!(ctx.is_instance_of(grandchild_obj, parent_map));
+
+        assert!(ctx.is_subtype_of(
+            parent_map.to_ptr() as *mut Map,
+            parent_map.to_ptr() as *mut Map
+        ));
+        assert!(!ctx.is_subtype_of(
+            parent_map.to_ptr() as *mut Map,
+            child_map.to_ptr() as *mut Map
+        ));
+
+        assert!(ctx.is_subtype_of(
+            child_map.to_ptr() as *mut Map,
+            child_map.to_ptr() as *mut Map
+        ));
+        assert!(ctx.is_subtype_of(
+            child_map.to_ptr() as *mut Map,
+            parent_map.to_ptr() as *mut Map
+        ));
+        assert!(!ctx.is_subtype_of(
+            child_map.to_ptr() as *mut Map,
+            grandchild_map.to_ptr() as *mut Map
+        ));
+
+        assert!(ctx.is_subtype_of(
+            grandchild_map.to_ptr() as *mut Map,
+            grandchild_map.to_ptr() as *mut Map
+        ));
+        assert!(ctx.is_subtype_of(
+            grandchild_map.to_ptr() as *mut Map,
+            child_map.to_ptr() as *mut Map
+        ));
+        assert!(ctx.is_subtype_of(
+            grandchild_map.to_ptr() as *mut Map,
+            parent_map.to_ptr() as *mut Map
+        ));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_unregistered_map() {
+        let mut ctx = setup_context();
+
+        let unregistered_map = ctx.gc.create_map("Unregistered", &[]);
+        let registered_map = ctx.create_map("Registered", &[]);
+
+        assert!(
+            !ctx.supertypes
+                .contains_key(&(unregistered_map.to_ptr() as *mut Map))
+        );
+        assert!(
+            ctx.supertypes
+                .contains_key(&(registered_map.to_ptr() as *mut Map))
+        );
+
+        assert!(!ctx.is_subtype_of(
+            unregistered_map.to_ptr() as *mut Map,
+            registered_map.to_ptr() as *mut Map
+        ));
+
+        ctx.register_map_inheritance(unregistered_map.to_ptr() as *mut Map);
+
+        assert!(
+            ctx.supertypes
+                .contains_key(&(unregistered_map.to_ptr() as *mut Map))
+        );
+        assert!(ctx.is_subtype_of(
+            unregistered_map.to_ptr() as *mut Map,
+            unregistered_map.to_ptr() as *mut Map
+        ));
     }
 }

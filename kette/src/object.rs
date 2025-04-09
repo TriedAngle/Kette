@@ -91,6 +91,15 @@ pub struct Word {
     pub body: Tagged,   // quotation
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Handler {
+    pub header: ObjectHeader,
+    pub tty: Tagged,     // Map Object
+    pub handler: Tagged, // Quotation
+    pub frame: Tagged,   // stackframe where defined
+}
+
 impl Tagged {
     pub const fn null() -> Self {
         Self(0)
@@ -465,7 +474,7 @@ impl Map {
         None
     }
 
-    unsafe fn get_parent_slots(&self) -> Vec<*mut Slot> {
+    pub unsafe fn get_parent_slots(&self) -> Vec<*mut Slot> {
         let mut parent_slots = Vec::new();
         let slot_count = self.slot_count.to_int() as usize;
 

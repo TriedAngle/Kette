@@ -33,7 +33,9 @@ fn main() {
         retian_size: 1024,
         name_size: 1024,
         call_size: 1024,
+        handler_size: 1024,
     };
+
     let mut ctx = Context::new(&config, code_heap);
     add_primitives(&mut ctx);
 

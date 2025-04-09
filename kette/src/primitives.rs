@@ -48,6 +48,11 @@ pub fn add_primitives(ctx: &mut Context) {
         ("namestack|insert", "k v -- old-k old-v", namestack_push),
         ("namestack|find", "k -- k v", namestack_lookup),
         ("namestack|delete", "k -- k v", namestack_remove),
+        ("get-frame", " -- stackframe", get_current_frame),
+        ("push-handler", "handler -- ", push_handler),
+        ("pop-handler", " -- handler", pop_handler),
+        ("throw", "error -- ", throw),
+        ("unwind-to-frame", " frame -- ", unwind_to_frame),
         // parser
         ("@read-next", " -- str", read_next),
         ("@read-until", "end -- str", read_until),
@@ -572,11 +577,37 @@ fn namestack_remove(ctx: &mut Context) {
     ctx.push(value);
 }
 
+fn get_current_frame(ctx: &mut Context) {
+    let frame = ctx.get_current_frame();
+    ctx.push(frame);
+}
+
+fn push_handler(ctx: &mut Context) {
+    let handler = ctx.pop();
+    ctx.push_handler(handler);
+}
+
+fn pop_handler(ctx: &mut Context) {
+    let handler = ctx.pop_handler();
+    ctx.push(handler);
+}
+
+fn throw(ctx: &mut Context) {
+    let exception = ctx.pop();
+    ctx.throw(exception);
+}
+
+fn unwind_to_frame(ctx: &mut Context) {
+    let frame = ctx.pop();
+    ctx.unwind_to_frame(frame);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        primitives, ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Object, Tagged, Word, SLOT_CONST_DATA, SLOT_PARENT
+        ByteArray, CodeHeap, Context, ContextConfig, GarbageCollector, Handler,
+        Object, SLOT_CONST_DATA, SLOT_PARENT, Tagged, Word, primitives,
     };
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -588,6 +619,7 @@ mod tests {
             retian_size: 100,
             name_size: 100,
             call_size: 100,
+            handler_size: 100,
         };
         let mut ctx = Context::new(&config, code_heap);
         primitives::add_primitives(&mut ctx);
@@ -1268,5 +1300,143 @@ mod tests {
             let array_ptr = resized_array.to_ptr() as *const crate::Array;
             assert_eq!((*array_ptr).len(), 0);
         }
+    }
+
+    #[test]
+    fn test_push_pop_handler() {
+        let mut ctx = setup_context();
+
+        let frame = ctx.get_current_frame();
+        let handler = create_test_handler(&mut ctx, frame, Tagged::ffalse());
+
+        ctx.push(handler);
+        let lookup_name = ctx.gc.allocate_string("push-handler");
+        let push_handler_word = ctx.lookup(lookup_name).0;
+        ctx.execute_word(push_handler_word.to_ptr() as *const Word);
+
+        let lookup_name = ctx.gc.allocate_string("pop-handler");
+        let pop_handler_word = ctx.lookup(lookup_name).0;
+        ctx.execute_word(pop_handler_word.to_ptr() as *const Word);
+
+        let popped = ctx.pop();
+        assert_eq!(popped, handler);
+    }
+
+    fn create_test_handler(
+        ctx: &mut Context,
+        frame: Tagged,
+        tty: Tagged,
+    ) -> Tagged {
+        let lookup_name = ctx.gc.allocate_string("println-utf8");
+        let handler_body = vec![
+            ctx.gc.allocate_string("Handler executed"),
+            ctx.lookup(lookup_name).0,
+        ];
+        let handler_quot = ctx.gc.allocate_quotation(&handler_body);
+
+        let handler_obj = ctx.gc.allocate_object(ctx.gc.specials.handler_map);
+        let handler_ptr = handler_obj.to_ptr() as *mut Handler;
+
+        unsafe {
+            (*handler_ptr).frame = frame;
+            (*handler_ptr).tty = tty;
+            (*handler_ptr).handler = handler_quot;
+        }
+
+        handler_obj
+    }
+
+    #[test]
+    fn test_handler_stack_management() {
+        let mut ctx = setup_context();
+
+        let frame = ctx.get_current_frame();
+        let handler1 = create_test_handler(&mut ctx, frame, Tagged::ffalse());
+        ctx.push_handler(handler1);
+
+        let ba_map = ctx.gc.specials.bytearray_map;
+        let handler2 = create_test_handler(&mut ctx, frame, ba_map);
+        ctx.push_handler(handler2);
+
+        let popped2 = ctx.pop_handler();
+        assert_eq!(popped2, handler2);
+
+        let popped1 = ctx.pop_handler();
+        assert_eq!(popped1, handler1);
+
+        let popped_empty = ctx.pop_handler();
+        assert_eq!(popped_empty, Tagged::ffalse());
+    }
+
+    #[test]
+    fn test_frame_and_unwinding() {
+        let mut ctx = setup_context();
+
+        let dummy_frame = ctx.gc.allocate_object(ctx.gc.specials.object_map);
+
+        let current_call_ptr = ctx.call.current;
+        let entry_ptr = current_call_ptr as *mut Tagged;
+        unsafe {
+            *entry_ptr = dummy_frame;
+        }
+        ctx.call.increment(1);
+
+        let lookup_name = ctx.gc.allocate_string("get-frame");
+        let get_frame_word = ctx.lookup(lookup_name).0;
+        ctx.execute_word(get_frame_word.to_ptr() as *const Word);
+        let frame1 = ctx.pop();
+
+        assert_eq!(frame1, dummy_frame);
+
+        let dummy_frame2 = ctx.gc.allocate_object(ctx.gc.specials.object_map);
+
+        let current_call_ptr = ctx.call.current;
+        let entry_ptr = current_call_ptr as *mut Tagged;
+        unsafe {
+            *entry_ptr = dummy_frame2;
+        }
+        ctx.call.increment(1);
+
+        ctx.execute_word(get_frame_word.to_ptr() as *const Word);
+        let frame2 = ctx.pop();
+
+        assert_ne!(frame1, frame2);
+        assert_eq!(frame2, dummy_frame2);
+
+        ctx.push(frame1);
+        let lookup_name = ctx.gc.allocate_string("unwind-to-frame");
+        let unwind_word = ctx.lookup(lookup_name).0;
+        ctx.execute_word(unwind_word.to_ptr() as *const Word);
+
+        ctx.execute_word(get_frame_word.to_ptr() as *const Word);
+        let frame_after_unwind = ctx.pop();
+
+        assert_eq!(frame_after_unwind, frame1);
+    }
+
+    #[test]
+    fn test_is_type_match() {
+        let mut ctx = setup_context();
+
+        let parent_map = ctx.create_map("ParentType", &[]);
+        let child_map = ctx.create_map(
+            "ChildType",
+            &[("Parent", SLOT_PARENT, parent_map, Tagged::ffalse())],
+        );
+
+        let parent_obj = ctx.gc.allocate_object(parent_map);
+        let child_obj = ctx.gc.allocate_object(child_map);
+        let other_obj = ctx.gc.allocate_object(ctx.gc.specials.object_map);
+
+        assert!(ctx.is_instance_of(parent_obj, parent_map));
+        assert!(ctx.is_instance_of(child_obj, child_map));
+
+        assert!(ctx.is_instance_of(child_obj, parent_map));
+
+        assert!(!ctx.is_instance_of(parent_obj, child_map));
+        assert!(!ctx.is_instance_of(other_obj, parent_map));
+        assert!(!ctx.is_instance_of(other_obj, child_map));
+
+        assert!(!ctx.is_instance_of(parent_obj, Tagged::ffalse()));
     }
 }

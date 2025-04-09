@@ -20,6 +20,7 @@ pub struct SpecialObjects {
     pub slot_map: Tagged,
     pub quotation_map: Tagged,
     pub word_map: Tagged,
+    pub handler_map: Tagged,
 
     pub primitive_tag: Tagged,
     pub parser_tag: Tagged,
@@ -40,6 +41,7 @@ impl SpecialObjects {
             slot_map: Tagged::null(),
             quotation_map: Tagged::null(),
             word_map: Tagged::null(),
+            handler_map: Tagged::null(),
 
             primitive_tag: Tagged::null(),
             parser_tag: Tagged::null(),
@@ -285,16 +287,7 @@ impl GarbageCollector {
             ],
         );
 
-        self.initialize_map_slots(
-            self.specials.object_map,
-            "Object",
-            &[(
-                "Parent",
-                SLOT_PARENT,
-                self.specials.object_map,
-                Tagged::ffalse(),
-            )],
-        );
+        self.initialize_map_slots(self.specials.object_map, "Object", &[]);
 
         self.initialize_map_slots(
             self.specials.false_map,
@@ -403,6 +396,38 @@ impl GarbageCollector {
         );
         self.specials.word_map = word_map;
         self.add_root(self.specials.word_map);
+
+        let handler_map = self.create_map(
+            "Handler",
+            &[
+                (
+                    "Type",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Kind",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Frame",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        self.specials.handler_map = handler_map;
+        self.add_root(self.specials.handler_map);
 
         let parser_map = self.create_map(
             "Parser",
