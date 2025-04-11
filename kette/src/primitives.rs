@@ -1,6 +1,5 @@
 use crate::{
-    Array, ByteArray, Context, Map, Parser, Quotation, SLOT_METHOD, StackFn,
-    Tagged, Word,
+    Array, ByteArray, Context, Map, Object, Parser, Quotation, StackFn, Tagged, Word, SLOT_METHOD
 };
 
 pub fn add_primitives(ctx: &mut Context) {
@@ -13,6 +12,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("swap", "x y -- y x", swap),
         ("over", "x y -- x y x", over),
         ("rot", "x y z -- y z x", rot),
+        ("-rot", "x y z -- z x y", rot_neg),
         ("dropd", "x y -- x", dropd),
         // fixnum
         ("fixnum+", "a b -- c", fixnum_add),
@@ -21,21 +21,28 @@ pub fn add_primitives(ctx: &mut Context) {
         ("fixnum/", "a b -- c", fixnum_div),
         ("fixnum>utf8", "num -- str", fixnum_to_string),
         ("fixnum=", "a b -- ?", fixnum_eq),
+        ("is-fixnum?", "obj -- ?", fixnum_is),
+        ("is-2fixnum?", "obj1 obj2 -- ?", fixnum_is2),
         // general
         ("if", "? t-branch f-branch -- t/f-called", iff),
         ("array>quotation", "array -- q", array_to_quotation),
+        ("has-tag?", "word tag -- f", has_tag),
         // objects
         ("send-self", "..a obj name -- ..b", send_self),
         ("send-super", "..a obj name -- ..b", send_super),
         ("(clone)", "a -- b", clone),
         ("(new)", "map -- obj", new_from_prototype),
-        ("(new-boa)", "map -- obj", new_by_order_of_args),
+        ("(new-boa)", "..a map -- obj", new_by_order_of_args),
         ("set-prototype", "obj map -- ", set_prototype),
         ("<array>", "n -- array", create_array),
         ("<bytearray>", "n -- bytearray", create_bytearray),
         ("resize-array", "array n -- new", resize_array),
         ("resize-bytearray", "bytearray n -- new", resize_bytearray),
         ("(array-resize-push)", "array obj -- array", array_push),
+        ("obj>map", "obj -- map", get_map),
+        ("obj>ptr", "obj -- ptr", get_ptr),
+        ("ptr>obj", "obj -- ptr", ptr_to_obj),
+        ("ref-eq?", "obj -- ptr", ref_eq),
         ("slot", "obj n -- value", get_slot),
         ("set-slot", "value obj n -- ", set_slot),
         ("get-u8", "obj n -- u8", get_u8),
@@ -44,6 +51,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("(call)", "..a q -- ..b", call),
         ("(print)", "str -- ", print_utf8),
         ("(println)", "str -- ", println_utf8),
+        ("@print-stack", " -- ", print_stack),
         (">r", "a -- ", data_to_retain),
         ("r>", " -- a", retain_to_data),
         ("depth", " -- n", data_depth),
@@ -57,6 +65,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("throw", "error -- ", throw),
         ("unwind-to-frame", " frame -- ", unwind_to_frame),
         ("panic", "message -- ", error_panic),
+        ("(special)", "idx -- special", get_special),
         // parser
         ("@read-next", " -- str", read_next),
         ("@read-until", "end -- str", read_until),
@@ -66,17 +75,6 @@ pub fn add_primitives(ctx: &mut Context) {
 
     let syntaxes: &[(&str, StackFn)] =
         &[("@:", parse_syntax), ("f", push_false), ("t", push_true)];
-
-    let maps: &[(&str, Tagged)] = &[
-        ("map", ctx.gc.specials.map_map),
-        ("object", ctx.gc.specials.object_map),
-        ("fixnum", ctx.gc.specials.fixnum_map),
-        ("array", ctx.gc.specials.array_map),
-        ("bytearray", ctx.gc.specials.bytearray_map),
-        ("slot-descriptor", ctx.gc.specials.slot_map),
-        ("quotation", ctx.gc.specials.quotation_map),
-        ("word", ctx.gc.specials.word_map),
-    ];
 
     for &(name, _stack_effect, fun) in words {
         let fun = Tagged::from_fn(fun);
@@ -92,18 +90,6 @@ pub fn add_primitives(ctx: &mut Context) {
             ctx.gc
                 .allocate_primitive_word(name, Tagged::null(), fun, true);
         ctx.namestack_push(word, Tagged::null());
-    }
-
-    for &(name, map) in maps {
-        let name_obj = ctx.gc.allocate_string(name);
-        let quot = ctx.gc.allocate_quotation(&[map]);
-        let word_obj = ctx.gc.allocate_object(ctx.gc.specials.word_map);
-        let word = word_obj.to_ptr() as *mut Word;
-        unsafe {
-            (*word).name = name_obj;
-            (*word).body = quot;
-        }
-        ctx.namestack_push(word_obj, Tagged::null());
     }
 }
 
@@ -245,6 +231,14 @@ fn array_to_quotation(ctx: &mut Context) {
     unsafe { (*quot_ptr).body = array };
 
     ctx.push(quotation);
+}
+
+fn has_tag(ctx: &mut Context) { 
+    let tag = ctx.pop();
+    let word_obj = ctx.pop();
+    let word = word_obj.to_ptr() as *const Word;
+    let has  = unsafe { (*word).has_tag(tag) };
+    push_bool(ctx, has);
 }
 
 fn get_bytearray_str(tagged: Tagged) -> &'static str {
@@ -391,6 +385,47 @@ fn array_push(ctx: &mut Context) {
     ctx.push(array);
 }
 
+fn get_map(ctx: &mut Context) {
+    let obj = ctx.pop();
+    if obj.is_int() {
+        let map = ctx.gc.specials.fixnum_map;
+        ctx.push(map);
+        return;
+    }
+    if obj.is_false() {
+        let map = ctx.gc.specials.false_map;
+        ctx.push(map);
+        return;
+    }
+    let obj_ptr = obj.to_ptr();
+    let header = unsafe { (*obj_ptr).header };
+    let map = header.get_map();
+    let map_obj = Tagged::from_ptr(map as _);
+    ctx.push(map_obj);
+}
+
+fn get_ptr(ctx: &mut Context) {
+    let obj = ctx.pop();
+    let ptr = obj.to_ptr();
+    let int = Tagged::from_int(ptr as _);
+    ctx.push(int)
+}
+
+fn ptr_to_obj(ctx: &mut Context) {
+    let ptr_obj = ctx.pop();
+    let ptr_int = ptr_obj.to_int();
+    let ptr = ptr_int as *mut Object;
+    let obj = Tagged::from_ptr(ptr);
+    ctx.push(obj);
+}
+
+fn ref_eq(ctx: &mut Context) {
+    let obj2 = ctx.pop();
+    let obj1 = ctx.pop();
+    let is = obj2 == obj1;
+    push_bool(ctx, is);
+}
+
 fn get_slot(ctx: &mut Context) {
     let n_obj = ctx.pop();
     let obj = ctx.pop();
@@ -459,6 +494,21 @@ fn fixnum_eq(ctx: &mut Context) {
     push_bool(ctx, res);
 }
 
+fn fixnum_is(ctx: &mut Context) {
+    let obj = ctx.pop();
+    let is = obj.is_int();
+    push_bool(ctx, is);
+}
+
+fn fixnum_is2(ctx: &mut Context) {
+    let obj2 = ctx.pop();
+    let obj1 = ctx.pop();
+    let is2 = obj2.is_int();
+    let is1 = obj1.is_int();
+    let is = is2 && is1;
+    push_bool(ctx, is);
+}
+
 fn fixnum_to_string(ctx: &mut Context) {
     let num = pop1num(ctx);
     let s = num.to_string();
@@ -476,6 +526,10 @@ fn print_utf8(ctx: &mut Context) {
     let ba = pop_bytearray(ctx);
     let s = unsafe { (*ba).as_str() };
     print!("{s}");
+}
+
+fn print_stack(ctx: &mut Context) {
+    ctx.print_stack();
 }
 
 fn dup(ctx: &mut Context) {
@@ -521,6 +575,17 @@ fn rot(ctx: &mut Context) {
     ctx.push(y);
     ctx.push(z);
     ctx.push(x);
+}
+
+
+// x y z -- z x y
+fn rot_neg(ctx: &mut Context) {
+    let z = ctx.pop();
+    let y = ctx.pop();
+    let x = ctx.pop();
+    ctx.push(z);
+    ctx.push(x);
+    ctx.push(y);
 }
 
 fn dropd(ctx: &mut Context) {
@@ -646,6 +711,13 @@ fn error_panic(ctx: &mut Context) {
 
     // Terminate execution with panic
     panic!("VM execution terminated due to panic");
+}
+
+fn get_special(ctx: &mut Context) { 
+    let idx_obj = ctx.pop();
+    let idx = idx_obj.to_int();
+    let obj = ctx.gc.specials.get_nth(idx as usize);
+    ctx.push(obj);
 }
 
 #[cfg(test)]

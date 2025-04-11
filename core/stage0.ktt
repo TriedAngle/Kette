@@ -9,5 +9,119 @@
 @: : 
     @read-next \ ) @read-until drop
     f f \ ; @parse-until array>quotation 
-    word (new-boa) f namestack|insert 2drop ;
+    9 (special) (new-boa) f namestack|insert 2drop ;
+
+: CHAR_NEWLINE ( -- char ) 2 <bytearray> dup 10 swap 0 set-u8 ;
+
+@: // CHAR_NEWLINE @read-until drop ;
+@: TODO: \ ; @read-until drop ;
+
+// map-slot: name kind value default
+// map: name data-slots slot-count slots prototype
+// array: length capacity <dynamic tagged>
+// bytearray: size <dynamic u8>
+// quotation: effect body
+// word: name effect tags body
+// handler: type quotation frame
+
+: dip ( x q -- x ) swap >r (call) r> ;
+: keep ( x q -- x ) over [ (call) ] dip ;
+: bi ( x p q -- ) [ keep ] dip (call) ;
+: bi* ( x y p q -- ) [ dip ] dip (call) ;
+: bi@ ( x y p -- ) dup bi* ;
+
+: word|tags-null? ( word -- ? ) 2 slot [ f ] [ t ] if ;
+: word|init-tags ( word -- ) 10 <array> swap 2 set-slot ; 
+: word|?init-tags ( word -- ) dup word|tags-null? [ word|init-tags ] [ drop ] if ;
+: word|body ( word -- body) 3 slot ;
+: word|set-body ( word body -- ) 3 set-slot ;
+: word|add-tag ( word tag -- ) 
+    swap [ word|?init-tags ] keep swap 
+    2 slot (array-resize-push) ;
+
+: word|map ( -- map ) 9 (special) ;
+: box|map ( -- map ) 11 (special) ;
+: fixnum|map ( -- map ) 4 (special) ;
+
+: parser-tag ( -- tag ) 13 (special) ;
+: inline-tag ( -- tag ) 14 (special) ;
+
+: new-empty-word ( name -- word ) f 10 <array> f word|map (new-boa) ;
+
+: define-word ( name -- word ) 
+    new-empty-word [ f namestack|insert 2drop ] keep ;
+
+: scan-new-word ( -- word ) @read-next define-word ;
+
+: ignore-stack-effect ( -- ) \ ) @read-until drop ;
+: parse-word-body ( -- quot ) \ ; @parse-until array>quotation ;
+
+@: : scan-new-word ignore-stack-effect parse-word-body word|set-body ;
+
+: >box ( value -- box ) box|map (new-boa) ;
+: unbox ( box -- value ) 0 slot ;
+
+: array-index ( n -- idx ) 2 fixnum+ ;
+: array-nth ( array n -- ) array-index slot ;
+: array-set-nth ( x array n -- ) array-index set-slot ;
+
+: (1array) ( x arr -- arr ) [ 0 array-set-nth ] keep ;
+: (2array) ( x y arr -- arr ) [ 1 array-set-nth ] keep (1array)  ;
+: (3array) ( x y z arr -- arr ) [ 2 array-set-nth ] keep (2array)  ;
+: (4array) ( x y z w arr -- arr ) [ 3 array-set-nth ] keep (3array) ;
+: 1array ( x -- arr ) 1 <array> (1array) ;
+: 2array ( x y -- arr ) 2 <array> (2array) ;
+: 3array ( x y z -- arr ) 3 <array> (3array) ;
+: 4array ( x y z w -- arr ) 4 <array> (4array)  ;
+
+: define-push-word ( word item -- ) 1array array>quotation word|set-body ;
+: define-symbol ( word -- ) dup >box define-push-word ;
+
+@: $: scan-new-word define-symbol ;
+
+
+: get ( symbol -- value ) namestack|find dropd ;
+: set ( value symbol -- ) swap namestack|insert 2drop ;
+
+: parse-word? ( name -- word/f ) namestack|find swap dup [ dropd ] [ 2drop f ] if ;
+: parse-next? ( -- int/word/f ) 
+    @read-next dup @parse-int 
+    dup [ dropd ] [ parse-word? ] if ;
+
+@: \\ @read-next parse-word? dup [ (array-resize-push) ] [ drop s" word not found" panic ] if ;
+@: \box @read-next parse-word? dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
+
+: map-slot|map ( -- map ) 7 (special) ;
+// : word|map ( -- map ) 9 (special) ;
+: fixnum|map ( -- map ) 4 (special) ;
+: parser-tag ( -- tag ) 14 (special) ;
+: inline-tag ( -- tag ) 14 (special) ;
+
+: is-parsing? ( word -- ? ) parser-tag has-tag? ;
+: is-word? ( obj -- ? ) obj>map word|map ref-eq? ;
+
+: scan-next ( -- int/word/exec/f ) 
+    parse-next? ;
+    
+: new-const-data-slot ( name value default -- map-slot ) 
+    0 -rot map-slot|map (new-boa) ; 
+
+: new-data-slot ( name value default -- map-slot ) 
+    1 -rot map-slot|map (new-boa) ; 
+
+: new-basic-data-slot ( name -- slot ) f f new-data-slot ;
+
+: parse-basic-slots ( -- ) \ ; @parse-until ;
+
+
+
+// @: |> scan-new-word ; 
+
+TODO: requires boxing ;
+
+: * ( a b -- c ) fixnum* ;
+// simple if expression
+// every value other than `f` is true
+10 dup [ 2 * ] [ drop 0 ] if fixnum>utf8 (println)
+
 

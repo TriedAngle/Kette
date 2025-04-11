@@ -166,12 +166,5 @@ fn execute_string(ctx: &mut Context, input: &str) {
 }
 
 fn print_stack(ctx: &Context) {
-    let stack_size = {
-        let data_ptr = ctx.data.current;
-        let data_start = ctx.data.start;
-        (data_ptr as usize - data_start as usize)
-            / std::mem::size_of::<Tagged>()
-    };
-
-    println!("Stack size: {}", stack_size);
+    ctx.print_stack();
 }

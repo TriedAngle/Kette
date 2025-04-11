@@ -94,6 +94,13 @@ pub struct Word {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Box {
+    pub header: ObjectHeader,
+    pub value: Tagged,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Handler {
     pub header: ObjectHeader,
     pub tty: Tagged,     // Map Object

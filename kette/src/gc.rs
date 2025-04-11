@@ -1,3 +1,4 @@
+use core::panic;
 use std::alloc::{Layout, alloc, dealloc};
 use std::collections::HashMap;
 use std::mem;
@@ -21,9 +22,11 @@ pub struct SpecialObjects {
     pub quotation_map: Tagged,
     pub word_map: Tagged,
     pub handler_map: Tagged,
+    pub box_map: Tagged,
 
     pub primitive_tag: Tagged,
     pub parser_tag: Tagged,
+    pub inline_tag: Tagged,
 
     pub parser: Tagged,
 }
@@ -42,11 +45,35 @@ impl SpecialObjects {
             quotation_map: Tagged::null(),
             word_map: Tagged::null(),
             handler_map: Tagged::null(),
+            box_map: Tagged::null(),
 
             primitive_tag: Tagged::null(),
             parser_tag: Tagged::null(),
+            inline_tag: Tagged::null(),
 
             parser: Tagged::null(),
+        }
+    }
+
+    pub fn get_nth(&self, idx: usize) -> Tagged {
+        match idx {
+            0 => self.map_map,
+            1 => self.object_map,
+            2 => self.false_map,
+            3 => self.true_obj,
+            4 => self.fixnum_map,
+            5 => self.array_map,
+            6 => self.bytearray_map,
+            7 => self.slot_map,
+            8 => self.quotation_map,
+            9 => self.word_map,
+            10 => self.handler_map,
+            11 => self.box_map,
+            12 => self.primitive_tag,
+            13 => self.parser_tag,
+            14 => self.inline_tag,
+            15 => self.parser,
+            _ => panic!("special object get_nth invalid idx: {:?}", idx),
         }
     }
 }
@@ -429,6 +456,21 @@ impl GarbageCollector {
         self.specials.handler_map = handler_map;
         self.add_root(self.specials.handler_map);
 
+        let box_map = self.create_map(
+            "Box",
+            &[
+                ("value", SLOT_CONST_DATA, Tagged::ffalse(), Tagged::ffalse()),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        self.specials.box_map = box_map;
+        self.add_root(self.specials.box_map);
+
         let parser_map = self.create_map(
             "Parser",
             &[
@@ -464,6 +506,8 @@ impl GarbageCollector {
         self.specials.primitive_tag =
             self.allocate_object(self.specials.object_map);
         self.specials.parser_tag =
+            self.allocate_object(self.specials.object_map);
+        self.specials.inline_tag =
             self.allocate_object(self.specials.object_map);
 
         self.add_root(self.specials.primitive_tag);

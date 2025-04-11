@@ -1,7 +1,7 @@
 use crate::{
-    Array, ByteArray, CodeHeap, GarbageCollector, Handler, Map, MemoryRegion,
-    Mutex, Object, ObjectHeader, Parser, Quotation, SLOT_CONST_DATA, StackFn,
-    Tagged, Word,
+    Array, Box, ByteArray, CodeHeap, GarbageCollector, Handler, Map,
+    MemoryRegion, Mutex, Object, ObjectHeader, Parser, Quotation,
+    SLOT_CONST_DATA, StackFn, Tagged, Word,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -507,6 +507,142 @@ impl Context {
             Some((tagged, false))
         } else {
             None
+        }
+    }
+
+    pub fn print_stack(&self) {
+        let data_size = {
+            let data_ptr = self.data.current;
+            let data_start = self.data.start;
+            (data_ptr as usize - data_start as usize)
+                / std::mem::size_of::<Tagged>()
+        };
+
+        if data_size == 0 {
+            println!("Stack: []");
+            return;
+        }
+
+        print!("Stack: [");
+
+        for i in 0..data_size {
+            let idx = data_size - i - 1;
+            let elem = unsafe { *self.data.start.add(idx) };
+
+            if i > 0 {
+                print!(" ");
+            }
+
+            print!("{}", self.format_tagged(elem));
+        }
+
+        println!("]");
+    }
+
+    fn format_tagged(&self, tagged: Tagged) -> String {
+        if tagged.is_int() {
+            return tagged.to_int().to_string();
+        }
+
+        if tagged.is_false() {
+            return "f".to_string();
+        }
+
+        if tagged == self.gc.specials.true_obj {
+            return "t".to_string();
+        }
+
+        if tagged == Tagged::null() {
+            return "null".to_string();
+        }
+
+        let obj_ptr = tagged.to_ptr();
+        let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        if map_tagged == self.gc.specials.bytearray_map {
+            let ba_ptr = tagged.to_ptr() as *const ByteArray;
+            let size = unsafe { (*ba_ptr).len() };
+            let s = unsafe { (*ba_ptr).as_str() };
+            return format!("ba{{{}}} \"{}\"", size, s);
+        }
+
+        if map_tagged == self.gc.specials.array_map {
+            let array_ptr = tagged.to_ptr() as *const Array;
+            let len = unsafe { (*array_ptr).len() };
+
+            let mut result = String::from("array[");
+
+            let display_count = std::cmp::min(len, 10);
+
+            for i in 0..display_count {
+                if i > 0 {
+                    result.push_str(" ");
+                }
+                let elem = unsafe { (*array_ptr).get(i) };
+                result.push_str(&self.format_tagged(elem));
+            }
+
+            if len > 10 {
+                result.push_str(&format!("..{}", len));
+            }
+
+            result.push_str("]");
+            return result;
+        }
+
+        if map_tagged == self.gc.specials.quotation_map {
+            let quot_ptr = tagged.to_ptr() as *const Quotation;
+            let array = unsafe { (*quot_ptr).body };
+            let array_ptr = array.to_ptr() as *const Array;
+            let len = unsafe { (*array_ptr).actual_length() };
+
+            let mut result = String::from("quot[");
+
+            let display_count = std::cmp::min(len, 10);
+
+            for i in 0..display_count {
+                if i > 0 {
+                    result.push_str(" ");
+                }
+                let elem = unsafe { (*array_ptr).get(i) };
+                result.push_str(&self.format_tagged(elem));
+            }
+
+            if len > 10 {
+                result.push_str(&format!("..{}", len));
+            }
+
+            result.push_str("]");
+            return result;
+        }
+
+        if map_tagged == self.gc.specials.word_map {
+            let word_ptr = tagged.to_ptr() as *const Word;
+            let name = unsafe { (*word_ptr).name };
+
+            let name_ptr = name.to_ptr() as *const ByteArray;
+            let name_str = unsafe { (*name_ptr).as_str() };
+
+            return format!("{}", name_str);
+        }
+
+        if map_tagged == self.gc.specials.box_map {
+            let box_ptr = tagged.to_ptr() as *const Box;
+            let value = unsafe { (*box_ptr).value };
+
+            return format!("\\ {}", &self.format_tagged(value));
+        }
+
+        let map_ptr = map_tagged.to_ptr() as *const Map;
+        let map_name = unsafe { (*map_ptr).name };
+
+        if map_name == Tagged::null() {
+            return format!("Object@{:p}", obj_ptr);
+        } else {
+            let name_ptr = map_name.to_ptr() as *const ByteArray;
+            let name_str = unsafe { (*name_ptr).as_str() };
+            return format!("{}@{:p}", name_str, obj_ptr);
         }
     }
 }

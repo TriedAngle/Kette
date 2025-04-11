@@ -1,3 +1,5 @@
+use core::panic;
+
 use crate::{Array, ByteArray, Context, ObjectHeader, Tagged, Word};
 
 pub struct Parser {
@@ -158,13 +160,14 @@ impl Parser {
         delimiter: Option<&str>,
     ) -> Tagged {
         let mut accum = ctx.gc.allocate_array(100);
-
+        let mut found = !delimiter.is_some();
         self.skip_whitespace();
 
         while !self.is_at_end() {
             if let Some(delim) = delimiter {
                 if self.starts_with(delim) {
                     self.advance_position(delim.len() as i64);
+                    found = true;
                     break;
                 }
             }
@@ -189,8 +192,30 @@ impl Parser {
 
             self.skip_whitespace();
         }
+        if !found {
+            panic!("parse until could not find: {:?}", delimiter);
+        }
 
         accum
+    }
+
+    pub fn parse_next(&mut self, ctx: &mut Context) {
+        self.skip_whitespace();
+
+        while !self.is_at_end() {
+            let token = self.parse_token(ctx);
+
+            if ctx.is_word(token) && ctx.is_parsing_word(token) {
+                let accum = ctx.gc.allocate_array(100);
+                let word = token.to_ptr() as *mut Word;
+                ctx.push(accum);
+                ctx.execute_word(word);
+            } else {
+                ctx.push(token);
+            }
+
+            self.skip_whitespace();
+        }
     }
 
     pub fn read_until(
