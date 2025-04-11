@@ -19,4 +19,3 @@ pub use parking_lot::{Mutex, RwLock};
 pub use primitives::add_primitives;
 
 pub type StackFn = fn(ctx: &mut Context);
-pub type ParseStackFn = fn(ctx: &mut Context, parser: &mut Parser);

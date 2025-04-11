@@ -45,7 +45,7 @@ impl Context {
         while i < body_len {
             let item = unsafe { (*body).get(i) };
 
-            if item.is_int() || item == Tagged::null() {
+            if item.is_int() || item.is_false() {
                 code.push(Code::Push(item));
                 i += 1;
                 continue;
@@ -73,7 +73,6 @@ impl Context {
                             let false_branch =
                                 next.to_ptr() as *const Quotation;
 
-                            // Compile both branches to get their code
                             let node_true = self.compile(true_branch);
                             let true_code =
                                 unsafe { node_true.as_ref().data_as::<Code>() };
@@ -83,9 +82,10 @@ impl Context {
                             };
 
                             let false_branch_size = false_code.len() as i16;
-                            let branch_offset = false_branch_size + 1;
+                            let branch_offset = false_branch_size;
                             let true_branch_size = true_code.len() as i16;
-                            code.push(Code::BranchRelative(branch_offset));
+
+                            code.push(Code::BranchRelative(branch_offset + 2));
 
                             for &instr in false_code {
                                 code.push(instr);
@@ -130,10 +130,13 @@ impl Context {
     }
 
     pub fn execute_word(&mut self, word: *const Word) {
+        let name = unsafe { (*word).name.as_str() };
         if let Some(fun) = self.word_primitive(Tagged::from_ptr(word as _)) {
+            log::debug!("call primitive: {:?}", name);
             fun(self);
             return;
         }
+        log::debug!("call non primitive: {:?}", name);
 
         let quot_obj = unsafe { (*word).body };
         let quot = quot_obj.to_ptr() as _;
@@ -444,7 +447,7 @@ mod test {
         let quotation_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = quotation_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, Tagged::from_int(42));
+            (*array_ptr).push(Tagged::from_int(42));
         }
 
         let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -476,9 +479,9 @@ mod test {
         let quotation_array = ctx.gc.allocate_array(3);
         unsafe {
             let array_ptr = quotation_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, Tagged::from_int(1));
-            (*array_ptr).set(1, Tagged::from_int(2));
-            (*array_ptr).set(2, Tagged::from_int(3));
+            (*array_ptr).push(Tagged::from_int(1));
+            (*array_ptr).push(Tagged::from_int(2));
+            (*array_ptr).push(Tagged::from_int(3));
         }
 
         let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -518,7 +521,7 @@ mod test {
         let inner_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = inner_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, Tagged::from_int(42));
+            (*array_ptr).push(Tagged::from_int(42));
         }
 
         let inner_quotation =
@@ -532,7 +535,7 @@ mod test {
         let outer_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = outer_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, inner_quotation);
+            (*array_ptr).push(inner_quotation);
         }
 
         let outer_quotation =
@@ -589,7 +592,7 @@ mod test {
         let quotation_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = quotation_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, word);
+            (*array_ptr).push(word);
         }
 
         let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -627,7 +630,7 @@ mod test {
 
         unsafe {
             let tags_ptr = tags.to_ptr() as *mut Array;
-            (*tags_ptr).set(0, ctx.gc.specials.primitive_tag);
+            (*tags_ptr).push(ctx.gc.specials.primitive_tag);
 
             let word_ptr = word.to_ptr();
             (*word_ptr).set_slot(0, word_name);
@@ -641,7 +644,7 @@ mod test {
         let quotation_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = quotation_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, word);
+            (*array_ptr).push(word);
         }
 
         let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -659,6 +662,7 @@ mod test {
             .unwrap();
 
         assert_eq!(code.len(), 1);
+        println!("{:?}", code[0]);
         match code[0] {
             Code::CallPrimitive(_) => {}
             _ => panic!("Expected CallPrimitive operation"),
@@ -673,7 +677,7 @@ mod test {
         let true_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = true_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, Tagged::from_int(1));
+            (*array_ptr).push(Tagged::from_int(1));
         }
         let true_quotation =
             ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -686,7 +690,7 @@ mod test {
         let false_array = ctx.gc.allocate_array(1);
         unsafe {
             let array_ptr = false_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, Tagged::from_int(0));
+            (*array_ptr).push(Tagged::from_int(0));
         }
         let false_quotation =
             ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -701,7 +705,7 @@ mod test {
         let tags = ctx.gc.allocate_array(1);
         unsafe {
             let tags_ptr = tags.to_ptr() as *mut Array;
-            (*tags_ptr).set(0, ctx.gc.specials.primitive_tag);
+            (*tags_ptr).push(ctx.gc.specials.primitive_tag);
             let word_ptr = if_word.to_ptr();
             (*word_ptr).set_slot(0, if_name);
             (*word_ptr).set_slot(1, Tagged::null());
@@ -714,9 +718,9 @@ mod test {
         let main_array = ctx.gc.allocate_array(3);
         unsafe {
             let array_ptr = main_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, true_quotation);
-            (*array_ptr).set(1, false_quotation);
-            (*array_ptr).set(2, if_word);
+            (*array_ptr).push(true_quotation);
+            (*array_ptr).push(false_quotation);
+            (*array_ptr).push(if_word);
         }
         let main_quotation =
             ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
@@ -830,10 +834,10 @@ mod test {
         let quotation_array = ctx.gc.allocate_array(4);
         unsafe {
             let array_ptr = quotation_array.to_ptr() as *mut Array;
-            (*array_ptr).set(0, Tagged::from_int(42));
-            (*array_ptr).set(1, str_obj);
-            (*array_ptr).set(2, word);
-            (*array_ptr).set(3, Tagged::null());
+            (*array_ptr).push(Tagged::from_int(42));
+            (*array_ptr).push(str_obj);
+            (*array_ptr).push(word);
+            (*array_ptr).push(Tagged::null());
         }
 
         let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);

@@ -63,7 +63,7 @@ impl<T: Copy> MemoryRegion<T> {
 impl From<*mut Array> for MemoryRegion<Tagged> {
     fn from(value: *mut Array) -> Self {
         let data_ptr = unsafe { (*value).data_ptr() };
-        let size = unsafe { (*value).size.to_int() as usize };
+        let size = unsafe { (*value).capacity() };
         Self::new(data_ptr, size)
     }
 }
@@ -71,7 +71,7 @@ impl From<*mut Array> for MemoryRegion<Tagged> {
 impl From<*mut Array> for MemoryRegion<(Tagged, Tagged)> {
     fn from(value: *mut Array) -> Self {
         let data_ptr = unsafe { (*value).data_ptr() } as _;
-        let size = unsafe { (*value).size.to_int() as usize };
+        let size = unsafe { (*value).capacity() };
         Self::new(data_ptr, size)
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     Array, ByteArray, CodeHeap, GarbageCollector, Handler, Map, MemoryRegion,
-    Mutex, Object, ObjectHeader, ParseStackFn, Parser, Quotation,
-    SLOT_CONST_DATA, StackFn, Tagged, Word,
+    Mutex, Object, ObjectHeader, Parser, Quotation, SLOT_CONST_DATA, StackFn,
+    Tagged, Word,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -345,7 +345,7 @@ impl Context {
         unsafe { (*parser).read_next(self) }
     }
 
-    pub fn parse_until(&mut self, delimiter: Option<&str>) -> Vec<Tagged> {
+    pub fn parse_until(&mut self, delimiter: Option<&str>) -> Tagged {
         let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
         unsafe { (*parser).parse_until(self, delimiter) }
     }
@@ -474,23 +474,6 @@ impl Context {
     }
 
     pub fn word_primitive(&self, tagged: Tagged) -> Option<StackFn> {
-        if !self.is_word(tagged) {
-            return None;
-        }
-
-        let word = tagged.to_ptr() as *const Word;
-
-        if unsafe { !(*word).has_tag(self.gc.specials.primitive_tag) } {
-            return None;
-        }
-
-        let body = unsafe { (*word).body };
-        let num = body.to_int();
-        let ptr = unsafe { mem::transmute(num) };
-        Some(ptr)
-    }
-
-    pub fn word_primitive_parse(&self, tagged: Tagged) -> Option<ParseStackFn> {
         if !self.is_word(tagged) {
             return None;
         }

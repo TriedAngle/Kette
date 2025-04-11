@@ -1,1 +1,14 @@
-3 5 fixnum+ fixnum>utf8 println-utf8
+@: \ @read-next (array-resize-push) ;
+
+@: s" \ " @read-until (array-resize-push) ;
+
+@: [ \ ] @parse-until array>quotation (array-resize-push) ;
+
+@: { \ } @parse-until (array-resize-push) ;
+
+@: : 
+    @read-next \ ) @parse-until drop
+    f f \ ; @parse-until array>quotation 
+    word (new-boa) f namestack|insert 2drop ;
+
+

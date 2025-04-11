@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, mem};
 
-use crate::{ParseStackFn, StackFn};
+use crate::StackFn;
 
 pub const TAG_INT: u64 = 0b1;
 pub const TAG_MASK_FULL: u64 = 0b11;
@@ -61,7 +61,8 @@ pub struct Map {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Array {
     pub header: ObjectHeader,
-    pub size: Tagged,
+    pub length: Tagged,
+    pub capacity: Tagged,
     // Elements are stored directly after the size field in memory
 }
 
@@ -129,11 +130,6 @@ impl Tagged {
         Self::from_int(val)
     }
 
-    pub fn from_parse_fn(fun: ParseStackFn) -> Tagged {
-        let val: i64 = unsafe { mem::transmute(fun) };
-        Self::from_int(val)
-    }
-
     pub fn to_ptr(self) -> *mut Object {
         debug_assert!(self.0 & TAG_MASK_FULL == TAG_OBJECT);
         self.0 as *mut Object
@@ -152,18 +148,16 @@ impl Tagged {
         fun
     }
 
-    pub fn to_parse_fn(self) -> ParseStackFn {
-        let val = self.to_int();
-        let fun: ParseStackFn = unsafe { mem::transmute(val) };
-        fun
-    }
-
     pub fn is_int(&self) -> bool {
         (self.0 & TAG_INT) == TAG_INT
     }
 
     pub fn is_false(&self) -> bool {
         *self == Self::ffalse()
+    }
+
+    pub fn as_str(&self) -> &str {
+        unsafe { (*(self.to_ptr() as *mut ByteArray)).as_str() }
     }
 }
 
@@ -219,42 +213,91 @@ impl ObjectHeader {
 
 impl Array {
     pub fn len(&self) -> usize {
-        self.size.to_int() as usize
+        self.length.to_int() as usize
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity.to_int() as usize
     }
 
     pub fn data_ptr(&mut self) -> *mut Tagged {
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset = mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>();
+        let offset = mem::size_of::<Self>();
+        let data_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
+        data_ptr
+    }
+
+    pub fn data_ptr_const(&self) -> *const Tagged {
+        let ptr = (self as *const Self).cast::<u8>();
+        let offset = mem::size_of::<Self>();
         let data_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         data_ptr
     }
 
     pub unsafe fn get(&self, idx: usize) -> Tagged {
-        debug_assert!(idx < self.len(), "Index out of bounds");
+        debug_assert!(idx < self.capacity(), "Index out of bounds");
         let ptr = (self as *const Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
+        let offset = mem::size_of::<Self>() + idx * 8;
         let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe { *element_ptr }
     }
 
     pub unsafe fn set(&mut self, idx: usize, value: Tagged) {
-        debug_assert!(idx < self.len(), "Index out of bounds");
+        debug_assert!(idx < self.capacity(), "Index out of bounds");
         let ptr = (self as *mut Self).cast::<u8>();
-        let offset =
-            mem::size_of::<ObjectHeader>() + mem::size_of::<Tagged>() + idx * 8;
+        let offset = mem::size_of::<Self>() + idx * 8;
         let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
         unsafe {
             *element_ptr = value;
         }
     }
 
+    pub fn is_full(&self) -> bool {
+        let length = self.len();
+        let capacity = self.capacity();
+        length >= capacity
+    }
+
+    pub unsafe fn push(&mut self, value: Tagged) {
+        let length = self.len();
+        debug_assert!(!self.is_full(), "Push on full array");
+        self.length = Tagged::from_int(length as i64 + 1);
+        unsafe { self.set(length, value) };
+    }
+
+    pub fn actual_length(&self) -> usize {
+        let capacity = self.capacity.to_int() as usize;
+        for i in (0..capacity).rev() {
+            let ptr = (self as *const Self).cast::<u8>();
+            let offset = mem::size_of::<Self>() + i * mem::size_of::<Tagged>();
+            let element_ptr = unsafe { ptr.add(offset).cast::<Tagged>() };
+            let element = unsafe { *element_ptr };
+            if !element.is_false() {
+                return i + 1;
+            }
+        }
+        0
+    }
+
     pub unsafe fn iter<'a>(&'a self) -> ArrayIterator<'a> {
         ArrayIterator {
             array: self,
             current: 0,
-            end: self.len(),
+            end: self.actual_length(),
         }
+    }
+
+    pub fn as_slice(&self) -> &[Tagged] {
+        let length = self.capacity();
+
+        let data_ptr = self.data_ptr_const();
+        unsafe { std::slice::from_raw_parts(data_ptr, length) }
+    }
+    pub fn as_slice_len(&self) -> &[Tagged] {
+        let length = self.len();
+
+        let data_ptr = self.data_ptr_const();
+        unsafe { std::slice::from_raw_parts(data_ptr, length) }
     }
 }
 
@@ -537,7 +580,7 @@ impl Word {
         }
 
         let tags_array = self.tags.to_ptr() as *const Array;
-        let tags_len = unsafe { (*tags_array).len() };
+        let tags_len = unsafe { (*tags_array).capacity() };
 
         for i in 0..tags_len {
             let current_tag = unsafe { (*tags_array).get(i) };

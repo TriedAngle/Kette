@@ -1,6 +1,6 @@
 use crate::{
-    Array, ByteArray, Context, Map, ParseStackFn, Parser, Quotation,
-    SLOT_METHOD, StackFn, Tagged, Word,
+    Array, ByteArray, Context, Map, Parser, Quotation, SLOT_METHOD, StackFn,
+    Tagged, Word,
 };
 
 pub fn add_primitives(ctx: &mut Context) {
@@ -8,6 +8,8 @@ pub fn add_primitives(ctx: &mut Context) {
         // stack
         ("dup", "x -- x x", dup),
         ("drop", "x -- ", drop),
+        ("2drop", "x -- ", drop2),
+        ("3drop", "x -- ", drop3),
         ("swap", "x y -- y x", swap),
         ("over", "x y -- x y x", over),
         ("rot", "x y z -- y z x", rot),
@@ -33,14 +35,15 @@ pub fn add_primitives(ctx: &mut Context) {
         ("<bytearray>", "n -- bytearray", create_bytearray),
         ("resize-array", "array n -- new", resize_array),
         ("resize-bytearray", "bytearray n -- new", resize_bytearray),
+        ("(array-resize-push)", "array obj -- array", array_push),
         ("slot", "obj n -- value", get_slot),
         ("set-slot", "value obj n -- ", set_slot),
         ("get-u8", "obj n -- u8", get_u8),
         ("set-u8", "u8 obj n -- ", set_u8),
         // vm
         ("(call)", "..a q -- ..b", call),
-        ("print-utf8", "str -- ", print_utf8),
-        ("println-utf8", "str -- ", println_utf8),
+        ("(print)", "str -- ", print_utf8),
+        ("(println)", "str -- ", println_utf8),
         (">r", "a -- ", data_to_retain),
         ("r>", " -- a", retain_to_data),
         ("depth", " -- n", data_depth),
@@ -53,20 +56,16 @@ pub fn add_primitives(ctx: &mut Context) {
         ("pop-handler", " -- handler", pop_handler),
         ("throw", "error -- ", throw),
         ("unwind-to-frame", " frame -- ", unwind_to_frame),
+        ("panic", "message -- ", error_panic),
         // parser
         ("@read-next", " -- str", read_next),
         ("@read-until", "end -- str", read_until),
         ("@parse-int", "str -- int/f", parse_int),
-        ("@parse-word", "str -- word/f", parse_word),
         ("@parse-until", "end/f -- array/f", parse_until),
     ];
 
-    let syntaxes: &[(&str, ParseStackFn)] = &[
-        ("[", parse_quotation),
-        ("@:", parse_syntax),
-        ("f", push_false),
-        ("t", push_true),
-    ];
+    let syntaxes: &[(&str, StackFn)] =
+        &[("@:", parse_syntax), ("f", push_false), ("t", push_true)];
 
     let maps: &[(&str, Tagged)] = &[
         ("map", ctx.gc.specials.map_map),
@@ -88,7 +87,7 @@ pub fn add_primitives(ctx: &mut Context) {
     }
 
     for &(name, fun) in syntaxes {
-        let fun = Tagged::from_parse_fn(fun);
+        let fun = Tagged::from_fn(fun);
         let word =
             ctx.gc
                 .allocate_primitive_word(name, Tagged::null(), fun, true);
@@ -104,27 +103,26 @@ pub fn add_primitives(ctx: &mut Context) {
             (*word).name = name_obj;
             (*word).body = quot;
         }
+        ctx.namestack_push(word_obj, Tagged::null());
     }
 }
 
-fn parse_quotation(ctx: &mut Context, parser: &mut Parser) {
-    let res = parser.parse_until(ctx, Some("]"));
-    let quot = ctx.gc.allocate_quotation(&res);
-    ctx.push(quot);
-}
-
-fn push_false(ctx: &mut Context, _parser: &mut Parser) {
+fn push_false(ctx: &mut Context) {
     ctx.push(Tagged::ffalse());
+    array_push(ctx);
 }
 
-fn push_true(ctx: &mut Context, _parser: &mut Parser) {
+fn push_true(ctx: &mut Context) {
     ctx.push(ctx.gc.specials.true_obj);
+    array_push(ctx);
 }
 
-fn parse_syntax(ctx: &mut Context, parser: &mut Parser) {
-    let name = parser.read_next(ctx);
-    let res = parser.parse_until(ctx, Some(";"));
-    let quot = ctx.gc.allocate_quotation(&res);
+fn parse_syntax(ctx: &mut Context) {
+    let name = ctx.read_next();
+    let res = ctx.parse_until(Some(";"));
+    ctx.push(res);
+    array_to_quotation(ctx);
+    let quot = ctx.pop();
     let tags = ctx.gc.allocate_array(1);
     let word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
 
@@ -157,16 +155,6 @@ fn parse_int(ctx: &mut Context) {
     }
 }
 
-fn parse_word(ctx: &mut Context) {
-    let value = ctx.pop();
-    let parser = ctx.gc.specials.parser.to_ptr() as *mut Parser;
-    if let Some(word) = unsafe { (*parser).parse_word(ctx, value) } {
-        ctx.push(word);
-    } else {
-        ctx.push(Tagged::ffalse())
-    }
-}
-
 fn read_until(ctx: &mut Context) {
     let end_obj = ctx.pop();
     let end_ptr = end_obj.to_ptr() as *const ByteArray;
@@ -188,16 +176,7 @@ fn parse_until(ctx: &mut Context) {
     };
 
     let res = ctx.parse_until(delimiter);
-
-    let array = ctx.gc.allocate_array(res.len());
-    let array_ptr = array.to_ptr() as *mut Array;
-    for (i, item) in res.iter().enumerate() {
-        unsafe {
-            (*array_ptr).set(i, *item);
-        }
-    }
-
-    ctx.push(array);
+    ctx.push(res);
 }
 
 fn call(ctx: &mut Context) {
@@ -398,6 +377,20 @@ fn resize_bytearray(ctx: &mut Context) {
     ctx.push(new)
 }
 
+fn array_push(ctx: &mut Context) {
+    let obj = ctx.pop();
+    let mut array = ctx.pop();
+    let mut array_ptr = array.to_ptr() as *mut Array;
+    if unsafe { (*array_ptr).is_full() } {
+        let new_capacity = unsafe { (*array_ptr).capacity() * 2 };
+        let new = ctx.gc.resize_array(array, new_capacity);
+        array = new;
+        array_ptr = new.to_ptr() as _;
+    }
+    unsafe { (*array_ptr).push(obj) };
+    ctx.push(array);
+}
+
 fn get_slot(ctx: &mut Context) {
     let n_obj = ctx.pop();
     let obj = ctx.pop();
@@ -492,6 +485,17 @@ fn dup(ctx: &mut Context) {
 }
 
 fn drop(ctx: &mut Context) {
+    let _ = ctx.pop();
+}
+
+fn drop2(ctx: &mut Context) {
+    let _ = ctx.pop();
+    let _ = ctx.pop();
+}
+
+fn drop3(ctx: &mut Context) {
+    let _ = ctx.pop();
+    let _ = ctx.pop();
     let _ = ctx.pop();
 }
 
@@ -600,6 +604,48 @@ fn throw(ctx: &mut Context) {
 fn unwind_to_frame(ctx: &mut Context) {
     let frame = ctx.pop();
     ctx.unwind_to_frame(frame);
+}
+
+fn error_panic(ctx: &mut Context) {
+    let message = ctx.pop();
+
+    if message.is_false() {
+        println!("PANIC: <no message>");
+    } else {
+        let message_ptr = message.to_ptr() as *const ByteArray;
+        let message_str = unsafe { (*message_ptr).as_str() };
+        println!("PANIC: {}", message_str);
+    }
+
+    println!("Stack trace:");
+
+    let frame = ctx.get_current_frame();
+    if frame.is_false() {
+        println!("  <callstack empty or unavailable>");
+    } else {
+        // TODO: implement this
+        println!("  <callstack empty or unavailable>");
+        // let mut depth = 0;
+        // let mut current_frame = ctx.call.current;
+        // let mut frames = Vec::new();
+        //
+        // while current_frame > ctx.call.start {
+        //     unsafe { current_frame = current_frame.sub(1) };
+        //     let frame_obj = unsafe { *current_frame };
+        //
+        //     if !frame_obj.is_false() && !frame_obj.is_int() {
+        //         frames.push(frame_obj);
+        //     }
+        // }
+        //
+        // for frame in frames.iter().rev() {
+        //     print_frame(ctx, *frame, depth);
+        //     depth += 1;
+        // }
+    }
+
+    // Terminate execution with panic
+    panic!("VM execution terminated due to panic");
 }
 
 #[cfg(test)]
@@ -991,7 +1037,7 @@ mod tests {
 
         let array_ptr = array.to_ptr() as *const crate::Array;
         unsafe {
-            assert_eq!((*array_ptr).len(), 5);
+            assert_eq!((*array_ptr).capacity(), 5);
 
             for i in 0..5 {
                 assert_eq!((*array_ptr).get(i), Tagged::null());
@@ -1007,7 +1053,7 @@ mod tests {
 
         let resized_ptr = resized_array.to_ptr() as *const crate::Array;
         unsafe {
-            assert_eq!((*resized_ptr).len(), 8);
+            assert_eq!((*resized_ptr).capacity(), 8);
 
             for i in 0..5 {
                 assert_eq!((*resized_ptr).get(i), Tagged::null());
@@ -1026,7 +1072,7 @@ mod tests {
 
         let shrunk_ptr = shrunk_array.to_ptr() as *const crate::Array;
         unsafe {
-            assert_eq!((*shrunk_ptr).len(), 3);
+            assert_eq!((*shrunk_ptr).capacity(), 3);
 
             for i in 0..3 {
                 assert_eq!((*shrunk_ptr).get(i), Tagged::null());
@@ -1192,13 +1238,13 @@ mod tests {
         for i in 0..3 {
             ctx.push(Tagged::from_int(i * 10));
             ctx.push(array);
-            ctx.push(Tagged::from_int(i + 1));
+            ctx.push(Tagged::from_int(i + 2));
             primitives::set_slot(&mut ctx);
         }
 
         for i in 0..3 {
             ctx.push(array);
-            ctx.push(Tagged::from_int(i + 1));
+            ctx.push(Tagged::from_int(i + 2));
             primitives::get_slot(&mut ctx);
 
             let result = ctx.pop();
@@ -1212,7 +1258,7 @@ mod tests {
 
         for i in 0..3 {
             ctx.push(resized);
-            ctx.push(Tagged::from_int(i + 1));
+            ctx.push(Tagged::from_int(i + 2));
             primitives::get_slot(&mut ctx);
 
             let result = ctx.pop();
@@ -1222,13 +1268,13 @@ mod tests {
         for i in 3..5 {
             ctx.push(Tagged::from_int(i * 10));
             ctx.push(resized);
-            ctx.push(Tagged::from_int(i + 1));
+            ctx.push(Tagged::from_int(i + 2));
             primitives::set_slot(&mut ctx);
         }
 
         for i in 0..5 {
             ctx.push(resized);
-            ctx.push(Tagged::from_int(i + 1));
+            ctx.push(Tagged::from_int(i + 2));
             primitives::get_slot(&mut ctx);
 
             let result = ctx.pop();
@@ -1283,7 +1329,7 @@ mod tests {
             let bytearray_ptr =
                 empty_bytearray.to_ptr() as *const crate::ByteArray;
 
-            assert_eq!((*array_ptr).len(), 0);
+            assert_eq!((*array_ptr).capacity(), 0);
             assert_eq!((*bytearray_ptr).len(), 0);
         }
 
@@ -1298,7 +1344,7 @@ mod tests {
 
         unsafe {
             let array_ptr = resized_array.to_ptr() as *const crate::Array;
-            assert_eq!((*array_ptr).len(), 0);
+            assert_eq!((*array_ptr).capacity(), 0);
         }
     }
 

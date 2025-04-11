@@ -8,7 +8,7 @@ use clap::{ArgAction, Parser};
 use parking_lot::Mutex;
 
 use kette::{
-    CodeHeap, Context, ContextConfig, Quotation, Tagged, add_primitives,
+    Array, CodeHeap, Context, ContextConfig, Quotation, Tagged, add_primitives,
 };
 
 #[derive(Parser, Debug)]
@@ -25,6 +25,7 @@ struct Args {
 }
 
 fn main() {
+    env_logger::builder().init();
     let args = Args::parse();
 
     let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
@@ -98,10 +99,10 @@ fn load_and_execute_file(
     let input = ctx.gc.allocate_string(&content);
     ctx.reset_parser(input);
     let tokens = ctx.parse_until(None);
-    if !tokens.is_empty() {
-        let quotation = ctx.gc.allocate_quotation(&tokens);
-        ctx.execute(quotation.to_ptr() as *const Quotation);
-    }
+    let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+    let quot_ptr = quotation.to_ptr() as *mut Quotation;
+    unsafe { (*quot_ptr).body = tokens };
+    ctx.execute(quotation.to_ptr() as *const Quotation);
 
     Ok(())
 }
@@ -133,8 +134,6 @@ fn run_repl(ctx: &mut Context) {
 
         execute_string(ctx, &input);
 
-        print_stack(ctx);
-
         line_num += 1;
     }
 
@@ -146,15 +145,24 @@ fn execute_string(ctx: &mut Context, input: &str) {
     ctx.reset_parser(input);
 
     let tokens = ctx.parse_until(None);
-    let quotation = ctx.gc.allocate_quotation(&tokens);
+
+    let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
+
+    let quot_ptr = quotation.to_ptr() as *mut Quotation;
+    unsafe { (*quot_ptr).body = tokens };
+
     ctx.execute(quotation.to_ptr() as *const Quotation);
     let codes = ctx.codes.lock();
     let code = codes
         .get_code_for_quotation(quotation.to_ptr() as _)
         .unwrap();
 
-    println!("parsed: {:?}", tokens);
-    println!("compiled: {:?}", code);
+    print_stack(ctx);
+    let tokens_ptr = tokens.to_ptr() as *const Array;
+
+    let tokens_slice = unsafe { (*tokens_ptr).as_slice_len() };
+    log::info!("parsed: {:?}", tokens_slice);
+    log::info!("compiled: {:?}", code);
 }
 
 fn print_stack(ctx: &Context) {

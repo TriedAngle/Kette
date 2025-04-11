@@ -98,7 +98,7 @@ impl GarbageCollector {
 
         if map_tagged == self.specials.array_map {
             let array_ptr = obj_ptr as *mut Array;
-            let size = unsafe { (*array_ptr).len() };
+            let size = unsafe { (*array_ptr).capacity() };
 
             let clone = self.allocate_array(size);
             let clone_ptr = clone.to_ptr() as *mut Array;
@@ -155,7 +155,7 @@ impl GarbageCollector {
 
             if map_ptr as *mut Object == self.specials.array_map.to_ptr() {
                 let array_ptr = obj_ptr as *mut Array;
-                let size = (*array_ptr).len();
+                let size = (*array_ptr).capacity();
 
                 for i in 0..size {
                     let elem = (*array_ptr).get(i);
@@ -707,7 +707,7 @@ impl GarbageCollector {
             }
 
             let mut slots_ptr = slots.to_ptr() as *mut Array;
-            let slots_len = (*slots_ptr).len();
+            let slots_len = (*slots_ptr).capacity();
 
             if slot_count >= slots_len {
                 let new_capacity = std::cmp::max(1, slots_len * 2);
@@ -800,10 +800,10 @@ impl GarbageCollector {
         false
     }
 
-    pub fn allocate_array(&mut self, size: usize) -> Tagged {
+    pub fn allocate_array(&mut self, capacity: usize) -> Tagged {
         let elem_size = mem::size_of::<Tagged>();
         let base_size = mem::size_of::<Array>();
-        let total_size = base_size + (size * elem_size);
+        let total_size = base_size + (capacity * elem_size);
 
         let layout =
             Layout::from_size_align(total_size, mem::align_of::<Array>())
@@ -819,7 +819,8 @@ impl GarbageCollector {
         unsafe {
             (*array).header =
                 ObjectHeader::new(self.specials.array_map.to_ptr() as *mut Map);
-            (*array).size = Tagged::from_int(size as i64);
+            (*array).capacity = Tagged::from_int(capacity as i64);
+            (*array).length = Tagged::from_int(0);
         }
 
         self.allocations.insert(ptr, (total_size, layout));
@@ -872,9 +873,13 @@ impl GarbageCollector {
         bytearray
     }
 
-    pub fn resize_array(&mut self, array: Tagged, new_size: usize) -> Tagged {
+    pub fn resize_array(
+        &mut self,
+        array: Tagged,
+        new_capacity: usize,
+    ) -> Tagged {
         if array.is_int() || array == Tagged::null() {
-            return self.allocate_array(new_size);
+            return self.allocate_array(new_capacity);
         }
 
         let array_ptr = array.to_ptr();
@@ -882,20 +887,22 @@ impl GarbageCollector {
         let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
 
         if map_tagged != self.specials.array_map {
-            return self.allocate_array(new_size);
+            return self.allocate_array(new_capacity);
         }
 
         let array_ptr = array_ptr as *mut Array;
-        let old_size = unsafe { (*array_ptr).len() };
+        let old_size = unsafe { (*array_ptr).capacity() };
 
-        let new_array = self.allocate_array(new_size);
+        let new_array = self.allocate_array(new_capacity);
         let new_array_ptr = new_array.to_ptr() as *mut Array;
 
-        let copy_size = std::cmp::min(old_size, new_size);
+        let copy_size = std::cmp::min(old_size, new_capacity);
         for i in 0..copy_size {
             let value = unsafe { (*array_ptr).get(i) };
             unsafe { (*new_array_ptr).set(i, value) };
         }
+
+        unsafe { (*new_array_ptr).length = (*array_ptr).length };
 
         new_array
     }
@@ -941,6 +948,9 @@ impl GarbageCollector {
                 (*array_ptr).set(i, *item);
             }
         }
+        unsafe {
+            (*array_ptr).length = Tagged::from_int(items.len() as i64);
+        };
 
         let quotation = self.allocate_object(self.specials.quotation_map);
         unsafe {
@@ -1118,7 +1128,7 @@ mod tests {
             assert_eq!(map as *mut Object, gc.specials.array_map.to_ptr());
 
             let array_ptr = array.to_ptr() as *mut Array;
-            assert_eq!((*array_ptr).len(), 5);
+            assert_eq!((*array_ptr).capacity(), 5);
 
             for i in 0..5 {
                 assert_eq!((*array_ptr).get(i), Tagged::null());
@@ -1172,7 +1182,7 @@ mod tests {
         let larger = gc.resize_array(array, 5);
         unsafe {
             let larger_ptr = larger.to_ptr() as *mut Array;
-            assert_eq!((*larger_ptr).len(), 5);
+            assert_eq!((*larger_ptr).capacity(), 5);
 
             assert_eq!((*larger_ptr).get(0).to_int(), 1);
             assert_eq!((*larger_ptr).get(1).to_int(), 2);
@@ -1185,7 +1195,7 @@ mod tests {
         let smaller = gc.resize_array(array, 2);
         unsafe {
             let smaller_ptr = smaller.to_ptr() as *mut Array;
-            assert_eq!((*smaller_ptr).len(), 2);
+            assert_eq!((*smaller_ptr).capacity(), 2);
 
             assert_eq!((*smaller_ptr).get(0).to_int(), 1);
             assert_eq!((*smaller_ptr).get(1).to_int(), 2);
@@ -1488,7 +1498,7 @@ mod tests {
             let orig_ptr = original_array.to_ptr() as *mut Array;
             let clone_ptr = clone_array.to_ptr() as *mut Array;
 
-            assert_eq!((*orig_ptr).len(), (*clone_ptr).len());
+            assert_eq!((*orig_ptr).capacity(), (*clone_ptr).capacity());
             for i in 0..3 {
                 assert_eq!((*orig_ptr).get(i), (*clone_ptr).get(i));
             }

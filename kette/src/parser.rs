@@ -1,4 +1,4 @@
-use crate::{ByteArray, Context, ObjectHeader, Tagged, Word};
+use crate::{Array, ByteArray, Context, ObjectHeader, Tagged, Word};
 
 pub struct Parser {
     _header: ObjectHeader,
@@ -156,8 +156,8 @@ impl Parser {
         &mut self,
         ctx: &mut Context,
         delimiter: Option<&str>,
-    ) -> Vec<Tagged> {
-        let mut result = Vec::new();
+    ) -> Tagged {
+        let mut accum = ctx.gc.allocate_array(100);
 
         self.skip_whitespace();
 
@@ -172,22 +172,25 @@ impl Parser {
             let token = self.parse_token(ctx);
 
             if ctx.is_word(token) && ctx.is_parsing_word(token) {
-                if let Some(func) = ctx.word_primitive_parse(token) {
-                    func(ctx, self);
-                    let res = ctx.pop();
-                    result.push(res);
-                } else {
-                    let word = token.to_ptr() as *mut Word;
-                    ctx.execute_word(word);
-                }
+                let word = token.to_ptr() as *mut Word;
+                ctx.push(accum);
+                ctx.execute_word(word);
+                accum = ctx.pop();
             } else {
-                result.push(token);
+                let mut arr = accum.to_ptr() as *mut Array;
+                if unsafe { (*arr).is_full() } {
+                    let new_cap = unsafe { (*arr).capacity() * 2 };
+                    let new = ctx.gc.resize_array(accum, new_cap);
+                    accum = new;
+                    arr = new.to_ptr() as _;
+                }
+                unsafe { (*arr).push(token) };
             }
 
             self.skip_whitespace();
         }
 
-        result
+        accum
     }
 
     pub fn read_until(
@@ -286,8 +289,9 @@ mod tests {
         let mut ctx = setup_context();
         ctx.reset_parser_string("123 456 789");
 
-        let results = ctx.parse_until(None);
-
+        let result = ctx.parse_until(None);
+        let array = result.to_ptr() as *mut Array;
+        let results = unsafe { (*array).as_slice_len() };
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].to_int(), 123);
         assert_eq!(results[1].to_int(), 456);
@@ -299,7 +303,9 @@ mod tests {
         let mut ctx = setup_context();
         ctx.reset_parser_string("123 456 ; 789");
 
-        let results = ctx.parse_until(Some(";"));
+        let result = ctx.parse_until(Some(";"));
+        let array = result.to_ptr() as *mut Array;
+        let results = unsafe { (*array).as_slice_len() };
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].to_int(), 123);
