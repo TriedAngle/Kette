@@ -211,7 +211,7 @@ impl Parser {
         if let Some(end_index) = remaining.find(stop_sequence) {
             let end_pos = start_pos + end_index;
 
-            let content = &input_str[start_pos..end_pos];
+            let content = &input_str[start_pos + 1..end_pos];
 
             self.position = Tagged::from_int(
                 (start_pos + end_index + stop_sequence.len()) as i64,
@@ -219,7 +219,7 @@ impl Parser {
 
             return ctx.gc.allocate_string(content);
         } else {
-            let content = &input_str[start_pos..];
+            let content = &input_str[start_pos + 1..];
 
             self.position = Tagged::from_int(input_str.len() as i64);
 

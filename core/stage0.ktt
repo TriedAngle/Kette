@@ -7,8 +7,7 @@
 @: { \ } @parse-until (array-resize-push) ;
 
 @: : 
-    @read-next \ ) @parse-until drop
+    @read-next \ ) @read-until drop
     f f \ ; @parse-until array>quotation 
     word (new-boa) f namestack|insert 2drop ;
-
 
