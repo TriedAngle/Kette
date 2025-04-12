@@ -22,10 +22,16 @@ pub fn add_primitives(ctx: &mut Context) {
         ("fixnum/", "a b -- c", fixnum_div),
         ("fixnum>utf8", "num -- str", fixnum_to_string),
         ("fixnum=", "a b -- ?", fixnum_eq),
+        ("fixnum!=", "a b -- ?", fixnum_neq),
+        ("fixnum>", "a b -- ?", fixnum_gt),
+        ("fixnum<", "a b -- ?", fixnum_lt),
+        ("fixnum>=", "a b -- ?", fixnum_geq),
+        ("fixnum<=", "a b -- ?", fixnum_leq),
         ("is-fixnum?", "obj -- ?", fixnum_is),
         ("is-2fixnum?", "obj1 obj2 -- ?", fixnum_is2),
         // general
         ("if", "? t-branch f-branch -- t/f-called", iff),
+        ("not", " ? -- !? ", not),
         ("array>quotation", "array -- q", array_to_quotation),
         ("has-tag?", "word tag -- f", has_tag),
         // objects
@@ -72,6 +78,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("@read-until", "end -- str", read_until),
         ("@parse-int", "str -- int/f", parse_int),
         ("@parse-until", "end/f -- array/f", parse_until),
+        ("@skip-whitespace", " -- ", skip_whitespace),
     ];
 
     let syntaxes: &[(&str, StackFn)] =
@@ -164,6 +171,10 @@ fn parse_until(ctx: &mut Context) {
 
     let res = ctx.parse_until(delimiter);
     ctx.push(res);
+}
+
+fn skip_whitespace(ctx: &mut Context) {
+    ctx.skip_whitespace();
 }
 
 fn call(ctx: &mut Context) {
@@ -495,6 +506,36 @@ fn fixnum_eq(ctx: &mut Context) {
     push_bool(ctx, res);
 }
 
+fn fixnum_neq(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let res = a != b;
+    push_bool(ctx, res);
+}
+
+fn fixnum_gt(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let res = a > b;
+    push_bool(ctx, res);
+}
+
+fn fixnum_lt(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let res = a < b;
+    push_bool(ctx, res);
+}
+
+fn fixnum_geq(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let res = a >= b;
+    push_bool(ctx, res);
+}
+
+fn fixnum_leq(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let res = a <= b;
+    push_bool(ctx, res);
+}
+
 fn fixnum_is(ctx: &mut Context) {
     let obj = ctx.pop();
     let is = obj.is_int();
@@ -527,6 +568,12 @@ fn print_utf8(ctx: &mut Context) {
     let ba = pop_bytearray(ctx);
     let s = unsafe { (*ba).as_str() };
     print!("{s}");
+}
+
+fn not(ctx: &mut Context) {
+    let b = ctx.pop();
+    let is = b.is_false();
+    push_bool(ctx, is);
 }
 
 fn print_stack(ctx: &mut Context) {

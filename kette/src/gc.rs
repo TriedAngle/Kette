@@ -215,6 +215,8 @@ impl GarbageCollector {
         }
 
         for (ptr, layout) in to_free {
+            // let tagged = Tagged::from_ptr(ptr as _);
+            // println!("Dealloc: {:?}", tagged);
             unsafe {
                 dealloc(ptr, layout);
             }
@@ -459,7 +461,12 @@ impl GarbageCollector {
         let box_map = self.create_map(
             "Box",
             &[
-                ("value", SLOT_CONST_DATA, Tagged::ffalse(), Tagged::ffalse()),
+                (
+                    "value",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
                 (
                     "Parent",
                     SLOT_PARENT,
@@ -505,13 +512,13 @@ impl GarbageCollector {
 
         self.specials.primitive_tag =
             self.allocate_object(self.specials.object_map);
+        self.add_root(self.specials.primitive_tag);
         self.specials.parser_tag =
             self.allocate_object(self.specials.object_map);
+        self.add_root(self.specials.parser_tag);
         self.specials.inline_tag =
             self.allocate_object(self.specials.object_map);
-
-        self.add_root(self.specials.primitive_tag);
-        self.add_root(self.specials.parser_tag);
+        self.add_root(self.specials.inline_tag);
     }
 
     fn raw_allocate<T>(&mut self, size: usize) -> *mut T {

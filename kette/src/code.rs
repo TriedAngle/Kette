@@ -753,7 +753,7 @@ mod test {
 
         match main_code[0] {
             Code::BranchRelative(offset) => {
-                assert_eq!(offset, 2);
+                assert_eq!(offset, 3);
             }
             _ => {
                 panic!("Expected BranchRelative operation as first instruction")

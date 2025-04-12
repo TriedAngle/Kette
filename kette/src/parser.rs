@@ -43,7 +43,7 @@ impl Parser {
         &input_str[pos..]
     }
 
-    fn skip_whitespace(&mut self) {
+    pub fn skip_whitespace(&mut self) {
         while let Some(c) = self.current_char() {
             if !c.is_whitespace() {
                 break;
@@ -236,7 +236,7 @@ impl Parser {
         if let Some(end_index) = remaining.find(stop_sequence) {
             let end_pos = start_pos + end_index;
 
-            let content = &input_str[start_pos + 1..end_pos];
+            let content = &input_str[start_pos..end_pos];
 
             self.position = Tagged::from_int(
                 (start_pos + end_index + stop_sequence.len()) as i64,
@@ -244,7 +244,7 @@ impl Parser {
 
             return ctx.gc.allocate_string(content);
         } else {
-            let content = &input_str[start_pos + 1..];
+            let content = &input_str[start_pos..];
 
             self.position = Tagged::from_int(input_str.len() as i64);
 

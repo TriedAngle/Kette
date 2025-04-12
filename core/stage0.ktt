@@ -1,6 +1,6 @@
 @: \ @read-next (array-resize-push) ;
 
-@: s" \ " @read-until (array-resize-push) ;
+@: s" \ " @skip-whitespace @read-until (array-resize-push) ;
 
 @: [ \ ] @parse-until array>quotation (array-resize-push) ;
 
@@ -56,7 +56,6 @@
 : ignore-stack-effect ( -- ) \ ) @read-until drop ;
 : parse-word-body ( -- quot ) \ ; @parse-until array>quotation ;
 
-@: : scan-new-word ignore-stack-effect parse-word-body word|set-body ;
 
 : >box ( value -- box ) box|map (new-boa) ;
 : unbox ( box -- value ) 0 slot ;
@@ -77,6 +76,7 @@
 : define-push-word ( word item -- ) 1array array>quotation swap word|set-body ;
 : define-symbol ( word -- ) dup >box define-push-word ;
 
+@: : scan-new-word ignore-stack-effect  parse-word-body swap word|set-body ;
 @: $: scan-new-word define-symbol ;
 
 TODO: errorhandling ;
@@ -113,15 +113,19 @@ TODO: errorhandling ;
 
 : parse-basic-slots ( -- ) \ ; @parse-until ;
 
-
-
-// @: |> scan-new-word ; 
-
-TODO: requires boxing ;
-
+: + ( a b -- c ) fixnum+ ;
+: - ( a b -- c ) fixnum- ;
 : * ( a b -- c ) fixnum* ;
-// simple if expression
-// every value other than `f` is true
-10 dup [ 2 * ] [ drop 0 ] if fixnum>utf8 (println)
+: / ( a b -- c ) fixnum/ ;
+: = ( a b -- c ) fixnum= ;
+: != ( a b -- c ) fixnum!= ;
+: > ( a b -- c ) fixnum> ;
+: < ( a b -- c ) fixnum< ;
+: >= ( a b -- c ) fixnum>= ;
+: <= ( a b -- c ) fixnum<= ;
 
+: loop ( ... p -- ... )
+    [ (call) ] keep swap [ loop ] [ drop ] if ; 
 
+s" yooooo" (println) 
+10 [ 1 fixnum- dup fixnum>utf8 (println) dup 0 > ] loop

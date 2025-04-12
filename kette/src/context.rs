@@ -355,6 +355,13 @@ impl Context {
         unsafe { (*parser).read_until(self, end) }
     }
 
+    pub fn skip_whitespace(&mut self) {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe {
+            (*parser).skip_whitespace();
+        }
+    }
+
     pub fn namestack_push(
         &mut self,
         key: Tagged,
@@ -374,6 +381,7 @@ impl Context {
 
                 if entry_key == existing_key {
                     let old_value = unsafe { (*entry_ptr).1 };
+                    unsafe { (*entry_ptr).0 = key };
                     unsafe { (*entry_ptr).1 = value };
                     return (existing_key, old_value);
                 }
@@ -564,7 +572,7 @@ impl Context {
             let ba_ptr = tagged.to_ptr() as *const ByteArray;
             let size = unsafe { (*ba_ptr).len() };
             let s = unsafe { (*ba_ptr).as_str() };
-            return format!("ba{{{}}} \"{}\"", size, s);
+            return format!("{{({})\"{}\"}}", size, s);
         }
 
         if map_tagged == self.gc.specials.array_map {

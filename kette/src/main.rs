@@ -8,7 +8,7 @@ use clap::{ArgAction, Parser};
 use parking_lot::Mutex;
 
 use kette::{
-    Array, CodeHeap, Context, ContextConfig, Quotation, Tagged, add_primitives,
+    Array, CodeHeap, Context, ContextConfig, Quotation, add_primitives,
 };
 
 #[derive(Parser, Debug)]
@@ -161,7 +161,7 @@ fn execute_string(ctx: &mut Context, input: &str) {
     let tokens_ptr = tokens.to_ptr() as *const Array;
 
     let tokens_slice = unsafe { (*tokens_ptr).as_slice_len() };
-    log::info!("parsed: {:?}", tokens_slice);
+    log::debug!("parsed: {:?}", tokens_slice);
     log::info!("compiled: {:?}", code);
 }
 
