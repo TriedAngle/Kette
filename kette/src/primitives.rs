@@ -1,5 +1,6 @@
 use crate::{
-    Array, ByteArray, Context, Map, Object, Parser, Quotation, StackFn, Tagged, Word, SLOT_METHOD
+    Array, ByteArray, Context, Map, Object, Parser, Quotation, SLOT_METHOD,
+    StackFn, Tagged, Word,
 };
 
 pub fn add_primitives(ctx: &mut Context) {
@@ -233,11 +234,11 @@ fn array_to_quotation(ctx: &mut Context) {
     ctx.push(quotation);
 }
 
-fn has_tag(ctx: &mut Context) { 
+fn has_tag(ctx: &mut Context) {
     let tag = ctx.pop();
     let word_obj = ctx.pop();
     let word = word_obj.to_ptr() as *const Word;
-    let has  = unsafe { (*word).has_tag(tag) };
+    let has = unsafe { (*word).has_tag(tag) };
     push_bool(ctx, has);
 }
 
@@ -577,7 +578,6 @@ fn rot(ctx: &mut Context) {
     ctx.push(x);
 }
 
-
 // x y z -- z x y
 fn rot_neg(ctx: &mut Context) {
     let z = ctx.pop();
@@ -713,7 +713,7 @@ fn error_panic(ctx: &mut Context) {
     panic!("VM execution terminated due to panic");
 }
 
-fn get_special(ctx: &mut Context) { 
+fn get_special(ctx: &mut Context) {
     let idx_obj = ctx.pop();
     let idx = idx_obj.to_int();
     let obj = ctx.gc.specials.get_nth(idx as usize);

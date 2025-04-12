@@ -34,7 +34,7 @@
 : word|init-tags ( word -- ) 10 <array> swap 2 set-slot ; 
 : word|?init-tags ( word -- ) dup word|tags-null? [ word|init-tags ] [ drop ] if ;
 : word|body ( word -- body) 3 slot ;
-: word|set-body ( word body -- ) 3 set-slot ;
+: word|set-body ( body word -- ) 3 set-slot ;
 : word|add-tag ( word tag -- ) 
     swap [ word|?init-tags ] keep swap 
     2 slot (array-resize-push) ;
@@ -65,23 +65,23 @@
 : array-nth ( array n -- ) array-index slot ;
 : array-set-nth ( x array n -- ) array-index set-slot ;
 
-: (1array) ( x arr -- arr ) [ 0 array-set-nth ] keep ;
-: (2array) ( x y arr -- arr ) [ 1 array-set-nth ] keep (1array)  ;
-: (3array) ( x y z arr -- arr ) [ 2 array-set-nth ] keep (2array)  ;
-: (4array) ( x y z w arr -- arr ) [ 3 array-set-nth ] keep (3array) ;
+: (1array) ( x arr -- arr ) [ 0 array-set-nth ] keep [ 1 swap 0 set-slot ] keep ;
+: (2array) ( x y arr -- arr ) [ 1 array-set-nth ] keep [ (1array) 2 swap 0 set-slot ] keep  ;
+: (3array) ( x y z arr -- arr ) [ 2 array-set-nth ] keep [  (2array) 3 swap 0 set-slot ] keep ;
+: (4array) ( x y z w arr -- arr ) [ 3 array-set-nth ] keep [ (3array) 4 swap 0 set-slot ] keep  ;
 : 1array ( x -- arr ) 1 <array> (1array) ;
 : 2array ( x y -- arr ) 2 <array> (2array) ;
 : 3array ( x y z -- arr ) 3 <array> (3array) ;
 : 4array ( x y z w -- arr ) 4 <array> (4array)  ;
 
-: define-push-word ( word item -- ) 1array array>quotation word|set-body ;
+: define-push-word ( word item -- ) 1array array>quotation swap word|set-body ;
 : define-symbol ( word -- ) dup >box define-push-word ;
 
 @: $: scan-new-word define-symbol ;
 
-
-: get ( symbol -- value ) namestack|find dropd ;
-: set ( value symbol -- ) swap namestack|insert 2drop ;
+TODO: errorhandling ;
+: get ( symbol -- value ) unbox namestack|find dropd ;
+: set ( value symbol -- ) unbox swap namestack|insert 2drop ;
 
 : parse-word? ( name -- word/f ) namestack|find swap dup [ dropd ] [ 2drop f ] if ;
 : parse-next? ( -- int/word/f ) 
@@ -92,7 +92,7 @@
 @: \box @read-next parse-word? dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
 
 : map-slot|map ( -- map ) 7 (special) ;
-// : word|map ( -- map ) 9 (special) ;
+: word|map ( -- map ) 9 (special) ;
 : fixnum|map ( -- map ) 4 (special) ;
 : parser-tag ( -- tag ) 14 (special) ;
 : inline-tag ( -- tag ) 14 (special) ;
