@@ -84,7 +84,9 @@ TODO: errorhandling ;
 
 $: last-word
 
-@: : scan-new-word [ last-word set ] keep ignore-stack-effect parse-word-body swap word|set-body ;
+@: : 
+    scan-new-word [ last-word set ] keep ignore-stack-effect 
+    parse-word-body swap word|set-body ;
 
 : map|map ( -- map ) 0 (special) ;
 : fixnum|map ( -- map ) 4 (special) ;
@@ -118,13 +120,18 @@ $: last-word
 
 : 2bi ( x y p q -- ) [ 2keep ] dip (call) ;
 
-: parse-word? ( name -- word/f ) namestack|find swap dup [ dropd ] [ 2drop f ] if ;
+: parse-word? ( name -- word/f ) 
+    namestack|find swap dup [ dropd ] [ 2drop f ] if ;
+
 : parse-next? ( -- int/word/f ) 
     @read-next dup @parse-int 
     dup [ dropd ] [ parse-word? ] if ;
 
-@: \\ @read-next parse-word? dup [ (array-resize-push) ] [ drop s" word not found" panic ] if ;
-@: \box @read-next parse-word? dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
+@: \\ @read-next parse-word? 
+    dup [ (array-resize-push) ] [ drop s" word not found" panic ] if ;
+
+@: \box @read-next parse-word? 
+    dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
 
 
 : rotd ( x y z w -- y z x w ) [ rot ] dip ;
@@ -150,13 +157,24 @@ $: last-word
 : >= ( a b -- c ) fixnum>= ;
 : <= ( a b -- c ) fixnum<= ;
 
-: bytearray-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot (copy-bytearray) ;
 
-: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 slot ] bi@ fixnum+ ] keep 0 slot ;
+: merge|size&offset ( src dst -- size offset ) 
+    swap [ swap [ 0 slot ] bi@ fixnum+ ] keep 0 slot ;
 
-: <|> ( s1 s2 -- s1s2 ) 
-    2dup merge|size&offset [ swapd resize-bytearray ] dip
+: bytearray-copy-full ( src dst dst-offset -- ) 
+    pick 0 slot 0 -rot (copy-bytearray) ;
+
+: bytearray<|> ( s1 s2 -- s1s2 ) 
+    2dup merge|size&offset @print-stack [ swapd resize-bytearray ] dip
     swap [ swap bytearray-copy-full ] keep ;
+
+: array-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot (copy-array) ;
+
+// a1 a2 size off -- a2 new new | size | off
+: array<|> ( a1 a2 -- a1a2 ) 
+    2dup merge|size&offset [ 
+        swapd [ resize-array dup ] [ swap 0 set-slot ] bi 
+    ] dip swap [ swap array-copy-full ] keep ;
 
 : loop ( ... p -- ... )
     [ (call) ] keep swap [ loop ] [ drop ] if ; 
@@ -185,6 +203,7 @@ $: last-word
 
 : read-accessor-name ( name -- accessor-name ) 
     ;
+
 : create-read-accessors ( data-slots -- read-slots )
     [ ] ;
 
