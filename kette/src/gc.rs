@@ -1,1671 +1,1649 @@
-use std::{
-    alloc,
-    collections::{HashMap, HashSet},
-    ptr, usize,
-};
+use core::panic;
+use std::alloc::{Layout, alloc, dealloc};
+use std::collections::HashMap;
+use std::mem;
+use std::str;
 
 use crate::{
-    bignum::BigNum,
-    object::{
-        Array, BoxObject, ByteArray, Float, Map, Object, ObjectHeader, ObjectRef, Quotation, Slot,
-        SpecialObjects, Word,
-    },
+    Array, ByteArray, Map, Object, ObjectHeader, SLOT_CONST_DATA, SLOT_DATA,
+    SLOT_PARENT, Slot, Tagged,
 };
 
-const SMALL_OBJECT_MAX_SIZE: usize = 64;
-const BUMP_CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
-const MIN_OBJECT_ALIGNMENT: usize = 8;
-const ALLOCATION_METADATA_SIZE: usize = std::mem::size_of::<usize>();
+pub struct SpecialObjects {
+    pub map_map: Tagged,
+    pub object_map: Tagged,
+    pub false_map: Tagged,
+    pub true_obj: Tagged,
 
-pub struct AllocatorStats {
-    pub chunk_count: usize,
-    pub total_allocated: usize,
-    pub total_objects: usize,
-    pub live_objects: usize,
+    pub fixnum_map: Tagged,
+    pub array_map: Tagged,
+    pub bytearray_map: Tagged,
+    pub slot_map: Tagged,
+    pub quotation_map: Tagged,
+    pub word_map: Tagged,
+    pub handler_map: Tagged,
+    pub box_map: Tagged,
+
+    pub primitive_tag: Tagged,
+    pub parser_tag: Tagged,
+    pub inline_tag: Tagged,
+
+    pub parser: Tagged,
 }
 
-struct Chunk {
-    start: *mut u8,
-    current: *mut u8,
-    end: *mut u8,
-
-    object_count: usize,
-    live_count: usize,
-}
-
-impl Chunk {
-    unsafe fn new() -> Self {
-        let layout =
-            alloc::Layout::from_size_align_unchecked(BUMP_CHUNK_SIZE, MIN_OBJECT_ALIGNMENT);
-        let ptr = alloc::alloc(layout);
-
-        Self {
-            start: ptr,
-            current: ptr,
-            end: ptr.add(BUMP_CHUNK_SIZE),
-            object_count: 0,
-            live_count: 0,
-        }
-    }
-
-    fn remaining_space(&self) -> usize {
-        unsafe { self.end.offset_from(self.current) as usize }
-    }
-
-    fn contains_address(&self, addr: *mut u8) -> bool {
-        addr >= self.start && addr < self.end
-    }
-
-    unsafe fn allocate(&mut self, size: usize) -> Option<*mut u8> {
-        let total_size = size + ALLOCATION_METADATA_SIZE;
-        let aligned_size = (total_size + MIN_OBJECT_ALIGNMENT - 1) & !(MIN_OBJECT_ALIGNMENT - 1);
-
-        if self.remaining_space() < aligned_size {
-            return None;
-        }
-
-        *(self.current as *mut usize) = size;
-        let object_start = self.current.add(ALLOCATION_METADATA_SIZE);
-
-        self.current = self.current.add(aligned_size);
-        self.object_count += 1;
-
-        Some(object_start)
-    }
-
-    unsafe fn for_each_object<F>(&self, mut f: F)
-    where
-        F: FnMut(*mut ObjectHeader),
-    {
-        let mut current = self.start;
-
-        while current < self.current {
-            let size = *(current as *mut usize);
-            let object = current.add(ALLOCATION_METADATA_SIZE) as *mut ObjectHeader;
-
-            f(object);
-
-            let total_size = size + ALLOCATION_METADATA_SIZE;
-            let aligned_size =
-                (total_size + MIN_OBJECT_ALIGNMENT - 1) & !(MIN_OBJECT_ALIGNMENT - 1);
-            current = current.add(aligned_size);
-        }
-    }
-
-    unsafe fn scan_live_objects(&mut self) -> usize {
-        self.live_count = 0;
-        let mut live_count = 0;
-
-        self.for_each_object(|obj| {
-            if (*obj).is_marked() {
-                live_count += 1;
-                (*obj).clear_mark();
-            }
-        });
-        self.live_count = live_count;
-        live_count
-    }
-}
-
-pub struct BumpAllocator {
-    chunks: Vec<Chunk>,
-    current_chunk_idx: usize,
-    total_allocated: usize,
-    alive_objects: usize,
-}
-
-impl BumpAllocator {
+impl SpecialObjects {
     pub fn new() -> Self {
-        Self {
-            chunks: vec![unsafe { Chunk::new() }],
-            current_chunk_idx: 0,
-            total_allocated: 0,
-            alive_objects: 0,
+        SpecialObjects {
+            map_map: Tagged::null(),
+            object_map: Tagged::null(),
+            false_map: Tagged::null(),
+            true_obj: Tagged::null(),
+            fixnum_map: Tagged::null(),
+            array_map: Tagged::null(),
+            bytearray_map: Tagged::null(),
+            slot_map: Tagged::null(),
+            quotation_map: Tagged::null(),
+            word_map: Tagged::null(),
+            handler_map: Tagged::null(),
+            box_map: Tagged::null(),
+
+            primitive_tag: Tagged::null(),
+            parser_tag: Tagged::null(),
+            inline_tag: Tagged::null(),
+
+            parser: Tagged::null(),
         }
     }
 
-    pub unsafe fn allocate(&mut self, size: usize) -> *mut u8 {
-        debug_assert!(size >= MIN_OBJECT_ALIGNMENT);
-
-        if let Some(ptr) = self.chunks[self.current_chunk_idx].allocate(size) {
-            self.total_allocated += size;
-            return ptr;
+    pub fn get_nth(&self, idx: usize) -> Tagged {
+        match idx {
+            0 => self.map_map,
+            1 => self.object_map,
+            2 => self.false_map,
+            3 => self.true_obj,
+            4 => self.fixnum_map,
+            5 => self.array_map,
+            6 => self.bytearray_map,
+            7 => self.slot_map,
+            8 => self.quotation_map,
+            9 => self.word_map,
+            10 => self.handler_map,
+            11 => self.box_map,
+            12 => self.primitive_tag,
+            13 => self.parser_tag,
+            14 => self.inline_tag,
+            15 => self.parser,
+            _ => panic!("special object get_nth invalid idx: {:?}", idx),
         }
-
-        for (idx, chunk) in self.chunks.iter_mut().enumerate() {
-            if let Some(ptr) = chunk.allocate(size) {
-                self.current_chunk_idx = idx;
-                self.total_allocated += size;
-                return ptr;
-            }
-        }
-
-        self.chunks.push(unsafe { Chunk::new() });
-        self.current_chunk_idx = self.chunks.len() - 1;
-
-        let ptr = self.chunks[self.current_chunk_idx]
-            .allocate(size)
-            .expect("New chunk should have space");
-
-        self.total_allocated += size;
-        ptr
-    }
-
-    pub fn contains_address(&self, addr: *mut u8) -> bool {
-        self.chunks.iter().any(|chunk| chunk.contains_address(addr))
-    }
-
-    pub unsafe fn sweep(&mut self) {
-        self.total_allocated = 0;
-        self.alive_objects = 0;
-        let mut i = 0;
-        while i < self.chunks.len() {
-            let live_count = unsafe { self.chunks[i].scan_live_objects() };
-            self.alive_objects += live_count;
-            if live_count == 0 {
-                self.chunks.swap_remove(i);
-
-                if i <= self.current_chunk_idx {
-                    self.current_chunk_idx = self.current_chunk_idx.saturating_sub(1);
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        if self.chunks.is_empty() {
-            self.chunks.push(unsafe { Chunk::new() });
-            self.current_chunk_idx = 0;
-        }
-    }
-
-    pub fn stats(&self) -> AllocatorStats {
-        let mut total_objects = 0;
-        let mut live_objects = 0;
-
-        for chunk in &self.chunks {
-            total_objects += chunk.object_count;
-            live_objects += chunk.live_count;
-        }
-
-        AllocatorStats {
-            chunk_count: self.chunks.len(),
-            total_allocated: self.total_allocated,
-            total_objects,
-            live_objects,
-        }
-    }
-}
-
-pub struct LargeAllocator {
-    objects: Vec<ptr::NonNull<Object>>,
-}
-
-impl LargeAllocator {
-    fn new() -> Self {
-        Self {
-            objects: Vec::new(),
-        }
-    }
-
-    pub unsafe fn allocate(&mut self, size: usize) -> *mut Object {
-        let layout = unsafe { alloc::Layout::from_size_align_unchecked(size, 8) };
-        let ptr = unsafe { alloc::alloc(layout) as *mut Object };
-        unsafe {
-            self.objects.push(ptr::NonNull::new_unchecked(ptr));
-        }
-        ptr
-    }
-
-    pub unsafe fn deallocate(&mut self, ptr: *mut Object) {
-        let map = unsafe { (*ptr).get_map() };
-        let size = (*map).object_size;
-        let layout = unsafe {
-            alloc::Layout::from_size_align_unchecked(size.as_int_unchecked() as usize, 8)
-        };
-        unsafe { alloc::dealloc(ptr as *mut u8, layout) };
     }
 }
 
 pub struct GarbageCollector {
-    pub bump: BumpAllocator,
-    pub large: LargeAllocator,
-    pub roots: HashSet<ObjectRef>,
-    pub total_allocated: usize,
-    pub threshold: usize,
+    allocations: HashMap<*mut u8, (usize, Layout)>,
     pub specials: SpecialObjects,
+    roots: Vec<Tagged>,
 }
 
 impl GarbageCollector {
     pub fn new() -> Self {
-        Self {
-            bump: BumpAllocator::new(),
-            large: LargeAllocator::new(),
-            roots: HashSet::new(),
-            total_allocated: 0,
-            threshold: 1024 * 1024, // 1MB initial threshold
+        let mut gc = GarbageCollector {
+            allocations: HashMap::new(),
             specials: SpecialObjects::new(),
-        }
-    }
-
-    pub unsafe fn allocate(&mut self, map: *mut Map) -> *mut Object {
-        let size = unsafe { (*map).object_size.as_int_unchecked() as usize };
-
-        self.total_allocated += size;
-        if self.total_allocated > self.threshold {
-            unsafe { self.collect() };
-            self.threshold = self.total_allocated * 2;
-        }
-
-        let ptr = if size <= SMALL_OBJECT_MAX_SIZE {
-            unsafe { self.bump.allocate(size) as *mut Object }
-        } else {
-            unsafe { self.large.allocate(size) }
-        };
-
-        unsafe { (*ptr).header = ObjectHeader::new(map) };
-
-        let slots = unsafe { (ptr as *mut u8).add(std::mem::size_of::<Object>()) };
-        unsafe { std::ptr::write_bytes(slots, 0, size - std::mem::size_of::<Object>()) };
-
-        ptr
-    }
-
-    pub unsafe fn allocate_array(&mut self, length: usize) -> *mut Array {
-        let size = Array::required_size(length);
-
-        self.total_allocated += size;
-        if self.total_allocated > self.threshold {
-            unsafe { self.collect() };
-            self.threshold = self.total_allocated * 2;
-        }
-
-        let ptr = if size <= SMALL_OBJECT_MAX_SIZE {
-            unsafe { self.bump.allocate(size) as *mut Array }
-        } else {
-            unsafe { self.large.allocate(size) as *mut Array }
+            roots: Vec::new(),
         };
 
         unsafe {
-            (*ptr).header = ObjectHeader::new(self.specials.get_array_map());
-            (*ptr).size = ObjectRef::from_int(length as i64);
+            gc.initialize_special_objects();
         }
 
-        let elements = unsafe { (ptr as *mut u8).add(std::mem::size_of::<Array>()) };
-        unsafe { std::ptr::write_bytes(elements, 0, length * std::mem::size_of::<ObjectRef>()) };
-
-        ptr
+        gc
     }
 
-    pub unsafe fn allocate_bytearray(&mut self, length: usize) -> *mut ByteArray {
-        let size = ByteArray::required_size(length);
-
-        self.total_allocated += size;
-        if self.total_allocated > self.threshold {
-            unsafe { self.collect() };
-            self.threshold = self.total_allocated * 2;
+    pub fn clone(&mut self, obj: Tagged) -> Tagged {
+        if obj.is_int() || obj == Tagged::null() {
+            return obj;
         }
 
-        let ptr = if size <= SMALL_OBJECT_MAX_SIZE {
-            unsafe { self.bump.allocate(size) as *mut ByteArray }
-        } else {
-            unsafe { self.large.allocate(size) as *mut ByteArray }
-        };
+        let obj_ptr = obj.to_ptr();
+        let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        if map_tagged == self.specials.bytearray_map {
+            let bytearray_ptr = obj_ptr as *mut ByteArray;
+            let size = unsafe { (*bytearray_ptr).len() };
+
+            let clone = self.allocate_bytearray(size);
+            let clone_ptr = clone.to_ptr() as *mut ByteArray;
+
+            for i in 0..size {
+                let byte = unsafe { (*bytearray_ptr).get_byte(i) };
+                unsafe { (*clone_ptr).set_byte(i, byte) };
+            }
+
+            return clone;
+        }
+
+        if map_tagged == self.specials.array_map {
+            let array_ptr = obj_ptr as *mut Array;
+            let size = unsafe { (*array_ptr).capacity() };
+
+            let clone = self.allocate_array(size);
+            let clone_ptr = clone.to_ptr() as *mut Array;
+
+            for i in 0..size {
+                let elem = unsafe { (*array_ptr).get(i) };
+                unsafe { (*clone_ptr).set(i, elem) };
+            }
+
+            return clone;
+        }
+
+        let clone = self.allocate_object(map_tagged);
+        let clone_ptr = clone.to_ptr();
 
         unsafe {
-            (*ptr).header = ObjectHeader::new(self.specials.get_bytearray_map());
-            (*ptr).size = ObjectRef::from_int(length as i64);
-        }
+            let data_slots = (*map_ptr).data_slots.to_int() as usize;
 
-        let elements = unsafe { (ptr as *mut u8).add(std::mem::size_of::<ByteArray>()) };
-        unsafe { std::ptr::write_bytes(elements, 0, length) };
-
-        ptr
-    }
-
-    pub unsafe fn allocate_string(&mut self, s: &str) -> *mut ByteArray {
-        let ptr = unsafe { self.allocate_bytearray(s.len()) };
-        unsafe { (*ptr).set_from_str(s) };
-        ptr
-    }
-
-    pub unsafe fn allocate_slot(
-        &mut self,
-        name: ObjectRef,
-        kind: ObjectRef,
-        index: ObjectRef, // integer
-    ) -> *mut Slot {
-        let slot = unsafe { self.allocate(self.specials.get_slot_map()) as *mut Slot };
-        unsafe { (*slot).name = name };
-        unsafe { (*slot).kind = kind };
-        unsafe { (*slot).index = index };
-        unsafe { (*slot).ty = SpecialObjects::get_false() };
-        unsafe { (*slot).guard = SpecialObjects::get_false() };
-        slot
-    }
-
-    pub unsafe fn allocate_map(
-        &mut self,
-        name: ObjectRef,
-        init_slot_capacity: usize,
-        object_size: usize,
-        default: ObjectRef,
-    ) -> *mut Map {
-        let map_size = std::mem::size_of::<Map>();
-
-        self.total_allocated += map_size;
-        if self.total_allocated > self.threshold {
-            unsafe { self.collect() };
-            self.threshold = self.total_allocated * 2;
-        }
-
-        let ptr = unsafe { self.large.allocate(map_size) as *mut Map };
-
-        unsafe {
-            (*ptr).header = ObjectHeader::new(self.specials.get_map_map());
-        };
-        unsafe { (*ptr).object_size = ObjectRef::from_int(object_size as i64) };
-        unsafe { (*ptr).slot_count = ObjectRef::from_int(0) };
-        unsafe { (*ptr).name = name };
-        unsafe { (*ptr).default = default };
-
-        let slots_array = unsafe { self.allocate_array(init_slot_capacity) };
-        unsafe { (*ptr).slots = ObjectRef::from_array_ptr(slots_array) };
-
-        ptr
-    }
-
-    pub unsafe fn allocate_box(&mut self, value: ObjectRef) -> *mut BoxObject {
-        let ptr = self.allocate(self.specials.get_box_map()) as *mut BoxObject;
-        (*ptr).boxed = value;
-        ptr
-    }
-
-    pub unsafe fn allocate_quotation(&mut self, size: Option<usize>) -> *mut Quotation {
-        let ptr = self.allocate(self.specials.get_quotation_map()) as *mut Quotation;
-
-        (*ptr).body = ObjectRef::null();
-        (*ptr).stack_effect = ObjectRef::null();
-        (*ptr).compiled = ObjectRef::null();
-
-        if let Some(size) = size {
-            let body = unsafe { self.allocate_array(size) };
-            unsafe { (*ptr).body = ObjectRef::from_array_ptr(body) };
-        }
-
-        ptr
-    }
-
-    pub unsafe fn allocate_word(&mut self, size: Option<usize>, flags: bool) -> *mut Word {
-        let ptr = self.allocate(self.specials.get_word_map()) as *mut Word;
-
-        let body = self.allocate_quotation(size);
-        (*ptr).body = ObjectRef::from_quotation_ptr(body);
-
-        if flags {
-            let flags = self.allocate_array(4);
-            (*ptr).flags = ObjectRef::from_array_ptr(flags);
-        }
-        (*ptr).stack_effect = ObjectRef::null();
-
-        ptr
-    }
-
-    pub unsafe fn allocate_float(&mut self, value: f64) -> *mut Float {
-        let ptr = self.allocate(self.specials.get_float_map()) as *mut Float;
-
-        unsafe { (*ptr).float = value }
-        ptr
-    }
-
-    pub unsafe fn allocate_bignum(&mut self, num_size: u64, negative: bool) -> *mut BigNum {
-        let size = BigNum::required_size(num_size as usize);
-
-        self.total_allocated += size;
-        if self.total_allocated > self.threshold {
-            unsafe { self.collect() };
-            self.threshold = self.total_allocated * 2;
-        }
-
-        let ptr = if size <= SMALL_OBJECT_MAX_SIZE {
-            unsafe { self.bump.allocate(size) as *mut BigNum }
-        } else {
-            unsafe { self.large.allocate(size) as *mut BigNum }
-        };
-
-        unsafe { std::ptr::write_bytes(ptr as *mut u8, 0, size) };
-
-        unsafe {
-            (*ptr).header = ObjectHeader::new(self.specials.get_bignum_map());
-            (*ptr).meta = BigNum::encode_meta(num_size as u64, negative);
-        }
-        ptr
-    }
-
-    pub fn add_root_object(&mut self, obj: *mut Object) {
-        let object = ObjectRef::from_ptr(obj);
-        self.add_root(object);
-    }
-    pub fn add_root(&mut self, obj: ObjectRef) {
-        self.roots.insert(obj);
-    }
-
-    pub fn remove_root(&mut self, obj: ObjectRef) {
-        self.roots.remove(&obj);
-    }
-
-    pub unsafe fn collect(&mut self) {
-        unsafe { self.mark() };
-
-        unsafe { self.sweep() };
-
-        self.total_allocated = unsafe { self.calculate_live_size() };
-    }
-
-    unsafe fn mark(&mut self) {
-        let mut work_list = Vec::new();
-
-        for &root in &self.roots {
-            unsafe { self.mark_object(root, &mut work_list) };
-        }
-
-        while let Some(obj) = work_list.pop() {
-            let object = unsafe { obj.as_ptr_unchecked() };
-            let map = unsafe { (*object).get_map() };
-
-            let slot_count = unsafe { map.slot_count.as_int_unchecked() as usize };
-            for i in 0..slot_count {
-                if let Some(slot) = (*map).get_slot(i) {
-                    let slot = unsafe { slot.as_ptr_unchecked() as *mut Slot };
-                    let kind = unsafe { (*slot).kind };
-                    if kind == SpecialObjects::get_slot_kind_data() {
-                        let idx = unsafe { (*slot).index.as_int_unchecked() as usize };
-                        let value = unsafe { (*object).get_slot_value(idx) };
-
-                        if let Some(value) = value {
-                            unsafe { self.mark_object(value, &mut work_list) };
-                        }
-                    }
-                } else {
-                    panic!("slot doesn't exist??");
-                }
+            for i in 0..data_slots {
+                let value = (*obj_ptr).get_slot(i);
+                (*clone_ptr).set_slot(i, value);
             }
         }
+
+        clone
     }
 
-    unsafe fn mark_object(&self, obj: ObjectRef, work_list: &mut Vec<ObjectRef>) {
-        if obj.is_false() || obj.is_int() {
+    fn mark(&self) {
+        for root in &self.roots {
+            self.mark_object(*root);
+        }
+    }
+
+    fn mark_object(&self, tagged: Tagged) {
+        if tagged.is_int() || tagged.is_false() {
             return;
         }
 
-        let object = unsafe { obj.as_ptr_unchecked() };
-        let header = unsafe { &mut (*object).header };
+        let obj_ptr = tagged.to_ptr();
 
-        if !header.is_marked() {
-            header.set_mark();
-
-            let map_ptr = header.map();
-            if !map_ptr.is_null() {
-                let map_ref = ObjectRef::from_map(map_ptr);
-                if map_ptr as *mut Object != object && !map_ref.is_false() {
-                    unsafe { self.mark_object(map_ref, work_list) };
-                    return;
-                }
-            }
-            if obj.as_bytearray_ptr().is_some()
-                || map_ptr == self.specials.bytearray_map.as_map_ptr()
-            {
-                return;
-            }
-            if obj.as_bignum_ptr().is_some() || map_ptr == self.specials.bignum_map.as_map_ptr() {
-                return;
-            }
-
-            if let Some(array) = obj.as_array_ptr() {
-                self.mark_array(array, work_list);
-            }
-
-            if map_ptr == self.specials.array_map.as_map_ptr() {
-                let array = obj.as_ptr_unchecked() as *mut Array;
-                self.mark_array(array, work_list);
-                return;
-            }
-
-            work_list.push(obj);
-        }
-    }
-
-    unsafe fn mark_array(&self, array: *mut Array, work_list: &mut Vec<ObjectRef>) {
-        let size = unsafe { (*array).size.as_int_unchecked() as usize };
-
-        for i in 0..size {
-            let element = unsafe { (*array).get_element_unsafe(i) };
-            unsafe { self.mark_object(element, work_list) };
-        }
-    }
-
-    unsafe fn sweep(&mut self) {
-        let mut i = 0;
-        while i < self.large.objects.len() {
-            let obj = self.large.objects[i].as_ptr();
-
-            if unsafe { !(*obj).header.is_marked() } {
-                unsafe { self.large.deallocate(obj) };
-                self.large.objects.swap_remove(i);
-            } else {
-                unsafe {
-                    (*obj).header.clear_mark();
-                };
-                i += 1;
-            }
-        }
-
-        unsafe { self.bump.sweep() };
-    }
-
-    unsafe fn calculate_live_size(&self) -> usize {
-        let mut total = 0;
-        total += self.large.objects.len();
-        total += self.bump.alive_objects;
-
-        total
-    }
-}
-
-impl GarbageCollector {
-    pub unsafe fn deep_clone(&mut self, obj: ObjectRef, levels: usize) -> ObjectRef {
-        let mut cache = std::collections::HashMap::new();
-        self.deep_clone_with_cache(obj, &mut cache, 0, levels)
-    }
-
-    unsafe fn deep_clone_with_cache(
-        &mut self,
-        obj: ObjectRef,
-        cache: &mut HashMap<*mut Object, ObjectRef>,
-        current_level: usize,
-        levels: usize,
-    ) -> ObjectRef {
-        if current_level > levels && current_level == 0 {
-            return obj;
-        }
-        if obj.is_int() || obj.is_false() {
-            return obj;
-        }
-
-        let obj_ptr = obj.as_ptr_unchecked();
-
-        if let Some(&cloned) = cache.get(&obj_ptr) {
-            return cloned;
-        }
-
-        if let Some(array) = obj.as_array_ptr() {
-            let size = (*array).size.as_int_unchecked() as usize;
-            let new_array = self.allocate_array(size);
-
-            cache.insert(obj_ptr, ObjectRef::from_array_ptr(new_array));
-
-            if !(*array).size.is_int() {
-                (*new_array).size =
-                    self.deep_clone_with_cache((*array).size, cache, current_level + 1, levels);
-            } else {
-                (*new_array).size = (*array).size;
-            }
-
-            for i in 0..size {
-                let elem = (*array).get_element_unsafe(i);
-                let cloned_elem =
-                    self.deep_clone_with_cache(elem, cache, current_level + 1, levels);
-                (*new_array).set_element_unsafe(i, cloned_elem);
-            }
-
-            return ObjectRef::from_array_ptr(new_array);
-        }
-
-        if let Some(bytearray) = obj.as_bytearray_ptr() {
-            let size = (*bytearray).size.as_int_unchecked() as usize;
-            let new_bytearray = self.allocate_bytearray(size);
-
-            let src = (bytearray as *const u8).add(std::mem::size_of::<ByteArray>());
-            let dst = (new_bytearray as *mut u8).add(std::mem::size_of::<ByteArray>());
-            std::ptr::copy_nonoverlapping(src, dst, size);
-
-            return ObjectRef::from_bytearray_ptr(new_bytearray);
-        }
-
-        if let Some(float) = obj.as_float_ptr() {
-            let new_float = self.allocate((*float).header.map()) as *mut Float;
-            (*new_float).float = (*float).float;
-            return ObjectRef::from_float_ptr(new_float);
-        }
-
-        let map = (*obj_ptr).get_map_mut();
-        let slot_count = map.slot_count.as_int_unchecked() as usize;
-
-        let new_obj = self.allocate(map);
-
-        cache.insert(obj_ptr, ObjectRef::from_ptr(new_obj));
-
-        for i in 0..slot_count {
-            if let Some(slot_ref) = map.get_slot(i) {
-                let slot = slot_ref.as_ptr_unchecked() as *const Slot;
-                if (*slot).is_data_slot() {
-                    let idx = (*slot).index.as_int_unchecked() as usize;
-                    let value = (*obj_ptr).get_slot_value(idx).unwrap();
-                    let cloned_value =
-                        self.deep_clone_with_cache(value, cache, current_level + 1, levels);
-                    (*new_obj).set_slot_value(idx, cloned_value);
-                }
-            }
-        }
-
-        ObjectRef::from_ptr(new_obj)
-    }
-}
-
-impl GarbageCollector {
-    pub fn init_special_objects(&mut self) {
         unsafe {
-            let map_map = self.allocate_map(
-                ObjectRef::null(),
-                5,
-                std::mem::size_of::<Map>(),
-                ObjectRef::null(),
-            );
-            (*map_map).header = ObjectHeader::new(map_map);
-            self.specials.map_map = ObjectRef::from_map(map_map);
+            if (*obj_ptr).header.is_marked() {
+                return;
+            }
 
-            let bytearray_map_name =
-                ObjectRef::from_bytearray_ptr(self.allocate_string("ByteArray"));
-            let bytearray_map = self.allocate_map(
-                bytearray_map_name,
-                1,
-                std::mem::size_of::<ByteArray>(),
-                ObjectRef::null(),
-            );
-            (*bytearray_map_name.as_bytearray_ptr().unwrap()).header =
-                ObjectHeader::new(bytearray_map);
-            (*bytearray_map).header = ObjectHeader::new(map_map);
-            self.specials.bytearray_map = ObjectRef::from_map(bytearray_map);
+            (*obj_ptr).header.mark();
 
-            let map_map_name = self.allocate_string("Map");
-            (*map_map).name = ObjectRef::from_bytearray_ptr(map_map_name);
+            let map_ptr = (*obj_ptr).header.get_map();
+            self.mark_object(Tagged::from_ptr(map_ptr as *mut Object));
 
-            let array_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Array"));
-            let array_map = self.allocate_map(
-                array_map_name,
-                1,
-                std::mem::size_of::<Array>(),
-                ObjectRef::null(),
-            );
-            (*array_map).header = ObjectHeader::new(map_map);
-            self.specials.array_map = ObjectRef::from_map(array_map);
+            if map_ptr as *mut Object == self.specials.bytearray_map.to_ptr() {
+                return;
+            }
 
-            (*(*map_map).slots.as_array_ptr().unwrap()).header = ObjectHeader::new(array_map);
+            if map_ptr as *mut Object == self.specials.array_map.to_ptr() {
+                let array_ptr = obj_ptr as *mut Array;
+                let size = (*array_ptr).capacity();
 
-            let slot_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Slot"));
-            let slot_map = self.allocate_map(
-                slot_map_name,
-                5,
-                std::mem::size_of::<Slot>(),
-                ObjectRef::null(),
-            );
-            self.specials.slot_map = ObjectRef::from_map(slot_map);
-            (*slot_map).header = ObjectHeader::new(map_map);
+                for i in 0..size {
+                    let elem = (*array_ptr).get(i);
+                    self.mark_object(elem);
+                }
+                return;
+            }
 
-            let name_name = ObjectRef::from_bytearray_ptr(self.allocate_string("name"));
-            let object_size_name =
-                ObjectRef::from_bytearray_ptr(self.allocate_string("object_size"));
-            let slot_count_name = ObjectRef::from_bytearray_ptr(self.allocate_string("slot_count"));
-            let slots_name = ObjectRef::from_bytearray_ptr(self.allocate_string("slots"));
-            let default_name = ObjectRef::from_bytearray_ptr(self.allocate_string("default"));
-            let size_name = ObjectRef::from_bytearray_ptr(self.allocate_string("size"));
+            let data_slots = (*map_ptr).data_slots.to_int() as usize;
+            for i in 0..data_slots {
+                let value = (*obj_ptr).get_slot(i);
+                self.mark_object(value);
+            }
+        }
+    }
 
-            let slot_type_name = ObjectRef::from_bytearray_ptr(self.allocate_string("type"));
-            let slot_index_name = ObjectRef::from_bytearray_ptr(self.allocate_string("index"));
-            let slot_kind_name = ObjectRef::from_bytearray_ptr(self.allocate_string("kind"));
-            let slot_guard_name = ObjectRef::from_bytearray_ptr(self.allocate_string("guard"));
+    fn sweep(&mut self) {
+        let mut to_free = Vec::new();
 
-            let map_name_slot = self.allocate_slot(
-                name_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-            let map_object_size_slot = self.allocate_slot(
-                object_size_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(1),
-            );
-            let map_slot_count_slot = self.allocate_slot(
-                slot_count_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(2),
-            );
-            let map_slots_slot = self.allocate_slot(
-                slots_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(3),
-            );
-            let map_default_slot = self.allocate_slot(
-                default_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(4),
+        for (&ptr, &(_size, layout)) in &self.allocations {
+            let obj_ptr = ptr as *mut Object;
+
+            unsafe {
+                if !(*obj_ptr).header.is_marked() {
+                    to_free.push((ptr, layout));
+                } else {
+                    (*obj_ptr).header.unmark();
+                }
+            }
+        }
+
+        for (ptr, layout) in to_free {
+            // let tagged = Tagged::from_ptr(ptr as _);
+            // println!("Dealloc: {:?}", tagged);
+            unsafe {
+                dealloc(ptr, layout);
+            }
+            self.allocations.remove(&ptr);
+        }
+    }
+
+    pub fn collect_garbage(&mut self) {
+        self.mark();
+        self.sweep();
+    }
+
+    unsafe fn initialize_special_objects(&mut self) {
+        let map_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.map_map = Tagged::from_ptr(map_map_ptr as *mut Object);
+        self.add_root(self.specials.map_map);
+
+        let object_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.object_map =
+            Tagged::from_ptr(object_map_ptr as *mut Object);
+        self.add_root(self.specials.object_map);
+
+        let false_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.false_map =
+            Tagged::from_ptr(false_map_ptr as *mut Object);
+        self.add_root(self.specials.false_map);
+
+        let fixnum_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.fixnum_map =
+            Tagged::from_ptr(fixnum_map_ptr as *mut Object);
+        self.add_root(self.specials.fixnum_map);
+
+        let array_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.array_map =
+            Tagged::from_ptr(array_map_ptr as *mut Object);
+        self.add_root(self.specials.array_map);
+
+        let bytearray_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.bytearray_map =
+            Tagged::from_ptr(bytearray_map_ptr as *mut Object);
+        self.add_root(self.specials.bytearray_map);
+
+        let slot_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
+        self.specials.slot_map = Tagged::from_ptr(slot_map_ptr as *mut Object);
+        self.add_root(self.specials.slot_map);
+
+        unsafe {
+            (*map_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*map_map_ptr).data_slots = Tagged::from_int(5);
+
+            (*object_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*object_map_ptr).data_slots = Tagged::from_int(0);
+
+            (*false_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*false_map_ptr).data_slots = Tagged::from_int(0);
+
+            (*fixnum_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*fixnum_map_ptr).data_slots = Tagged::from_int(0);
+
+            (*array_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*array_map_ptr).data_slots = Tagged::from_int(0);
+
+            (*bytearray_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*bytearray_map_ptr).data_slots = Tagged::from_int(0);
+
+            (*slot_map_ptr).header = ObjectHeader::new(map_map_ptr);
+            (*slot_map_ptr).data_slots = Tagged::from_int(4);
+        }
+
+        let null_tag = Tagged::null();
+
+        self.initialize_map_slots(
+            self.specials.slot_map,
+            "Slot",
+            &[
+                ("name", SLOT_CONST_DATA, Tagged::from_int(0), null_tag),
+                ("kind", SLOT_CONST_DATA, Tagged::from_int(1), null_tag),
+                ("value", SLOT_CONST_DATA, Tagged::from_int(2), null_tag),
+                ("default", SLOT_CONST_DATA, Tagged::from_int(3), null_tag),
+            ],
+        );
+
+        self.initialize_map_slots(
+            self.specials.map_map,
+            "Map",
+            &[
+                ("name", SLOT_CONST_DATA, Tagged::from_int(0), null_tag),
+                (
+                    "data_slots",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::from_int(0),
+                ),
+                ("slots", SLOT_CONST_DATA, Tagged::from_int(2), null_tag),
+                ("prototype", SLOT_CONST_DATA, Tagged::from_int(3), null_tag),
+            ],
+        );
+
+        self.initialize_map_slots(self.specials.object_map, "Object", &[]);
+
+        self.initialize_map_slots(
+            self.specials.false_map,
+            "False",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.fixnum_map,
+            "Fixnum",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.array_map,
+            "Array",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        self.initialize_map_slots(
+            self.specials.bytearray_map,
+            "ByteArray",
+            &[(
+                "Parent",
+                SLOT_PARENT,
+                self.specials.object_map,
+                Tagged::ffalse(),
+            )],
+        );
+
+        let quotation_map = self.create_map(
+            "Quotation",
+            &[
+                (
+                    "effect",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "body",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        self.specials.quotation_map = quotation_map;
+        self.add_root(self.specials.quotation_map);
+
+        let word_map = self.create_map(
+            "Word",
+            &[
+                (
+                    "name",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "effect",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "tags",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "body",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(3),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        self.specials.word_map = word_map;
+        self.add_root(self.specials.word_map);
+
+        let handler_map = self.create_map(
+            "Handler",
+            &[
+                (
+                    "Type",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Kind",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Frame",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        self.specials.handler_map = handler_map;
+        self.add_root(self.specials.handler_map);
+
+        let box_map = self.create_map(
+            "Box",
+            &[
+                (
+                    "value",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        self.specials.box_map = box_map;
+        self.add_root(self.specials.box_map);
+
+        let parser_map = self.create_map(
+            "Parser",
+            &[
+                (
+                    "input",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "position",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "Parent",
+                    SLOT_PARENT,
+                    self.specials.object_map,
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+        let parser = self.allocate_object(parser_map);
+        self.specials.parser = parser;
+        self.add_root(parser);
+
+        let true_map = self.create_map("True", &[]);
+        let true_obj = self.allocate_object(true_map);
+        self.specials.true_obj = true_obj;
+        self.add_root(self.specials.true_obj);
+
+        self.specials.primitive_tag =
+            self.allocate_object(self.specials.object_map);
+        self.add_root(self.specials.primitive_tag);
+        self.specials.parser_tag =
+            self.allocate_object(self.specials.object_map);
+        self.add_root(self.specials.parser_tag);
+        self.specials.inline_tag =
+            self.allocate_object(self.specials.object_map);
+        self.add_root(self.specials.inline_tag);
+    }
+
+    fn raw_allocate<T>(&mut self, size: usize) -> *mut T {
+        let layout =
+            Layout::from_size_align(size, mem::align_of::<T>()).unwrap();
+        let ptr = unsafe { alloc(layout) };
+
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, size);
+        }
+
+        self.allocations.insert(ptr, (size, layout));
+
+        ptr as *mut T
+    }
+
+    pub fn add_root(&mut self, obj: Tagged) {
+        if !obj.is_int() && obj != Tagged::null() {
+            self.roots.push(obj);
+        }
+    }
+
+    pub fn remove_root(&mut self, obj: Tagged) {
+        self.roots.retain(|&root| root != obj);
+    }
+
+    pub fn allocate_object(&mut self, map: Tagged) -> Tagged {
+        let map_ptr = map.to_ptr() as *mut Map;
+
+        let data_slots = unsafe { (*map_ptr).data_slots.to_int() as usize };
+
+        let base_size = mem::size_of::<Object>();
+        let slots_size = data_slots * mem::size_of::<Tagged>();
+        let total_size = base_size + slots_size;
+
+        let layout =
+            Layout::from_size_align(total_size, mem::align_of::<Object>())
+                .unwrap();
+
+        let ptr = unsafe { alloc(layout) };
+
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, total_size);
+        }
+
+        let obj = ptr as *mut Object;
+        unsafe {
+            (*obj).header = ObjectHeader::new(map_ptr);
+        }
+
+        self.allocations.insert(ptr, (total_size, layout));
+
+        Tagged::from_ptr(obj)
+    }
+
+    pub fn allocate_slot(
+        &mut self,
+        name: Tagged,
+        kind: Tagged,
+        value: Tagged,
+        default: Tagged,
+    ) -> Tagged {
+        let size = mem::size_of::<Slot>();
+        let layout =
+            Layout::from_size_align(size, mem::align_of::<Slot>()).unwrap();
+
+        let ptr = unsafe { alloc(layout) };
+
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, size);
+        }
+
+        let slot = ptr as *mut Slot;
+        unsafe {
+            (*slot).header =
+                ObjectHeader::new(self.specials.slot_map.to_ptr() as *mut Map);
+            (*slot).name = name;
+            (*slot).kind = kind;
+            (*slot).value = value;
+            (*slot).default = default;
+        }
+
+        self.allocations.insert(ptr, (size, layout));
+
+        Tagged::from_ptr(slot as *mut Object)
+    }
+
+    pub fn allocate_map(&mut self, name: Tagged, slots: Tagged) -> Tagged {
+        let size = mem::size_of::<Map>();
+        let layout =
+            Layout::from_size_align(size, mem::align_of::<Map>()).unwrap();
+
+        let ptr = unsafe { alloc(layout) };
+
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, size);
+        }
+        let slots_ptr = slots.to_ptr() as *mut Array;
+        let slot_count = unsafe { (*slots_ptr).len() };
+
+        let data_slots = self.calculate_data_slots(slots, slot_count);
+
+        let map = ptr as *mut Map;
+        unsafe {
+            (*map).header =
+                ObjectHeader::new(self.specials.map_map.to_ptr() as *mut Map);
+            (*map).name = name;
+            (*map).slots = slots;
+            (*map).data_slots = Tagged::from_int(data_slots as i64);
+            (*map).prototype = Tagged::null(); // Initially null, will set below
+        }
+
+        self.allocations.insert(ptr, (size, layout));
+
+        let map_tagged = Tagged::from_ptr(map as *mut Object);
+
+        let prototype = self.allocate_object(map_tagged);
+        let proto_ptr = prototype.to_ptr();
+
+        if data_slots > 0 && slots != Tagged::null() {
+            unsafe {
+                let slots_ptr = slots.to_ptr() as *mut Array;
+                let mut data_slot_index = 0;
+
+                for i in 0..slot_count {
+                    let slot_tagged = (*slots_ptr).get(i);
+                    let slot_ptr = slot_tagged.to_ptr() as *mut Slot;
+
+                    let kind = (*slot_ptr).kind.to_int();
+                    if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
+                        let default_value = (*slot_ptr).default;
+                        (*proto_ptr).set_slot(data_slot_index, default_value);
+                        data_slot_index += 1;
+                    }
+                }
+            }
+        }
+
+        unsafe {
+            (*map).prototype = prototype;
+        }
+
+        map_tagged
+    }
+
+    fn calculate_data_slots(&self, slots: Tagged, slot_count: usize) -> usize {
+        let mut data_count = 0;
+
+        if slots != Tagged::null() && slot_count > 0 {
+            let slots_ptr = slots.to_ptr() as *mut Array;
+
+            for i in 0..slot_count {
+                let slot_tagged = unsafe { (*slots_ptr).get(i) };
+                let slot_ptr = slot_tagged.to_ptr() as *mut Slot;
+
+                let kind = unsafe { (*slot_ptr).kind.to_int() };
+                if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
+                    data_count += 1;
+                }
+            }
+        }
+
+        data_count
+    }
+
+    pub fn create_map(
+        &mut self,
+        name: &str,
+        slots: &[(&str, i64, Tagged, Tagged)],
+    ) -> Tagged {
+        let name_tagged = self.allocate_string(name);
+
+        let slots_tagged = self.allocate_array(slots.len());
+        let slots_ptr = slots_tagged.to_ptr() as *mut Array;
+
+        for (i, &(slot_name, kind, value, default)) in slots.iter().enumerate()
+        {
+            let slot_name_tagged = self.allocate_string(slot_name);
+            let kind_tagged = Tagged::from_int(kind);
+
+            let slot_tagged = self.allocate_slot(
+                slot_name_tagged,
+                kind_tagged,
+                value,
+                default,
             );
 
-            (*map_map).slot_count = ObjectRef::from_int(5);
-            let map_slots = (*map_map).slots.as_array_ptr().unwrap();
-            (*map_slots).set_element(0, ObjectRef::from_ptr(map_name_slot as *mut Object));
-            (*map_slots).set_element(1, ObjectRef::from_ptr(map_object_size_slot as *mut Object));
-            (*map_slots).set_element(2, ObjectRef::from_ptr(map_slot_count_slot as *mut Object));
-            (*map_slots).set_element(3, ObjectRef::from_ptr(map_slots_slot as *mut Object));
-            (*map_slots).set_element(4, ObjectRef::from_ptr(map_default_slot as *mut Object));
+            unsafe {
+                (*slots_ptr).set(i, slot_tagged);
+            }
+        }
 
-            let array_size_slot = self.allocate_slot(
-                size_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-            let bytearray_size_slot = self.allocate_slot(
-                size_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
+        unsafe {
+            (*slots_ptr).length = Tagged::from_int(slots.len() as i64);
+        }
 
-            (*array_map).slot_count = ObjectRef::from_int(1);
-            (*bytearray_map).slot_count = ObjectRef::from_int(1);
-            let array_slots = (*array_map).slots.as_array_ptr().unwrap();
-            (*array_slots).set_element(0, ObjectRef::from_ptr(array_size_slot as *mut Object));
-            let bytearray_slots = (*bytearray_map).slots.as_array_ptr().unwrap();
-            (*bytearray_slots)
-                .set_element(0, ObjectRef::from_ptr(bytearray_size_slot as *mut Object));
+        self.allocate_map(name_tagged, slots_tagged)
+    }
 
-            let slot_name_slot = self.allocate_slot(
-                name_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-            let slot_type_slot = self.allocate_slot(
-                slot_type_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(1),
-            );
-            let slot_index_slot = self.allocate_slot(
-                slot_index_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(2),
-            );
-            let slot_kind_slot = self.allocate_slot(
-                slot_kind_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(3),
-            );
-            let slot_guard_slot = self.allocate_slot(
-                slot_guard_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(4),
-            );
+    pub fn push_slot(
+        &mut self,
+        map: Tagged,
+        slot_name: &str,
+        kind: i64,
+        value: Tagged,
+        default: Tagged,
+    ) -> bool {
+        let map_ptr = map.to_ptr() as *mut Map;
 
-            (*slot_map).slot_count = ObjectRef::from_int(5);
-            let slot_slots = (*slot_map).slots.as_array_ptr().unwrap();
-            (*slot_slots).set_element(0, ObjectRef::from_ptr(slot_name_slot as *mut Object));
-            (*slot_slots).set_element(1, ObjectRef::from_ptr(slot_type_slot as *mut Object));
-            (*slot_slots).set_element(2, ObjectRef::from_ptr(slot_index_slot as *mut Object));
-            (*slot_slots).set_element(3, ObjectRef::from_ptr(slot_kind_slot as *mut Object));
-            (*slot_slots).set_element(4, ObjectRef::from_ptr(slot_guard_slot as *mut Object));
+        unsafe {
+            let slots = (*map_ptr).slots;
 
-            let slot_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("True"));
-            let true_map = self.allocate_map(
-                slot_map_name,
-                5,
-                std::mem::size_of::<Object>(),
-                ObjectRef::null(),
-            );
+            if slots == Tagged::null() {
+                let new_slots = self.allocate_array(1);
+                let new_slot_name = self.allocate_string(slot_name);
+                let new_slot = self.allocate_slot(
+                    new_slot_name,
+                    Tagged::from_int(kind),
+                    value,
+                    default,
+                );
 
-            let true_object = self.allocate(true_map);
-            (*true_map).default = ObjectRef::from_ptr(true_object);
-            self.specials.true_object = ObjectRef::from_ptr(true_object);
+                let new_slots_ptr = new_slots.to_ptr() as *mut Array;
+                (*new_slots_ptr).set(0, new_slot);
+                (*new_slots_ptr).length = Tagged::from_int(1);
 
-            let float_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Float"));
-            let float_map = self.allocate_map(
-                float_map_name,
-                5,
-                std::mem::size_of::<Float>(),
-                ObjectRef::null(),
-            );
-            self.specials.float_map = ObjectRef::from_map(float_map);
+                (*map_ptr).slots = new_slots;
 
-            let bignum_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("ByteArray"));
-            let bignum_map = self.allocate_map(
-                bignum_map_name,
-                1,
-                std::mem::size_of::<BigNum>(),
-                ObjectRef::null(),
-            );
-            self.specials.bignum_map = ObjectRef::from_map(bignum_map);
+                if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
+                    (*map_ptr).data_slots = Tagged::from_int(1);
+                } else {
+                    (*map_ptr).data_slots = Tagged::from_int(0);
+                }
 
-            let quotation_map_name =
-                ObjectRef::from_bytearray_ptr(self.allocate_string("Quotation"));
-            let quotation_map = self.allocate_map(
-                quotation_map_name,
-                3, // body, stack_effect, compiled
-                std::mem::size_of::<Quotation>(),
-                ObjectRef::null(),
-            );
-            (*quotation_map).header = ObjectHeader::new(map_map);
-            self.specials.quotation_map = ObjectRef::from_map(quotation_map);
+                return true;
+            }
 
-            let body_name = ObjectRef::from_bytearray_ptr(self.allocate_string("body"));
-            let stack_effect_name =
-                ObjectRef::from_bytearray_ptr(self.allocate_string("stack-effect"));
-            let compiled_name = ObjectRef::from_bytearray_ptr(self.allocate_string("compiled"));
+            let mut slots_ptr = slots.to_ptr() as *mut Array;
+            let slots_cap = (*slots_ptr).capacity();
+            let slot_count = (*slots_ptr).len();
 
-            let quotation_body_slot = self.allocate_slot(
-                body_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-            let quotation_stack_effect_slot = self.allocate_slot(
-                stack_effect_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(1),
-            );
-            let quotation_compiled_slot = self.allocate_slot(
-                compiled_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(2),
+            if slot_count >= slots_cap {
+                let new_capacity = std::cmp::max(1, slots_cap * 2);
+                let new_slots = self.allocate_array(new_capacity);
+                let new_slots_ptr = new_slots.to_ptr() as *mut Array;
+
+                for i in 0..slot_count {
+                    let slot = (*slots_ptr).get(i);
+                    (*new_slots_ptr).set(i, slot);
+                }
+
+                (*map_ptr).slots = new_slots;
+                slots_ptr = new_slots_ptr;
+            }
+
+            let new_slot_name = self.allocate_string(slot_name);
+            let new_slot = self.allocate_slot(
+                new_slot_name,
+                Tagged::from_int(kind),
+                value,
+                default,
             );
 
-            (*quotation_map).slot_count = ObjectRef::from_int(3);
-            let quotation_slots = (*quotation_map).slots.as_array_ptr().unwrap();
-            (*quotation_slots)
-                .set_element(0, ObjectRef::from_ptr(quotation_body_slot as *mut Object));
-            (*quotation_slots).set_element(
-                1,
-                ObjectRef::from_ptr(quotation_stack_effect_slot as *mut Object),
+            (*slots_ptr).set(slot_count, new_slot);
+            (*slots_ptr).length = Tagged::from_int(slot_count as i64 + 1);
+
+            if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
+                let current_data_slots =
+                    (*map_ptr).data_slots.to_int() as usize;
+                (*map_ptr).data_slots =
+                    Tagged::from_int((current_data_slots + 1) as i64);
+            }
+        }
+
+        true
+    }
+
+    pub fn remove_slot(&mut self, map: Tagged, slot_name: &str) -> bool {
+        let map_ptr = map.to_ptr() as *mut Map;
+
+        unsafe {
+            let slots = (*map_ptr).slots;
+
+            if slots.is_false() {
+                return false;
+            }
+
+            let slots_ptr = slots.to_ptr() as *mut Array;
+            let slot_count = (*slots_ptr).len();
+            let mut found_idx = None;
+            let mut was_data_slot = false;
+
+            for i in 0..slot_count {
+                let slot_tagged = (*slots_ptr).get(i);
+                let slot_ptr = slot_tagged.to_ptr() as *mut Slot;
+
+                let name_tagged = (*slot_ptr).name;
+                let name_ptr = name_tagged.to_ptr() as *mut ByteArray;
+                let slot_name_str = (*name_ptr).as_str();
+
+                if slot_name_str == slot_name {
+                    found_idx = Some(i);
+                    let kind = (*slot_ptr).kind.to_int();
+                    was_data_slot =
+                        kind == SLOT_CONST_DATA || kind == SLOT_DATA;
+                    break;
+                }
+            }
+
+            if let Some(idx) = found_idx {
+                for i in idx..(slot_count - 1) {
+                    let next_slot = (*slots_ptr).get(i + 1);
+                    (*slots_ptr).set(i, next_slot);
+                }
+
+                (*slots_ptr).length = Tagged::from_int((slot_count - 1) as i64);
+
+                if was_data_slot {
+                    let current_data_slots =
+                        (*map_ptr).data_slots.to_int() as usize;
+                    (*map_ptr).data_slots =
+                        Tagged::from_int((current_data_slots - 1) as i64);
+                }
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn allocate_array(&mut self, capacity: usize) -> Tagged {
+        let elem_size = mem::size_of::<Tagged>();
+        let base_size = mem::size_of::<Array>();
+        let total_size = base_size + (capacity * elem_size);
+
+        let layout =
+            Layout::from_size_align(total_size, mem::align_of::<Array>())
+                .unwrap();
+
+        let ptr = unsafe { alloc(layout) };
+
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, total_size);
+        }
+
+        let array = ptr as *mut Array;
+        unsafe {
+            (*array).header =
+                ObjectHeader::new(self.specials.array_map.to_ptr() as *mut Map);
+            (*array).capacity = Tagged::from_int(capacity as i64);
+            (*array).length = Tagged::from_int(0);
+        }
+
+        self.allocations.insert(ptr, (total_size, layout));
+
+        Tagged::from_ptr(array as *mut Object)
+    }
+
+    pub fn allocate_bytearray(&mut self, size: usize) -> Tagged {
+        let base_size = mem::size_of::<ByteArray>();
+        let total_size = base_size + size;
+        let layout =
+            Layout::from_size_align(total_size, mem::align_of::<ByteArray>())
+                .unwrap();
+
+        let ptr = unsafe { alloc(layout) };
+
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, total_size);
+        }
+
+        let bytearray = ptr as *mut ByteArray;
+        unsafe {
+            (*bytearray).header = ObjectHeader::new(
+                self.specials.bytearray_map.to_ptr() as *mut Map,
             );
-            (*quotation_slots).set_element(
-                2,
-                ObjectRef::from_ptr(quotation_compiled_slot as *mut Object),
+            (*bytearray).size = Tagged::from_int(size as i64);
+        }
+
+        self.allocations.insert(ptr, (total_size, layout));
+
+        Tagged::from_ptr(bytearray as *mut Object)
+    }
+
+    pub fn allocate_string(&mut self, s: &str) -> Tagged {
+        let bytes = s.as_bytes();
+        let bytearray = self.allocate_bytearray(bytes.len() + 1);
+
+        let bytearray_ptr = bytearray.to_ptr() as *mut ByteArray;
+
+        for (i, &byte) in bytes.iter().enumerate() {
+            unsafe {
+                (*bytearray_ptr).set_byte(i, byte);
+            }
+        }
+
+        unsafe {
+            (*bytearray_ptr).set_byte(bytes.len(), 0);
+        }
+
+        bytearray
+    }
+
+    pub fn resize_array(
+        &mut self,
+        array: Tagged,
+        new_capacity: usize,
+    ) -> Tagged {
+        if array.is_int() || array == Tagged::null() {
+            return self.allocate_array(new_capacity);
+        }
+
+        let array_ptr = array.to_ptr();
+        let map_ptr = unsafe { (*array_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        if map_tagged != self.specials.array_map {
+            return self.allocate_array(new_capacity);
+        }
+
+        let array_ptr = array_ptr as *mut Array;
+        let old_size = unsafe { (*array_ptr).capacity() };
+
+        let new_array = self.allocate_array(new_capacity);
+        let new_array_ptr = new_array.to_ptr() as *mut Array;
+
+        let copy_size = std::cmp::min(old_size, new_capacity);
+        for i in 0..copy_size {
+            let value = unsafe { (*array_ptr).get(i) };
+            unsafe { (*new_array_ptr).set(i, value) };
+        }
+
+        unsafe { (*new_array_ptr).length = (*array_ptr).length };
+
+        new_array
+    }
+
+    pub fn resize_bytearray(
+        &mut self,
+        bytearray: Tagged,
+        new_size: usize,
+    ) -> Tagged {
+        if bytearray.is_int() || bytearray == Tagged::null() {
+            return self.allocate_bytearray(new_size);
+        }
+
+        let ba_ptr = bytearray.to_ptr();
+        let map_ptr = unsafe { (*ba_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        if map_tagged != self.specials.bytearray_map {
+            return self.allocate_bytearray(new_size);
+        }
+
+        let ba_ptr = ba_ptr as *mut ByteArray;
+        let old_size = unsafe { (*ba_ptr).len() };
+
+        let new_ba = self.allocate_bytearray(new_size);
+        let new_ba_ptr = new_ba.to_ptr() as *mut ByteArray;
+
+        let copy_size = std::cmp::min(old_size, new_size);
+        for i in 0..copy_size {
+            let byte = unsafe { (*ba_ptr).get_byte(i) };
+            unsafe { (*new_ba_ptr).set_byte(i, byte) };
+        }
+
+        new_ba
+    }
+
+    pub fn allocate_quotation(&mut self, items: &[Tagged]) -> Tagged {
+        let array = self.allocate_array(items.len());
+        let array_ptr = array.to_ptr() as *mut Array;
+
+        for (i, item) in items.iter().enumerate() {
+            unsafe {
+                (*array_ptr).set(i, *item);
+            }
+        }
+        unsafe {
+            (*array_ptr).length = Tagged::from_int(items.len() as i64);
+        };
+
+        let quotation = self.allocate_object(self.specials.quotation_map);
+        unsafe {
+            let quotation_ptr = quotation.to_ptr();
+            (*quotation_ptr).set_slot(0, Tagged::null());
+            (*quotation_ptr).set_slot(1, array);
+        }
+
+        quotation
+    }
+
+    pub fn allocate_primitive_word(
+        &mut self,
+        name: &str,
+        effect: Tagged,
+        fun: Tagged,
+        is_parse: bool,
+    ) -> Tagged {
+        let tags = self.allocate_array(if is_parse { 2 } else { 1 });
+        let tags_ptr = tags.to_ptr() as *mut Array;
+
+        unsafe {
+            (*tags_ptr).set(0, self.specials.primitive_tag);
+            if is_parse {
+                (*tags_ptr).set(1, self.specials.parser_tag);
+            }
+        }
+
+        let name = self.allocate_string(name);
+
+        let word = self.allocate_object(self.specials.word_map);
+        unsafe {
+            let ptr = word.to_ptr();
+            (*ptr).set_slot(0, name);
+            (*ptr).set_slot(1, effect);
+            (*ptr).set_slot(2, tags);
+            (*ptr).set_slot(3, fun);
+        }
+
+        word
+    }
+
+    pub fn initialize_map_slots(
+        &mut self,
+        map: Tagged,
+        name: &str,
+        slots: &[(&str, i64, Tagged, Tagged)],
+    ) {
+        let map_ptr = map.to_ptr() as *mut Map;
+
+        unsafe {
+            (*map_ptr).name = self.allocate_string(name);
+        }
+
+        let slots_array = self.allocate_array(slots.len());
+
+        let slots_ptr = slots_array.to_ptr() as *mut Array;
+        for (i, &(slot_name, kind, value, default)) in slots.iter().enumerate()
+        {
+            let slot_name_tagged = self.allocate_string(slot_name);
+            let kind_tagged = Tagged::from_int(kind);
+
+            let slot_tagged = self.allocate_slot(
+                slot_name_tagged,
+                kind_tagged,
+                value,
+                default,
             );
 
-            let word_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Word"));
-            let word_map = self.allocate_map(
-                word_map_name,
-                4, // name, body (Quotation), stack_effect, flags
-                std::mem::size_of::<Word>(),
-                ObjectRef::null(),
-            );
-            (*word_map).header = ObjectHeader::new(map_map);
-            self.specials.word_map = ObjectRef::from_map(word_map);
+            unsafe {
+                (*slots_ptr).set(i, slot_tagged);
+            }
+        }
 
-            let word_name_slot_name = ObjectRef::from_bytearray_ptr(self.allocate_string("name"));
-            let word_body_slot_name = ObjectRef::from_bytearray_ptr(self.allocate_string("body"));
-            let word_stack_effect_slot_name =
-                ObjectRef::from_bytearray_ptr(self.allocate_string("stack-effect"));
-            let word_flags_slot_name = ObjectRef::from_bytearray_ptr(self.allocate_string("flags"));
+        unsafe {
+            (*map_ptr).slots = slots_array;
+            (*slots_ptr).length = Tagged::from_int(slots.len() as i64)
+        }
 
-            let word_name_slot = self.allocate_slot(
-                word_name_slot_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-            let word_body_slot = self.allocate_slot(
-                word_body_slot_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(1),
-            );
-            let word_stack_effect_slot = self.allocate_slot(
-                word_stack_effect_slot_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(2),
-            );
-            let word_flags_slot = self.allocate_slot(
-                word_flags_slot_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(3),
-            );
+        if map == self.specials.false_map
+            || map == self.specials.fixnum_map
+            || map == self.specials.array_map
+            || map == self.specials.bytearray_map
+        {
+            return;
+        }
 
-            (*word_map).slot_count = ObjectRef::from_int(4);
-            let word_slots = (*word_map).slots.as_array_ptr().unwrap();
-            (*word_slots).set_element(0, ObjectRef::from_ptr(word_name_slot as *mut Object));
-            (*word_slots).set_element(1, ObjectRef::from_ptr(word_body_slot as *mut Object));
-            (*word_slots).set_element(
-                2,
-                ObjectRef::from_ptr(word_stack_effect_slot as *mut Object),
-            );
-            (*word_slots).set_element(3, ObjectRef::from_ptr(word_flags_slot as *mut Object));
+        let prototype = self.allocate_object(map);
+        let proto_ptr = prototype.to_ptr();
 
-            let box_map_name = ObjectRef::from_bytearray_ptr(self.allocate_string("Box"));
-            let box_map = self.allocate_map(
-                box_map_name,
-                1,
-                std::mem::size_of::<BoxObject>(),
-                ObjectRef::null(),
-            );
-            (*box_map).header = ObjectHeader::new(map_map);
-            self.specials.box_map = ObjectRef::from_map(box_map);
+        unsafe {
+            let data_slots = (*map_ptr).data_slots.to_int() as usize;
+            if data_slots > 0 {
+                let mut data_slot_index = 0;
 
-            // Add box value slot
-            let value_name = ObjectRef::from_bytearray_ptr(self.allocate_string("value"));
-            let value_slot = self.allocate_slot(
-                value_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
+                for (_, kind, _, default) in slots {
+                    if *kind == SLOT_CONST_DATA || *kind == SLOT_DATA {
+                        (*proto_ptr).set_slot(data_slot_index, *default);
+                        data_slot_index += 1;
+                    }
+                }
+            }
 
-            (*box_map).slot_count = ObjectRef::from_int(1);
-            let box_slots = (*box_map).slots.as_array_ptr().unwrap();
-            (*box_slots).set_element(0, ObjectRef::from_ptr(value_slot as *mut Object));
-
-            self.add_root_object(map_map as *mut Object);
-            self.add_root_object(array_map as *mut Object);
-            self.add_root_object(bytearray_map as *mut Object);
-            self.add_root_object(slot_map as *mut Object);
-            self.add_root_object(true_map as *mut Object);
-            self.add_root_object(true_object);
-            self.add_root_object(float_map as *mut Object);
-            self.add_root_object(bignum_map as *mut Object);
-            self.add_root_object(quotation_map as *mut Object);
-            self.add_root_object(word_map as *mut Object);
-            self.add_root_object(box_map as *mut Object);
+            (*map_ptr).prototype = prototype;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::object::{Map, ObjectHeader, ObjectType};
-
-    use super::*;
+    use crate::{
+        Array, ByteArray, GarbageCollector, Map, Object, SLOT_CONST_DATA, Slot,
+        Tagged,
+    };
 
     #[test]
-    fn test_special_objects_initialization() {
+    fn test_initialize_special_objects() {
+        let gc = GarbageCollector::new();
+
+        assert_ne!(gc.specials.map_map, Tagged::null());
+        assert_ne!(gc.specials.object_map, Tagged::null());
+        assert_ne!(gc.specials.false_map, Tagged::null());
+        assert_ne!(gc.specials.fixnum_map, Tagged::null());
+        assert_ne!(gc.specials.array_map, Tagged::null());
+        assert_ne!(gc.specials.bytearray_map, Tagged::null());
+
+        let map_map_ptr = gc.specials.map_map.to_ptr() as *mut Map;
+        unsafe { assert_eq!((*map_map_ptr).header.get_map(), map_map_ptr) }
+    }
+
+    #[test]
+    fn test_allocate_object() {
         let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
+
+        let name = gc.allocate_string("TestObject");
+        let slots = gc.allocate_array(0);
+        let map = gc.allocate_map(name, slots);
+
+        let obj = gc.allocate_object(map);
 
         unsafe {
-            assert!(!gc.specials.map_map.is_int(), "Map map should be a pointer");
-
-            let map_map_ptr = gc.specials.get_map_map();
-            assert_eq!((*map_map_ptr).header.map(), map_map_ptr as *mut Map);
-
-            gc.collect();
-
-            assert!(SpecialObjects::get_false() == ObjectRef::null());
-            assert_eq!(gc.specials.get_map_map(), map_map_ptr);
+            let obj_map = (*obj.to_ptr()).header.get_map();
+            assert_eq!(obj_map as *mut Object, map.to_ptr());
         }
     }
 
     #[test]
-    fn test_special_maps_names() {
+    fn test_allocate_string() {
         let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
+
+        let test_str = "Hello, World!";
+        let string_obj = gc.allocate_string(test_str);
 
         unsafe {
-            let map_map = gc.specials.get_map_map();
-            let array_map = gc.specials.get_array_map();
-            let bytearray_map = gc.specials.get_bytearray_map();
+            let map = (*string_obj.to_ptr()).header.get_map();
+            assert_eq!(map as *mut Object, gc.specials.bytearray_map.to_ptr());
 
-            assert_eq!(
-                (*map_map)
-                    .name
-                    .as_bytearray_ptr()
-                    .and_then(|p| (*p).as_str()),
-                Some("Map")
-            );
-            assert_eq!(
-                (*array_map)
-                    .name
-                    .as_bytearray_ptr()
-                    .and_then(|p| (*p).as_str()),
-                Some("Array")
-            );
-            assert_eq!(
-                (*bytearray_map)
-                    .name
-                    .as_bytearray_ptr()
-                    .and_then(|p| (*p).as_str()),
-                Some("ByteArray")
-            );
+            let bytearray = string_obj.to_ptr() as *mut ByteArray;
+            let size = (*bytearray).len();
+            assert_eq!(size, test_str.len() + 1);
 
-            assert_eq!((*map_map).header.map() as *const _, map_map);
-            assert_eq!((*array_map).header.map() as *const _, map_map);
-            assert_eq!((*bytearray_map).header.map() as *const _, map_map);
+            let str_from_bytes = (*bytearray).as_str();
+            assert_eq!(str_from_bytes, test_str);
         }
     }
 
     #[test]
-    fn test_bytearray_allocation() {
+    fn test_allocate_array() {
         let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
+
+        let array = gc.allocate_array(5);
 
         unsafe {
-            let bytearray = gc.allocate_bytearray(100);
+            let map = (*array.to_ptr()).header.get_map();
+            assert_eq!(map as *mut Object, gc.specials.array_map.to_ptr());
 
-            (*bytearray).set_element(0, b'H');
-            (*bytearray).set_element(1, b'i');
+            let array_ptr = array.to_ptr() as *mut Array;
+            assert_eq!((*array_ptr).capacity(), 5);
 
-            gc.collect();
-
-            assert_eq!((*bytearray).get_element(0), Some(b'H'));
-            assert_eq!((*bytearray).get_element(1), Some(b'i'));
-        }
-    }
-
-    #[test]
-    fn test_string_allocation() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let test_str = "Hello, World!";
-            let bytearray = gc.allocate_string(test_str);
-
-            assert_eq!(
-                (*bytearray).size.as_int_unchecked() as usize,
-                test_str.len()
-            );
-            assert_eq!((*bytearray).as_str(), Some(test_str));
-        }
-    }
-
-    #[test]
-    fn test_array_allocation() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let array = gc.allocate_array(5);
-            assert_eq!((*array).size.as_int_unchecked() as usize, 5);
-
-            let int_value = ObjectRef::from_int(42);
-            (*array).set_element(0, int_value);
-            assert_eq!((*array).get_element(0), Some(int_value));
-        }
-    }
-
-    #[test]
-    fn test_chunk_scanning() {
-        unsafe {
-            let mut chunk = Chunk::new();
-
-            let obj1 =
-                chunk.allocate(32).expect("First allocation should succeed") as *mut ObjectHeader;
-            let obj2 = chunk
-                .allocate(32)
-                .expect("Second allocation should succeed")
-                as *mut ObjectHeader;
-
-            *obj1 = ObjectHeader::new(0x1000 as *mut Map);
-            *obj2 = ObjectHeader::new(0x2000 as *mut Map);
-
-            assert_eq!(
-                chunk.scan_live_objects(),
-                0,
-                "Should start with no marked objects"
-            );
-
-            (*obj1).set_mark();
-            assert_eq!(
-                chunk.scan_live_objects(),
-                1,
-                "Should find one marked object"
-            );
-
-            (*obj1).set_mark();
-            (*obj2).set_mark();
-            assert_eq!(
-                chunk.scan_live_objects(),
-                2,
-                "Should find two marked objects"
-            );
-
-            (*obj1).clear_mark();
-            (*obj2).clear_mark();
-            assert_eq!(
-                chunk.scan_live_objects(),
-                0,
-                "Should end with no marked objects"
-            );
-        }
-    }
-
-    #[test]
-    fn test_allocation_and_collection() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let name = gc.allocate_string("TestObject");
-            let slot1 = gc.allocate_slot(
-                SpecialObjects::get_false(),
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-            let slot2 = gc.allocate_slot(
-                SpecialObjects::get_false(),
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(1),
-            );
-            let map = gc.allocate_map(
-                ObjectRef::from_ptr(name as _),
-                2,
-                32,
-                SpecialObjects::get_false(),
-            );
-
-            (*map).slot_count = ObjectRef::from_int(2);
-            (*map).set_slot(ObjectRef::from_ptr(slot1 as _), 0);
-            (*map).set_slot(ObjectRef::from_ptr(slot2 as _), 1);
-
-            let mut our_roots = Vec::new();
-
-            let mut objects = Vec::new();
-            for _ in 0..100 {
-                objects.push(gc.allocate(map));
-            }
-
-            gc.add_root_object(map as *mut _);
-
-            for obj in objects.iter().take(10) {
-                gc.add_root_object(*obj);
-                our_roots.push(*obj);
-            }
-
-            gc.collect();
-
-            for &root in our_roots.iter() {
-                assert_eq!(
-                    (*root).get_map() as *const _,
-                    map,
-                    "Root object should survive collection"
-                );
-            }
-
-            assert!(
-                gc.roots.contains(&ObjectRef::from_ptr(map as *mut _)),
-                "Map should survive collection"
-            );
-        }
-    }
-
-    #[test]
-    fn test_map_allocation() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let map = gc.allocate_map(
-                SpecialObjects::get_false(),
-                3,
-                48,
-                SpecialObjects::get_false(),
-            );
-
-            assert_eq!((*map).slot_count.as_int_unchecked(), 0);
-            assert_eq!((*map).object_size.as_int_unchecked(), 48);
-
-            let slots = (*map).slots();
-            assert_eq!(slots.size.as_int_unchecked(), 3);
-
-            let slot_map = gc.allocate_map(
-                SpecialObjects::get_false(),
-                5,
-                std::mem::size_of::<Slot>(),
-                SpecialObjects::get_false(),
-            );
-            let slot = gc.allocate(slot_map) as *mut Slot;
-            (*map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
-            (*map).slot_count = ObjectRef::from_int(1);
-
-            assert_eq!((*map).slot_count.as_int_unchecked(), 1);
-            assert_eq!(
-                (*map).get_slot(0),
-                Some(ObjectRef::from_ptr(slot as *mut Object))
-            );
-        }
-    }
-
-    #[test]
-    fn test_gc_map_marking() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let map = gc.allocate_map(
-                ObjectRef::null(),
-                5,
-                std::mem::size_of::<Map>(),
-                ObjectRef::null(),
-            );
-
-            let mapp = ObjectRef::from_ptr(map as *mut _);
-            assert_eq!(map as *mut _, mapp.as_ptr_unchecked());
-            gc.add_root_object(map as *mut Object);
-
-            let map_ptr = map as *mut Map;
-            let map_map_ptr = (*map).header.map();
-
-            gc.collect();
-
-            assert_eq!(map_map_ptr, (*map_ptr).header.map());
-        }
-    }
-
-    #[test]
-    fn test_gc_map_map_marking() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let map_map = gc.specials.get_map_map();
-            let initial_map_map_ptr = map_map;
-
-            let old_slot_count = (*map_map).slot_count;
-            let old_object_size = (*map_map).object_size;
-
-            gc.collect();
-
-            let map_map_after = gc.specials.get_map_map();
-            assert_eq!(
-                map_map_after, initial_map_map_ptr,
-                "map_map should survive collection"
-            );
-            assert_eq!(
-                (*map_map_after).header.map(),
-                map_map_after,
-                "map_map should still point to itself"
-            );
-
-            assert_eq!(
-                (*map_map_after).slot_count,
-                old_slot_count,
-                "slot_count should survive"
-            );
-            assert_eq!(
-                (*map_map_after).object_size,
-                old_object_size,
-                "object_size should survive"
-            );
-        }
-    }
-
-    #[test]
-    fn test_gc_array_marking() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let array = gc.allocate_array(5);
-            let obj = gc.allocate((*array).header.map());
-
-            (*array).set_element(0, ObjectRef::from_ptr(obj));
-            (*array).set_element(1, ObjectRef::from_int(42));
-            (*array).set_element(2, SpecialObjects::get_false());
-
-            gc.add_root_object(array as *mut Object);
-
-            gc.collect();
-
-            assert!((*array).get_element(0).unwrap().as_ptr().is_some());
-            assert_eq!((*array).get_element(1).unwrap().as_int(), Some(42));
-            assert!((*array).get_element(2).unwrap().is_false());
-        }
-    }
-
-    #[test]
-    fn test_gc_slot_marking() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let map = gc.allocate_map(
-                ObjectRef::null(),
-                2,
-                std::mem::size_of::<Object>() + std::mem::size_of::<ObjectRef>(),
-                ObjectRef::null(),
-            );
-
-            let slot = gc.allocate_slot(
-                ObjectRef::null(),
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-
-            (*map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
-            (*map).slot_count = ObjectRef::from_int(1);
-
-            gc.add_root_object(map as *mut Object);
-
-            gc.collect();
-
-            assert!((*map).get_slot(0).unwrap().as_ptr().is_some());
-        }
-    }
-
-    #[test]
-    fn test_gc_cyclic_references() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let obj_map = gc.allocate_map(
-                ObjectRef::null(),
-                1, // slot capacity
-                std::mem::size_of::<Object>() + std::mem::size_of::<ObjectRef>(),
-                ObjectRef::null(),
-            );
-            gc.add_root_object(obj_map as *mut Object);
-
-            let slot_name = gc.allocate_string("next");
-            let slot = gc.allocate_slot(
-                ObjectRef::from_bytearray_ptr(slot_name),
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
-
-            (*obj_map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
-            (*obj_map).slot_count = ObjectRef::from_int(1);
-
-            let obj1 = gc.allocate(obj_map);
-            let obj2 = gc.allocate(obj_map);
-            let obj3 = gc.allocate(obj_map);
-
-            (*obj1).set_slot_value(0, ObjectRef::from_ptr(obj2));
-            (*obj2).set_slot_value(0, ObjectRef::from_ptr(obj3));
-            (*obj3).set_slot_value(0, ObjectRef::from_ptr(obj1));
-
-            gc.add_root_object(obj1);
-
-            let initial_size = gc.total_allocated;
-            gc.collect();
-
-            let slot_value1 = (*obj1).get_slot_value(0).unwrap();
-            assert!(slot_value1.as_ptr().is_some(), "obj2 should be alive");
-
-            let obj2_ptr = slot_value1.as_ptr_unchecked();
-            let slot_value2 = (*obj2_ptr).get_slot_value(0).unwrap();
-            assert!(slot_value2.as_ptr().is_some(), "obj3 should be alive");
-
-            let obj3_ptr = slot_value2.as_ptr_unchecked();
-            let slot_value3 = (*obj3_ptr).get_slot_value(0).unwrap();
-            assert!(
-                slot_value3.as_ptr().is_some(),
-                "Reference back to obj1 should be alive"
-            );
-
-            gc.remove_root(ObjectRef::from_ptr(obj1));
-
-            let new_root = gc.allocate(obj_map);
-            gc.add_root_object(new_root);
-
-            gc.collect();
-
-            assert!(
-                gc.total_allocated < initial_size,
-                "Memory usage should decrease after collecting cycle"
-            );
-
-            (*new_root).set_slot_value(0, ObjectRef::from_int(42));
-            let value = (*new_root).get_slot_value(0).unwrap();
-            assert_eq!(
-                value,
-                ObjectRef::from_int(42),
-                "New root should be usable after collection"
-            );
-        }
-    }
-
-    #[test]
-    fn test_gc_large_object_allocation() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let large_size = 1024 * 1024; // 1MB
-            let large_array = gc.allocate_array(large_size / std::mem::size_of::<ObjectRef>());
-
-            for i in 0..10 {
-                (*large_array).set_element(i, ObjectRef::from_int(i as i64));
-            }
-
-            gc.add_root_object(large_array as *mut Object);
-
-            gc.collect();
-
-            for i in 0..10 {
-                assert_eq!(
-                    (*large_array).get_element(i),
-                    Some(ObjectRef::from_int(i as i64)),
-                    "Array data should survive collection"
-                );
+            for i in 0..5 {
+                assert_eq!((*array_ptr).get(i), Tagged::null());
             }
         }
     }
 
     #[test]
-    fn test_object_type_tagging() {
+    fn test_array_operations() {
+        let mut gc = GarbageCollector::new();
+
+        let array = gc.allocate_array(3);
+        let val1 = Tagged::from_int(42);
+        let val2 = Tagged::from_int(100);
+        let val3 = gc.allocate_string("test");
+
         unsafe {
-            let mut gc = GarbageCollector::new();
-            gc.init_special_objects();
+            let array_ptr = array.to_ptr() as *mut Array;
+            (*array_ptr).set(0, val1);
+            (*array_ptr).set(1, val2);
+            (*array_ptr).set(2, val3);
 
-            let array = gc.allocate_array(5);
-            let array_ref = ObjectRef::from_array_ptr(array);
-            assert_eq!(array_ref.get_type(), Some(ObjectType::Array));
+            assert_eq!((*array_ptr).get(0), val1);
+            assert_eq!((*array_ptr).get(1), val2);
+            assert_eq!((*array_ptr).get(2), val3);
 
-            let bytearray = gc.allocate_bytearray(10);
-            let bytearray_ref = ObjectRef::from_bytearray_ptr(bytearray);
-            assert_eq!(bytearray_ref.get_type(), Some(ObjectType::ByteArray));
+            let mut elements = Vec::new();
+            for item in (*array_ptr).iter() {
+                elements.push(item);
+            }
 
-            gc.add_root_object(array as *mut Object);
-            gc.add_root_object(bytearray as *mut Object);
-            gc.collect();
-
-            let array_ref2 = ObjectRef::from_array_ptr(array);
-            let bytearray_ref2 = ObjectRef::from_bytearray_ptr(bytearray);
-
-            assert_eq!(array_ref2.get_type(), Some(ObjectType::Array));
-            assert_eq!(bytearray_ref2.get_type(), Some(ObjectType::ByteArray));
+            assert_eq!(elements.len(), 3);
+            assert_eq!(elements[0], val1);
+            assert_eq!(elements[1], val2);
+            assert_eq!(elements[2], val3);
         }
     }
 
     #[test]
-    fn test_clone_simple_object() {
+    fn test_resize_array() {
         let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
+
+        let array = gc.allocate_array(3);
+        unsafe {
+            let array_ptr = array.to_ptr() as *mut Array;
+            (*array_ptr).set(0, Tagged::from_int(1));
+            (*array_ptr).set(1, Tagged::from_int(2));
+            (*array_ptr).set(2, Tagged::from_int(3));
+        }
+
+        let larger = gc.resize_array(array, 5);
+        unsafe {
+            let larger_ptr = larger.to_ptr() as *mut Array;
+            assert_eq!((*larger_ptr).capacity(), 5);
+
+            assert_eq!((*larger_ptr).get(0).to_int(), 1);
+            assert_eq!((*larger_ptr).get(1).to_int(), 2);
+            assert_eq!((*larger_ptr).get(2).to_int(), 3);
+
+            assert_eq!((*larger_ptr).get(3), Tagged::null());
+            assert_eq!((*larger_ptr).get(4), Tagged::null());
+        }
+
+        let smaller = gc.resize_array(array, 2);
+        unsafe {
+            let smaller_ptr = smaller.to_ptr() as *mut Array;
+            assert_eq!((*smaller_ptr).capacity(), 2);
+
+            assert_eq!((*smaller_ptr).get(0).to_int(), 1);
+            assert_eq!((*smaller_ptr).get(1).to_int(), 2);
+        }
+    }
+
+    #[test]
+    fn test_bytearray_operations() {
+        let mut gc = GarbageCollector::new();
+
+        let bytearray = gc.allocate_bytearray(5);
 
         unsafe {
-            let map_name = ObjectRef::from_bytearray_ptr(gc.allocate_string("Test Type"));
-            let slot_name = ObjectRef::from_bytearray_ptr(gc.allocate_string("value"));
+            let ba_ptr = bytearray.to_ptr() as *mut ByteArray;
 
-            let map = gc.allocate_map(
-                map_name,
-                1,
-                std::mem::size_of::<Object>() + std::mem::size_of::<ObjectRef>(),
-                ObjectRef::null(),
-            );
-            let slot = gc.allocate_slot(
-                slot_name,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
+            (*ba_ptr).set_byte(0, b'T');
+            (*ba_ptr).set_byte(1, b'E');
+            (*ba_ptr).set_byte(2, b'S');
+            (*ba_ptr).set_byte(3, b'T');
+            (*ba_ptr).set_byte(4, b'\0');
 
-            (*map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
-            (*map).slot_count = ObjectRef::from_int(1);
+            assert_eq!((*ba_ptr).get_byte(0), b'T');
+            assert_eq!((*ba_ptr).get_byte(1), b'E');
+            assert_eq!((*ba_ptr).get_byte(2), b'S');
+            assert_eq!((*ba_ptr).get_byte(3), b'T');
+            assert_eq!((*ba_ptr).get_byte(4), b'\0');
 
-            let obj = gc.allocate(map);
-            let value = ObjectRef::from_int(42);
-            (*obj).set_slot_value(0, value);
-            assert_eq!((*obj).get_slot_value(0), Some(ObjectRef::from_int(42)));
+            assert_eq!((*ba_ptr).as_str(), "TEST");
+        }
+    }
 
-            let cloned = gc.deep_clone(ObjectRef::from_ptr(obj), 0);
+    #[test]
+    fn test_resize_bytearray() {
+        let mut gc = GarbageCollector::new();
 
-            assert!(cloned.as_ptr().is_some());
-            let cloned_obj = cloned.as_ptr_unchecked();
+        let ba = gc.allocate_bytearray(4);
+        unsafe {
+            let ba_ptr = ba.to_ptr() as *mut ByteArray;
+            (*ba_ptr).set_byte(0, b'T');
+            (*ba_ptr).set_byte(1, b'E');
+            (*ba_ptr).set_byte(2, b'S');
+            (*ba_ptr).set_byte(3, b'T');
+        }
+
+        let larger = gc.resize_bytearray(ba, 6);
+        unsafe {
+            let larger_ptr = larger.to_ptr() as *mut ByteArray;
+            assert_eq!((*larger_ptr).len(), 6);
+
+            assert_eq!((*larger_ptr).get_byte(0), b'T');
+            assert_eq!((*larger_ptr).get_byte(1), b'E');
+            assert_eq!((*larger_ptr).get_byte(2), b'S');
+            assert_eq!((*larger_ptr).get_byte(3), b'T');
+
+            assert_eq!((*larger_ptr).get_byte(4), 0);
+            assert_eq!((*larger_ptr).get_byte(5), 0);
+        }
+
+        let smaller = gc.resize_bytearray(ba, 2);
+        unsafe {
+            let smaller_ptr = smaller.to_ptr() as *mut ByteArray;
+            assert_eq!((*smaller_ptr).len(), 2);
+
+            assert_eq!((*smaller_ptr).get_byte(0), b'T');
+            assert_eq!((*smaller_ptr).get_byte(1), b'E');
+        }
+    }
+
+    #[test]
+    fn test_map_and_slots() {
+        let mut gc = GarbageCollector::new();
+
+        let name = gc.allocate_string("Person");
+
+        let slots_array = gc.allocate_array(2);
+
+        let name_slot_name = gc.allocate_string("name");
+        let name_slot_kind = Tagged::from_int(0);
+        let name_slot_value = Tagged::from_int(0);
+        let name_slot = gc.allocate_slot(
+            name_slot_name,
+            name_slot_kind,
+            name_slot_value,
+            Tagged::ffalse(),
+        );
+
+        let age_slot_name = gc.allocate_string("age");
+        let age_slot_kind = Tagged::from_int(0);
+        let age_slot_value = Tagged::from_int(1);
+        let age_slot = gc.allocate_slot(
+            age_slot_name,
+            age_slot_kind,
+            age_slot_value,
+            Tagged::ffalse(),
+        );
+
+        let slots_ptr = slots_array.to_ptr() as *mut Array;
+        unsafe {
+            (*slots_ptr).set(0, name_slot);
+            (*slots_ptr).set(1, age_slot);
+            (*slots_ptr).length = Tagged::from_int(2);
+        }
+
+        let map = gc.allocate_map(name, slots_array);
+
+        unsafe {
+            let map_ptr = map.to_ptr() as *mut Map;
+
+            assert_eq!((*map_ptr).data_slots.to_int(), 2);
+            assert_eq!((*slots_ptr).len(), 2);
+
+            let name_ptr = (*map_ptr).name.to_ptr() as *mut ByteArray;
+            assert_eq!((*name_ptr).as_str(), "Person");
+        }
+
+        let obj = gc.allocate_object(map);
+
+        unsafe {
+            let obj_ptr = obj.to_ptr();
+
+            let name_value = gc.allocate_string("John");
+            (*obj_ptr).set_slot(0, name_value);
+
+            let age_value = Tagged::from_int(30);
+            (*obj_ptr).set_slot(1, age_value);
+
+            let name_slot_value = (*obj_ptr).get_slot(0);
+            let name_slot_ptr = name_slot_value.to_ptr() as *mut ByteArray;
+            assert_eq!((*name_slot_ptr).as_str(), "John");
+
+            let age_slot_value = (*obj_ptr).get_slot(1);
+            assert_eq!(age_slot_value.to_int(), 30);
+        }
+    }
+
+    #[test]
+    fn test_create_map_helper() {
+        let mut gc = GarbageCollector::new();
+
+        let person_map = gc.create_map(
+            "Person",
+            &[
+                ("name", 0, Tagged::from_int(0), Tagged::ffalse()),
+                ("age", 0, Tagged::from_int(1), Tagged::ffalse()),
+            ],
+        );
+
+        unsafe {
+            let map_ptr = person_map.to_ptr() as *mut Map;
+
+            assert_eq!((*map_ptr).data_slots.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 2);
+
+            let name_ptr = (*map_ptr).name.to_ptr() as *mut ByteArray;
+            assert_eq!((*name_ptr).as_str(), "Person");
+
+            let slots = (*map_ptr).slots;
+            let slots_ptr = slots.to_ptr() as *mut Array;
+
+            let name_slot = (*slots_ptr).get(0);
+            let name_slot_ptr = name_slot.to_ptr() as *mut Slot;
+            let name_slot_name = (*name_slot_ptr).name;
+            let name_slot_name_ptr = name_slot_name.to_ptr() as *mut ByteArray;
+            assert_eq!((*name_slot_name_ptr).as_str(), "name");
+
+            let age_slot = (*slots_ptr).get(1);
+            let age_slot_ptr = age_slot.to_ptr() as *mut Slot;
+            let age_slot_name = (*age_slot_ptr).name;
+            let age_slot_name_ptr = age_slot_name.to_ptr() as *mut ByteArray;
+            assert_eq!((*age_slot_name_ptr).as_str(), "age");
+        }
+    }
+
+    #[test]
+    fn test_push_slot() {
+        let mut gc = GarbageCollector::new();
+
+        let person_map = gc.create_map("Person", &[]);
+
+        gc.push_slot(
+            person_map,
+            "name",
+            0,
+            Tagged::from_int(0),
+            Tagged::ffalse(),
+        );
+        gc.push_slot(
+            person_map,
+            "age",
+            0,
+            Tagged::from_int(1),
+            Tagged::ffalse(),
+        );
+
+        unsafe {
+            let map_ptr = person_map.to_ptr() as *mut Map;
+
+            assert_eq!((*map_ptr).data_slots.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 2);
+
+            let slots = (*map_ptr).slots;
+            let slots_ptr = slots.to_ptr() as *mut Array;
+
+            let name_slot = (*slots_ptr).get(0);
+            let name_slot_ptr = name_slot.to_ptr() as *mut Slot;
+            let name_slot_name = (*name_slot_ptr).name;
+            let name_slot_name_ptr = name_slot_name.to_ptr() as *mut ByteArray;
+            assert_eq!((*name_slot_name_ptr).as_str(), "name");
+
+            let age_slot = (*slots_ptr).get(1);
+            let age_slot_ptr = age_slot.to_ptr() as *mut Slot;
+            let age_slot_name = (*age_slot_ptr).name;
+            let age_slot_name_ptr = age_slot_name.to_ptr() as *mut ByteArray;
+            assert_eq!((*age_slot_name_ptr).as_str(), "age");
+        }
+
+        gc.push_slot(
+            person_map,
+            "get_name",
+            2,
+            Tagged::null(),
+            Tagged::ffalse(),
+        );
+
+        unsafe {
+            let map_ptr = person_map.to_ptr() as *mut Map;
+            assert_eq!((*map_ptr).data_slots.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 3);
+        }
+    }
+
+    #[test]
+    fn test_remove_slot() {
+        let mut gc = GarbageCollector::new();
+
+        let person_map = gc.create_map(
+            "Person",
+            &[
+                ("name", 0, Tagged::from_int(0), Tagged::ffalse()),
+                ("age", 0, Tagged::from_int(1), Tagged::ffalse()),
+                ("address", 0, Tagged::from_int(2), Tagged::ffalse()),
+            ],
+        );
+
+        let result = gc.remove_slot(person_map, "age");
+        assert!(result);
+
+        unsafe {
+            let map_ptr = person_map.to_ptr() as *mut Map;
+
+            assert_eq!((*map_ptr).data_slots.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 2);
+
+            let slots = (*map_ptr).slots;
+            let slots_ptr = slots.to_ptr() as *mut Array;
+
+            let name_slot = (*slots_ptr).get(0);
+            let name_slot_ptr = name_slot.to_ptr() as *mut Slot;
+            let name_slot_name = (*name_slot_ptr).name;
+            let name_slot_name_ptr = name_slot_name.to_ptr() as *mut ByteArray;
+            assert_eq!((*name_slot_name_ptr).as_str(), "name");
+
+            let addr_slot = (*slots_ptr).get(1);
+            let addr_slot_ptr = addr_slot.to_ptr() as *mut Slot;
+            let addr_slot_name = (*addr_slot_ptr).name;
+            let addr_slot_name_ptr = addr_slot_name.to_ptr() as *mut ByteArray;
+            assert_eq!((*addr_slot_name_ptr).as_str(), "address");
+        }
+
+        let result = gc.remove_slot(person_map, "non_existent");
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_clone() {
+        let mut gc = GarbageCollector::new();
+
+        let original_str = gc.allocate_string("Test String");
+        let clone_str = gc.clone(original_str);
+
+        assert_ne!(original_str.to_ptr(), clone_str.to_ptr());
+        unsafe {
+            let orig_ptr = original_str.to_ptr() as *mut ByteArray;
+            let clone_ptr = clone_str.to_ptr() as *mut ByteArray;
+
+            assert_eq!((*orig_ptr).as_str(), (*clone_ptr).as_str());
+        }
+
+        let original_array = gc.allocate_array(3);
+        unsafe {
+            let array_ptr = original_array.to_ptr() as *mut Array;
+            (*array_ptr).set(0, Tagged::from_int(1));
+            (*array_ptr).set(1, Tagged::from_int(2));
+            (*array_ptr).set(2, Tagged::from_int(3));
+        }
+
+        let clone_array = gc.clone(original_array);
+
+        assert_ne!(original_array.to_ptr(), clone_array.to_ptr());
+        unsafe {
+            let orig_ptr = original_array.to_ptr() as *mut Array;
+            let clone_ptr = clone_array.to_ptr() as *mut Array;
+
+            assert_eq!((*orig_ptr).capacity(), (*clone_ptr).capacity());
+            for i in 0..3 {
+                assert_eq!((*orig_ptr).get(i), (*clone_ptr).get(i));
+            }
+        }
+
+        let person_map = gc.create_map(
+            "Person",
+            &[
+                (
+                    "name",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "age",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
+
+        let original_person = gc.allocate_object(person_map);
+        unsafe {
+            let obj_ptr = original_person.to_ptr();
+            (*obj_ptr).set_slot(0, gc.allocate_string("John"));
+            (*obj_ptr).set_slot(1, Tagged::from_int(30));
+        }
+
+        let clone_person = gc.clone(original_person);
+
+        assert_ne!(original_person.to_ptr(), clone_person.to_ptr());
+        unsafe {
+            let orig_ptr = original_person.to_ptr();
+            let clone_ptr = clone_person.to_ptr();
+
             assert_eq!(
-                (*cloned_obj).get_slot_value(0),
-                Some(ObjectRef::from_int(42))
-            );
-            assert_ne!(cloned_obj, obj);
-        }
-    }
-
-    #[test]
-    fn test_clone_array() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let array = gc.allocate_array(3);
-            (*array).set_element(0, ObjectRef::from_int(1));
-            (*array).set_element(1, ObjectRef::from_int(2));
-            (*array).set_element(2, ObjectRef::from_int(3));
-
-            let cloned = gc.deep_clone(ObjectRef::from_array_ptr(array), 0);
-
-            assert!(cloned.as_array_ptr().is_some());
-            let cloned_array = cloned.as_array_ptr().unwrap();
-            assert_ne!(cloned_array, array);
-
-            assert_eq!((*cloned_array).get_element(0), Some(ObjectRef::from_int(1)));
-            assert_eq!((*cloned_array).get_element(1), Some(ObjectRef::from_int(2)));
-            assert_eq!((*cloned_array).get_element(2), Some(ObjectRef::from_int(3)));
-        }
-    }
-
-    #[test]
-    fn test_clone_bytearray() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let original = gc.allocate_string("Hello, World!");
-            let cloned = gc.deep_clone(ObjectRef::from_bytearray_ptr(original), 0);
-
-            assert!(cloned.as_bytearray_ptr().is_some());
-            let cloned_ba = cloned.as_bytearray_ptr().unwrap();
-            assert_ne!(cloned_ba, original);
-
-            assert_eq!((*cloned_ba).as_str(), Some("Hello, World!"));
-        }
-    }
-
-    #[test]
-    fn test_clone_cyclic_references() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let map = gc.allocate_map(
-                ObjectRef::null(),
-                1,
-                std::mem::size_of::<Object>() + std::mem::size_of::<ObjectRef>(),
-                ObjectRef::null(),
+                (*orig_ptr).header.get_map(),
+                (*clone_ptr).header.get_map()
             );
 
-            let slot_name = gc.allocate_string("next");
-            let slot_name_ref = ObjectRef::from_bytearray_ptr(slot_name);
+            let name_slot_orig = (*orig_ptr).get_slot(0);
+            let name_slot_clone = (*clone_ptr).get_slot(0);
+            let name_orig_ptr = name_slot_orig.to_ptr() as *mut ByteArray;
+            let name_clone_ptr = name_slot_clone.to_ptr() as *mut ByteArray;
 
-            let slot = gc.allocate_slot(
-                slot_name_ref,
-                SpecialObjects::get_slot_kind_data(),
-                ObjectRef::from_int(0),
-            );
+            assert_eq!((*name_orig_ptr).as_str(), (*name_clone_ptr).as_str());
 
-            (*map).set_slot(ObjectRef::from_ptr(slot as *mut Object), 0);
-            (*map).slot_count = ObjectRef::from_int(1);
+            let age_slot_orig = (*orig_ptr).get_slot(1);
+            let age_slot_clone = (*clone_ptr).get_slot(1);
 
-            let obj1 = gc.allocate(map);
-            let obj2 = gc.allocate(map);
-            let obj3 = gc.allocate(map);
-
-            (*obj1).set_slot_value(0, ObjectRef::from_ptr(obj2));
-            (*obj2).set_slot_value(0, ObjectRef::from_ptr(obj3));
-            (*obj3).set_slot_value(0, ObjectRef::from_ptr(obj1));
-
-            let cloned1 = gc.deep_clone(ObjectRef::from_ptr(obj1), 0);
-            let cloned1_ptr = cloned1.as_ptr_unchecked();
-
-            let cloned2 = (*cloned1_ptr).get_slot_value(0).unwrap();
-            let cloned2_ptr = cloned2.as_ptr_unchecked();
-            let cloned3 = (*cloned2_ptr).get_slot_value(0).unwrap();
-            let cloned3_ptr = cloned3.as_ptr_unchecked();
-            let back_to_cloned1 = (*cloned3_ptr).get_slot_value(0).unwrap();
-
-            assert_eq!(back_to_cloned1.as_ptr_unchecked(), cloned1_ptr);
-            assert_ne!(cloned1_ptr, obj1);
-            assert_ne!(cloned2_ptr, obj2);
-            assert_ne!(cloned3_ptr, obj3);
-        }
-    }
-    #[test]
-    fn test_box_allocation() {
-        let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
-
-        unsafe {
-            let value = ObjectRef::from_int(42);
-            let box_ptr = gc.allocate_box(value);
-
-            assert_eq!((*box_ptr).boxed, value);
-            assert_eq!((*box_ptr).boxed.as_int(), Some(42));
-
-            // Test boxing survives GC
-            gc.add_root_object(box_ptr as *mut Object);
-            gc.collect();
-
-            assert_eq!((*box_ptr).boxed.as_int(), Some(42));
-
-            let str_ptr = gc.allocate_string("test");
-            let str_value = ObjectRef::from_bytearray_ptr(str_ptr);
-            let str_box = gc.allocate_box(str_value);
-
-            gc.add_root_object(str_box as *mut Object);
-            gc.collect();
-
-            let boxed_str = (*str_box).boxed;
-            assert!(boxed_str.as_bytearray_ptr().is_some());
-            assert_eq!(
-                (*boxed_str.as_bytearray_ptr().unwrap()).as_str(),
-                Some("test")
-            );
+            assert_eq!(age_slot_orig.to_int(), age_slot_clone.to_int());
         }
     }
 
     #[test]
-    fn test_nested_boxes() {
+    fn test_garbage_collection_stable() {
         let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
 
-        unsafe {
-            let value = ObjectRef::from_int(42);
-            let box1 = gc.allocate_box(value);
-            let box2 = gc.allocate_box(ObjectRef::from_box_ptr(box1));
+        let before = gc.allocations.len();
+        gc.collect_garbage();
+        let after = gc.allocations.len();
+        assert_eq!(before, after);
 
-            gc.add_root_object(box2 as *mut Object);
-            gc.collect();
-
-            let inner_box = (*box2).boxed.as_box_ptr().unwrap();
-            assert_eq!((*inner_box).boxed.as_int(), Some(42));
-        }
+        let _temp1 = gc.allocate_string("Temporary 1");
+        assert_eq!(gc.allocations.len(), after + 1);
+        gc.collect_garbage();
+        assert_eq!(before, gc.allocations.len());
     }
-
     #[test]
-    fn test_box_gc_behavior() {
+    fn test_garbage_collection() {
         let mut gc = GarbageCollector::new();
-        gc.init_special_objects();
+
+        let _temp1 = gc.allocate_string("Temporary 1");
+        let _temp2 = gc.allocate_array(10);
+
+        let keep = gc.allocate_string("Keep me");
+        gc.add_root(keep);
+
+        gc.collect_garbage();
 
         unsafe {
-            let value = ObjectRef::from_int(42);
-            let box1 = gc.allocate_box(value);
-            let _box2 = gc.allocate_box(value);
-
-            gc.add_root_object(box1 as *mut Object);
-
-            let initial_allocated = gc.total_allocated;
-            gc.collect();
-
-            assert!(gc.total_allocated < initial_allocated);
-            assert_eq!((*box1).boxed.as_int(), Some(42));
+            let keep_ptr = keep.to_ptr() as *mut ByteArray;
+            assert_eq!((*keep_ptr).as_str(), "Keep me");
         }
+
+        let alloc_count_before = gc.allocations.len();
+
+        let _new1 = gc.allocate_string("New 1");
+        let _new2 = gc.allocate_string("New 2");
+
+        gc.collect_garbage();
+
+        assert!(gc.allocations.len() > 0);
+        assert!(gc.allocations.len() < alloc_count_before + 2);
     }
 }

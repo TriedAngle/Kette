@@ -1,91 +1,154 @@
-use std::mem;
-
 use crate::{
-    gc::GarbageCollector,
-    object::{Array, ByteArray, ObjectHeader, ObjectRef, ObjectType, Quotation, SpecialObjects},
-    MemoryRegion, MutArc,
+    Array, Box, ByteArray, CodeHeap, GarbageCollector, Handler, Map,
+    MemoryRegion, Mutex, Object, ObjectHeader, Parser, Quotation,
+    SLOT_CONST_DATA, StackFn, Tagged, Word,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
 };
 
 pub struct Context {
     pub header: ObjectHeader,
-    pub datastack: ObjectRef,
-    pub retainstack: ObjectRef,
-    pub namestack: ObjectRef,
+    pub datastack: Tagged,
+    pub retainstack: Tagged,
+    pub namestack: Tagged,
+    pub callstack: Tagged,
+    pub handlerstack: Tagged,
 
-    pub parser: ObjectRef,
+    pub gc: GarbageCollector,
+    pub codes: Arc<Mutex<CodeHeap>>,
 
-    pub gc: MutArc<GarbageCollector>,
-    pub data: MemoryRegion<ObjectRef>,
-    pub retain: MemoryRegion<ObjectRef>,
-    pub names: MemoryRegion<(ObjectRef, ObjectRef)>, // first object always bytearray or f
-}
-
-pub struct Parser {
-    pub header: ObjectHeader,
-    pub text: ObjectRef,
-    pub offset: ObjectRef,
-    pub line: ObjectRef,
-    pub column: ObjectRef,
+    pub data: MemoryRegion<Tagged>,
+    pub retain: MemoryRegion<Tagged>,
+    pub call: MemoryRegion<Tagged>,
+    pub name: MemoryRegion<(Tagged, Tagged)>,
+    pub handlers: MemoryRegion<Tagged>,
+    pub supertypes: HashMap<*mut Map, HashSet<*mut Map>>,
 }
 
 pub struct ContextConfig {
-    pub datastack_size: usize,
-    pub retainstack_size: usize,
-    pub namestack_size: usize,
+    pub data_size: usize,
+    pub retian_size: usize,
+    pub name_size: usize,
+    pub call_size: usize,
+    pub handler_size: usize,
 }
 
 impl Context {
-    pub fn new(config: &ContextConfig) -> Self {
-        let mut gc = MutArc::new(GarbageCollector::new());
-        gc.init_special_objects();
-        let datastack = unsafe { gc.allocate_array(config.datastack_size) };
-        let retainstack = unsafe { gc.allocate_array(config.retainstack_size) };
-        let namestack = unsafe { gc.allocate_array(config.namestack_size * 2) };
+    pub fn new(config: &ContextConfig, codes: Arc<Mutex<CodeHeap>>) -> Self {
+        let mut gc = GarbageCollector::new();
+        let datastack = gc.allocate_array(config.data_size);
+        let retainstack = gc.allocate_array(config.retian_size);
+        let namestack = gc.allocate_array(config.name_size);
+        let callstack = gc.allocate_array(config.call_size);
+        let handlerstack = gc.allocate_array(config.handler_size);
 
-        let data = datastack.into();
-        let retain = retainstack.into();
-        let names = namestack.into();
+        let data = (datastack.to_ptr() as *mut Array).into();
+        let retain = (retainstack.to_ptr() as *mut Array).into();
+        let name = (namestack.to_ptr() as *mut Array).into();
+        let call = (callstack.to_ptr() as *mut Array).into();
+        let handlers = (handlerstack.to_ptr() as *mut Array).into();
 
-        let parser = Parser::new(&mut gc);
-        gc.add_root(ObjectRef::from_ptr(parser as *mut _));
-        // TODO: make map
-        let header = ObjectHeader::null();
+        gc.add_root(datastack);
+        gc.add_root(retainstack);
+        gc.add_root(namestack);
+        gc.add_root(callstack);
 
-        gc.add_root(ObjectRef::from_array_ptr(datastack));
-        gc.add_root(ObjectRef::from_array_ptr(retainstack));
-        gc.add_root(ObjectRef::from_array_ptr(namestack));
+        let ctx_map = gc.create_map(
+            "Context",
+            &[
+                (
+                    "datastack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(0),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "retainstack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(1),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "namestack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(2),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "callstack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(3),
+                    Tagged::ffalse(),
+                ),
+                (
+                    "handlerstack",
+                    SLOT_CONST_DATA,
+                    Tagged::from_int(4),
+                    Tagged::ffalse(),
+                ),
+            ],
+        );
 
-        Self {
+        let header = ObjectHeader::new(ctx_map.to_ptr() as *mut _);
+        gc.add_root(ctx_map);
+        let supertypes = HashMap::new();
+
+        let mut new = Self {
             header,
-            datastack: datastack.into(),
-            retainstack: retainstack.into(),
-            namestack: ObjectRef::null(),
-            parser: ObjectRef::from_ptr(parser as *mut _),
-            gc,
+            datastack,
+            retainstack,
+            namestack,
+            callstack,
+            handlerstack,
             data,
             retain,
-            names,
-        }
+            name,
+            call,
+            handlers,
+            codes,
+            gc,
+            supertypes,
+        };
+
+        new.register_map_inheritance(new.gc.specials.object_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.false_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.map_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.fixnum_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.array_map.to_ptr() as _);
+        new.register_map_inheritance(
+            new.gc.specials.bytearray_map.to_ptr() as _
+        );
+        new.register_map_inheritance(new.gc.specials.slot_map.to_ptr() as _);
+        new.register_map_inheritance(
+            new.gc.specials.quotation_map.to_ptr() as _
+        );
+        new.register_map_inheritance(new.gc.specials.word_map.to_ptr() as _);
+        new.register_map_inheritance(new.gc.specials.handler_map.to_ptr() as _);
+
+        new
     }
 
-    pub fn push(&mut self, value: ObjectRef) {
+    pub fn push(&mut self, value: Tagged) {
         let _ = self.data.replace(value);
         self.data.increment(1);
     }
 
-    pub fn pop(&mut self) -> ObjectRef {
+    pub fn pop(&mut self) -> Tagged {
         self.data.decrement(1);
-        self.data.replace(ObjectRef::null())
+        self.data.replace(Tagged::null())
     }
 
-    pub fn retain_push(&mut self, value: ObjectRef) {
+    pub fn retain_push(&mut self, value: Tagged) {
         let _ = self.retain.replace(value);
         self.retain.increment(1);
     }
 
-    pub fn retain_pop(&mut self) -> ObjectRef {
+    pub fn retain_pop(&mut self) -> Tagged {
         self.retain.decrement(1);
-        self.retain.replace(ObjectRef::null())
+        self.retain.replace(Tagged::null())
     }
 
     pub fn data_retain(&mut self) {
@@ -98,1057 +161,855 @@ impl Context {
         self.push(value);
     }
 
-    pub fn execute(&mut self, quotation: *mut Quotation) {
-        let code = unsafe { (*quotation).body.as_ptr_unchecked() } as *mut Array;
-        let data_ptr = unsafe { (*code).data_ptr_mut() };
-        let count = unsafe { (*code).size.as_int_unchecked() as usize };
+    pub fn push_handler(&mut self, handler: Tagged) {
+        self.handlers.replace(handler);
+        self.handlers.increment(1);
+    }
 
-        for idx in 0..count {
-            let ptr = unsafe { data_ptr.add(idx) };
-            let current = unsafe { *ptr };
+    pub fn pop_handler(&mut self) -> Tagged {
+        if self.handlers.current <= self.handlers.start {
+            return Tagged::ffalse();
+        }
 
-            let Some(ty) = current.get_type() else {
-                self.push(current);
-                continue;
-            };
+        self.handlers.decrement(1);
+        self.handlers.replace(Tagged::null())
+    }
 
-            match ty {
-                ObjectType::Word => {
-                    let word = current.as_word_ptr().unwrap();
-                    let body_obj = unsafe { (*word).body };
-                    if let Some(flags) = unsafe { (*word).flags.as_array_ptr() } {
-                        let mut is_primitive = false;
-                        for flag in unsafe { (*flags).iter() } {
-                            if flag == SpecialObjects::get_false() {
-                                break;
-                            };
-                            if flag == SpecialObjects::word_primitive() {
-                                is_primitive = true;
-                            }
-                        }
-                        if is_primitive {
-                            let primitive_fn_raw = unsafe { body_obj.as_int_unchecked() };
-                            let primitive_fn: fn(&mut Context) =
-                                unsafe { mem::transmute(primitive_fn_raw) };
-                            primitive_fn(self);
-                        } else {
-                            let quot = body_obj.as_quotation_ptr().unwrap();
-                            self.execute(quot);
-                        }
-                    } else {
-                        let quot = body_obj.as_quotation_ptr().unwrap();
-                        self.execute(quot);
-                    }
-                }
-                ObjectType::Quotation => {
-                    self.push(current);
-                }
-                ObjectType::Box => {
-                    self.push(current);
-                }
-                _ => self.push(current),
+    pub fn get_current_frame(&mut self) -> Tagged {
+        if self.call.current <= self.call.start {
+            return Tagged::ffalse();
+        }
+
+        let frame = unsafe { *self.call.current.sub(1) };
+        return frame;
+    }
+
+    pub fn unwind_to_frame(&mut self, frame: Tagged) {
+        let mut current_ptr = self.call.current;
+
+        while current_ptr >= self.call.start {
+            let frame_obj = unsafe { *current_ptr };
+            if frame_obj == frame {
+                self.call.current = unsafe { current_ptr.add(1) };
+                return;
+            }
+
+            unsafe { current_ptr = current_ptr.sub(1) };
+        }
+
+        panic!("Fatal VM State: unwinding target not found")
+    }
+
+    pub fn throw(&mut self, exception: Tagged) {
+        let handler_count = (self.handlers.current as usize
+            - self.handlers.start as usize)
+            / std::mem::size_of::<Tagged>();
+
+        if handler_count == 0 {
+            panic!("Fatal VM State: No handlers installed");
+        }
+
+        for i in (0..handler_count).rev() {
+            let handler = unsafe { *(self.handlers.start.add(i)) };
+            let handler_ptr = handler.to_ptr() as *mut Handler;
+
+            let tty = unsafe { (*handler_ptr).tty };
+            let handler_quot = unsafe { (*handler_ptr).handler };
+            let handler_frame = unsafe { (*handler_ptr).frame };
+
+            // TODO: support inheritance
+            if self.is_instance_of(exception, tty) {
+                self.push(handler_frame);
+                self.execute(handler_quot.to_ptr() as *const Quotation);
+                return;
             }
         }
+
+        panic!("Fatal VM State: No matching handler found");
     }
 
-    pub fn compile_string(&mut self, text: ObjectRef) -> ObjectRef {
-        let parser = unsafe { self.parser.as_ptr_unchecked() as *mut Parser };
-        unsafe { (*parser).set_text(text) };
-        unsafe { (*parser).compile_string(self) }
+    pub fn create_map(
+        &mut self,
+        name: &str,
+        slots: &[(&str, i64, Tagged, Tagged)],
+    ) -> Tagged {
+        let map_tagged = self.gc.create_map(name, slots);
+
+        self.register_map_inheritance(map_tagged.to_ptr() as *mut Map);
+
+        map_tagged
     }
 
-    unsafe fn name_or_word_string(obj: ObjectRef) -> *mut ByteArray {
-        if let Some(word) = obj.as_word_ptr() {
-            let name = unsafe { (*word).name };
-            unsafe { name.as_bytearray_ptr_unchecked() }
-        } else {
-            unsafe { obj.as_bytearray_ptr_unchecked() }
-        }
-    }
-
-    pub fn namestack_push_or_replace(&mut self, name: ObjectRef, object: ObjectRef) {
-        if name.is_false() {
+    fn register_map_inheritance(&mut self, map_ptr: *mut Map) {
+        if self.supertypes.contains_key(&map_ptr) {
             return;
         }
 
-        let name_ptr = unsafe { Self::name_or_word_string(name) };
+        let mut parents = HashSet::new();
+        parents.insert(map_ptr);
 
-        let mut current = self.names.current;
-        let mut found = false;
+        let parent_slots = unsafe { (*map_ptr).get_parent_slots() };
 
-        while current > self.names.start {
-            unsafe {
-                current = current.sub(1);
-                let (existing_name, _) = *current;
+        for parent_slot in parent_slots {
+            let parent_tagged = unsafe { (*parent_slot).value };
+            if !parent_tagged.is_false() {
+                let parent_map_ptr = parent_tagged.to_ptr() as *mut Map;
 
-                if existing_name.is_false() {
-                    *current = (name, object);
-                    found = true;
-                    break;
-                }
+                self.register_map_inheritance(parent_map_ptr);
 
-                let existing_name_ptr = Self::name_or_word_string(existing_name);
-                if (*name_ptr).equal(&*existing_name_ptr) {
-                    *current = (name, object);
-                    found = true;
-                    break;
+                parents.insert(parent_map_ptr);
+
+                if let Some(parent_set) = self.supertypes.get(&parent_map_ptr) {
+                    for &ancestor in parent_set {
+                        parents.insert(ancestor);
+                    }
                 }
             }
         }
 
-        if !found {
-            self.names.replace((name, object));
-            self.names.increment(1);
+        self.supertypes.insert(map_ptr, parents);
+    }
+
+    pub fn is_instance_of(&self, obj: Tagged, map: Tagged) -> bool {
+        if obj.is_int() || obj.is_false() {
+            if obj.is_false() && map == self.gc.specials.false_map {
+                return true;
+            }
+            return false;
+        }
+
+        let obj_ptr = obj.to_ptr();
+        let obj_map_ptr = unsafe { (*obj_ptr).header.get_map() };
+
+        self.is_subtype_of(obj_map_ptr, map.to_ptr() as _)
+    }
+
+    pub fn is_subtype_of(&self, map: *mut Map, parent: *mut Map) -> bool {
+        if let Some(parents) = self.supertypes.get(&map) {
+            parents.contains(&parent)
+        } else {
+            panic!("Fatal VM State: Map '{:?}' not registered", map);
         }
     }
 
-    pub fn namestack_lookup(&self, name: ObjectRef) -> Option<(ObjectRef, ObjectRef)> {
-        if name.is_false() {
+    pub fn lookup(&self, tagged: Tagged) -> (Tagged, Tagged) {
+        let Some((search_name, _)) = self.get_name_bytearray(tagged) else {
+            return (Tagged::ffalse(), Tagged::ffalse());
+        };
+
+        let mut current_ptr = self.name.current;
+
+        while current_ptr >= self.name.start {
+            let entry = unsafe { *(current_ptr as *const (Tagged, Tagged)) };
+            let (key, value) = entry;
+
+            if key == Tagged::ffalse() && value == Tagged::ffalse() {
+                unsafe { current_ptr = current_ptr.sub(1) };
+                continue;
+            }
+
+            let Some((key_name, _)) = self.get_name_bytearray(key) else {
+                unsafe { current_ptr = current_ptr.sub(1) };
+                continue;
+            };
+
+            let search_name_ptr = search_name.to_ptr() as *const ByteArray;
+            let key_name_ptr = key_name.to_ptr() as *const ByteArray;
+
+            let search_str = unsafe { (*search_name_ptr).as_str() };
+            let key_str = unsafe { (*key_name_ptr).as_str() };
+
+            if search_str == key_str {
+                return (key, value);
+            }
+
+            unsafe { current_ptr = current_ptr.sub(1) };
+        }
+
+        (Tagged::ffalse(), Tagged::ffalse())
+    }
+
+    pub fn reset_parser_string(&mut self, input: &str) {
+        let input = self.gc.allocate_string(input);
+        self.reset_parser(input);
+    }
+    pub fn reset_parser(&mut self, input: Tagged) {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe {
+            (*parser).reset(input);
+        };
+    }
+
+    pub fn read_next(&mut self) -> Tagged {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).read_next(self) }
+    }
+
+    pub fn parse_until(&mut self, delimiter: Option<&str>) -> Tagged {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).parse_until(self, delimiter) }
+    }
+
+    pub fn read_until(&mut self, end: &str) -> Tagged {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).read_until(self, end) }
+    }
+
+    pub fn skip_whitespace(&mut self) {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe {
+            (*parser).skip_whitespace();
+        }
+    }
+
+    pub fn namestack_push(
+        &mut self,
+        key: Tagged,
+        value: Tagged,
+    ) -> (Tagged, Tagged) {
+        let Some(_) = self.get_name_bytearray(key) else {
+            return (Tagged::ffalse(), Tagged::ffalse());
+        };
+
+        let (existing_key, _existing_value) = self.lookup(key);
+        if existing_key != Tagged::ffalse() {
+            let mut current_ptr = self.name.current;
+
+            while current_ptr >= self.name.start {
+                let entry_ptr = current_ptr as *mut (Tagged, Tagged);
+                let (entry_key, _) = unsafe { *entry_ptr };
+
+                if entry_key == existing_key {
+                    let old_value = unsafe { (*entry_ptr).1 };
+                    unsafe { (*entry_ptr).0 = key };
+                    unsafe { (*entry_ptr).1 = value };
+                    return (existing_key, old_value);
+                }
+
+                unsafe { current_ptr = current_ptr.sub(1) };
+            }
+        }
+
+        let mut current_ptr = self.name.start;
+
+        while current_ptr <= self.name.current {
+            let entry_ptr = current_ptr as *mut (Tagged, Tagged);
+            let (entry_key, _) = unsafe { *entry_ptr };
+
+            if entry_key == Tagged::ffalse() {
+                unsafe {
+                    *entry_ptr = (key, value);
+                }
+                return (key, value);
+            }
+
+            unsafe { current_ptr = current_ptr.add(1) };
+        }
+
+        if self.name.current == self.name.end {
+            panic!("Namestack is full");
+        }
+
+        self.name.increment(1);
+
+        let entry_ptr = self.name.current as *mut (Tagged, Tagged);
+        unsafe {
+            *entry_ptr = (key, value);
+        }
+
+        (key, value)
+    }
+
+    pub fn namestack_remove(&mut self, key: Tagged) -> (Tagged, Tagged) {
+        let (existing_key, _existing_value) = self.lookup(key);
+        if existing_key == Tagged::ffalse() {
+            return (Tagged::ffalse(), Tagged::ffalse());
+        }
+
+        let mut current_ptr = self.name.current;
+
+        while current_ptr >= self.name.start {
+            let entry_ptr = current_ptr as *mut (Tagged, Tagged);
+            let (entry_key, _) = unsafe { *entry_ptr };
+
+            if entry_key == existing_key {
+                let old_entry = unsafe { *entry_ptr };
+
+                unsafe {
+                    *entry_ptr = (Tagged::ffalse(), Tagged::ffalse());
+                }
+
+                return old_entry;
+            }
+
+            unsafe { current_ptr = current_ptr.sub(1) };
+        }
+
+        (Tagged::ffalse(), Tagged::ffalse())
+    }
+
+    pub fn is_quotation(&self, tagged: Tagged) -> bool {
+        if tagged.is_int() || tagged == Tagged::null() {
+            return false;
+        }
+
+        let obj_ptr = tagged.to_ptr();
+        let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        map_tagged == self.gc.specials.quotation_map
+    }
+
+    pub fn is_word(&self, tagged: Tagged) -> bool {
+        if tagged.is_int() || tagged == Tagged::null() {
+            return false;
+        }
+
+        let obj_ptr = tagged.to_ptr();
+        let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        map_tagged == self.gc.specials.word_map
+    }
+
+    pub fn is_parsing_word(&self, word: Tagged) -> bool {
+        if !self.is_word(word) {
+            return false;
+        }
+
+        let word_ptr = word.to_ptr() as *const Word;
+        unsafe { (*word_ptr).has_tag(self.gc.specials.parser_tag) }
+    }
+
+    pub fn word_primitive(&self, tagged: Tagged) -> Option<StackFn> {
+        if !self.is_word(tagged) {
             return None;
         }
 
-        let name_ptr = unsafe { Self::name_or_word_string(name) };
+        let word = tagged.to_ptr() as *const Word;
 
-        let mut current = self.names.current;
-
-        while current > self.names.start {
-            unsafe {
-                current = current.sub(1);
-                let (existing_name, object) = *current;
-
-                if existing_name.is_false() {
-                    continue;
-                }
-
-                let existing_ptr =  Self::name_or_word_string(existing_name);
-
-                if (*name_ptr).equal(&*existing_ptr) {
-                    return Some((existing_name, object));
-                }
-            }
+        if unsafe { !(*word).has_tag(self.gc.specials.primitive_tag) } {
+            return None;
         }
 
-        None
-    }
-    pub fn namestack_remove(&mut self, name: ObjectRef) -> ObjectRef {
-        if name.is_false() {
-            return ObjectRef::null();
-        }
-
-        let name_ptr = unsafe { Self::name_or_word_string(name) };
-
-        let mut current = self.names.current;
-
-        while current > self.names.start {
-            unsafe {
-                current = current.sub(1);
-                let (existing_name, object) = *current;
-
-                if existing_name.is_false() {
-                    continue;
-                }
-
-                let existing_ptr = Self::name_or_word_string(existing_name);
-
-                if (*name_ptr).equal(&*existing_ptr) {
-                    *current = (ObjectRef::null(), ObjectRef::null());
-                    return object;
-                }
-            }
-        }
-
-        ObjectRef::null()
-    }
-}
-
-impl Parser {
-    pub fn new(gc: &mut GarbageCollector) -> *mut Self {
-        let map = unsafe { gc.allocate_map(ObjectRef::null(), 4, 32, ObjectRef::null()) };
-        let parser = unsafe { gc.allocate(map) } as *mut Parser;
-
-        unsafe {
-            (*parser).text = ObjectRef::null();
-            (*parser).offset = ObjectRef::from_int(0);
-            (*parser).line = ObjectRef::from_int(1);
-            (*parser).column = ObjectRef::from_int(1);
-        }
-
-        parser
+        let body = unsafe { (*word).body };
+        let num = body.to_int();
+        let ptr = unsafe { mem::transmute(num) };
+        Some(ptr)
     }
 
-    pub fn next_word(&mut self, gc: &mut GarbageCollector) -> (ObjectRef, bool) {
-        let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
-        let mut offset = unsafe { self.offset.as_int_unchecked() as usize };
-        let text_size = unsafe { (*text_ptr).size.as_int_unchecked() as usize };
-
-        while offset < text_size {
-            let ch = unsafe { (*text_ptr).get_element(offset).unwrap() };
-            match ch {
-                b' ' | b'\t' => {
-                    offset += 1;
-                    unsafe {
-                        self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
-                    }
-                }
-                b'\n' => {
-                    offset += 1;
-                    unsafe {
-                        self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
-                        self.column = ObjectRef::from_int(1);
-                    }
-                }
-                _ => break,
-            }
+    fn get_name_bytearray(&self, tagged: Tagged) -> Option<(Tagged, bool)> {
+        if tagged.is_int() || tagged == Tagged::null() {
+            return None;
         }
 
-        if offset >= text_size {
-            return (ObjectRef::null(), false);
-        }
+        let obj_ptr = tagged.to_ptr();
+        let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
 
-        let start = offset;
-        while offset < text_size {
-            let ch = unsafe { (*text_ptr).get_element(offset).unwrap() };
-            match ch {
-                b' ' | b'\t' | b'\n' => break,
-                _ => {
-                    offset += 1;
-                    unsafe {
-                        self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
-                    }
-                }
-            }
-        }
-
-        let word_size = offset - start;
-        let word = unsafe { gc.allocate_bytearray(word_size) };
-
-        unsafe {
-            let src = (text_ptr as *const u8)
-                .add(std::mem::size_of::<ByteArray>())
-                .add(start);
-            let dst = (word as *mut u8).add(std::mem::size_of::<ByteArray>());
-            std::ptr::copy_nonoverlapping(src, dst, word_size);
-        }
-
-        self.offset = ObjectRef::from_int(offset as i64);
-
-        (ObjectRef::from_bytearray_ptr(word), true)
-    }
-
-    pub fn read_until(&mut self, gc: &mut GarbageCollector, end_pattern: ObjectRef) -> ObjectRef {
-        let text_ptr = unsafe { self.text.as_bytearray_ptr_unchecked() };
-        let end_ptr = unsafe { end_pattern.as_bytearray_ptr_unchecked() };
-
-        let mut offset = unsafe { self.offset.as_int_unchecked() as usize };
-        let text_size = unsafe { (*text_ptr).size.as_int_unchecked() as usize };
-        let pattern_size = unsafe { (*end_ptr).size.as_int_unchecked() as usize };
-
-        let initial_offset = offset;
-
-        if pattern_size == 0 || pattern_size > (text_size - offset) {
-            return ObjectRef::null();
-        }
-
-        while offset <= text_size - pattern_size {
-            let mut found = true;
-
-            for i in 0..pattern_size {
-                let text_ch = unsafe { (*text_ptr).get_element(offset + i).unwrap() };
-                let pattern_ch = unsafe { (*end_ptr).get_element(i).unwrap() };
-
-                if text_ch != pattern_ch {
-                    found = false;
-                    break;
-                }
-            }
-
-            if found {
-                let result_size = offset - initial_offset;
-                let result = unsafe { gc.allocate_bytearray(result_size - 1) };
-
-                unsafe {
-                    let src = (text_ptr as *const u8)
-                        .add(std::mem::size_of::<ByteArray>())
-                        .add(initial_offset + 1);
-                    let dst = (result as *mut u8).add(std::mem::size_of::<ByteArray>());
-                    std::ptr::copy_nonoverlapping(src, dst, result_size);
-                }
-
-                for i in initial_offset..offset {
-                    let ch = unsafe { (*text_ptr).get_element(i).unwrap() };
-                    if ch == b'\n' {
-                        unsafe {
-                            self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
-                            self.column = ObjectRef::from_int(1);
-                        }
-                    } else {
-                        unsafe {
-                            self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
-                        }
-                    }
-                }
-
-                for i in 0..pattern_size {
-                    let ch = unsafe { (*text_ptr).get_element(offset + i).unwrap() };
-                    if ch == b'\n' {
-                        unsafe {
-                            self.line = ObjectRef::from_int(self.line.as_int_unchecked() + 1);
-                            self.column = ObjectRef::from_int(1);
-                        }
-                    } else {
-                        unsafe {
-                            self.column = ObjectRef::from_int(self.column.as_int_unchecked() + 1);
-                        }
-                    }
-                }
-
-                self.offset = ObjectRef::from_int((offset + pattern_size) as i64);
-
-                return ObjectRef::from_bytearray_ptr(result);
-            }
-
-            offset += 1;
-        }
-
-        self.offset = ObjectRef::from_int(initial_offset as i64);
-        ObjectRef::null()
-    }
-
-    pub fn parse_until(&mut self, ctx: &mut Context, end_word: ObjectRef) -> ObjectRef {
-        let initial_offset = self.offset;
-        let initial_line = self.line;
-        let initial_column = self.column;
-
-        let mut objects = Vec::new();
-
-        let end_bytearray = unsafe { end_word.as_bytearray_ptr_unchecked() };
-
-        loop {
-            let (word, success) = self.next_word(&mut ctx.gc);
-            if !success {
-                self.offset = initial_offset;
-                self.line = initial_line;
-                self.column = initial_column;
-                return ObjectRef::null();
-            }
-
-            let word_ptr = unsafe { word.as_bytearray_ptr_unchecked() };
-            if unsafe { (*word_ptr).equal(&*end_bytearray) } {
-                let array = unsafe { ctx.gc.allocate_array(objects.len()) };
-                for (i, obj) in objects.iter().enumerate() {
-                    unsafe { (*array).set_element(i, *obj) };
-                }
-                return ObjectRef::from_array_ptr(array);
-            }
-
-            let mut parsed = false;
-
-            ctx.push(word);
-            ctx.parse_fixnum();
-            let result = ctx.pop();
-            if !result.is_false() {
-                objects.push(result);
-                parsed = true;
-            }
-
-            if !parsed {
-                ctx.push(word);
-                ctx.parse_float();
-                let result = ctx.pop();
-                if !result.is_false() {
-                    objects.push(result);
-                    parsed = true;
-                }
-            }
-
-            if !parsed {
-                match ctx.namestack_lookup(word) {
-                    Some((name, value)) => {
-                        let obj = if name.as_word_ptr().is_some() {
-                            name
-                        } else {
-                            value
-                        };
-                        if let Some(word_ptr) = obj.as_word_ptr() {
-                            unsafe {
-                                if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
-                                    let mut is_primitive = false;
-                                    let mut is_parser = false;
-
-                                    for flag in (*flags).iter() {
-                                        if flag == SpecialObjects::get_false() {
-                                            break;
-                                        }
-                                        if flag == SpecialObjects::word_primitive() {
-                                            is_primitive = true;
-                                        }
-                                        if flag == SpecialObjects::word_parser() {
-                                            is_parser = true;
-                                        }
-                                    }
-                                    if is_parser {
-                                        if is_primitive {
-                                            let primitive_fn_raw =
-                                                (*word_ptr).body.as_int_unchecked();
-                                            let primitive_fn: fn(&mut Context) =
-                                                mem::transmute(primitive_fn_raw);
-                                            primitive_fn(ctx);
-                                            let result = ctx.pop();
-                                            objects.push(result);
-                                        } else {
-                                            let quot = (*word_ptr).body.as_quotation_ptr().unwrap();
-                                            ctx.execute(quot);
-                                            let result = ctx.pop();
-                                            if !result.is_false() {
-                                                objects.push(result);
-                                            }
-                                        }
-                                    } else {
-                                        objects.push(obj);
-                                    }
-                                } else {
-                                    objects.push(obj);
-                                }
-                            }
-                        } else {
-                            objects.push(obj);
-                        }
-                    }
-                    None => {
-                        objects.push(word);
-                    }
-                }
-            }
+        if map_tagged == self.gc.specials.word_map {
+            let word_ptr = obj_ptr as *const Word;
+            let name = unsafe { (*word_ptr).name };
+            Some((name, true))
+        } else if map_tagged == self.gc.specials.bytearray_map {
+            Some((tagged, false))
+        } else {
+            None
         }
     }
 
-    pub fn compile_string(&mut self, ctx: &mut Context) -> ObjectRef {
-        let mut objects = Vec::new();
+    pub fn print_stack(&self) {
+        let data_size = {
+            let data_ptr = self.data.current;
+            let data_start = self.data.start;
+            (data_ptr as usize - data_start as usize)
+                / std::mem::size_of::<Tagged>()
+        };
 
-        loop {
-            let (word, success) = self.next_word(&mut ctx.gc);
-            if !success {
-                break;
-            }
-
-            let mut parsed = false;
-
-            ctx.push(word);
-            ctx.parse_fixnum();
-            let result = ctx.pop();
-            if !result.is_false() {
-                objects.push(result);
-                parsed = true;
-            }
-
-            if !parsed {
-                ctx.push(word);
-                ctx.parse_float();
-                let result = ctx.pop();
-                if !result.is_false() {
-                    objects.push(result);
-                    parsed = true;
-                }
-            }
-
-            if !parsed {
-                match ctx.namestack_lookup(word) {
-                    Some((name, value)) => {
-                        let obj = if name.as_word_ptr().is_some() {
-                            name
-                        } else {
-                            value
-                        };
-                        if let Some(word_ptr) = obj.as_word_ptr() {
-                            unsafe {
-                                if let Some(flags) = (*word_ptr).flags.as_array_ptr() {
-                                    let mut is_primitive = false;
-                                    let mut is_parser = false;
-
-                                    for flag in (*flags).iter() {
-                                        if flag == SpecialObjects::get_false() {
-                                            break;
-                                        }
-                                        if flag == SpecialObjects::word_primitive() {
-                                            is_primitive = true;
-                                        }
-                                        if flag == SpecialObjects::word_parser() {
-                                            is_parser = true;
-                                        }
-                                    }
-                                    if is_parser {
-                                        if is_primitive {
-                                            let primitive_fn_raw =
-                                                (*word_ptr).body.as_int_unchecked();
-                                            let primitive_fn: fn(&mut Context) =
-                                                mem::transmute(primitive_fn_raw);
-                                            primitive_fn(ctx);
-                                            let result = ctx.pop();
-                                            objects.push(result);
-                                        } else {
-                                            let quot = (*word_ptr).body.as_quotation_ptr().unwrap();
-                                            ctx.execute(quot);
-                                            let result = ctx.pop();
-                                            if !result.is_false() {
-                                                objects.push(result);
-                                            }
-                                        }
-                                    } else {
-                                        objects.push(obj);
-                                    }
-                                } else {
-                                    objects.push(obj);
-                                }
-                            }
-                        } else {
-                            objects.push(obj);
-                        }
-                    }
-                    None => {
-                        objects.push(word);
-                    }
-                }
-            }
+        if data_size == 0 {
+            println!("Stack: []");
+            return;
         }
 
-        let array = unsafe { ctx.gc.allocate_array(objects.len()) };
-        for (i, obj) in objects.iter().enumerate() {
-            unsafe { (*array).set_element(i, *obj) };
+        print!("Stack: [");
+
+        for i in 0..data_size {
+            let idx = data_size - i - 1;
+            let elem = unsafe { *self.data.start.add(idx) };
+
+            if i > 0 {
+                print!(" ");
+            }
+
+            print!("{}", self.format_tagged(elem));
         }
 
-        let quotation = unsafe { ctx.gc.allocate_quotation(None) };
-        unsafe { (*quotation).body = ObjectRef::from_array_ptr(array) };
-
-        ObjectRef::from_quotation_ptr(quotation)
+        println!("]");
     }
 
-    pub fn set_text(&mut self, text: ObjectRef) {
-        self.text = text;
-        self.offset = ObjectRef::from_int(0);
-        self.line = ObjectRef::from_int(1);
-        self.column = ObjectRef::from_int(1);
+    fn format_tagged(&self, tagged: Tagged) -> String {
+        if tagged.is_int() {
+            return tagged.to_int().to_string();
+        }
+
+        if tagged.is_false() {
+            return "f".to_string();
+        }
+
+        if tagged == self.gc.specials.true_obj {
+            return "t".to_string();
+        }
+
+        if tagged == Tagged::null() {
+            return "null".to_string();
+        }
+
+        let obj_ptr = tagged.to_ptr();
+        let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+        let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
+
+        if map_tagged == self.gc.specials.bytearray_map {
+            let ba_ptr = tagged.to_ptr() as *const ByteArray;
+            let size = unsafe { (*ba_ptr).len() };
+            let s = unsafe { (*ba_ptr).as_str() };
+            return format!("ba{{({})\"{}\"}}", size, s);
+        }
+
+        if map_tagged == self.gc.specials.array_map {
+            let array_ptr = tagged.to_ptr() as *const Array;
+            let len = unsafe { (*array_ptr).len() };
+
+            let mut result = String::from("array[");
+
+            let display_count = std::cmp::min(len, 10);
+
+            for i in 0..display_count {
+                if i > 0 {
+                    result.push_str(" ");
+                }
+                let elem = unsafe { (*array_ptr).get(i) };
+                result.push_str(&self.format_tagged(elem));
+            }
+
+            if len > 10 {
+                result.push_str(&format!("..{}", len));
+            }
+
+            result.push_str("]");
+            return result;
+        }
+
+        if map_tagged == self.gc.specials.quotation_map {
+            let quot_ptr = tagged.to_ptr() as *const Quotation;
+            let array = unsafe { (*quot_ptr).body };
+            let array_ptr = array.to_ptr() as *const Array;
+            let len = unsafe { (*array_ptr).actual_length() };
+
+            let mut result = String::from("quot[");
+
+            let display_count = std::cmp::min(len, 10);
+
+            for i in 0..display_count {
+                if i > 0 {
+                    result.push_str(" ");
+                }
+                let elem = unsafe { (*array_ptr).get(i) };
+                result.push_str(&self.format_tagged(elem));
+            }
+
+            if len > 10 {
+                result.push_str(&format!("..{}", len));
+            }
+
+            result.push_str("]");
+            return result;
+        }
+
+        if map_tagged == self.gc.specials.word_map {
+            let word_ptr = tagged.to_ptr() as *const Word;
+            let name = unsafe { (*word_ptr).name };
+
+            let name_ptr = name.to_ptr() as *const ByteArray;
+            let name_str = unsafe { (*name_ptr).as_str() };
+
+            return format!("{}", name_str);
+        }
+
+        if map_tagged == self.gc.specials.box_map {
+            let box_ptr = tagged.to_ptr() as *const Box;
+            let value = unsafe { (*box_ptr).value };
+
+            return format!("\\ {}", &self.format_tagged(value));
+        }
+
+        let map_ptr = map_tagged.to_ptr() as *const Map;
+        let map_name = unsafe { (*map_ptr).name };
+
+        if map_name == Tagged::null() {
+            return format!("Object@{:p}", obj_ptr);
+        } else {
+            let name_ptr = map_name.to_ptr() as *const ByteArray;
+            let name_str = unsafe { (*name_ptr).as_str() };
+            return format!("{}@{:p}", name_str, obj_ptr);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::object::ObjectType;
+    use std::sync::Arc;
 
-    fn create_test_context() -> Context {
+    use parking_lot::Mutex;
+
+    use crate::{CodeHeap, Context, ContextConfig, Map, SLOT_PARENT, Tagged};
+
+    fn setup_context() -> Context {
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
         let config = ContextConfig {
-            datastack_size: 512,
-            retainstack_size: 512,
-            namestack_size: 512,
+            data_size: 100,
+            retian_size: 100,
+            name_size: 100,
+            call_size: 100,
+            handler_size: 100,
         };
-        Context::new(&config)
-    }
-
-    #[test]
-    fn test_push_pop_integers() {
-        let mut ctx = create_test_context();
-
-        unsafe {
-            let value = ObjectRef::from_int(42);
-            ctx.push(value);
-            let result = ctx.pop();
-            assert_eq!(result.as_int(), Some(42));
-
-            let values = vec![1, -5, 100, -42, 0];
-            for &v in &values {
-                ctx.push(ObjectRef::from_int(v));
-            }
-
-            for &expected in values.iter().rev() {
-                let result = ctx.pop();
-                assert_eq!(result.as_int(), Some(expected));
-            }
-        }
-    }
-
-    #[test]
-    fn test_stack_operations_with_heap_objects() {
-        let mut ctx = create_test_context();
-
-        unsafe {
-            let bytearray = ctx.gc.allocate_string("test string");
-            let bytearray_ref = ObjectRef::from_bytearray_ptr(bytearray);
-            ctx.push(bytearray_ref);
-
-            let array = ctx.gc.allocate_array(3);
-            (*array).set_element(0, ObjectRef::from_int(1));
-            (*array).set_element(1, ObjectRef::from_int(2));
-            (*array).set_element(2, ObjectRef::from_int(3));
-            let array_ref = ObjectRef::from_array_ptr(array);
-            ctx.push(array_ref);
-
-            let popped_array = ctx.pop();
-            assert_eq!(popped_array.get_type(), Some(ObjectType::Array));
-            let array_ptr = popped_array.as_array_ptr().unwrap();
-            assert_eq!((*array_ptr).get_element(0), Some(ObjectRef::from_int(1)));
-            assert_eq!((*array_ptr).get_element(1), Some(ObjectRef::from_int(2)));
-            assert_eq!((*array_ptr).get_element(2), Some(ObjectRef::from_int(3)));
-
-            let popped_bytearray = ctx.pop();
-            assert_eq!(popped_bytearray.get_type(), Some(ObjectType::ByteArray));
-            let bytearray_ptr = popped_bytearray.as_bytearray_ptr().unwrap();
-            assert_eq!((*bytearray_ptr).as_str(), Some("test string"));
-        }
-    }
-
-    #[test]
-    fn test_mixed_stack_operations() {
-        let mut ctx = create_test_context();
-
-        unsafe {
-            ctx.push(ObjectRef::from_int(42));
-
-            let bytearray = ctx.gc.allocate_string("mixed test");
-            ctx.push(ObjectRef::from_bytearray_ptr(bytearray));
-
-            ctx.push(ObjectRef::from_int(-7));
-
-            let last_int = ctx.pop();
-            assert_eq!(last_int.as_int(), Some(-7));
-
-            let heap_obj = ctx.pop();
-            assert_eq!(heap_obj.get_type(), Some(ObjectType::ByteArray));
-            let bytearray_ptr = heap_obj.as_bytearray_ptr().unwrap();
-            assert_eq!((*bytearray_ptr).as_str(), Some("mixed test"));
-
-            let first_int = ctx.pop();
-            assert_eq!(first_int.as_int(), Some(42));
-        }
-    }
-
-    #[test]
-    fn test_retain_stack_operations() {
-        let mut ctx = create_test_context();
-
-        ctx.push(ObjectRef::from_int(1));
-        ctx.push(ObjectRef::from_int(2));
-
-        ctx.data_retain();
-        assert_eq!(ctx.pop().as_int(), Some(1));
-
-        ctx.retain_data();
-        assert_eq!(ctx.pop().as_int(), Some(2));
-
-        unsafe {
-            let bytearray = ctx.gc.allocate_string("retain test");
-            let bytearray_ref = ObjectRef::from_bytearray_ptr(bytearray);
-
-            ctx.push(bytearray_ref);
-            ctx.data_retain();
-
-            let array = ctx.gc.allocate_array(1);
-            (*array).set_element(0, ObjectRef::from_int(42));
-            ctx.push(ObjectRef::from_array_ptr(array));
-
-            let popped_array = ctx.pop();
-            assert_eq!(popped_array.get_type(), Some(ObjectType::Array));
-
-            ctx.retain_data();
-            let restored = ctx.pop();
-            assert_eq!(restored.get_type(), Some(ObjectType::ByteArray));
-            let restored_ptr = restored.as_bytearray_ptr().unwrap();
-            assert_eq!((*restored_ptr).as_str(), Some("retain test"));
-        }
-    }
-
-    #[test]
-    fn test_pop_empty_stack() {
-        let mut ctx = create_test_context();
-        ctx.pop();
-        assert!(ctx.data.is_invalid());
-    }
-
-    #[test]
-    fn test_pop_after_collect() {
-        let mut ctx = create_test_context();
-        unsafe {
-            ctx.gc.collect();
-            let collect_0 = ctx.gc.total_allocated;
-            let bytearray1 = ctx.gc.allocate_string("string 1");
-            ctx.push(ObjectRef::from_bytearray_ptr(bytearray1));
-            ctx.gc.collect();
-            let collect_1 = ctx.gc.total_allocated;
-            let _ = ctx.pop();
-            ctx.gc.collect();
-            ctx.gc.collect();
-            let collect_2 = ctx.gc.total_allocated;
-
-            assert!(collect_0 == collect_2);
-            // TODO: inspect this, why `<` doens't work.
-            assert!(collect_2 <= collect_1);
-        }
-    }
-
-    #[test]
-    fn test_gc_interaction() {
-        let mut ctx = create_test_context();
-
-        unsafe {
-            let bytearray1 = ctx.gc.allocate_string("string 1");
-            let bytearray2 = ctx.gc.allocate_string("string 2");
-
-            ctx.push(ObjectRef::from_bytearray_ptr(bytearray1));
-            ctx.push(ObjectRef::from_bytearray_ptr(bytearray2));
-
-            ctx.gc.collect();
-
-            let popped2 = ctx.pop();
-            let popped1 = ctx.pop();
-
-            assert!(
-                popped2.as_bytearray_ptr().is_some(),
-                "Second object should be a ByteArray"
-            );
-            assert!(
-                popped1.as_bytearray_ptr().is_some(),
-                "First object should be a ByteArray"
-            );
-
-            let str2 = (*popped2.as_bytearray_ptr().unwrap()).as_str();
-            let str1 = (*popped1.as_bytearray_ptr().unwrap()).as_str();
-
-            assert_eq!(str2, Some("string 2"));
-            assert_eq!(str1, Some("string 1"));
-        }
+        Context::new(&config, code_heap)
     }
 
     #[test]
     fn test_namestack_basic_operations() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let name1 = ctx.gc.allocate_string("first");
-            let name2 = ctx.gc.allocate_string("second");
-            let obj1 = ObjectRef::from_int(42);
-            let obj2 = ObjectRef::from_int(84);
+        let mut ctx = setup_context();
 
-            ctx.namestack_push_or_replace(name1.into(), obj1);
-            assert_eq!(
-                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
-                Some(obj1)
-            );
+        let key1 = ctx.gc.allocate_string("key1");
+        let value1 = Tagged::from_int(42);
 
-            ctx.namestack_push_or_replace(name2.into(), obj2);
-            assert_eq!(
-                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
-                Some(obj2)
-            );
-            assert_eq!(
-                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
-                Some(obj1)
-            );
+        let key2 = ctx.gc.allocate_string("key2");
+        let value2 = Tagged::from_int(100);
 
-            let removed = ctx.namestack_remove(name1.into());
-            assert_eq!(removed, obj1);
-            assert_eq!(
-                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
-                None
-            );
-            assert_eq!(
-                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
-                Some(obj2)
-            );
+        let result = ctx.lookup(key1);
+        assert_eq!(result, (Tagged::ffalse(), Tagged::ffalse()));
+
+        let push_result = ctx.namestack_push(key1, value1);
+        assert_eq!(push_result, (key1, value1));
+
+        let result = ctx.lookup(key1);
+        assert_eq!(result, (key1, value1));
+
+        let result = ctx.lookup(key2);
+        assert_eq!(result, (Tagged::ffalse(), Tagged::ffalse()));
+
+        let push_result = ctx.namestack_push(key2, value2);
+        assert_eq!(push_result, (key2, value2));
+
+        let result1 = ctx.lookup(key1);
+        assert_eq!(result1, (key1, value1));
+
+        let result2 = ctx.lookup(key2);
+        assert_eq!(result2, (key2, value2));
+    }
+
+    #[test]
+    fn test_namestack_update_value() {
+        let mut ctx = setup_context();
+
+        let key = ctx.gc.allocate_string("test_key");
+        let value1 = Tagged::from_int(42);
+        let value2 = Tagged::from_int(100);
+
+        let push_result = ctx.namestack_push(key, value1);
+        assert_eq!(push_result, (key, value1));
+
+        let result = ctx.lookup(key);
+        assert_eq!(result, (key, value1));
+
+        let update_result = ctx.namestack_push(key, value2);
+        assert_eq!(update_result, (key, value1));
+
+        let result = ctx.lookup(key);
+        assert_eq!(result, (key, value2));
+    }
+
+    #[test]
+    fn test_namestack_remove() {
+        let mut ctx = setup_context();
+
+        let key1 = ctx.gc.allocate_string("key1");
+        let value1 = Tagged::from_int(42);
+
+        let key2 = ctx.gc.allocate_string("key2");
+        let value2 = Tagged::from_int(100);
+
+        ctx.namestack_push(key1, value1);
+        ctx.namestack_push(key2, value2);
+
+        assert_eq!(ctx.lookup(key1), (key1, value1));
+        assert_eq!(ctx.lookup(key2), (key2, value2));
+
+        let remove_result = ctx.namestack_remove(key1);
+        assert_eq!(remove_result, (key1, value1));
+
+        assert_eq!(ctx.lookup(key1), (Tagged::ffalse(), Tagged::ffalse()));
+        assert_eq!(ctx.lookup(key2), (key2, value2));
+
+        let remove_result = ctx.namestack_remove(key1);
+        assert_eq!(remove_result, (Tagged::ffalse(), Tagged::ffalse()));
+
+        let remove_result = ctx.namestack_remove(key2);
+        assert_eq!(remove_result, (key2, value2));
+
+        assert_eq!(ctx.lookup(key1), (Tagged::ffalse(), Tagged::ffalse()));
+        assert_eq!(ctx.lookup(key2), (Tagged::ffalse(), Tagged::ffalse()));
+    }
+
+    #[test]
+    fn test_namestack_reuse_slots() {
+        let mut ctx = setup_context();
+
+        let key1 = ctx.gc.allocate_string("key1");
+        let value1 = Tagged::from_int(42);
+
+        let key2 = ctx.gc.allocate_string("key2");
+        let value2 = Tagged::from_int(100);
+
+        let key3 = ctx.gc.allocate_string("key3");
+        let value3 = Tagged::from_int(200);
+
+        let push_result1 = ctx.namestack_push(key1, value1);
+        assert_eq!(push_result1, (key1, value1));
+
+        let push_result2 = ctx.namestack_push(key2, value2);
+        assert_eq!(push_result2, (key2, value2));
+
+        ctx.namestack_remove(key1);
+
+        let push_result3 = ctx.namestack_push(key3, value3);
+        assert_eq!(push_result3, (key3, value3));
+
+        assert_eq!(ctx.lookup(key1), (Tagged::ffalse(), Tagged::ffalse()));
+        assert_eq!(ctx.lookup(key2), (key2, value2));
+        assert_eq!(ctx.lookup(key3), (key3, value3));
+
+        let entry_ptr = ctx.name.start as *const (Tagged, Tagged);
+        let (stored_key, stored_value) = unsafe { *entry_ptr };
+
+        if stored_key != Tagged::ffalse() {
+            let key3_name_ptr = unsafe {
+                (stored_key.to_ptr() as *const crate::ByteArray)
+                    .as_ref()
+                    .unwrap()
+            };
+            let stored_name = unsafe { key3_name_ptr.as_str() };
+            assert_eq!(stored_name, "key3");
+            assert_eq!(stored_value, value3);
         }
     }
 
     #[test]
-    fn test_namestack_replace() {
-        let mut ctx = create_test_context();
+    fn test_namestack_with_words() {
+        let mut ctx = setup_context();
+
+        let name = ctx.gc.allocate_string("test_word");
+
+        let word = ctx.gc.allocate_object(ctx.gc.specials.word_map);
         unsafe {
-            let name = ctx.gc.allocate_string("test");
-            let obj1 = ObjectRef::from_int(42);
-            let obj2 = ObjectRef::from_int(84);
-
-            ctx.namestack_push_or_replace(name.into(), obj1);
-            assert_eq!(
-                ctx.namestack_lookup(name.into()).map(|(_, value)| value),
-                Some(obj1)
-            );
-
-            ctx.namestack_push_or_replace(name.into(), obj2);
-            assert_eq!(
-                ctx.namestack_lookup(name.into()).map(|(_, value)| value),
-                Some(obj2)
-            );
+            let word_ptr = word.to_ptr();
+            (*word_ptr).set_slot(0, name);
+            (*word_ptr).set_slot(1, Tagged::null());
+            (*word_ptr).set_slot(2, Tagged::null());
+            (*word_ptr).set_slot(3, Tagged::null());
         }
+
+        let value = Tagged::from_int(42);
+
+        let push_result = ctx.namestack_push(word, value);
+        assert_eq!(push_result, (word, value));
+
+        let result = ctx.lookup(word);
+        assert_eq!(result, (word, value));
+
+        let result = ctx.lookup(name);
+        assert_eq!(result.1, value);
+
+        assert!(result.0 == word || result.0 == name);
+
+        let remove_result = ctx.namestack_remove(word);
+        assert_eq!(remove_result.1, value);
+
+        assert_eq!(ctx.lookup(word), (Tagged::ffalse(), Tagged::ffalse()));
+        assert_eq!(ctx.lookup(name), (Tagged::ffalse(), Tagged::ffalse()));
     }
 
     #[test]
-    fn test_namestack_false_slots() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let name1 = ctx.gc.allocate_string("first");
-            let name2 = ctx.gc.allocate_string("second");
-            let name3 = ctx.gc.allocate_string("third");
-            let obj1 = ObjectRef::from_int(1);
-            let obj2 = ObjectRef::from_int(2);
-            let obj3 = ObjectRef::from_int(3);
+    fn test_namestack_shadowing() {
+        let mut ctx = setup_context();
 
-            ctx.namestack_push_or_replace(name1.into(), obj1);
-            ctx.namestack_push_or_replace(name2.into(), obj2);
-            ctx.namestack_push_or_replace(name3.into(), obj3);
+        let key = ctx.gc.allocate_string("shadowed_key");
+        let value1 = Tagged::from_int(42);
+        let value2 = Tagged::from_int(100);
 
-            let removed = ctx.namestack_remove(name2.into());
-            assert_eq!(removed, obj2);
+        let push_result1 = ctx.namestack_push(key, value1);
+        assert_eq!(push_result1, (key, value1));
 
-            let name4 = ctx.gc.allocate_string("fourth");
-            let obj4 = ObjectRef::from_int(4);
-            ctx.namestack_push_or_replace(name4.into(), obj4);
+        let push_result2 = ctx.namestack_push(key, value2);
+        assert_eq!(push_result2, (key, value1));
 
-            assert_eq!(
-                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
-                Some(obj1)
-            );
-            assert_eq!(
-                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
-                None
-            );
-            assert_eq!(
-                ctx.namestack_lookup(name3.into()).map(|(_, value)| value),
-                Some(obj3)
-            );
-            assert_eq!(
-                ctx.namestack_lookup(name4.into()).map(|(_, value)| value),
-                Some(obj4)
-            );
-        }
+        let result = ctx.lookup(key);
+        assert_eq!(result, (key, value2));
+
+        ctx.namestack_remove(key);
+
+        assert_eq!(ctx.lookup(key), (Tagged::ffalse(), Tagged::ffalse()));
     }
 
     #[test]
-    fn test_namestack_null_operations() {
-        let mut ctx = create_test_context();
+    #[should_panic(expected = "Namestack is full")]
+    fn test_namestack_overflow() {
+        let config = ContextConfig {
+            data_size: 10,
+            retian_size: 10,
+            name_size: 2,
+            call_size: 0,
+            handler_size: 0,
+        };
+        let code_heap = Arc::new(Mutex::new(CodeHeap::new()));
+        let mut ctx = Context::new(&config, code_heap);
 
-        ctx.namestack_push_or_replace(ObjectRef::null(), ObjectRef::from_int(42));
-        assert_eq!(ctx.namestack_lookup(ObjectRef::null()), None);
-        assert_eq!(ctx.namestack_remove(ObjectRef::null()), ObjectRef::null());
+        let key1 = ctx.gc.allocate_string("key1");
+        let key2 = ctx.gc.allocate_string("key2");
+        let key3 = ctx.gc.allocate_string("key3");
+        let value = Tagged::from_int(42);
+
+        ctx.namestack_push(key1, value);
+        ctx.namestack_push(key2, value);
+
+        ctx.namestack_push(key3, value);
     }
 
     #[test]
-    fn test_namestack_duplicate_names() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let name1 = ctx.gc.allocate_string("test");
-            let name2 = ctx.gc.allocate_string("test");
-            let obj1 = ObjectRef::from_int(1);
-            let obj2 = ObjectRef::from_int(2);
+    fn test_invalid_keys() {
+        let mut ctx = setup_context();
 
-            ctx.namestack_push_or_replace(name1.into(), obj1);
-            ctx.namestack_push_or_replace(name2.into(), obj2);
+        let int_key = Tagged::from_int(42);
+        let null_key = Tagged::null();
+        let value = Tagged::from_int(100);
 
-            assert_eq!(
-                ctx.namestack_lookup(name1.into()).map(|(_, value)| value),
-                Some(obj2)
-            );
-            assert_eq!(
-                ctx.namestack_lookup(name2.into()).map(|(_, value)| value),
-                Some(obj2)
-            );
-        }
+        assert_eq!(ctx.lookup(int_key), (Tagged::ffalse(), Tagged::ffalse()));
+        assert_eq!(ctx.lookup(null_key), (Tagged::ffalse(), Tagged::ffalse()));
+
+        assert_eq!(
+            ctx.namestack_push(int_key, value),
+            (Tagged::ffalse(), Tagged::ffalse())
+        );
+        assert_eq!(
+            ctx.namestack_push(null_key, value),
+            (Tagged::ffalse(), Tagged::ffalse())
+        );
+
+        assert_eq!(
+            ctx.namestack_remove(int_key),
+            (Tagged::ffalse(), Tagged::ffalse())
+        );
+        assert_eq!(
+            ctx.namestack_remove(null_key),
+            (Tagged::ffalse(), Tagged::ffalse())
+        );
     }
 
     #[test]
-    fn test_parser_basic() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("hello world");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
+    fn test_map_inheritance() {
+        let mut ctx = setup_context();
 
-            let (word1, success1) = (*parser).next_word(&mut ctx.gc);
-            assert!(success1);
-            assert_eq!((*word1.as_bytearray_ptr().unwrap()).as_str(), Some("hello"));
-            assert_eq!((*parser).line.as_int(), Some(1));
-            assert_eq!((*parser).column.as_int(), Some(6));
+        let parent_map = ctx.create_map("Parent", &[]);
+        let child_map = ctx.create_map(
+            "Child",
+            &[("Parent", SLOT_PARENT, parent_map, Tagged::ffalse())],
+        );
+        let grandchild_map = ctx.create_map(
+            "Grandchild",
+            &[("Parent", SLOT_PARENT, child_map, Tagged::ffalse())],
+        );
 
-            let (word2, success2) = (*parser).next_word(&mut ctx.gc);
-            assert!(success2);
-            assert_eq!((*word2.as_bytearray_ptr().unwrap()).as_str(), Some("world"));
+        let parent_obj = ctx.gc.allocate_object(parent_map);
+        let child_obj = ctx.gc.allocate_object(child_map);
+        let grandchild_obj = ctx.gc.allocate_object(grandchild_map);
 
-            let (_, success3) = (*parser).next_word(&mut ctx.gc);
-            assert!(!success3);
-        }
+        assert!(ctx.is_instance_of(parent_obj, parent_map));
+        assert!(!ctx.is_instance_of(parent_obj, child_map));
+
+        assert!(ctx.is_instance_of(child_obj, child_map));
+        assert!(ctx.is_instance_of(child_obj, parent_map));
+        assert!(!ctx.is_instance_of(child_obj, grandchild_map));
+
+        assert!(ctx.is_instance_of(grandchild_obj, grandchild_map));
+        assert!(ctx.is_instance_of(grandchild_obj, child_map));
+        assert!(ctx.is_instance_of(grandchild_obj, parent_map));
+
+        assert!(ctx.is_subtype_of(
+            parent_map.to_ptr() as *mut Map,
+            parent_map.to_ptr() as *mut Map
+        ));
+        assert!(!ctx.is_subtype_of(
+            parent_map.to_ptr() as *mut Map,
+            child_map.to_ptr() as *mut Map
+        ));
+
+        assert!(ctx.is_subtype_of(
+            child_map.to_ptr() as *mut Map,
+            child_map.to_ptr() as *mut Map
+        ));
+        assert!(ctx.is_subtype_of(
+            child_map.to_ptr() as *mut Map,
+            parent_map.to_ptr() as *mut Map
+        ));
+        assert!(!ctx.is_subtype_of(
+            child_map.to_ptr() as *mut Map,
+            grandchild_map.to_ptr() as *mut Map
+        ));
+
+        assert!(ctx.is_subtype_of(
+            grandchild_map.to_ptr() as *mut Map,
+            grandchild_map.to_ptr() as *mut Map
+        ));
+        assert!(ctx.is_subtype_of(
+            grandchild_map.to_ptr() as *mut Map,
+            child_map.to_ptr() as *mut Map
+        ));
+        assert!(ctx.is_subtype_of(
+            grandchild_map.to_ptr() as *mut Map,
+            parent_map.to_ptr() as *mut Map
+        ));
     }
 
     #[test]
-    fn test_parser_whitespace() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("word1\n  word2\t\tword3");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
+    #[should_panic]
+    fn test_unregistered_map() {
+        let mut ctx = setup_context();
 
-            let (word1, _) = (*parser).next_word(&mut ctx.gc);
-            assert_eq!((*word1.as_bytearray_ptr().unwrap()).as_str(), Some("word1"));
-            assert_eq!((*parser).line.as_int(), Some(1));
-            assert_eq!((*parser).column.as_int(), Some(6));
+        let unregistered_map = ctx.gc.create_map("Unregistered", &[]);
+        let registered_map = ctx.create_map("Registered", &[]);
 
-            let (word2, _) = (*parser).next_word(&mut ctx.gc);
-            assert_eq!((*word2.as_bytearray_ptr().unwrap()).as_str(), Some("word2"));
-            assert_eq!((*parser).line.as_int(), Some(2));
-            assert_eq!((*parser).column.as_int(), Some(8));
+        assert!(
+            !ctx.supertypes
+                .contains_key(&(unregistered_map.to_ptr() as *mut Map))
+        );
+        assert!(
+            ctx.supertypes
+                .contains_key(&(registered_map.to_ptr() as *mut Map))
+        );
 
-            let (word3, _) = (*parser).next_word(&mut ctx.gc);
-            assert_eq!((*word3.as_bytearray_ptr().unwrap()).as_str(), Some("word3"));
-            assert_eq!((*parser).line.as_int(), Some(2));
-        }
-    }
+        assert!(!ctx.is_subtype_of(
+            unregistered_map.to_ptr() as *mut Map,
+            registered_map.to_ptr() as *mut Map
+        ));
 
-    #[test]
-    fn test_parser_empty() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
+        ctx.register_map_inheritance(unregistered_map.to_ptr() as *mut Map);
 
-            let (_, success) = (*parser).next_word(&mut ctx.gc);
-            assert!(!success);
-        }
-    }
-
-    #[test]
-    fn test_parser_only_whitespace() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("  \t\n  ");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let (_, success) = (*parser).next_word(&mut ctx.gc);
-            assert!(!success);
-            assert_eq!((*parser).line.as_int(), Some(2));
-        }
-    }
-
-    #[test]
-    fn test_parse_until_basic() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("42 3.14 word ]");
-            let end = ctx.gc.allocate_string("]");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let result = (*parser).parse_until(&mut ctx, end.into());
-            assert!(!result.is_false());
-
-            let array = result.as_array_ptr().unwrap();
-            assert_eq!((*array).size.as_int(), Some(3));
-
-            let first = (*array).get_element(0).unwrap();
-            assert_eq!(first.as_int(), Some(42));
-
-            let second = (*array).get_element(1).unwrap();
-            assert!(second.as_float_ptr().is_some());
-
-            let third = (*array).get_element(2).unwrap();
-            assert_eq!((*third.as_bytearray_ptr().unwrap()).as_str(), Some("word"));
-        }
-    }
-
-    #[test]
-    fn test_parse_until_not_found() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("42 3.14 word");
-            let end = ctx.gc.allocate_string("]");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let initial_offset = (*parser).offset;
-            let result = (*parser).parse_until(&mut ctx, end.into());
-
-            assert!(result.is_false());
-            assert_eq!((*parser).offset, initial_offset);
-        }
-    }
-
-    #[test]
-    fn test_parse_until_namestack() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let name = ctx.gc.allocate_string("test-var");
-            let value = ObjectRef::from_int(999);
-            ctx.namestack_push_or_replace(name.into(), value);
-            assert_eq!(
-                ctx.namestack_lookup(name.into()).map(|(_, val)| val),
-                Some(value)
-            );
-
-            let text = ctx.gc.allocate_string("42 test-var ]");
-            let end = ctx.gc.allocate_string("]");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let result = (*parser).parse_until(&mut ctx, end.into());
-            assert!(!result.is_false());
-
-            let array = result.as_array_ptr().unwrap();
-            assert_eq!((*array).size.as_int(), Some(2));
-
-            let second = (*array).get_element(1).unwrap();
-            assert_eq!(second.as_int(), Some(999));
-        }
-    }
-
-    #[test]
-    fn test_read_until_basic() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("Hello World END test");
-            let end = ctx.gc.allocate_string("END");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let result = (*parser).read_until(&mut ctx.gc, end.into());
-            assert!(!result.is_false());
-
-            let result_str = (*result.as_bytearray_ptr().unwrap()).as_str();
-            assert_eq!(result_str, Some("Hello World "));
-
-            assert_eq!((*parser).offset.as_int(), Some(15));
-        }
-    }
-
-    #[test]
-    fn test_read_until_with_newlines() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("First line\nSecond line\nEND more");
-            let end = ctx.gc.allocate_string("END");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let result = (*parser).read_until(&mut ctx.gc, end.into());
-            assert!(!result.is_false());
-
-            let result_str = (*result.as_bytearray_ptr().unwrap()).as_str();
-            assert_eq!(result_str, Some("First line\nSecond line\n"));
-
-            // Check line and column counting
-            assert_eq!((*parser).line.as_int(), Some(3));
-            assert_eq!((*parser).column.as_int(), Some(4));
-        }
-    }
-
-    #[test]
-    fn test_read_until_pattern_not_found() {
-        let mut ctx = create_test_context();
-        unsafe {
-            let text = ctx.gc.allocate_string("Hello World");
-            let end = ctx.gc.allocate_string("END");
-            let parser = ctx.parser.as_ptr_unchecked() as *mut Parser;
-            (*parser).set_text(text.into());
-
-            let initial_offset = (*parser).offset;
-            let result = (*parser).read_until(&mut ctx.gc, end.into());
-
-            assert!(result.is_false());
-            assert_eq!((*parser).offset, initial_offset);
-        }
+        assert!(
+            ctx.supertypes
+                .contains_key(&(unregistered_map.to_ptr() as *mut Map))
+        );
+        assert!(ctx.is_subtype_of(
+            unregistered_map.to_ptr() as *mut Map,
+            unregistered_map.to_ptr() as *mut Map
+        ));
     }
 }

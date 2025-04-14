@@ -1,0 +1,203 @@
+@: \ @read-next (array-resize-push) ;
+
+@: s" \ " @skip-whitespace @read-until (array-resize-push) ;
+
+@: [ \ ] @parse-until array>quotation (array-resize-push) ;
+
+@: { \ } @parse-until (array-resize-push) ;
+
+@: : 
+    @read-next \ ) @read-until drop
+    f f \ ; @parse-until array>quotation 
+    9 (special) (new-boa) f namestack|insert 2drop ;
+
+: CHAR_NEWLINE ( -- char ) 2 <bytearray> dup 10 swap 0 set-u8 ;
+
+@: // CHAR_NEWLINE @read-until drop ;
+@: TODO: \ ; @read-until drop ;
+
+// map-slot: name kind value default
+// map: name data-slots slots prototype
+// array: length capacity <dynamic tagged>
+// bytearray: size <dynamic u8>
+// quotation: effect body
+// word: name effect tags body
+// handler: type quotation frame
+
+: dip ( x q -- x ) swap >r (call) r> ;
+: keep ( x q -- x ) over [ (call) ] dip ;
+: bi ( x p q -- ) [ keep ] dip (call) ;
+: bi* ( x y p q -- ) [ dip ] dip (call) ;
+: bi@ ( x y p -- ) dup bi* ;
+
+: array-index ( n -- idx ) 2 fixnum+ ;
+: array-nth ( array n -- ) array-index slot ;
+: array-set-nth ( x array n -- ) array-index set-slot ;
+: (1array) ( x arr -- arr ) [ 0 array-set-nth ] keep [ 1 swap 0 set-slot ] keep ;
+: (2array) ( x y arr -- arr ) [ 1 array-set-nth ] keep [ (1array) 2 swap 0 set-slot ] keep  ;
+: (3array) ( x y z arr -- arr ) [ 2 array-set-nth ] keep [  (2array) 3 swap 0 set-slot ] keep ;
+: (4array) ( x y z w arr -- arr ) [ 3 array-set-nth ] keep [ (3array) 4 swap 0 set-slot ] keep  ;
+: 1array ( x -- arr ) 1 <array> (1array) ;
+: 2array ( x y -- arr ) 2 <array> (2array) ;
+: 3array ( x y z -- arr ) 3 <array> (3array) ;
+: 4array ( x y z w -- arr ) 4 <array> (4array)  ;
+
+: word|tags-null? ( word -- ? ) 2 slot [ f ] [ t ] if ;
+: word|init-tags ( word -- ) 10 <array> swap 2 set-slot ; 
+: word|?init-tags ( word -- ) dup word|tags-null? [ word|init-tags ] [ drop ] if ;
+: word|body ( word -- body) 3 slot ;
+: word|set-body ( body word -- ) 3 set-slot ;
+: word|add-tag ( word tag -- ) 
+    swap [ word|?init-tags ] keep 
+    2 slot swap (array-resize-push) ;
+
+: word|map ( -- map ) 9 (special) ;
+: box|map ( -- map ) 11 (special) ;
+: fixnum|map ( -- map ) 4 (special) ;
+
+: parser-tag ( -- tag ) 13 (special) ;
+: inline-tag ( -- tag ) 14 (special) ;
+
+: new-empty-word ( name -- word ) f 10 <array> f word|map (new-boa) ;
+
+: define-word ( name -- word ) 
+    new-empty-word [ f namestack|insert 2drop ] keep ;
+
+: scan-new-word ( -- word ) @read-next define-word ;
+
+: ignore-stack-effect ( -- ) \ ) @read-until drop ;
+: parse-word-body ( -- quot ) \ ; @parse-until array>quotation ;
+
+
+: >box ( value -- box ) box|map (new-boa) ;
+: unbox ( box -- value ) 0 slot ;
+
+
+: define-push-word ( word item -- ) 1array array>quotation swap word|set-body ;
+: define-symbol ( word -- ) dup >box define-push-word ;
+
+TODO: errorhandling ;
+
+@: $: scan-new-word define-symbol ;
+: get ( symbol -- value ) unbox namestack|find dropd ;
+: set ( value symbol -- ) unbox swap namestack|insert 2drop ;
+
+$: last-word
+
+@: : scan-new-word [ last-word set ] keep ignore-stack-effect parse-word-body swap word|set-body ;
+
+: map|map ( -- map ) 0 (special) ;
+: fixnum|map ( -- map ) 4 (special) ;
+: array|map ( -- map ) 5 (special) ;
+: map-slot|map ( -- map ) 7 (special) ;
+: word|map ( -- map ) 9 (special) ;
+
+: array? ( obj -- ? ) obj>map array|map ref-eq? ;
+
+: parser-tag ( -- tag ) 13 (special) ;
+: inline-tag ( -- tag ) 14 (special) ;
+: recursive-tag ( -- tag ) 15 (special) ;
+
+@: inline last-word get inline-tag word|add-tag ;
+
+: dip ( x q -- x ) swap >r (call) r> ;
+: keep ( x q -- x ) over [ (call) ] dip ;
+: bi ( x p q -- ) [ keep ] dip (call) ;
+: bi* ( x y p q -- ) [ dip ] dip (call) ;
+: bi@ ( x y p -- ) dup bi* ;
+
+: 4drop ( x y z w -- ) 3drop drop ;
+
+: 2dip ( x y q -- x y ) swap [ dip ] dip ;
+: 3dip ( x y z q -- x y z ) swap [ 2dip ] dip ;
+: 4dip ( x y z w q -- x y z w ) swap [ 3dip ] dip ;
+
+: 2keep ( ..a x y q -- ..b x y ) [ 2dup ] dip 2dip ;
+: 3keep ( ..a x y z q -- ..b x y z ) [ 3dup ] dip 3dip ;
+: 4keep ( ..a x y z w q -- ..b x y z w ) [ 4dup ] dip 4dip ;
+
+: 2bi ( x y p q -- ) [ 2keep ] dip (call) ;
+
+: parse-word? ( name -- word/f ) namestack|find swap dup [ dropd ] [ 2drop f ] if ;
+: parse-next? ( -- int/word/f ) 
+    @read-next dup @parse-int 
+    dup [ dropd ] [ parse-word? ] if ;
+
+@: \\ @read-next parse-word? dup [ (array-resize-push) ] [ drop s" word not found" panic ] if ;
+@: \box @read-next parse-word? dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
+
+
+: rotd ( x y z w -- y z x w ) [ rot ] dip ;
+: -rotd ( x y z w -- z x y w ) [ -rot ] dip ; 
+
+: roll ( w x y z -- x y z w ) rotd swap ;
+: -roll ( x y z w -- w x y z ) swap -rotd ;
+
+: is-parsing? ( word -- ? ) parser-tag has-tag? ;
+: is-word? ( obj -- ? ) obj>map word|map ref-eq? ; 
+    
+: scan-next sss  -- int/word/exec/f ) 
+    parse-next? ;
+
+: + ( a b -- c ) fixnum+ ;
+: - ( a b -- c ) fixnum- ;
+: * ( a b -- c ) fixnum* ;
+: / ( a b -- c ) fixnum/ ;
+: = ( a b -- c ) fixnum= ;
+: != ( a b -- c ) fixnum!= ;
+: > ( a b -- c ) fixnum> ;
+: < ( a b -- c ) fixnum< ;
+: >= ( a b -- c ) fixnum>= ;
+: <= ( a b -- c ) fixnum<= ;
+
+
+: loop ( ... p -- ... )
+    [ (call) ] keep swap [ loop ] [ drop ] if ; 
+
+: while ( ... p q -- ... )
+    [ [ (call) ] keep ] dip rot
+    [ swap [ [ (call) ] keep ] dip swap while ] [ 2drop ] if ;
+
+: map-apply ( q src idx -- mapped ) 
+    array-nth swap (call) ; 
+
+: map ( ..a arr q -- ..a new ) 
+    swap dup [ dup 0 slot resize-array ] [ 0 slot ] bi 
+    0 swap [ 2dup < ] [ [ [ 
+        [ swap [ map-apply ] dip ] keep array-set-nth
+    ] 4keep 1 fixnum+ ] dip ] while rot [ 4drop ] dip ;
+
+: parse-until-no-link ( delim -- parsed ) ; 
+: new-const-data-slot ( name value default -- map-slot ) 
+    0 -rot map-slot|map (new-boa) ; 
+
+: new-data-slot ( name value default -- map-slot ) 
+    1 -rot map-slot|map (new-boa) ; 
+
+: new-basic-data-slot ( name -- slot ) f f new-data-slot ;
+
+
+: parse-basic-slots ( -- arr )  
+    10 <array> @read-next dup [ s" ;" bytearray\0= not ] [
+        dupd (array-resize-push) drop
+        @read-next dup
+    ] while drop ;
+
+: new-empty-map ( name -- map ) f f f f map|map (new-boa) ;
+
+@: type:
+    @read-next [ define-word ] [ new-empty-map ] bi 
+    parse-basic-slots [ new-basic-data-slot ] map
+    swap [ swap 
+        [ 2 set-slot ] [ 0 slot swap 1  set-slot ] 2bi 
+    ] keep define-push-word ;
+
+type: vec3 x y z ; 
+
+10 20 30 vec3 (new-boa)
+
+dup 0 slot fixnum>utf8 (println)
+dup 1 slot fixnum>utf8 (println)
+dup 2 slot fixnum>utf8 (println)
+
+
