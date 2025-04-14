@@ -572,7 +572,7 @@ impl Context {
             let ba_ptr = tagged.to_ptr() as *const ByteArray;
             let size = unsafe { (*ba_ptr).len() };
             let s = unsafe { (*ba_ptr).as_str() };
-            return format!("{{({})\"{}\"}}", size, s);
+            return format!("ba{{({})\"{}\"}}", size, s);
         }
 
         if map_tagged == self.gc.specials.array_map {

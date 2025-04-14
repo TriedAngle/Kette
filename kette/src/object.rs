@@ -52,13 +52,12 @@ pub struct Map {
     pub header: ObjectHeader,
     pub name: Tagged,       // ByteArray
     pub data_slots: Tagged, // Fixnum,
-    pub slot_count: Tagged, // Fixnum,
     pub slots: Tagged,      // Array
     pub prototype: Tagged,  // Prototype Instance
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Array {
     pub header: ObjectHeader,
     pub length: Tagged,
@@ -67,7 +66,7 @@ pub struct Array {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ByteArray {
     pub header: ObjectHeader,
     pub size: Tagged,
@@ -341,6 +340,21 @@ impl ByteArray {
             unsafe { std::slice::from_raw_parts(byte_ptr, self.len() - 1) };
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
+
+    pub unsafe fn equal(&self, rhs: &ByteArray) -> bool {
+        if self.len() != rhs.len() {
+            return false;
+        }
+
+        let len = self.len();
+        for i in 0..len {
+            if unsafe { self.get_byte(i) != rhs.get_byte(i) } {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 pub struct ArrayIterator<'a> {
@@ -365,16 +379,15 @@ impl<'a> Iterator for ArrayIterator<'a> {
 
 impl Map {
     pub unsafe fn get_slot_ptr(&self, idx: usize) -> *mut Slot {
-        debug_assert!(
-            idx < self.slot_count.to_int() as usize,
-            "Slot index out of bounds"
-        );
-
         if self.slots == Tagged::null() {
             return std::ptr::null_mut();
         }
 
         let slots_ptr = self.slots.to_ptr() as *mut Array;
+        debug_assert!(
+            idx < unsafe { (*slots_ptr).len() },
+            "Slot index out of bounds"
+        );
         let slot_tagged = unsafe { (*slots_ptr).get(idx) };
 
         slot_tagged.to_ptr() as *mut Slot
@@ -385,12 +398,12 @@ impl Map {
             return &[];
         }
 
-        let slot_count = self.slot_count.to_int() as usize;
+        let slots_ptr = self.slots.to_ptr() as *mut Array;
+        let slot_count = unsafe { (*slots_ptr).len() };
         if slot_count == 0 {
             return &[];
         }
 
-        let slots_ptr = self.slots.to_ptr() as *mut Array;
         let first_slot_tagged = unsafe { (*slots_ptr).get(0) };
         let first_slot_ptr = first_slot_tagged.to_ptr() as *mut Slot;
 
@@ -403,10 +416,12 @@ impl Map {
     }
 
     pub unsafe fn iter_slots<'a>(&'a self) -> MapSlotIterator<'a> {
+        let slots_ptr = self.slots.to_ptr() as *mut Array;
+        let slot_count = unsafe { (*slots_ptr).len() };
         MapSlotIterator {
             map: self,
             current: 0,
-            end: self.slot_count.to_int() as usize,
+            end: slot_count,
         }
     }
 
@@ -432,7 +447,8 @@ impl Map {
         name: &str,
         kind: Option<i64>,
     ) -> Option<*mut Slot> {
-        let slot_count = unsafe { (*map_ptr).slot_count.to_int() as usize };
+        let slots_ptr = unsafe { (*map_ptr).slots.to_ptr() } as *mut Array;
+        let slot_count = unsafe { (*slots_ptr).len() };
 
         if unsafe { (*map_ptr).slots == Tagged::null() } || slot_count == 0 {
             return None;
@@ -526,7 +542,8 @@ impl Map {
 
     pub unsafe fn get_parent_slots(&self) -> Vec<*mut Slot> {
         let mut parent_slots = Vec::new();
-        let slot_count = self.slot_count.to_int() as usize;
+        let slots_ptr = self.slots.to_ptr() as *mut Array;
+        let slot_count = unsafe { (*slots_ptr).len() };
 
         if self.slots == Tagged::null() || slot_count == 0 {
             return parent_slots;

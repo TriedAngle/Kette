@@ -310,9 +310,8 @@ impl GarbageCollector {
                     Tagged::from_int(1),
                     Tagged::from_int(0),
                 ),
-                ("slot_count", SLOT_CONST_DATA, Tagged::from_int(2), null_tag),
-                ("slots", SLOT_CONST_DATA, Tagged::from_int(3), null_tag),
-                ("prototype", SLOT_CONST_DATA, Tagged::from_int(4), null_tag),
+                ("slots", SLOT_CONST_DATA, Tagged::from_int(2), null_tag),
+                ("prototype", SLOT_CONST_DATA, Tagged::from_int(3), null_tag),
             ],
         );
 
@@ -606,12 +605,7 @@ impl GarbageCollector {
         Tagged::from_ptr(slot as *mut Object)
     }
 
-    pub fn allocate_map(
-        &mut self,
-        name: Tagged,
-        slots: Tagged,
-        slot_count: usize,
-    ) -> Tagged {
+    pub fn allocate_map(&mut self, name: Tagged, slots: Tagged) -> Tagged {
         let size = mem::size_of::<Map>();
         let layout =
             Layout::from_size_align(size, mem::align_of::<Map>()).unwrap();
@@ -621,6 +615,8 @@ impl GarbageCollector {
         unsafe {
             std::ptr::write_bytes(ptr, 0, size);
         }
+        let slots_ptr = slots.to_ptr() as *mut Array;
+        let slot_count = unsafe { (*slots_ptr).len() };
 
         let data_slots = self.calculate_data_slots(slots, slot_count);
 
@@ -630,7 +626,6 @@ impl GarbageCollector {
                 ObjectHeader::new(self.specials.map_map.to_ptr() as *mut Map);
             (*map).name = name;
             (*map).slots = slots;
-            (*map).slot_count = Tagged::from_int(slot_count as i64);
             (*map).data_slots = Tagged::from_int(data_slots as i64);
             (*map).prototype = Tagged::null(); // Initially null, will set below
         }
@@ -715,7 +710,11 @@ impl GarbageCollector {
             }
         }
 
-        self.allocate_map(name_tagged, slots_tagged, slots.len())
+        unsafe {
+            (*slots_ptr).length = Tagged::from_int(slots.len() as i64);
+        }
+
+        self.allocate_map(name_tagged, slots_tagged)
     }
 
     pub fn push_slot(
@@ -730,7 +729,6 @@ impl GarbageCollector {
 
         unsafe {
             let slots = (*map_ptr).slots;
-            let slot_count = (*map_ptr).slot_count.to_int() as usize;
 
             if slots == Tagged::null() {
                 let new_slots = self.allocate_array(1);
@@ -744,9 +742,9 @@ impl GarbageCollector {
 
                 let new_slots_ptr = new_slots.to_ptr() as *mut Array;
                 (*new_slots_ptr).set(0, new_slot);
+                (*new_slots_ptr).length = Tagged::from_int(1);
 
                 (*map_ptr).slots = new_slots;
-                (*map_ptr).slot_count = Tagged::from_int(1);
 
                 if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
                     (*map_ptr).data_slots = Tagged::from_int(1);
@@ -758,10 +756,11 @@ impl GarbageCollector {
             }
 
             let mut slots_ptr = slots.to_ptr() as *mut Array;
-            let slots_len = (*slots_ptr).capacity();
+            let slots_cap = (*slots_ptr).capacity();
+            let slot_count = (*slots_ptr).len();
 
-            if slot_count >= slots_len {
-                let new_capacity = std::cmp::max(1, slots_len * 2);
+            if slot_count >= slots_cap {
+                let new_capacity = std::cmp::max(1, slots_cap * 2);
                 let new_slots = self.allocate_array(new_capacity);
                 let new_slots_ptr = new_slots.to_ptr() as *mut Array;
 
@@ -783,7 +782,7 @@ impl GarbageCollector {
             );
 
             (*slots_ptr).set(slot_count, new_slot);
-            (*map_ptr).slot_count = Tagged::from_int((slot_count + 1) as i64);
+            (*slots_ptr).length = Tagged::from_int(slot_count as i64 + 1);
 
             if kind == SLOT_CONST_DATA || kind == SLOT_DATA {
                 let current_data_slots =
@@ -801,13 +800,13 @@ impl GarbageCollector {
 
         unsafe {
             let slots = (*map_ptr).slots;
-            let slot_count = (*map_ptr).slot_count.to_int() as usize;
 
-            if slots == Tagged::null() || slot_count == 0 {
+            if slots.is_false() {
                 return false;
             }
 
             let slots_ptr = slots.to_ptr() as *mut Array;
+            let slot_count = (*slots_ptr).len();
             let mut found_idx = None;
             let mut was_data_slot = false;
 
@@ -834,8 +833,7 @@ impl GarbageCollector {
                     (*slots_ptr).set(i, next_slot);
                 }
 
-                (*map_ptr).slot_count =
-                    Tagged::from_int((slot_count - 1) as i64);
+                (*slots_ptr).length = Tagged::from_int((slot_count - 1) as i64);
 
                 if was_data_slot {
                     let current_data_slots =
@@ -1078,7 +1076,7 @@ impl GarbageCollector {
 
         unsafe {
             (*map_ptr).slots = slots_array;
-            (*map_ptr).slot_count = Tagged::from_int(slots.len() as i64);
+            (*slots_ptr).length = Tagged::from_int(slots.len() as i64)
         }
 
         if map == self.specials.false_map
@@ -1138,7 +1136,7 @@ mod tests {
 
         let name = gc.allocate_string("TestObject");
         let slots = gc.allocate_array(0);
-        let map = gc.allocate_map(name, slots, 0);
+        let map = gc.allocate_map(name, slots);
 
         let obj = gc.allocate_object(map);
 
@@ -1343,19 +1341,20 @@ mod tests {
             Tagged::ffalse(),
         );
 
+        let slots_ptr = slots_array.to_ptr() as *mut Array;
         unsafe {
-            let slots_ptr = slots_array.to_ptr() as *mut Array;
             (*slots_ptr).set(0, name_slot);
             (*slots_ptr).set(1, age_slot);
+            (*slots_ptr).length = Tagged::from_int(2);
         }
 
-        let map = gc.allocate_map(name, slots_array, 2);
+        let map = gc.allocate_map(name, slots_array);
 
         unsafe {
             let map_ptr = map.to_ptr() as *mut Map;
 
             assert_eq!((*map_ptr).data_slots.to_int(), 2);
-            assert_eq!((*map_ptr).slot_count.to_int(), 2);
+            assert_eq!((*slots_ptr).len(), 2);
 
             let name_ptr = (*map_ptr).name.to_ptr() as *mut ByteArray;
             assert_eq!((*name_ptr).as_str(), "Person");
@@ -1397,7 +1396,7 @@ mod tests {
             let map_ptr = person_map.to_ptr() as *mut Map;
 
             assert_eq!((*map_ptr).data_slots.to_int(), 2);
-            assert_eq!((*map_ptr).slot_count.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 2);
 
             let name_ptr = (*map_ptr).name.to_ptr() as *mut ByteArray;
             assert_eq!((*name_ptr).as_str(), "Person");
@@ -1444,7 +1443,7 @@ mod tests {
             let map_ptr = person_map.to_ptr() as *mut Map;
 
             assert_eq!((*map_ptr).data_slots.to_int(), 2);
-            assert_eq!((*map_ptr).slot_count.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 2);
 
             let slots = (*map_ptr).slots;
             let slots_ptr = slots.to_ptr() as *mut Array;
@@ -1473,7 +1472,7 @@ mod tests {
         unsafe {
             let map_ptr = person_map.to_ptr() as *mut Map;
             assert_eq!((*map_ptr).data_slots.to_int(), 2);
-            assert_eq!((*map_ptr).slot_count.to_int(), 3);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 3);
         }
     }
 
@@ -1497,7 +1496,7 @@ mod tests {
             let map_ptr = person_map.to_ptr() as *mut Map;
 
             assert_eq!((*map_ptr).data_slots.to_int(), 2);
-            assert_eq!((*map_ptr).slot_count.to_int(), 2);
+            // assert_eq!((*map_ptr).slot_count.to_int(), 2);
 
             let slots = (*map_ptr).slots;
             let slots_ptr = slots.to_ptr() as *mut Array;

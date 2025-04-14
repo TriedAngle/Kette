@@ -10,6 +10,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("2dup", "x y -- x y x y", dup2),
         ("3dup", "x y z -- x y z x y z", dup3),
         ("4dup", "x y z w -- x y z w x y z w", dup4),
+        ("dupd", "x y -- x x y", dupd),
         ("drop", "x -- ", drop),
         ("2drop", "x -- ", drop2),
         ("3drop", "x -- ", drop3),
@@ -49,6 +50,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("resize-array", "array n -- new", resize_array),
         ("resize-bytearray", "bytearray n -- new", resize_bytearray),
         ("(array-resize-push)", "array obj -- array", array_push),
+        ("bytearray=", "ba1 ba2 -- ?", bytearray_eq),
+        ("bytearray\\0=", "ba1 ba2 -- ?", bytearray_str_eq),
         ("obj>map", "obj -- map", get_map),
         ("obj>ptr", "obj -- ptr", get_ptr),
         ("ptr>obj", "obj -- ptr", ptr_to_obj),
@@ -401,6 +404,28 @@ fn array_push(ctx: &mut Context) {
     ctx.push(array);
 }
 
+fn bytearray_eq(ctx: &mut Context) {
+    let ba2_obj = ctx.pop();
+    let ba1_obj = ctx.pop();
+    let ba2 = ba2_obj.to_ptr() as *const ByteArray;
+    let ba1 = ba1_obj.to_ptr() as *const ByteArray;
+
+    let is = unsafe { (*ba1).equal(&*ba2) };
+    push_bool(ctx, is);
+}
+
+fn bytearray_str_eq(ctx: &mut Context) {
+    let ba2_obj = ctx.pop();
+    let ba1_obj = ctx.pop();
+    let ba2 = ba2_obj.to_ptr() as *const ByteArray;
+    let ba1 = ba1_obj.to_ptr() as *const ByteArray;
+    let s2 = unsafe { (*ba2).as_str() };
+    let s1 = unsafe { (*ba1).as_str() };
+
+    let is = s2.eq(s1);
+    push_bool(ctx, is);
+}
+
 fn get_map(ctx: &mut Context) {
     let obj = ctx.pop();
     if obj.is_int() {
@@ -624,6 +649,14 @@ fn dup4(ctx: &mut Context) {
     ctx.push(obj2);
     ctx.push(obj3);
     ctx.push(obj4);
+}
+
+fn dupd(ctx: &mut Context) {
+    let y = ctx.pop();
+    let x = ctx.pop();
+    ctx.push(x);
+    ctx.push(x);
+    ctx.push(y);
 }
 
 fn drop(ctx: &mut Context) {
