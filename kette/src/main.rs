@@ -103,7 +103,17 @@ fn load_and_execute_file(
     let quot_ptr = quotation.to_ptr() as *mut Quotation;
     unsafe { (*quot_ptr).body = tokens };
     ctx.execute(quotation.to_ptr() as *const Quotation);
+    let codes = ctx.codes.lock();
+    let code = codes
+        .get_code_for_quotation(quotation.to_ptr() as _)
+        .unwrap();
 
+    print_stack(ctx);
+    let tokens_ptr = tokens.to_ptr() as *const Array;
+
+    let tokens_slice = unsafe { (*tokens_ptr).as_slice_len() };
+    log::info!("parsed: {:?}", tokens_slice);
+    log::info!("compiled: {:?}", code);
     Ok(())
 }
 
@@ -161,7 +171,7 @@ fn execute_string(ctx: &mut Context, input: &str) {
     let tokens_ptr = tokens.to_ptr() as *const Array;
 
     let tokens_slice = unsafe { (*tokens_ptr).as_slice_len() };
-    log::debug!("parsed: {:?}", tokens_slice);
+    log::info!("parsed: {:?}", tokens_slice);
     log::info!("compiled: {:?}", code);
 }
 

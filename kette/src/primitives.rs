@@ -7,6 +7,9 @@ pub fn add_primitives(ctx: &mut Context) {
     let words: &[(&str, &str, StackFn)] = &[
         // stack
         ("dup", "x -- x x", dup),
+        ("2dup", "x y -- x y x y", dup2),
+        ("3dup", "x y z -- x y z x y z", dup3),
+        ("4dup", "x y z w -- x y z w x y z w", dup4),
         ("drop", "x -- ", drop),
         ("2drop", "x -- ", drop2),
         ("3drop", "x -- ", drop3),
@@ -27,8 +30,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("fixnum<", "a b -- ?", fixnum_lt),
         ("fixnum>=", "a b -- ?", fixnum_geq),
         ("fixnum<=", "a b -- ?", fixnum_leq),
-        ("is-fixnum?", "obj -- ?", fixnum_is),
-        ("is-2fixnum?", "obj1 obj2 -- ?", fixnum_is2),
+        ("fixnum?", "obj -- ?", fixnum_is),
+        ("2fixnum?", "obj1 obj2 -- ?", fixnum_is2),
         // general
         ("if", "? t-branch f-branch -- t/f-called", iff),
         ("not", " ? -- !? ", not),
@@ -61,6 +64,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("@print-stack", " -- ", print_stack),
         (">r", "a -- ", data_to_retain),
         ("r>", " -- a", retain_to_data),
+        ("r@", " -- ", retain_copy),
         ("depth", " -- n", data_depth),
         ("rdepth", " -- n", retain_depth),
         ("namestack|insert", "k v -- old-k old-v", namestack_push),
@@ -586,6 +590,42 @@ fn dup(ctx: &mut Context) {
     ctx.push(obj);
 }
 
+fn dup2(ctx: &mut Context) {
+    let obj2 = ctx.pop();
+    let obj1 = ctx.pop();
+    ctx.push(obj1);
+    ctx.push(obj2);
+    ctx.push(obj1);
+    ctx.push(obj2);
+}
+
+fn dup3(ctx: &mut Context) {
+    let obj3 = ctx.pop();
+    let obj2 = ctx.pop();
+    let obj1 = ctx.pop();
+    ctx.push(obj1);
+    ctx.push(obj2);
+    ctx.push(obj3);
+    ctx.push(obj1);
+    ctx.push(obj2);
+    ctx.push(obj3);
+}
+
+fn dup4(ctx: &mut Context) {
+    let obj4 = ctx.pop();
+    let obj3 = ctx.pop();
+    let obj2 = ctx.pop();
+    let obj1 = ctx.pop();
+    ctx.push(obj1);
+    ctx.push(obj2);
+    ctx.push(obj3);
+    ctx.push(obj4);
+    ctx.push(obj1);
+    ctx.push(obj2);
+    ctx.push(obj3);
+    ctx.push(obj4);
+}
+
 fn drop(ctx: &mut Context) {
     let _ = ctx.pop();
 }
@@ -647,6 +687,12 @@ fn data_to_retain(ctx: &mut Context) {
 
 fn retain_to_data(ctx: &mut Context) {
     ctx.retain_data();
+}
+
+fn retain_copy(ctx: &mut Context) {
+    let val = ctx.retain_pop();
+    ctx.retain_push(val);
+    ctx.push(val);
 }
 
 fn data_depth(ctx: &mut Context) {

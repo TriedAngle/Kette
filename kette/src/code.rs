@@ -132,11 +132,11 @@ impl Context {
     pub fn execute_word(&mut self, word: *const Word) {
         let name = unsafe { (*word).name.as_str() };
         if let Some(fun) = self.word_primitive(Tagged::from_ptr(word as _)) {
-            log::debug!("call primitive: {:?}", name);
+            log::trace!("call primitive: {:?}", name);
             fun(self);
             return;
         }
-        log::debug!("call non primitive: {:?}", name);
+        log::trace!("call non primitive: {:?}", name);
 
         let quot_obj = unsafe { (*word).body };
         let quot = quot_obj.to_ptr() as _;
