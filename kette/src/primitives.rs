@@ -4,6 +4,7 @@ use crate::{
 };
 
 pub fn add_primitives(ctx: &mut Context) {
+    #[rustfmt::skip]
     let words: &[(&str, &str, StackFn)] = &[
         // stack
         ("dup", "x -- x x", dup),
@@ -14,11 +15,13 @@ pub fn add_primitives(ctx: &mut Context) {
         ("drop", "x -- ", drop),
         ("2drop", "x -- ", drop2),
         ("3drop", "x -- ", drop3),
+        ("dropd", "x y -- x", dropd),
         ("swap", "x y -- y x", swap),
+        ("swapd", "x y z -- y x z", swapd),
         ("over", "x y -- x y x", over),
         ("rot", "x y z -- y z x", rot),
         ("-rot", "x y z -- z x y", rot_neg),
-        ("dropd", "x y -- x", dropd),
+        ("pick", "x y z -- x y z x", pick),
         // fixnum
         ("fixnum+", "a b -- c", fixnum_add),
         ("fixnum-", "a b -- c", fixnum_sub),
@@ -49,6 +52,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("<bytearray>", "n -- bytearray", create_bytearray),
         ("resize-array", "array n -- new", resize_array),
         ("resize-bytearray", "bytearray n -- new", resize_bytearray),
+        ("(copy-array)", "src dst src-off dst-off size --", copy_array),
+        ("(copy-bytearray)", "src dst src-off dst-off size --", copy_bytearray),
         ("(array-resize-push)", "array obj -- array", array_push),
         ("bytearray=", "ba1 ba2 -- ?", bytearray_eq),
         ("bytearray\\0=", "ba1 ba2 -- ?", bytearray_str_eq),
@@ -390,6 +395,50 @@ fn resize_bytearray(ctx: &mut Context) {
     ctx.push(new)
 }
 
+fn copy_array(ctx: &mut Context) {
+    let size = pop1num(ctx) as usize;
+    let dst_offset = pop1num(ctx) as usize;
+    let src_offset = pop1num(ctx) as usize;
+    let dst_obj = ctx.pop();
+    let src_obj = ctx.pop();
+
+    unsafe {
+        let src_array = src_obj.to_ptr() as *const Array;
+        let dst_array = dst_obj.to_ptr() as *mut Array;
+
+        let src_ptr = (src_array as *mut u8)
+            .add(std::mem::size_of::<Array>())
+            .add(src_offset * std::mem::size_of::<Tagged>());
+        let dst_ptr = (dst_array as *mut u8)
+            .add(std::mem::size_of::<Array>())
+            .add(dst_offset * std::mem::size_of::<Tagged>());
+
+        std::ptr::copy(src_ptr, dst_ptr, size * std::mem::size_of::<Tagged>());
+    }
+}
+
+fn copy_bytearray(ctx: &mut Context) {
+    let size = pop1num(ctx) as usize;
+    let dst_offset = pop1num(ctx) as usize;
+    let src_offset = pop1num(ctx) as usize;
+    let dst_obj = ctx.pop();
+    let src_obj = ctx.pop();
+
+    unsafe {
+        let src_array = src_obj.to_ptr() as *const ByteArray;
+        let dst_array = dst_obj.to_ptr() as *mut ByteArray;
+
+        let src_ptr = (src_array as *mut u8)
+            .add(std::mem::size_of::<ByteArray>())
+            .add(src_offset);
+        let dst_ptr = (dst_array as *mut u8)
+            .add(std::mem::size_of::<ByteArray>())
+            .add(dst_offset);
+
+        std::ptr::copy(src_ptr, dst_ptr, size);
+    }
+}
+
 fn array_push(ctx: &mut Context) {
     let obj = ctx.pop();
     let mut array = ctx.pop();
@@ -674,11 +723,26 @@ fn drop3(ctx: &mut Context) {
     let _ = ctx.pop();
 }
 
+fn dropd(ctx: &mut Context) {
+    let a = ctx.pop();
+    let _ = ctx.pop();
+    ctx.push(a);
+}
+
 fn swap(ctx: &mut Context) {
     let y = ctx.pop();
     let x = ctx.pop();
     ctx.push(y);
     ctx.push(x);
+}
+
+fn swapd(ctx: &mut Context) {
+    let z = ctx.pop();
+    let y = ctx.pop();
+    let x = ctx.pop();
+    ctx.push(y);
+    ctx.push(x);
+    ctx.push(z);
 }
 
 fn over(ctx: &mut Context) {
@@ -708,10 +772,14 @@ fn rot_neg(ctx: &mut Context) {
     ctx.push(y);
 }
 
-fn dropd(ctx: &mut Context) {
-    let a = ctx.pop();
-    let _ = ctx.pop();
-    ctx.push(a);
+fn pick(ctx: &mut Context) {
+    let z = ctx.pop();
+    let y = ctx.pop();
+    let x = ctx.pop();
+    ctx.push(x);
+    ctx.push(y);
+    ctx.push(z);
+    ctx.push(x);
 }
 
 fn data_to_retain(ctx: &mut Context) {
