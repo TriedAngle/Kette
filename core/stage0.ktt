@@ -150,6 +150,13 @@ $: last-word
 : >= ( a b -- c ) fixnum>= ;
 : <= ( a b -- c ) fixnum<= ;
 
+: bytearray-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot (copy-bytearray) ;
+
+: merge|size&offset ( src dst -- size offset ) swap [ swap [ 0 slot ] bi@ fixnum+ ] keep 0 slot ;
+
+: <|> ( s1 s2 -- s1s2 ) 
+    2dup merge|size&offset [ swapd resize-bytearray ] dip
+    swap [ swap bytearray-copy-full ] keep ;
 
 : loop ( ... p -- ... )
     [ (call) ] keep swap [ loop ] [ drop ] if ; 
@@ -176,6 +183,12 @@ $: last-word
 
 : new-basic-data-slot ( name -- slot ) f f new-data-slot ;
 
+: read-accessor-name ( name -- accessor-name ) 
+    ;
+: create-read-accessors ( data-slots -- read-slots )
+    [ ] ;
+
+: create-write-accessors ( data-slots -- write-slots ) ;
 
 : parse-basic-slots ( -- arr )  
     10 <array> @read-next dup [ s" ;" bytearray\0= not ] [
