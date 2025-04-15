@@ -1,20 +1,18 @@
-@: \ @read-next (array-resize-push) ;
+@: s" @read-next " @skip-whitespace @read-until (array-resize-push) ;
 
-@: s" \ " @skip-whitespace @read-until (array-resize-push) ;
+@: [ s" ]" @parse-until array>quotation (array-resize-push) ;
 
-@: [ \ ] @parse-until array>quotation (array-resize-push) ;
-
-@: { \ } @parse-until (array-resize-push) ;
+@: { s" }" @parse-until (array-resize-push) ;
 
 @: : 
-    @read-next \ ) @read-until drop
-    f f \ ; @parse-until array>quotation 
+    @read-next s" )" @read-until drop
+    f f s" ;" @parse-until array>quotation 
     9 (special) (new-boa) f namestack|insert 2drop ;
 
 : CHAR_NEWLINE ( -- char ) 2 <bytearray> dup 10 swap 0 set-u8 ;
 
 @: // CHAR_NEWLINE @read-until drop ;
-@: TODO: \ ; @read-until drop ;
+@: TODO: s" ;" @read-until drop ;
 
 // map-slot: name kind value default
 // map: name data-slots slots prototype
@@ -45,13 +43,13 @@
 : word|tags-null? ( word -- ? ) 2 slot [ f ] [ t ] if ;
 : word|init-tags ( word -- ) 10 <array> swap 2 set-slot ; 
 : word|?init-tags ( word -- ) dup word|tags-null? [ word|init-tags ] [ drop ] if ;
-: word|body ( word -- body) 3 slot ;
+: word|body ( word -- body ) 3 slot ;
 : word|set-body ( body word -- ) 3 set-slot ;
 : word|add-tag ( word tag -- ) 
     swap [ word|?init-tags ] keep 
     2 slot swap (array-resize-push) ;
 
-: word|map ( -- map ) 9 (special) ;
+: word-map ( -- map ) 9 (special) ;
 : box|map ( -- map ) 11 (special) ;
 : fixnum|map ( -- map ) 4 (special) ;
 
@@ -65,8 +63,8 @@
 
 : scan-new-word ( -- word ) @read-next define-word ;
 
-: ignore-stack-effect ( -- ) \ ) @read-until drop ;
-: parse-word-body ( -- quot ) \ ; @parse-until array>quotation ;
+: ignore-stack-effect ( -- ) s" )" @read-until drop ;
+: parse-word-body ( -- quot ) s" ;" @parse-until array>quotation ;
 
 
 : >box ( value -- box ) box|map (new-boa) ;
@@ -98,7 +96,7 @@ $: last-word
 
 : parser-tag ( -- tag ) 13 (special) ;
 : inline-tag ( -- tag ) 14 (special) ;
-: recursive-tag ( -- tag ) 15 (special) ;
+
 
 @: inline last-word get inline-tag word|add-tag ;
 
@@ -127,10 +125,7 @@ $: last-word
     @read-next dup @parse-int 
     dup [ dropd ] [ parse-word? ] if ;
 
-@: \\ @read-next parse-word? 
-    dup [ (array-resize-push) ] [ drop s" word not found" panic ] if ;
-
-@: \box @read-next parse-word? 
+@: \ @read-next parse-word? 
     dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
 
 
@@ -143,7 +138,7 @@ $: last-word
 : is-parsing? ( word -- ? ) parser-tag has-tag? ;
 : is-word? ( obj -- ? ) obj>map word|map ref-eq? ; 
     
-: scan-next sss  -- int/word/exec/f ) 
+: scan-next ( sss  -- int/word/exec/f ) 
     parse-next? ;
 
 : + ( a b -- c ) fixnum+ ;
@@ -192,7 +187,6 @@ $: last-word
         [ swap [ map-apply ] dip ] keep array-set-nth
     ] 4keep 1 fixnum+ ] dip ] while rot [ 4drop ] dip ;
 
-: parse-until-no-link ( delim -- parsed ) ; 
 : new-const-data-slot ( name value default -- map-slot ) 
     0 -rot map-slot|map (new-boa) ; 
 
@@ -201,14 +195,32 @@ $: last-word
 
 : new-basic-data-slot ( name -- slot ) f f new-data-slot ;
 
-: read-accessor-name ( name -- accessor-name ) 
-    ;
+: read-accessor-name ( name -- accessor-name ) s" >>" bytearray<|> ;
+
+: write-accessor-name (name -- accessor-name ) s" >>" swap bytearray<|> ;
+
+: read-accessor-method-body ( idx -- body ) 
+    \ self unbox swap \ slot unbox 3array array>quotation ;
+
+: write-accessor-method-body ( idx -- body )
+    \ self unbox swap \ set-slot unbox 3array array>quotation ;
+
+
+1 read-accessor-method-body
+1 write-accessor-method-body
+@print-stack 2drop
+
+: new-read-accessor-method ( name idx -- )
+    [ read-accessor-name ] dip  ;
+
+: new-read-accessor ( name idx -- ) ;
 
 : create-read-accessors ( data-slots -- read-slots )
     [ ] ;
 
 : create-write-accessors ( data-slots -- write-slots ) ;
 
+TODO: implement accessor methods and functions ;
 : parse-basic-slots ( -- arr )  
     10 <array> @read-next dup [ s" ;" bytearray\0= not ] [
         dupd (array-resize-push) drop

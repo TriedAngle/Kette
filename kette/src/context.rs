@@ -16,6 +16,7 @@ pub struct Context {
     pub namestack: Tagged,
     pub callstack: Tagged,
     pub handlerstack: Tagged,
+    pub self_obj: Tagged,
 
     pub gc: GarbageCollector,
     pub codes: Arc<Mutex<CodeHeap>>,
@@ -110,6 +111,7 @@ impl Context {
             handlers,
             codes,
             gc,
+            self_obj: Tagged::null(),
             supertypes,
         };
 

@@ -42,6 +42,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("array>quotation", "array -- q", array_to_quotation),
         ("has-tag?", "word tag -- f", has_tag),
         // objects
+        ("self", " -- self", get_self),
         ("send-self", "..a obj name -- ..b", send_self),
         ("send-super", "..a obj name -- ..b", send_super),
         ("(clone)", "a -- b", clone),
@@ -296,6 +297,11 @@ fn find_and_execute_method(
     } else {
         ctx.push(Tagged::ffalse());
     }
+}
+
+pub fn get_self(ctx: &mut Context) {
+    let obj = ctx.self_obj;
+    ctx.push(obj);
 }
 
 pub fn send_self(ctx: &mut Context) {
