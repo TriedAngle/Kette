@@ -164,13 +164,13 @@ $: last-word
     swap [ swap [ 0 slot ] bi@ fixnum+ ] keep 0 slot ;
 
 : bytearray-copy-full ( src dst dst-offset -- ) 
-    pick 0 slot 0 -rot (copy-bytearray) ;
+    pick 0 slot 0 -rot copy-bytearray ;
 
 : bytearray<|> ( s1 s2 -- s1s2 ) 
     2dup merge|size&offset [ swapd resize-bytearray ] dip
     swap [ swap bytearray-copy-full ] keep ;
 
-: array-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot (copy-array) ;
+: array-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot copy-array ;
 
 // a1 a2 size off -- a2 new new | size | off
 : array<|> ( a1 a2 -- a1a2 ) 
@@ -229,7 +229,7 @@ $: last-word
 
 TODO: implement accessor methods and functions ;
 : parse-basic-slots ( -- arr )  
-    10 <array> @read-next dup [ s" ;" bytearray\0= not ] [
+    10 <array> @read-next dup [ \s ; bytearray= not ] [
         dupd (array-resize-push) drop
         @read-next dup
     ] while drop ;
