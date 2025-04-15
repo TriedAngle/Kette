@@ -1,4 +1,5 @@
-@: s" @read-next " @skip-whitespace @read-until (array-resize-push) ;
+@: \s @read-next (array-resize-push) ;
+@: s" \s " @skip-whitespace @read-until (array-resize-push) ;
 
 @: [ s" ]" @parse-until array>quotation (array-resize-push) ;
 
@@ -49,7 +50,7 @@
     swap [ word|?init-tags ] keep 
     2 slot swap (array-resize-push) ;
 
-: word-map ( -- map ) 9 (special) ;
+: word|map ( -- map ) 9 (special) ;
 : box|map ( -- map ) 11 (special) ;
 : fixnum|map ( -- map ) 4 (special) ;
 
@@ -117,6 +118,12 @@ $: last-word
 : 4keep ( ..a x y z w q -- ..b x y z w ) [ 4dup ] dip 4dip ;
 
 : 2bi ( x y p q -- ) [ 2keep ] dip (call) ;
+: 2bi* ( a b x y p q -- ) [ 2dip ] dip (call) ;
+: 2bi@ ( a b x y p -- ) dup 2bi* ;
+
+: tri ( x p q r -- ) [ [ keep ] dip keep ] dip (call) ;
+: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip (call) ;
+: tri@ ( x y z p -- ) dup dup tri* ;
 
 : parse-word? ( name -- word/f ) 
     namestack|find swap dup [ dropd ] [ 2drop f ] if ;
@@ -160,7 +167,7 @@ $: last-word
     pick 0 slot 0 -rot (copy-bytearray) ;
 
 : bytearray<|> ( s1 s2 -- s1s2 ) 
-    2dup merge|size&offset @print-stack [ swapd resize-bytearray ] dip
+    2dup merge|size&offset [ swapd resize-bytearray ] dip
     swap [ swap bytearray-copy-full ] keep ;
 
 : array-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot (copy-array) ;
@@ -208,7 +215,7 @@ $: last-word
 
 1 read-accessor-method-body
 1 write-accessor-method-body
-@print-stack 2drop
+// @print-stack 2drop
 
 : new-read-accessor-method ( name idx -- )
     [ read-accessor-name ] dip  ;
@@ -240,8 +247,9 @@ type: vec3 x y z ;
 
 10 20 30 vec3 (new-boa)
 
-dup 0 slot fixnum>utf8 (println)
-dup 1 slot fixnum>utf8 (println)
-dup 2 slot fixnum>utf8 (println)
+// tri: ( x p q r -- ... ) 
+// tri@ ( x y z p -- ... )
+[ 0 slot ] [ 1 slot ] [ 2 slot ] tri 
+[ fixnum>utf8 s" field: " swap bytearray<|> (println) ] tri@
 
 
