@@ -48,7 +48,7 @@
 : word|set-body ( body word -- ) 3 set-slot ;
 : word|add-tag ( word tag -- ) 
     swap [ word|?init-tags ] keep 
-    2 slot swap (array-resize-push) ;
+    2 slot swap (array-resize-push) drop ;
 
 : word|map ( -- map ) 9 (special) ;
 : box|map ( -- map ) 11 (special) ;
@@ -71,8 +71,13 @@
 : >box ( value -- box ) box|map (new-boa) ;
 : unbox ( box -- value ) 0 slot ;
 
+: inline-tag ( -- tag ) 14 (special) ;
 
-: define-push-word ( word item -- ) 1array array>quotation swap word|set-body ;
+: make-inline ( word -- ) inline-tag word|add-tag ; 
+
+: define-push-word ( word item -- ) 
+    1array array>quotation swap [ word|set-body ] keep make-inline ;
+
 : define-symbol ( word -- ) dup >box define-push-word ;
 
 TODO: errorhandling ;
@@ -87,43 +92,45 @@ $: last-word
     scan-new-word [ last-word set ] keep ignore-stack-effect 
     parse-word-body swap word|set-body ;
 
-: map|map ( -- map ) 0 (special) ;
-: fixnum|map ( -- map ) 4 (special) ;
-: array|map ( -- map ) 5 (special) ;
-: map-slot|map ( -- map ) 7 (special) ;
-: word|map ( -- map ) 9 (special) ;
+
+
+@: inline last-word get make-inline ;
+
+: map|map ( -- map ) 0 (special) ; inline
+: fixnum|map ( -- map ) 4 (special) ; inline
+: array|map ( -- map ) 5 (special) ; inline
+: map-slot|map ( -- map ) 7 (special) ; inline
+: word|map ( -- map ) 9 (special) ; inline
 
 : array? ( obj -- ? ) obj>map array|map ref-eq? ;
 
 : parser-tag ( -- tag ) 13 (special) ;
-: inline-tag ( -- tag ) 14 (special) ;
 
+: 4drop ( x y z w -- ) 3drop drop ; inline
 
-@: inline last-word get inline-tag word|add-tag ;
+: 2dip ( x y q -- x y ) swap [ dip ] dip ; inline
+: 3dip ( x y z q -- x y z ) swap [ 2dip ] dip ; inline
+: 4dip ( x y z w q -- x y z w ) swap [ 3dip ] dip ; inline
 
-: dip ( x q -- x ) swap >r (call) r> ;
-: keep ( x q -- x ) over [ (call) ] dip ;
-: bi ( x p q -- ) [ keep ] dip (call) ;
-: bi* ( x y p q -- ) [ dip ] dip (call) ;
-: bi@ ( x y p -- ) dup bi* ;
+: 2keep ( ..a x y q -- ..b x y ) [ 2dup ] dip 2dip ; inline
+: 3keep ( ..a x y z q -- ..b x y z ) [ 3dup ] dip 3dip ; inline
+: 4keep ( ..a x y z w q -- ..b x y z w ) [ 4dup ] dip 4dip ; inline
 
-: 4drop ( x y z w -- ) 3drop drop ;
+: 2bi ( x y p q -- ) [ 2keep ] dip (call) ; inline
+: 2bi* ( a b x y p q -- ) [ 2dip ] dip (call) ; inline
+: 2bi@ ( a b x y p -- ) dup 2bi* ; inline
 
-: 2dip ( x y q -- x y ) swap [ dip ] dip ;
-: 3dip ( x y z q -- x y z ) swap [ 2dip ] dip ;
-: 4dip ( x y z w q -- x y z w ) swap [ 3dip ] dip ;
+: tri ( x p q r -- ) [ [ keep ] dip keep ] dip (call) ; inline
+: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip (call) ; inline
+: tri@ ( x y z p -- ) dup dup tri* ; inline
 
-: 2keep ( ..a x y q -- ..b x y ) [ 2dup ] dip 2dip ;
-: 3keep ( ..a x y z q -- ..b x y z ) [ 3dup ] dip 3dip ;
-: 4keep ( ..a x y z w q -- ..b x y z w ) [ 4dup ] dip 4dip ;
+: rotd ( x y z w -- y z x w ) [ rot ] dip ; inline
+: -rotd ( x y z w -- z x y w ) [ -rot ] dip ; inline
 
-: 2bi ( x y p q -- ) [ 2keep ] dip (call) ;
-: 2bi* ( a b x y p q -- ) [ 2dip ] dip (call) ;
-: 2bi@ ( a b x y p -- ) dup 2bi* ;
+: roll ( w x y z -- x y z w ) rotd swap ; inline
+: -roll ( x y z w -- w x y z ) swap -rotd ; inline
 
-: tri ( x p q r -- ) [ [ keep ] dip keep ] dip (call) ;
-: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip (call) ;
-: tri@ ( x y z p -- ) dup dup tri* ;
+: 2swap ( a b x y -- x y a b ) roll roll ; inline
 
 : parse-word? ( name -- word/f ) 
     namestack|find swap dup [ dropd ] [ 2drop f ] if ;
@@ -135,29 +142,22 @@ $: last-word
 @: \ @read-next parse-word? 
     dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
 
-
-: rotd ( x y z w -- y z x w ) [ rot ] dip ;
-: -rotd ( x y z w -- z x y w ) [ -rot ] dip ; 
-
-: roll ( w x y z -- x y z w ) rotd swap ;
-: -roll ( x y z w -- w x y z ) swap -rotd ;
-
 : is-parsing? ( word -- ? ) parser-tag has-tag? ;
 : is-word? ( obj -- ? ) obj>map word|map ref-eq? ; 
     
 : scan-next ( sss  -- int/word/exec/f ) 
     parse-next? ;
 
-: + ( a b -- c ) fixnum+ ;
-: - ( a b -- c ) fixnum- ;
-: * ( a b -- c ) fixnum* ;
-: / ( a b -- c ) fixnum/ ;
-: = ( a b -- c ) fixnum= ;
-: != ( a b -- c ) fixnum!= ;
-: > ( a b -- c ) fixnum> ;
-: < ( a b -- c ) fixnum< ;
-: >= ( a b -- c ) fixnum>= ;
-: <= ( a b -- c ) fixnum<= ;
+: + ( a b -- c ) fixnum+ ; inline
+: - ( a b -- c ) fixnum- ; inline
+: * ( a b -- c ) fixnum* ; inline
+: / ( a b -- c ) fixnum/ ; inline
+: = ( a b -- c ) fixnum= ; inline
+: != ( a b -- c ) fixnum!= ; inline
+: > ( a b -- c ) fixnum> ; inline
+: < ( a b -- c ) fixnum< ; inline
+: >= ( a b -- c ) fixnum>= ; inline
+: <= ( a b -- c ) fixnum<= ; inline
 
 
 : merge|size&offset ( src dst -- size offset ) 
@@ -172,27 +172,47 @@ $: last-word
 
 : array-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot copy-array ;
 
-// a1 a2 size off -- a2 new new | size | off
 : array<|> ( a1 a2 -- a1a2 ) 
     2dup merge|size&offset [ 
         swapd [ resize-array dup ] [ swap 0 set-slot ] bi 
     ] dip swap [ swap array-copy-full ] keep ;
 
+TODO: add inline tco ;
 : loop ( ... p -- ... )
     [ (call) ] keep swap [ loop ] [ drop ] if ; 
 
+TODO: add inline tco ;
 : while ( ... p q -- ... )
     [ [ (call) ] keep ] dip rot
     [ swap [ [ (call) ] keep ] dip swap while ] [ 2drop ] if ;
 
 : map-apply ( q src idx -- mapped ) 
-    array-nth swap (call) ; 
+    array-nth swap (call) ; inline
 
 : map ( ..a arr q -- ..a new ) 
     swap dup [ dup 0 slot resize-array ] [ 0 slot ] bi 
     0 swap [ 2dup < ] [ [ [ 
         [ swap [ map-apply ] dip ] keep array-set-nth
-    ] 4keep 1 fixnum+ ] dip ] while rot [ 4drop ] dip ;
+    ] 4keep 1 + ] dip ] while rot [ 4drop ] dip ; inline
+
+: each-apply ( q arr idx -- ) 
+    array-nth swap (call) ; inline
+
+: each ( ..a arr q -- )
+    swap dup 0 slot 0 swap [ 2dup < ] [ [
+        [ each-apply ] 3keep 1 + ] dip
+    ] while 4drop ; inline
+
+{ 
+    \ dip \ keep \ bi \ bi* \ bi@ \ >box \ unbox \ get \ set
+    \ array-index \ array-nth \ array-set-nth 
+    \ (1array) \ (2array) \ (3array) \ (4array) 
+    \ 1array  \ 2array \ 3array \ 4array
+    \ CHAR_NEWLINE \ // 
+    \ new-empty-word \ define-word \ scan-new-word \ ignore-stack-effect
+    \ scan-new-word \ parse-word-body \ inline-tag \ make-inline
+    \ define-push-word \ define-symbol \ : \ $:
+} dup [ unbox make-inline ] each [ unbox @force-recompile ] each
 
 : new-const-data-slot ( name value default -- map-slot ) 
     0 -rot map-slot|map (new-boa) ; 
@@ -213,8 +233,8 @@ $: last-word
     \ self unbox swap \ set-slot unbox 3array array>quotation ;
 
 
-1 read-accessor-method-body
-1 write-accessor-method-body
+// 1 read-accessor-method-body
+// 1 write-accessor-method-body
 // @print-stack 2drop
 
 : new-read-accessor-method ( name idx -- )
@@ -252,4 +272,14 @@ type: vec3 x y z ;
 [ 0 slot ] [ 1 slot ] [ 2 slot ] tri 
 [ fixnum>utf8 s" field: " swap bytearray<|> (println) ] tri@
 
+: println ( str -- ) (println) ;
+
+: parse-quotation ( -- quot ) 
+    @read-next drop s" ]" @parse-until 
+    array>quotation (array-resize-push) ;
+
+@: if: 
+    parse-quotation \ (call) unbox (array-resize-push)
+    parse-quotation parse-quotation 
+    \ if unbox (array-resize-push) ;
 

@@ -86,6 +86,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("unwind-to-frame", " frame -- ", unwind_to_frame),
         ("panic", "message -- ", error_panic),
         ("(special)", "idx -- special", get_special),
+        ("@force-recompile", " word -- ", unsafe_force_recompile),
         // parser
         ("@read-next", " -- str", read_next),
         ("@read-until", "end -- str", read_until),
@@ -918,6 +919,22 @@ fn get_special(ctx: &mut Context) {
     let idx = idx_obj.to_int();
     let obj = ctx.gc.specials.get_nth(idx as usize);
     ctx.push(obj);
+}
+
+fn unsafe_force_recompile(ctx: &mut Context) {
+    let word = ctx.pop();
+    if ctx.word_primitive(word).is_some() {
+        return;
+    }
+    let word_ptr = word.to_ptr() as *const Word;
+    let quot = unsafe { (*word_ptr).body };
+    let quot_ptr = quot.to_ptr() as *const Quotation;
+    {
+        let mut codes = ctx.codes.lock();
+        codes.remove(quot_ptr);
+    }
+
+    let _code = ctx.compile(quot_ptr);
 }
 
 #[cfg(test)]

@@ -55,6 +55,41 @@ impl Context {
             let map_ptr = unsafe { (*obj_ptr).header.get_map() };
             let map_tagged = Tagged::from_ptr(map_ptr as *mut Object);
 
+            if self.is_word(item) {
+                let word = obj_ptr as *mut Word;
+                if unsafe { (*word).has_tag(self.gc.specials.inline_tag) } {
+                    let node = self.compile_word(word);
+                    let node_code = unsafe { node.as_ref().data_as::<Code>() };
+
+                    for &instr in node_code {
+                        code.push(instr);
+                    }
+                    i += 1;
+                    continue;
+                }
+            }
+            if i + 1 < body_len && map_tagged == self.gc.specials.quotation_map
+            {
+                let next = unsafe { (*body).get(i + 1) };
+                if let Some(_) = self.word_primitive(next) {
+                    let word = next.to_ptr() as *const Word;
+                    let name =
+                        unsafe { (*word).name.to_ptr() as *const ByteArray };
+                    let name = unsafe { (*name).as_str() };
+                    if name == "(call)" {
+                        let node = self.compile(obj_ptr as _);
+                        let node_code =
+                            unsafe { node.as_ref().data_as::<Code>() };
+
+                        for &instr in node_code {
+                            code.push(instr);
+                        }
+
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
             // Check for if-pattern: quotation, quotation
             if i + 2 < body_len && map_tagged == self.gc.specials.quotation_map
             {
@@ -231,6 +266,11 @@ impl CodeHeap {
 
             unsafe { std::slice::from_raw_parts(data_ptr, len) }
         })
+    }
+
+    pub fn remove(&mut self, quotation: *const Quotation) {
+        // TODO: remove from memory
+        self.artifacts.remove(&quotation);
     }
 }
 
