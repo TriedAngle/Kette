@@ -100,7 +100,6 @@ $: last-word
 : fixnum|map ( -- map ) 4 (special) ; inline
 : array|map ( -- map ) 5 (special) ; inline
 : map-slot|map ( -- map ) 7 (special) ; inline
-: word|map ( -- map ) 9 (special) ; inline
 
 : array? ( obj -- ? ) obj>map array|map ref-eq? ;
 
@@ -254,7 +253,7 @@ TODO: implement accessor methods and functions ;
         @read-next dup
     ] while drop ;
 
-: new-empty-map ( name -- map ) f f f f map|map (new-boa) ;
+: new-empty-map ( name -- map ) f f f map|map (new-boa) ; inline
 
 @: type:
     @read-next [ define-word ] [ new-empty-map ] bi 

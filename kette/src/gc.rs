@@ -265,7 +265,7 @@ impl GarbageCollector {
 
         unsafe {
             (*map_map_ptr).header = ObjectHeader::new(map_map_ptr);
-            (*map_map_ptr).data_slots = Tagged::from_int(5);
+            (*map_map_ptr).data_slots = Tagged::from_int(4);
 
             (*object_map_ptr).header = ObjectHeader::new(map_map_ptr);
             (*object_map_ptr).data_slots = Tagged::from_int(0);
