@@ -255,17 +255,15 @@ TODO: add inline tco ;
 
 : new-basic-data-slot ( name idx -- slot ) f new-data-slot ;
 
-: read-accessor-name ( name -- accessor-name ) s" >>" bytearray-utf8<|> ;
 
-: write-accessor-name (name -- accessor-name ) s" >>" swap bytearray-utf8<|> ;
+// read accessors
+
+TODO: effect ;
+: read-accessor-name ( name -- accessor-name ) s" >>" bytearray-utf8<|> ;
 
 : read-accessor-method-body ( idx -- body ) 
     \ self unbox swap \ slot unbox 3array array>quotation ;
 
-: write-accessor-method-body ( idx -- body )
-    \ self unbox swap \ set-slot unbox 3array array>quotation ;
-
-TODO: effect ;
 : new-read-accessor-method ( name idx -- method )
     [ f 10 <array> ] dip read-accessor-method-body 
     word|map (new-boa) ;
@@ -285,7 +283,33 @@ TODO: effect ;
 : define-read-accessors ( data-slots -- read-slots )
     [ [ 0 slot ] [ 2 slot ] bi define-read-accessor ] map ;
 
-: create-write-accessors ( data-slots -- write-slots ) ;
+// write accessors
+
+TODO: effect ;
+: write-accessor-name (name -- accessor-name ) s" <<" bytearray-utf8<|> ;
+
+: write-accessor-method-body ( idx -- body )
+    \ self unbox swap \ set-slot unbox 3array array>quotation ;
+
+: new-write-accessor-method ( name idx -- method ) 
+    [ f 10 <array> ] dip write-accessor-method-body
+    word|map (new-boa) ;
+
+: new-write-accessor-word ( name -- word )
+    new-empty-word
+    dup >box \ unbox unbox \ send-self unbox 3array
+    array>quotation swap [ 3 set-slot ] keep ;
+
+: new-write-accessor ( name idx -- method word )
+    [ write-accessor-name ] dip
+    [ new-write-accessor-method ] [ drop new-write-accessor-word ] 2bi ;
+
+: define-write-accessor ( name idx -- method-slot ) 
+    new-write-accessor 
+    [ new-method-slot ] dip f namestack|insert 2drop ;
+
+: define-write-accessors ( data-slots -- write-slots )
+    [ [ 0 slot ] [ 2 slot ] bi define-write-accessor ] map ;
 
 TODO: implement accessor methods and functions ;
 : parse-basic-slots ( -- arr )  
@@ -305,17 +329,20 @@ TODO: implement accessor methods and functions ;
 : value>> (obj -- val ) 2 slot ;
 
 @: type:
-    @read-next [ define-word ] [ new-empty-map ] bi 
+    @read-next [ \s # swap bytearray-utf8<|> define-word ] [ new-empty-map ] bi 
     [ define-push-word ] keep parse-basic-slots
     enumerate [ first2 new-basic-data-slot ] map 
-    [ 0 slot over 1 set-slot ] [ dup define-read-accessors array<|> ] bi
+    [ 0 slot over 1 set-slot ]
+    [ dup [ define-read-accessors array<|> ] [ define-write-accessors array<|> ] bi ] bi
     swap 2 set-slot ;
 
 type: vec3 x y z ; 
 
 print-wall
-10 20 30 vec3 (new-boa)
+10 20 30 #vec3 (new-boa)
 dup [ x>> ] [ y>> ] [ z>> ] tri [ fixnum>utf8 println ] tri@
+dup 66 swap x<< dup x>> fixnum>utf8 println  
+
 \ z>> unbox body>> @print-stack drop 
 \ z>> unbox find-self value>> body>> @print-stack drop
 print-wall
