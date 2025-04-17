@@ -221,7 +221,7 @@ TODO: add inline tco ;
     0 swap [ 2dup < ] [ [ [ [ 
             [ swapd array-nth ] keep 2array 
         ] keep swapd array-set-nth
-    ] 3keep 1 + ] dip ] while roll 3drop ; inline
+    ] 3keep 1 fixnum+ ] dip ] while roll 3drop ; inline
 
 : each-apply ( q arr idx -- ) 
     array-nth swap (call) ; inline
@@ -231,10 +231,22 @@ TODO: add inline tco ;
         [ each-apply ] 3keep 1 + ] dip
     ] while 4drop ; inline
 
-: first2 ( arr -- first second ) [ 0 array-nth ] [ 1 array-nth ] bi ; inline
 
-{ 
-    \ dip \ keep \ bi \ bi* \ bi@ \ >box \ unbox \ get \ set
+: zip-apply ( arr1 arr2 idx -- zipped ) 
+    dup swapd [ array-nth ] 2bi@ 2array ;
+
+: zip ( arr1 arr2 -- new )
+    2dup [ 0 slot ] bi@ fixnum-min 
+    2dup resize-array 0 rot [ 2dup < ] [ [ [
+        [ swap [ zip-apply ] dip ] keep array-set-nth
+    ] 4keep 1 fixnum+ ] dip ] while 2drop [ 2drop ] dip ;
+
+: first2 ( arr -- first second ) [ 0 array-nth ] [ 1 array-nth ] bi ; inline
+: first3 ( arr -- first second third )
+    [ 0 array-nth ] [ 1 array-nth ] [ 2 array-nth ] tri ; inline
+
+
+{   \ dip \ keep \ bi \ bi* \ bi@ \ >box \ unbox \ get \ set
     \ array-index \ array-nth \ array-set-nth 
     \ (1array) \ (2array) \ (3array) \ (4array) 
     \ 1array  \ 2array \ 3array \ 4array
@@ -304,8 +316,13 @@ TODO: effect ;
     [ write-accessor-name ] dip
     [ new-write-accessor-method ] [ drop new-write-accessor-word ] 2bi ;
 
+: define-write-helper ( name word -- ) 
+    [ s" >>" swap bytearray-utf8<|> new-empty-word ] dip
+    \ over unbox swap 2array array>quotation 
+    swap [ 3 set-slot ] keep f namestack|insert 2drop ;
+
 : define-write-accessor ( name idx -- method-slot ) 
-    new-write-accessor 
+    swap [ swap new-write-accessor ] keep over define-write-helper
     [ new-method-slot ] dip f namestack|insert 2drop ;
 
 : define-write-accessors ( data-slots -- write-slots )
@@ -328,6 +345,8 @@ TODO: implement accessor methods and functions ;
 : body>> ( obj -- val ) 3 slot ;
 : value>> (obj -- val ) 2 slot ;
 
+: new-boa ( ... map -- obj ) (new-boa) ;
+
 @: type:
     @read-next [ \s # swap bytearray-utf8<|> define-word ] [ new-empty-map ] bi 
     [ define-push-word ] keep parse-basic-slots
@@ -338,14 +357,12 @@ TODO: implement accessor methods and functions ;
 
 type: vec3 x y z ; 
 
-print-wall
-10 20 30 #vec3 (new-boa)
-dup [ x>> ] [ y>> ] [ z>> ] tri [ fixnum>utf8 println ] tri@
-dup 66 swap x<< dup x>> fixnum>utf8 println  
+: vec3+ ( v1 v2 -- v1+v2 ) 
+    [ obj>array ] bi@ zip [ first2 + ] map #vec3 array>obj ;
 
-\ z>> unbox body>> @print-stack drop 
-\ z>> unbox find-self value>> body>> @print-stack drop
-print-wall
+10 20 30 #vec3 new-boa 
+5 100 33 #vec3 new-boa
+vec3+ obj>array
 
 : parse-quotation ( -- quot ) 
     @read-next drop s" ]" @parse-until 
@@ -355,4 +372,5 @@ print-wall
     parse-quotation \ (call) unbox (array-resize-push)
     parse-quotation parse-quotation 
     \ if unbox (array-resize-push) ;
+
 

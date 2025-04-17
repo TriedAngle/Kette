@@ -36,6 +36,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("fixnum<=", "a b -- ?", fixnum_leq),
         ("fixnum?", "obj -- ?", fixnum_is),
         ("2fixnum?", "obj1 obj2 -- ?", fixnum_is2),
+        ("fixnum-min", "a b -- min", fixnum_min),
+        ("fixnum-max", "a b -- min", fixnum_max),
         // general
         ("if", "? t-branch f-branch -- t/f-called", iff),
         ("not", " ? -- !? ", not),
@@ -77,6 +79,8 @@ pub fn add_primitives(ctx: &mut Context) {
         ("r@", " -- ", retain_copy),
         ("depth", " -- n", data_depth),
         ("rdepth", " -- n", retain_depth),
+        ("obj>array", "obj -- array", object_to_array),
+        ("array>obj", "map array -- obj", array_to_object),
         ("namestack|insert", "k v -- old-k old-v", namestack_push),
         ("namestack|find", "k -- k v", namestack_lookup),
         ("namestack|delete", "k -- k v", namestack_remove),
@@ -660,6 +664,18 @@ fn fixnum_is2(ctx: &mut Context) {
     push_bool(ctx, is);
 }
 
+fn fixnum_min(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let min = a.min(b);
+    push_num(ctx, min);
+}
+
+fn fixnum_max(ctx: &mut Context) {
+    let (a, b) = pop2num(ctx);
+    let max = a.max(b);
+    push_num(ctx, max);
+}
+
 fn fixnum_to_string(ctx: &mut Context) {
     let num = pop1num(ctx);
     let s = num.to_string();
@@ -847,6 +863,70 @@ fn retain_depth(ctx: &mut Context) {
         elements as i64
     };
     push_num(ctx, depth);
+}
+
+
+fn object_to_array(ctx: &mut Context) {
+    let obj = ctx.pop();
+    
+    // TODO: f => [] int => [val]
+    if obj.is_false() || obj.is_int() {
+        ctx.push(Tagged::ffalse());
+        return;
+    }
+
+    let obj_ptr = obj.to_ptr();
+    let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+    let data_slots = unsafe { (*map_ptr).data_slots.to_int() };
+    
+    if data_slots <= 0 {
+        let empty_array = ctx.gc.allocate_array(0);
+        ctx.push(empty_array);
+        return;
+    }
+    
+    let array = ctx.gc.allocate_array(data_slots as usize);
+    let array_ptr = array.to_ptr() as *mut Array;
+    
+    for i in 0..(data_slots as usize) {
+        let slot_value = unsafe { (*obj_ptr).get_slot(i) };
+        unsafe { (*array_ptr).set(i, slot_value) };
+    }
+    
+    unsafe { (*array_ptr).length = Tagged::from_int(data_slots) };
+    
+    ctx.push(array);
+}
+
+fn array_to_object(ctx: &mut Context) {
+    let map = ctx.pop();
+    let array = ctx.pop();
+    
+    if array.is_false() || map.is_false() {
+        ctx.push(Tagged::ffalse());
+        return;
+    }
+    
+    let map_ptr = map.to_ptr() as *mut Map;
+    let array_ptr = array.to_ptr() as *mut Array;
+    
+    let data_slots = unsafe { (*map_ptr).data_slots.to_int() as usize };
+    let array_len = unsafe { (*array_ptr).len() };
+    
+    if data_slots != array_len {
+        ctx.push(Tagged::ffalse());
+        return;
+    }
+    
+    let obj = ctx.gc.allocate_object(map);
+    let obj_ptr = obj.to_ptr();
+    
+    for i in 0..data_slots {
+        let value = unsafe { (*array_ptr).get(i) };
+        unsafe { (*obj_ptr).set_slot(i, value) };
+    }
+    
+    ctx.push(obj);
 }
 
 fn namestack_push(ctx: &mut Context) {
