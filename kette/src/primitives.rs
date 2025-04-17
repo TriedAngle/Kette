@@ -45,6 +45,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("self", " -- self", get_self),
         ("send-self", "..a obj name -- ..b", send_self),
         ("send-super", "..a obj name -- ..b", send_super),
+        ("find-self", "obj name -- slot/f", find_self),
         ("(clone)", "a -- b", clone),
         ("(new)", "map -- obj", new_from_prototype),
         ("(new-boa)", "..a map -- obj", new_by_order_of_args),
@@ -267,8 +268,14 @@ fn has_tag(ctx: &mut Context) {
     push_bool(ctx, has);
 }
 
-fn get_bytearray_str(tagged: Tagged) -> &'static str {
-    let ba_ptr = tagged.to_ptr() as *const ByteArray;
+fn get_bytearray_str(ctx: &Context, tagged: Tagged) -> &'static str {
+    let ba_ptr = if ctx.is_word(tagged) {
+        let word = tagged.to_ptr() as *const Word;
+        let ba = unsafe { (*word).name };
+        ba.to_ptr() as *const ByteArray
+    } else {
+        tagged.to_ptr() as *const ByteArray
+    };
     unsafe { (*ba_ptr).as_str() }
 }
 
@@ -289,27 +296,27 @@ fn find_and_execute_method(
 
     if let Some(slot) = method_slot {
         let method = unsafe { (*slot).value };
-
+        // TODO remove this
         ctx.push(obj);
 
-        ctx.push(method);
-
-        call(ctx);
+        let word = method.to_ptr() as *const Word;
+        ctx.execute_word(word);
     } else {
         ctx.push(Tagged::ffalse());
     }
 }
 
-pub fn get_self(ctx: &mut Context) {
-    let obj = ctx.self_obj;
-    ctx.push(obj);
+pub fn get_self(_ctx: &mut Context) {
+    // TODO: implement this and remove other push
+    // let obj = ctx.self_obj;
+    // ctx.push(obj);
 }
 
 pub fn send_self(ctx: &mut Context) {
     let msg = ctx.pop();
     let obj = ctx.pop();
 
-    let msg_name = get_bytearray_str(msg);
+    let msg_name = get_bytearray_str(ctx, msg);
 
     find_and_execute_method(ctx, obj, msg_name, false);
 }
@@ -318,9 +325,26 @@ pub fn send_super(ctx: &mut Context) {
     let msg = ctx.pop();
     let obj = ctx.pop();
 
-    let msg_name = get_bytearray_str(msg);
+    let msg_name = get_bytearray_str(ctx, msg);
 
     find_and_execute_method(ctx, obj, msg_name, true);
+}
+
+fn find_self(ctx: &mut Context) {
+    let msg = ctx.pop();
+    let obj = ctx.pop();
+
+    let obj_ptr = obj.to_ptr();
+    let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+    let msg_name = get_bytearray_str(ctx, msg);
+    unsafe {
+        let Some(slot) = (*map_ptr).find_slot(msg_name, None) else {
+            push_bool(ctx, false);
+            return;
+        };
+        let slot_obj = Tagged::from_ptr(slot as _);
+        ctx.push(slot_obj);
+    }
 }
 
 fn new_from_prototype(ctx: &mut Context) {
