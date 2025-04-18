@@ -250,11 +250,14 @@ TODO: add inline tco ;
     \ array-index \ array-nth \ array-set-nth 
     \ (1array) \ (2array) \ (3array) \ (4array) 
     \ 1array  \ 2array \ 3array \ 4array
-    \ CHAR_NEWLINE \ // 
+    \ CHAR_NEWLINE
     \ new-empty-word \ define-word \ scan-new-word \ ignore-stack-effect
     \ scan-new-word \ parse-word-body \ inline-tag \ make-inline
-    \ define-push-word \ define-symbol \ : \ $:
+    \ define-push-word \ define-symbol
 } dup [ unbox make-inline ] each [ unbox @force-recompile ] each
+
+TODO: inspect why this is necessary ;
+{ \ : \ $: \ // \ TODO: \ /* } [ unbox @force-recompile ] each
 
 : new-const-data-slot ( name value default -- map-slot ) 
     0 -rot map-slot|map (new-boa) ; 
@@ -354,6 +357,7 @@ TODO: implement accessor methods and functions ;
     [ 0 slot over 1 set-slot ]
     [ dup [ define-read-accessors array<|> ] [ define-write-accessors array<|> ] bi ] bi
     swap 2 set-slot ;
+
 
 type: vec3 x y z ; 
 
