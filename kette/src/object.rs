@@ -102,9 +102,20 @@ pub struct Box {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Handler {
     pub header: ObjectHeader,
-    pub tty: Tagged,     // Map Object
-    pub handler: Tagged, // Quotation
-    pub frame: Tagged,   // stackframe where defined
+    pub continuation: Tagged, // Continuation
+    pub tty: Tagged,          // Map Object
+    pub handler: Tagged,      // Quotation
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Continuatation {
+    pub header: ObjectHeader,
+    pub data: Tagged,
+    pub retain: Tagged,
+    pub call: Tagged,
+    pub handlers: Tagged,
+    pub self_obj: Tagged,
 }
 
 impl Tagged {

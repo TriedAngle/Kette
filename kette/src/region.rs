@@ -47,6 +47,14 @@ impl<T> MemoryRegion<T> {
     pub fn replace(&mut self, with: T) -> T {
         unsafe { std::mem::replace(&mut *self.current, with) }
     }
+
+    pub fn length(&self) -> usize {
+        if self.current <= self.start {
+            return 0;
+        }
+
+        unsafe { self.current.offset_from(self.start) as usize }
+    }
 }
 
 impl<T: Copy> MemoryRegion<T> {

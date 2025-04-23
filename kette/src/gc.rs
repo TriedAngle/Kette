@@ -154,12 +154,14 @@ impl GarbageCollector {
     }
 
     fn mark(&self) {
+        log::trace!("Start: Mark Phase");
         for root in &self.roots {
             self.mark_object(*root);
         }
     }
 
     fn mark_object(&self, tagged: Tagged) {
+        log::trace!("Mark: {:?}", tagged);
         if tagged.is_int() || tagged.is_false() {
             return;
         }
@@ -200,6 +202,7 @@ impl GarbageCollector {
     }
 
     fn sweep(&mut self) {
+        log::trace!("Start: Sweep Phase");
         let mut to_free = Vec::new();
 
         for (&ptr, &(_size, layout)) in &self.allocations {
@@ -230,6 +233,7 @@ impl GarbageCollector {
     }
 
     unsafe fn initialize_special_objects(&mut self) {
+        log::debug!("Initialize: Special Objects");
         let map_map_ptr = self.raw_allocate::<Map>(mem::size_of::<Map>());
         self.specials.map_map = Tagged::from_ptr(map_map_ptr as *mut Object);
         self.add_root(self.specials.map_map);

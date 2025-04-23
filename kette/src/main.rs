@@ -156,22 +156,25 @@ fn execute_string(ctx: &mut Context, input: &str) {
 
     let tokens = ctx.parse_until(None);
 
+    let tokens_ptr = tokens.to_ptr() as *const Array;
+    let tokens_slice = unsafe { (*tokens_ptr).as_slice_len() };
+    log::info!("parsed: {:?}", tokens_slice);
+
     let quotation = ctx.gc.allocate_object(ctx.gc.specials.quotation_map);
 
     let quot_ptr = quotation.to_ptr() as *mut Quotation;
     unsafe { (*quot_ptr).body = tokens };
 
     ctx.execute(quotation.to_ptr() as *const Quotation);
+    log::trace!("executed");
     let codes = ctx.codes.lock();
     let code = codes
         .get_code_for_quotation(quotation.to_ptr() as _)
         .unwrap();
 
+    log::trace!("print stack:");
     print_stack(ctx);
-    let tokens_ptr = tokens.to_ptr() as *const Array;
 
-    let tokens_slice = unsafe { (*tokens_ptr).as_slice_len() };
-    log::info!("parsed: {:?}", tokens_slice);
     log::info!("compiled: {:?}", code);
 }
 

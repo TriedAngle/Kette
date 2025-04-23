@@ -9,14 +9,15 @@ use std::{
     sync::Arc,
 };
 
+#[repr(C)]
 pub struct Context {
     pub header: ObjectHeader,
     pub datastack: Tagged,
     pub retainstack: Tagged,
-    pub namestack: Tagged,
     pub callstack: Tagged,
     pub handlerstack: Tagged,
     pub self_obj: Tagged,
+    pub namestack: Tagged,
 
     pub gc: GarbageCollector,
     pub codes: Arc<Mutex<CodeHeap>>,
@@ -24,8 +25,8 @@ pub struct Context {
     pub data: MemoryRegion<Tagged>,
     pub retain: MemoryRegion<Tagged>,
     pub call: MemoryRegion<Tagged>,
-    pub name: MemoryRegion<(Tagged, Tagged)>,
     pub handlers: MemoryRegion<Tagged>,
+    pub name: MemoryRegion<(Tagged, Tagged)>,
     pub supertypes: HashMap<*mut Map, HashSet<*mut Map>>,
 }
 
@@ -95,6 +96,7 @@ impl Context {
 
         let header = ObjectHeader::new(ctx_map.to_ptr() as *mut _);
         gc.add_root(ctx_map);
+
         let supertypes = HashMap::new();
 
         let mut new = Self {
@@ -177,6 +179,28 @@ impl Context {
         self.handlers.replace(Tagged::null())
     }
 
+    pub fn set_gc_root(&mut self, obj: Tagged, is: bool) {
+        if is {
+            self.gc.add_root(obj);
+        } else {
+            self.gc.remove_root(obj);
+        }
+    }
+
+    pub fn fix_lengths(&mut self) {
+        let fix = |array: &mut Tagged, region: &MemoryRegion<_>| {
+            let length = region.length();
+            println!("lenght: {:?}", length);
+            let array_ptr = array.to_ptr() as *mut Array;
+            unsafe { (*array_ptr).length = Tagged::from_int(length as i64) };
+        };
+
+        fix(&mut self.datastack, &self.data);
+        fix(&mut self.retainstack, &self.retain);
+        fix(&mut self.callstack, &self.call);
+        fix(&mut self.handlerstack, &self.handlers);
+    }
+
     pub fn get_current_frame(&mut self) -> Tagged {
         if self.call.current <= self.call.start {
             return Tagged::ffalse();
@@ -217,11 +241,11 @@ impl Context {
 
             let tty = unsafe { (*handler_ptr).tty };
             let handler_quot = unsafe { (*handler_ptr).handler };
-            let handler_frame = unsafe { (*handler_ptr).frame };
+            let handler_continuation = unsafe { (*handler_ptr).continuation };
 
             // TODO: support inheritance
             if self.is_instance_of(exception, tty) {
-                self.push(handler_frame);
+                self.push(handler_continuation);
                 self.execute(handler_quot.to_ptr() as *const Quotation);
                 return;
             }
@@ -348,6 +372,7 @@ impl Context {
     }
 
     pub fn parse_until(&mut self, delimiter: Option<&str>) -> Tagged {
+        log::trace!("Parse Until: {:?}", delimiter);
         let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
         unsafe { (*parser).parse_until(self, delimiter) }
     }
@@ -644,7 +669,6 @@ impl Context {
             return format!("\\ {}", &self.format_tagged(value));
         }
 
-        let map_ptr = map_tagged.to_ptr() as *const Map;
         let map_name = unsafe { (*map_ptr).name };
 
         if map_name == Tagged::null() {

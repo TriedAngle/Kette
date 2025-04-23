@@ -3,6 +3,7 @@ mod context;
 mod gc;
 mod linked_list;
 mod object;
+mod optimizer;
 mod parser;
 mod primitives;
 mod region;
