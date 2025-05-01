@@ -47,7 +47,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("self", " -- self", get_self),
         ("send-self", "..a obj name -- ..b", send_self),
         ("send-super", "..a obj name -- ..b", send_super),
-        ("find-self", "obj name -- slot/f", find_self),
+        ("lookup-slot", "obj name -- slot/f", lookup_slot),
         ("(clone)", "a -- b", clone),
         ("(new)", "map -- obj", new_from_prototype),
         ("(new-boa)", "..a map -- obj", new_by_order_of_args),
@@ -103,12 +103,33 @@ pub fn add_primitives(ctx: &mut Context) {
         ("@read-next", " -- str", read_next),
         ("@read-until", "end -- str", read_until),
         ("@parse-int", "str -- int/f", parse_int),
+        ("@parse-next", " -- obj", parse_next), 
         ("@parse-until", "end/f -- array/f", parse_until),
         ("@skip-whitespace", " -- ", skip_whitespace),
+        ("@print-compiled", " quot -- ", print_compiled),
     ];
 
     let syntaxes: &[(&str, StackFn)] =
         &[("@:", parse_syntax), ("f", push_false), ("t", push_true)];
+
+    let true_map = Tagged::from_ptr(unsafe {
+        (*ctx.gc.specials.true_obj.to_ptr()).header.get_map()
+    } as _);
+
+    let maps = &[
+        ctx.gc.specials.map_map,
+        ctx.gc.specials.object_map,
+        ctx.gc.specials.false_map,
+        true_map,
+        ctx.gc.specials.fixnum_map,
+        ctx.gc.specials.array_map,
+        ctx.gc.specials.bytearray_map,
+        ctx.gc.specials.slot_map,
+        ctx.gc.specials.quotation_map,
+        ctx.gc.specials.word_map,
+        ctx.gc.specials.handler_map,
+        ctx.gc.specials.box_map,
+    ];
 
     for &(name, _stack_effect, fun) in words {
         let fun = Tagged::from_fn(fun);
@@ -124,6 +145,15 @@ pub fn add_primitives(ctx: &mut Context) {
             ctx.gc
                 .allocate_primitive_word(name, Tagged::null(), fun, true);
         ctx.namestack_push(word, Tagged::null());
+    }
+
+    for &map in maps {
+        let ptr = map.to_ptr() as *mut Map;
+        let map_name_ba = unsafe { (*ptr).name.to_ptr() as *mut ByteArray };
+        let map_name = unsafe { (*map_name_ba).as_str() };
+        let name = format!("#{}", map_name);
+        let name_ba = ctx.gc.allocate_string(&name);
+        ctx.namestack_push(name_ba, map);
     }
 }
 
@@ -180,6 +210,10 @@ fn parse_int(ctx: &mut Context) {
     }
 }
 
+fn parse_next(ctx: &mut Context) {
+    ctx.parse_next();
+}
+
 fn read_until(ctx: &mut Context) {
     let end_obj = ctx.pop();
     let end_ptr = end_obj.to_ptr() as *const ByteArray;
@@ -206,6 +240,17 @@ fn parse_until(ctx: &mut Context) {
 
 fn skip_whitespace(ctx: &mut Context) {
     ctx.skip_whitespace();
+}
+
+fn print_compiled(ctx: &mut Context) {
+    let obj = ctx.pop();
+    let quot = obj.to_ptr() as *const Quotation;
+
+    let _ = ctx.compile(quot);
+    let codes = ctx.codes.lock();
+    let code = codes.get_code_for_quotation(quot).unwrap();
+
+    println!("{:?}", code);
 }
 
 fn call(ctx: &mut Context) {
@@ -302,7 +347,14 @@ fn find_and_execute_method(
     use_super: bool,
 ) {
     let obj_ptr = obj.to_ptr();
-    let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+
+    let map_ptr = if obj.is_int() {
+        ctx.gc.specials.fixnum_map.to_ptr() as *mut Map
+    } else if obj.is_false() {
+        ctx.gc.specials.false_map.to_ptr() as *mut Map
+    } else {
+        unsafe { (*obj_ptr).header.get_map() }
+    };
 
     let method_slot = if use_super {
         unsafe { (*map_ptr).find_super(msg_name, Some(SLOT_METHOD)) }
@@ -312,8 +364,6 @@ fn find_and_execute_method(
 
     if let Some(slot) = method_slot {
         let method = unsafe { (*slot).value };
-        // TODO remove this
-        ctx.push(obj);
 
         let word = method.to_ptr() as *const Word;
         ctx.execute_word(word);
@@ -322,15 +372,20 @@ fn find_and_execute_method(
     }
 }
 
-pub fn get_self(_ctx: &mut Context) {
-    // TODO: implement this and remove other push
-    // let obj = ctx.self_obj;
-    // ctx.push(obj);
+pub fn get_self(ctx: &mut Context) {
+    let obj = ctx.self_obj;
+    ctx.push(obj);
 }
 
 pub fn send_self(ctx: &mut Context) {
     let msg = ctx.pop();
     let obj = ctx.pop();
+
+    let msg = if let Some(val) = ctx.unbox(msg) {
+        val
+    } else {
+        msg
+    };
 
     let msg_name = get_bytearray_str(ctx, msg);
 
@@ -341,17 +396,28 @@ pub fn send_super(ctx: &mut Context) {
     let msg = ctx.pop();
     let obj = ctx.pop();
 
+    let msg = if let Some(val) = ctx.unbox(msg) {
+        val
+    } else {
+        msg
+    };
+
     let msg_name = get_bytearray_str(ctx, msg);
 
     find_and_execute_method(ctx, obj, msg_name, true);
 }
 
-fn find_self(ctx: &mut Context) {
+fn lookup_slot(ctx: &mut Context) {
     let msg = ctx.pop();
-    let obj = ctx.pop();
+    let map = ctx.pop();
 
-    let obj_ptr = obj.to_ptr();
-    let map_ptr = unsafe { (*obj_ptr).header.get_map() };
+    let msg = if let Some(val) = ctx.unbox(msg) {
+        val
+    } else {
+        msg
+    };
+
+    let map_ptr = map.to_ptr() as *mut Map;
     let msg_name = get_bytearray_str(ctx, msg);
     unsafe {
         let Some(slot) = (*map_ptr).find_slot(msg_name, None) else {

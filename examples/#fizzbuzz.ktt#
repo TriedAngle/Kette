@@ -1,0 +1,28 @@
+x        !/
+
+
+        !/
+        
+        : FRYu ( ..n quot -- fried-quot ) ;
+        '[ 5 _ + ] -> [ 5 _ + ] fry!
+
+        struct: i64 8 ;
+        i64 { inner bytearray }
+        => 8 bytearray
+        inner>> 8 bytearray
+
+        #: namestack !/ vector of pairs name value !/
+        #: modules !/ vector of pairs name words !/ 
+        
+        type: module name words ;
+
+        
+        struct: vec2
+            { x i64 }
+            { y i64 } ;
+
+        vec2 { inner bytearray }
+        => 16 bytearray
+        x>> inner>> type>> x-offset>> size>> struct-copy
+
+        !/

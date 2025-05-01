@@ -27,6 +27,7 @@ pub struct SpecialObjects {
     pub primitive_tag: Tagged,
     pub parser_tag: Tagged,
     pub inline_tag: Tagged,
+    pub method_tag: Tagged,
 
     pub parser: Tagged,
 }
@@ -50,6 +51,7 @@ impl SpecialObjects {
             primitive_tag: Tagged::null(),
             parser_tag: Tagged::null(),
             inline_tag: Tagged::null(),
+            method_tag: Tagged::null(),
 
             parser: Tagged::null(),
         }
@@ -72,7 +74,8 @@ impl SpecialObjects {
             12 => self.primitive_tag,
             13 => self.parser_tag,
             14 => self.inline_tag,
-            15 => self.parser,
+            15 => self.method_tag,
+            16 => self.parser,
             _ => panic!("special object get_nth invalid idx: {:?}", idx),
         }
     }
@@ -294,7 +297,7 @@ impl GarbageCollector {
 
         self.initialize_map_slots(
             self.specials.slot_map,
-            "Slot",
+            "slot",
             &[
                 ("name", SLOT_CONST_DATA, Tagged::from_int(0), null_tag),
                 ("kind", SLOT_CONST_DATA, Tagged::from_int(1), null_tag),
@@ -305,7 +308,7 @@ impl GarbageCollector {
 
         self.initialize_map_slots(
             self.specials.map_map,
-            "Map",
+            "map",
             &[
                 ("name", SLOT_CONST_DATA, Tagged::from_int(0), null_tag),
                 (
@@ -319,13 +322,13 @@ impl GarbageCollector {
             ],
         );
 
-        self.initialize_map_slots(self.specials.object_map, "Object", &[]);
+        self.initialize_map_slots(self.specials.object_map, "object", &[]);
 
         self.initialize_map_slots(
             self.specials.false_map,
-            "False",
+            "false",
             &[(
-                "Parent",
+                "parent",
                 SLOT_PARENT,
                 self.specials.object_map,
                 Tagged::ffalse(),
@@ -334,9 +337,9 @@ impl GarbageCollector {
 
         self.initialize_map_slots(
             self.specials.fixnum_map,
-            "Fixnum",
+            "fixnum",
             &[(
-                "Parent",
+                "parent",
                 SLOT_PARENT,
                 self.specials.object_map,
                 Tagged::ffalse(),
@@ -345,9 +348,9 @@ impl GarbageCollector {
 
         self.initialize_map_slots(
             self.specials.array_map,
-            "Array",
+            "array",
             &[(
-                "Parent",
+                "parent",
                 SLOT_PARENT,
                 self.specials.object_map,
                 Tagged::ffalse(),
@@ -356,9 +359,9 @@ impl GarbageCollector {
 
         self.initialize_map_slots(
             self.specials.bytearray_map,
-            "ByteArray",
+            "bytearray",
             &[(
-                "Parent",
+                "parent",
                 SLOT_PARENT,
                 self.specials.object_map,
                 Tagged::ffalse(),
@@ -366,7 +369,7 @@ impl GarbageCollector {
         );
 
         let quotation_map = self.create_map(
-            "Quotation",
+            "quotation",
             &[
                 (
                     "effect",
@@ -381,7 +384,7 @@ impl GarbageCollector {
                     Tagged::ffalse(),
                 ),
                 (
-                    "Parent",
+                    "parent",
                     SLOT_PARENT,
                     self.specials.object_map,
                     Tagged::ffalse(),
@@ -392,7 +395,7 @@ impl GarbageCollector {
         self.add_root(self.specials.quotation_map);
 
         let word_map = self.create_map(
-            "Word",
+            "word",
             &[
                 (
                     "name",
@@ -419,7 +422,7 @@ impl GarbageCollector {
                     Tagged::ffalse(),
                 ),
                 (
-                    "Parent",
+                    "parent",
                     SLOT_PARENT,
                     self.specials.object_map,
                     Tagged::ffalse(),
@@ -430,7 +433,7 @@ impl GarbageCollector {
         self.add_root(self.specials.word_map);
 
         let handler_map = self.create_map(
-            "Handler",
+            "handler",
             &[
                 (
                     "Type",
@@ -451,7 +454,7 @@ impl GarbageCollector {
                     Tagged::ffalse(),
                 ),
                 (
-                    "Parent",
+                    "parent",
                     SLOT_PARENT,
                     self.specials.object_map,
                     Tagged::ffalse(),
@@ -462,7 +465,7 @@ impl GarbageCollector {
         self.add_root(self.specials.handler_map);
 
         let box_map = self.create_map(
-            "Box",
+            "box",
             &[
                 (
                     "value",
@@ -471,7 +474,7 @@ impl GarbageCollector {
                     Tagged::ffalse(),
                 ),
                 (
-                    "Parent",
+                    "parent",
                     SLOT_PARENT,
                     self.specials.object_map,
                     Tagged::ffalse(),
@@ -482,7 +485,7 @@ impl GarbageCollector {
         self.add_root(self.specials.box_map);
 
         let parser_map = self.create_map(
-            "Parser",
+            "parser",
             &[
                 (
                     "input",
@@ -497,7 +500,7 @@ impl GarbageCollector {
                     Tagged::ffalse(),
                 ),
                 (
-                    "Parent",
+                    "parent",
                     SLOT_PARENT,
                     self.specials.object_map,
                     Tagged::ffalse(),
@@ -508,7 +511,7 @@ impl GarbageCollector {
         self.specials.parser = parser;
         self.add_root(parser);
 
-        let true_map = self.create_map("True", &[]);
+        let true_map = self.create_map("true", &[]);
         let true_obj = self.allocate_object(true_map);
         self.specials.true_obj = true_obj;
         self.add_root(self.specials.true_obj);
@@ -522,6 +525,9 @@ impl GarbageCollector {
         self.specials.inline_tag =
             self.allocate_object(self.specials.object_map);
         self.add_root(self.specials.inline_tag);
+        self.specials.method_tag =
+            self.allocate_object(self.specials.object_map);
+        self.add_root(self.specials.method_tag);
     }
 
     fn raw_allocate<T>(&mut self, size: usize) -> *mut T {

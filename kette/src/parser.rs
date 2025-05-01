@@ -123,9 +123,10 @@ impl Parser {
             return None;
         }
 
-        if !ctx.is_word(word) {
-            return None;
-        }
+        // TODO: investigate if this is needed
+        // if !ctx.is_word(word) {
+        //     return None;
+        // }
 
         Some(word)
     }
@@ -202,19 +203,19 @@ impl Parser {
     pub fn parse_next(&mut self, ctx: &mut Context) {
         self.skip_whitespace();
 
-        while !self.is_at_end() {
-            let token = self.parse_token(ctx);
+        let token = self.parse_token(ctx);
 
-            if ctx.is_word(token) && ctx.is_parsing_word(token) {
-                let accum = ctx.gc.allocate_array(100);
-                let word = token.to_ptr() as *mut Word;
-                ctx.push(accum);
-                ctx.execute_word(word);
-            } else {
-                ctx.push(token);
+        if ctx.is_word(token) && ctx.is_parsing_word(token) {
+            let accum = ctx.gc.allocate_array(100);
+            let word = token.to_ptr() as *mut Word;
+            ctx.push(accum);
+            ctx.execute_word(word);
+            let accum = ctx.pop();
+            for item in unsafe { (*(accum.to_ptr() as *mut Array)).iter() } {
+                ctx.push(item);
             }
-
-            self.skip_whitespace();
+        } else {
+            ctx.push(token);
         }
     }
 

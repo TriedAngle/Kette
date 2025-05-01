@@ -15,14 +15,6 @@
 @: // CHAR_NEWLINE @read-until drop ;
 @: /* s" */" @read-until drop ;
 
-// map-slot: name kind value default
-// map: name data-slots slots prototype
-// array: length capacity <dynamic tagged>
-// bytearray: size <dynamic u8>
-// quotation: effect body
-// word: name effect tags body
-// handler: type quotation frame
-
 // TODO: optimize this ;
 // x [ ... ] swap >r call r>
 // x r> [ ... ] call r>
@@ -65,9 +57,6 @@
 : box|map ( -- map ) 11 (special) ;
 : fixnum|map ( -- map ) 4 (special) ;
 
-: parser-tag ( -- tag ) 13 (special) ;
-: inline-tag ( -- tag ) 14 (special) ;
-
 : new-empty-word ( name -- word ) f 10 <array> f word|map (new-boa) ;
 
 : define-word ( name -- word ) 
@@ -82,18 +71,20 @@
 : >box ( value -- box ) box|map (new-boa) ;
 : unbox ( box -- value ) 0 slot ;
 
+: parser-tag ( -- tag ) 13 (special) ;
 : inline-tag ( -- tag ) 14 (special) ;
+: method-tag ( -- tag ) 15 (special) ;
 
 : make-inline ( word -- ) inline-tag word|add-tag ; 
+: make-parser ( word -- ) parser-tag word|add-tag ; 
+: make-method ( word -- ) method-tag word|add-tag ;
 
-: define-push-word ( word item -- ) 
+: make-push-word ( word item -- ) 
     1array array>quotation swap [ word|set-body ] keep make-inline ;
 
-: define-symbol ( word -- ) dup >box define-push-word ;
+: make-symbol ( word -- ) dup >box make-push-word ;
 
-// TODO: errorhandling ;
-
-@: $: scan-new-word define-symbol ;
+@: $: scan-new-word make-symbol ;
 : get ( symbol -- value ) unbox namestack|find dropd ;
 : set ( value symbol -- ) unbox swap namestack|insert 2drop ;
 
@@ -151,30 +142,12 @@ TODO: lmaooo ;
 : parse-word? ( name -- word/f ) 
     namestack|find swap dup [ dropd ] [ 2drop f ] if ;
 
-: parse-next? ( -- int/word/f ) 
-    @read-next dup @parse-int 
-    dup [ dropd ] [ parse-word? ] if ;
-
 @: \ @read-next parse-word? 
     dup [ >box (array-resize-push) ] [ drop s" word not found" panic ] if ;
 
 : is-parsing? ( word -- ? ) parser-tag has-tag? ;
 : is-word? ( obj -- ? ) obj>map word|map ref-eq? ; 
     
-: scan-next ( sss  -- int/word/exec/f ) 
-    parse-next? ;
-
-: + ( a b -- c ) fixnum+ ; inline
-: - ( a b -- c ) fixnum- ; inline
-: * ( a b -- c ) fixnum* ; inline
-: / ( a b -- c ) fixnum/ ; inline
-: = ( a b -- c ) fixnum= ; inline
-: != ( a b -- c ) fixnum!= ; inline
-: > ( a b -- c ) fixnum> ; inline
-: < ( a b -- c ) fixnum< ; inline
-: >= ( a b -- c ) fixnum>= ; inline
-: <= ( a b -- c ) fixnum<= ; inline
-
 
 : merge|size&offset ( src dst -- size offset ) 
     swap [ swap [ 0 slot ] bi@ fixnum+ ] keep 0 slot ;
@@ -188,7 +161,7 @@ TODO: lmaooo ;
 
 // takes null terminator into account
 : bytearray-utf8<|> ( s1 s2 -- s1s2 ) 
-    2dup merge|size&offset [ 1 - ] bi@ [ swapd resize-bytearray ] dip
+    2dup merge|size&offset [ 1 fixnum- ] bi@ [ swapd resize-bytearray ] dip
     swap [ swap bytearray-copy-full ] keep ;
 
 : array-copy-full ( src dst dst-offset -- ) pick 0 slot 0 -rot copy-array ;
@@ -212,13 +185,13 @@ TODO: add inline tco ;
 
 : map ( ..a arr q -- ..a new ) 
     swap dup [ dup 0 slot resize-array ] [ 0 slot ] bi 
-    0 swap [ 2dup < ] [ [ [ 
+    0 swap [ 2dup fixnum< ] [ [ [ 
         [ swap [ map-apply ] dip ] keep array-set-nth
-    ] 4keep 1 + ] dip ] while rot [ 4drop ] dip ; inline
+    ] 4keep 1 fixnum+ ] dip ] while rot [ 4drop ] dip ; inline
 
 : enumerate ( arr -- arr ) 
     dup [ dup 0 slot resize-array ] [ 0 slot ] bi 
-    0 swap [ 2dup < ] [ [ [ [ 
+    0 swap [ 2dup fixnum< ] [ [ [ [ 
             [ swapd array-nth ] keep 2array 
         ] keep swapd array-set-nth
     ] 3keep 1 fixnum+ ] dip ] while roll 3drop ; inline
@@ -227,8 +200,8 @@ TODO: add inline tco ;
     array-nth swap (call) ; inline
 
 : each ( ..a arr q -- )
-    swap dup 0 slot 0 swap [ 2dup < ] [ [
-        [ each-apply ] 3keep 1 + ] dip
+    swap dup 0 slot 0 swap [ 2dup fixnum< ] [ [
+        [ each-apply ] 3keep 1 fixnum+ ] dip
     ] while 4drop ; inline
 
 
@@ -237,7 +210,7 @@ TODO: add inline tco ;
 
 : zip ( arr1 arr2 -- new )
     2dup [ 0 slot ] bi@ fixnum-min 
-    2dup resize-array 0 rot [ 2dup < ] [ [ [
+    2dup resize-array 0 rot [ 2dup fixnum< ] [ [ [
         [ swap [ zip-apply ] dip ] keep array-set-nth
     ] 4keep 1 fixnum+ ] dip ] while 2drop [ 2drop ] dip ;
 
@@ -246,6 +219,7 @@ TODO: add inline tco ;
     [ 0 array-nth ] [ 1 array-nth ] [ 2 array-nth ] tri ; inline
 
 
+/*
 {   \ dip \ keep \ bi \ bi* \ bi@ \ >box \ unbox \ get \ set
     \ array-index \ array-nth \ array-set-nth 
     \ (1array) \ (2array) \ (3array) \ (4array) 
@@ -253,20 +227,31 @@ TODO: add inline tco ;
     \ CHAR_NEWLINE
     \ new-empty-word \ define-word \ scan-new-word \ ignore-stack-effect
     \ scan-new-word \ parse-word-body \ inline-tag \ make-inline
-    \ define-push-word \ define-symbol
+    \ make-push-word \ make-symbol
 } dup [ unbox make-inline ] each [ unbox @force-recompile ] each
 
 TODO: inspect why this is necessary ;
 { \ : \ $: \ // \ TODO: \ /* } [ unbox @force-recompile ] each
+*/
+
+
+: make-constant ( word obj -- ) make-push-word ; inline
+
+@: const: scan-new-word @parse-next make-constant  ;
+@: const!: @read-next define-word @parse-next (call) make-constant ;
+
+const: SLOT_DATA_CONST 0
+const: SLOT_DATA 1
+const: SLOT_METHOD 2
 
 : new-const-data-slot ( name value default -- map-slot ) 
-    0 -rot map-slot|map (new-boa) ; 
+    SLOT_DATA_CONST -rot map-slot|map (new-boa) ; 
 
 : new-data-slot ( name value default -- map-slot ) 
-    1 -rot map-slot|map (new-boa) ; 
+    SLOT_DATA -rot map-slot|map (new-boa) ; 
 
 : new-method-slot ( method -- map-slot )
-    [ 0 slot 2 ] keep f map-slot|map (new-boa) ;
+    [ 0 slot SLOT_METHOD ] keep f map-slot|map (new-boa) ;
 
 : new-basic-data-slot ( name idx -- slot ) f new-data-slot ;
 
@@ -331,12 +316,48 @@ TODO: effect ;
 : define-write-accessors ( data-slots -- write-slots )
     [ [ 0 slot ] [ 2 slot ] bi define-write-accessor ] map ;
 
-TODO: implement accessor methods and functions ;
 : parse-basic-slots ( -- arr )  
     10 <array> @read-next dup [ \s ; bytearray= not ] [
         dupd (array-resize-push) drop
         @read-next dup
     ] while drop ;
+
+: push-slot ( map slot -- ) 
+    swap [ 2 slot swap (array-resize-push) ] keep 2 set-slot ;
+
+
+: method-body ( word -- body )
+    >box \ unbox unbox \ send-self unbox 3array array>quotation ;
+
+: (method) ( word -- ) 
+    [ method-body ] keep word|set-body ;
+
+@: method: 
+    @read-next define-word dup make-method @read-next drop ignore-stack-effect (method) ;
+
+@: method!:
+    @read-next define-word dup make-method @read-next drop ignore-stack-effect 
+    s" ;" @parse-until array>quotation swap word|set-body ;
+
+// TODO: check if word and defined as method word
+: parse-method ( -- method-word ) 
+    @parse-next 0 slot f 10 <array>  
+    s" ;" @parse-until array>quotation 
+    word|map  (new-boa) ;
+
+: define-map-method ( map method -- )
+    new-method-slot push-slot ;
+
+: (method-parser) ( map -- ) 
+    parse-method define-map-method ;
+
+: map-word-name ( map-name -- name ) s" #" swap bytearray-utf8<|> ;
+
+: define-method-member-syntax ( map -- ) 
+    dup 0 slot map-word-name s" :" bytearray-utf8<|> define-word
+    [ make-parser ] keep 
+    swap \ (method-parser) unbox 2array array>quotation
+    swap word|set-body ; 
 
 : new-empty-map ( name -- map ) f f f map|map (new-boa) ; inline
 
@@ -348,35 +369,79 @@ TODO: implement accessor methods and functions ;
 : body>> ( obj -- val ) 3 slot ;
 : value>> (obj -- val ) 2 slot ;
 
-: new-boa ( ... map -- obj ) (new-boa) ;
+: new-boa ( ... map -- obj ) (new-boa) ; inline
 
 @: type:
-    @read-next [ \s # swap bytearray-utf8<|> define-word ] [ new-empty-map ] bi 
-    [ define-push-word ] keep parse-basic-slots
+    @read-next [ map-word-name define-word ] [ new-empty-map ] bi 
+    [ make-push-word ] keep 
+    [ define-method-member-syntax ] keep 
+    parse-basic-slots
     enumerate [ first2 new-basic-data-slot ] map 
     [ 0 slot over 1 set-slot ]
     [ dup [ define-read-accessors array<|> ] [ define-write-accessors array<|> ] bi ] bi
-    swap 2 set-slot ;
+    swap 2 set-slot  ;
 
+@: @builtin: 
+    @read-next map-word-name namestack|delete 
+    s" ;" @read-until drop swap define-word 
+    swap dup define-method-member-syntax make-push-word ; 
+
+@builtin: object ;
+@builtin: fixnum ;
+@builtin: true ;
+@builtin: false ;
+@builtin: array { length #fixnum } { capacity #fixnum } ;
+@builtin: bytearray { size #fixnum } ;
+@builtin: quotation
+    { effect #stack-effect }
+    { body #array } ;
+@builtin: word 
+    { name #bytearray }
+    { effect #stack-effect } 
+    { tags #array }
+    { body #quotation } ;
+@builtin: slot
+    { name #bytearray }
+    { kind #fixnum }
+    { value #object } 
+    { default #object } ;
+@builtin: map 
+    { name #bytearray } 
+    { data-slots #fixnum }
+    { slots #array }
+    { prototype #object } ;
+
+
+method!: + ( other -- new ) self 2dup 2fixnum? [ fixnum+ ] [ \ + unbox send-self ] if ;
+method!: * ( other -- new ) self 2dup 2fixnum? [ fixnum* ] [ \ * unbox send-self ] if ;
+
+#fixnum: + self fixnum+ ;
+
+// type: context data retain name call ;
+
+TODO: we could do an `nth` dispatch by putting `self` as a special stack effect? ;
+method: call ( -- )
+type: curry obj quot ;
+#curry: call self [ obj>> ] [ quot>> ] bi call ;
+#quotation: call self (call) ;
+
+: curry ( obj callable -- curried ) #curry new-boa ;
+
+TODO: reimplement iterators using call interface ;
 
 type: vec3 x y z ; 
-
-type: context data retain name call ;
 
 : vec3+ ( v1 v2 -- v1+v2 ) 
     [ obj>array ] bi@ zip [ first2 + ] map #vec3 array>obj ;
 
-10 20 30 #vec3 new-boa 
-5 100 33 #vec3 new-boa
-vec3+ obj>array
+: vec3* ( vec scalar -- scaled )
+    [ * ] curry [ obj>array ] dip map #vec3 array>obj ;
 
-: parse-quotation ( -- quot ) 
-    @read-next drop s" ]" @parse-until 
-    array>quotation (array-resize-push) ;
+#vec3: + self vec3+ ;
+#vec3: * self swap  vec3* ;
 
-@: if: 
-    parse-quotation \ (call) unbox (array-resize-push)
-    parse-quotation parse-quotation 
-    \ if unbox (array-resize-push) ;
+1 2 3 #vec3 new-boa 4 3 2 #vec3 new-boa + 
 
+// needs call interface first
+// 1 2 3 #vec3 new-boa 10 swap * 
 

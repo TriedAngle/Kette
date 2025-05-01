@@ -371,6 +371,11 @@ impl Context {
         unsafe { (*parser).read_next(self) }
     }
 
+    pub fn parse_next(&mut self) {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe { (*parser).parse_next(self) }
+    }
+
     pub fn parse_until(&mut self, delimiter: Option<&str>) -> Tagged {
         log::trace!("Parse Until: {:?}", delimiter);
         let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
@@ -506,6 +511,16 @@ impl Context {
 
         let word_ptr = word.to_ptr() as *const Word;
         unsafe { (*word_ptr).has_tag(self.gc.specials.parser_tag) }
+    }
+
+    pub fn word_method(&self, word: *const Word) -> Option<*const Quotation> {
+        if unsafe { !(*word).has_tag(self.gc.specials.method_tag) } {
+            return None;
+        }
+
+        let body = unsafe { (*word).body };
+        let quot = body.to_ptr() as *const Quotation;
+        Some(quot)
     }
 
     pub fn word_primitive(&self, tagged: Tagged) -> Option<StackFn> {
@@ -678,6 +693,21 @@ impl Context {
             let name_str = unsafe { (*name_ptr).as_str() };
             return format!("{}@{:p}", name_str, obj_ptr);
         }
+    }
+
+    pub fn unbox(&self, tagged: Tagged) -> Option<Tagged> {
+        if tagged.is_false() | tagged.is_int() {
+            return None;
+        };
+
+        let obj_ptr = tagged.to_ptr();
+        let map_ptr = unsafe { (*(obj_ptr)).header.get_map() };
+        if map_ptr != self.gc.specials.box_map.to_ptr() as *mut Map {
+            return None;
+        }
+        let box_ptr = obj_ptr as *mut Box;
+        let value = unsafe { (*box_ptr).value };
+        Some(value)
     }
 }
 
