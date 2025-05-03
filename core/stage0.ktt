@@ -1,5 +1,5 @@
 @: \s @read-next (array-resize-push) ;
-@: s" \s " @skip-whitespace @read-until (array-resize-push) ;
+@: s" \s " @skip-1whitespace @read-until (array-resize-push) ;
 
 @: [ s" ]" @parse-until array>quotation (array-resize-push) ;
 
@@ -15,19 +15,9 @@
 @: // CHAR_NEWLINE @read-until drop ;
 @: /* s" */" @read-until drop ;
 
-// TODO: optimize this ;
-// x [ ... ] swap >r call r>
-// x r> [ ... ] call r>
-// x >r ... r>
 : dip ( x q -- x ) swap >r (call) r> ;
-// x [ ... ] over [ call ] dip
-// x [ ... ] x [ call ] dip
-// x dup >r [ ... ] call r>
-// x dup >r ... r>
 : keep ( x q -- x ) over [ (call) ] dip ;
-// x [ ..1 ] [ ..2 ] bi
-// x dup >r [ ..1 ] call r> [ ..2 ] call
-// x dup r> ..1 r> ..2
+
 : bi ( x p q -- ) [ keep ] dip (call) ;
 : bi* ( x y p q -- ) [ dip ] dip (call) ;
 : bi@ ( x y p -- ) dup bi* ;
@@ -333,10 +323,10 @@ TODO: effect ;
     [ method-body ] keep word|set-body ;
 
 @: method: 
-    @read-next define-word dup make-method @read-next drop ignore-stack-effect (method) ;
+    @read-next define-word /* dup make-method */ @read-next drop ignore-stack-effect (method) ;
 
 @: method!:
-    @read-next define-word dup make-method @read-next drop ignore-stack-effect 
+    @read-next define-word /* dup make-method */ @read-next drop ignore-stack-effect 
     s" ;" @parse-until array>quotation swap word|set-body ;
 
 // TODO: check if word and defined as method word
@@ -412,36 +402,133 @@ TODO: effect ;
     { prototype #object } ;
 
 
-method!: + ( other -- new ) self 2dup 2fixnum? [ fixnum+ ] [ \ + unbox send-self ] if ;
-method!: * ( other -- new ) self 2dup 2fixnum? [ fixnum* ] [ \ * unbox send-self ] if ;
+method!: + ( other self -- new ) 2dup 2fixnum? [ fixnum+ ] [ \ + send-self ] if ;
+method!: * ( other self -- new ) 2dup 2fixnum? [ fixnum* ] [ \ * send-self ] if ;
 
 #fixnum: + self fixnum+ ;
 
 // type: context data retain name call ;
 
 TODO: we could do an `nth` dispatch by putting `self` as a special stack effect? ;
-method: call ( -- )
+method: call ( self -- )
+
+// TODO: optimize this ;
+// x [ ... ] swap >r call r>
+// x r> [ ... ] call r>
+// x >r ... r>
+: dip ( x q -- x ) swap >r call r> ;
+// x [ ... ] over [ call ] dip
+// x [ ... ] x [ call ] dip
+// x dup >r [ ... ] call r>
+// x dup >r ... r>
+: keep ( x q -- x ) over [ call ] dip ;
+
+// x [ ..1 ] [ ..2 ] bi
+// x dup >r [ ..1 ] call r> [ ..2 ] call
+// x dup r> ..1 r> ..2
+: bi ( x p q -- ) [ keep ] dip call ;
+
+: bi* ( x y p q -- ) [ dip ] dip call ;
+: bi@ ( x y p -- ) dup bi* ;
+: 2dip ( x y q -- x y ) swap [ dip ] dip ; inline
+: 3dip ( x y z q -- x y z ) swap [ 2dip ] dip ; inline
+: 4dip ( x y z w q -- x y z w ) swap [ 3dip ] dip ; inline
+
+: 2keep ( ..a x y q -- ..b x y ) [ 2dup ] dip 2dip ; inline
+: 3keep ( ..a x y z q -- ..b x y z ) [ 3dup ] dip 3dip ; inline
+: 4keep ( ..a x y z w q -- ..b x y z w ) [ 4dup ] dip 4dip ; inline
+
+: 2bi ( x y p q -- ) [ 2keep ] dip call ; inline
+: 2bi* ( a b x y p q -- ) [ 2dip ] dip call ; inline
+: 2bi@ ( a b x y p -- ) dup 2bi* ; inline
+
+: tri ( x p q r -- ) [ [ keep ] dip keep ] dip call ; inline
+: tri* ( x y z p q r -- ) [ [ 2dip ] dip dip ] dip call ; inline
+: tri@ ( x y z p -- ) dup dup tri* ; inline
+
+: rotd ( x y z w -- y z x w ) [ rot ] dip ; inline
+: -rotd ( x y z w -- z x y w ) [ -rot ] dip ; inline
+
+: roll ( w x y z -- x y z w ) rotd swap ; inline
+: -roll ( x y z w -- w x y z ) swap -rotd ; inline
+
+: 2swap ( a b x y -- x y a b ) roll roll ; inline
+
+: loop ( ... p -- ... )
+    [ call ] keep swap [ loop ] [ drop ] if ; 
+
+TODO: add inline tco ;
+: while ( ... p q -- ... )
+    [ [ call ] keep ] dip rot
+    [ swap [ [ call ] keep ] dip swap while ] [ 2drop ] if ;
+
+: map-apply ( q src idx -- mapped ) 
+    array-nth swap call ; inline
+
+: map ( ..a arr q -- ..a new ) 
+    swap dup [ dup 0 slot resize-array ] [ 0 slot ] bi 
+    0 swap [ 2dup fixnum< ] [ [ [ 
+        [ swap [ map-apply ] dip ] keep array-set-nth
+    ] 4keep 1 fixnum+ ] dip ] while rot [ 4drop ] dip ; inline
+
+: enumerate ( arr -- arr ) 
+    dup [ dup 0 slot resize-array ] [ 0 slot ] bi 
+    0 swap [ 2dup fixnum< ] [ [ [ [ 
+            [ swapd array-nth ] keep 2array 
+        ] keep swapd array-set-nth
+    ] 3keep 1 fixnum+ ] dip ] while roll 3drop ; inline
+
+: each-apply ( q arr idx -- ) 
+    array-nth swap call ; inline
+
+: each ( ..a arr q -- )
+    swap dup 0 slot 0 swap [ 2dup fixnum< ] [ [
+        [ each-apply ] 3keep 1 fixnum+ ] dip
+    ] while 4drop ; inline
+
+
+: zip-apply ( arr1 arr2 idx -- zipped ) 
+    dup swapd [ array-nth ] 2bi@ 2array ;
+
+: zip ( arr1 arr2 -- new )
+    2dup [ 0 slot ] bi@ fixnum-min 
+    2dup resize-array 0 rot [ 2dup fixnum< ] [ [ [
+        [ swap [ zip-apply ] dip ] keep array-set-nth
+    ] 4keep 1 fixnum+ ] dip ] while 2drop [ 2drop ] dip ;
+
+: string<|> ( val val -- valval ) bytearray-utf8<|> ;
+
+method: to-string ( self -- str )
+
+#fixnum: to-string self   fixnum>utf8 ;
+
+#array: to-string 
+    s" { " self [ to-string string<|> s"  " string<|> ] each s" }" string<|> ;
+
+: println ( obj -- ) to-string (println) ;
 type: curry obj quot ;
 #curry: call self [ obj>> ] [ quot>> ] bi call ;
 #quotation: call self (call) ;
 
 : curry ( obj callable -- curried ) #curry new-boa ;
 
-TODO: reimplement iterators using call interface ;
-
 type: vec3 x y z ; 
 
 : vec3+ ( v1 v2 -- v1+v2 ) 
-    [ obj>array ] bi@ zip [ first2 + ] map #vec3 array>obj ;
+    [ obj>array ] bi@  zip [ first2 + ] map #vec3 array>obj ;
 
 : vec3* ( vec scalar -- scaled )
     [ * ] curry [ obj>array ] dip map #vec3 array>obj ;
 
 #vec3: + self vec3+ ;
-#vec3: * self swap  vec3* ;
+#vec3: * self swap vec3* ;
+#vec3: to-string
+    s" vec3[ " self obj>array [ to-string string<|> s"  " string<|> ] each s" ]" string<|> ;
 
-1 2 3 #vec3 new-boa 4 3 2 #vec3 new-boa + 
+1 2 3 #vec3 new-boa 4 3 2 #vec3 new-boa + println
+1 2 3 #vec3 new-boa 10 swap * println
 
-// needs call interface first
-// 1 2 3 #vec3 new-boa 10 swap * 
+: scale-by ( sequence factor -- scaled ) [ * ] curry map ;
+: add ( sequence value -- added ) [ + ] curry map ;
 
+{ 1 2 5 2 } 10 scale-by 1 add println

@@ -52,6 +52,15 @@ impl Parser {
             self.position = Tagged::from_int(new_pos);
         }
     }
+    pub fn skip_1whitespace(&mut self) {
+        if let Some(c) = self.current_char() {
+            if !c.is_whitespace() {
+                return;
+            }
+            let new_pos = self.position.to_int() + 1;
+            self.position = Tagged::from_int(new_pos);
+        }
+    }
 
     fn advance_position(&mut self, by: i64) {
         let new_pos = self.position.to_int() + by;

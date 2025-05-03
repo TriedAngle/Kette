@@ -393,7 +393,12 @@ impl Context {
             (*parser).skip_whitespace();
         }
     }
-
+    pub fn skip_1whitespace(&mut self) {
+        let parser = self.gc.specials.parser.to_ptr() as *mut Parser;
+        unsafe {
+            (*parser).skip_1whitespace();
+        }
+    }
     pub fn namestack_push(
         &mut self,
         key: Tagged,

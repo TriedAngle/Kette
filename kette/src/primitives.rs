@@ -106,6 +106,7 @@ pub fn add_primitives(ctx: &mut Context) {
         ("@parse-next", " -- obj", parse_next), 
         ("@parse-until", "end/f -- array/f", parse_until),
         ("@skip-whitespace", " -- ", skip_whitespace),
+        ("@skip-1whitespace", " -- ", skip_1whitespace),
         ("@print-compiled", " quot -- ", print_compiled),
     ];
 
@@ -242,6 +243,10 @@ fn skip_whitespace(ctx: &mut Context) {
     ctx.skip_whitespace();
 }
 
+fn skip_1whitespace(ctx: &mut Context) {
+    ctx.skip_1whitespace();
+}
+
 fn print_compiled(ctx: &mut Context) {
     let obj = ctx.pop();
     let quot = obj.to_ptr() as *const Quotation;
@@ -346,13 +351,12 @@ fn find_and_execute_method(
     msg_name: &str,
     use_super: bool,
 ) {
-    let obj_ptr = obj.to_ptr();
-
     let map_ptr = if obj.is_int() {
         ctx.gc.specials.fixnum_map.to_ptr() as *mut Map
     } else if obj.is_false() {
         ctx.gc.specials.false_map.to_ptr() as *mut Map
     } else {
+        let obj_ptr = obj.to_ptr();
         unsafe { (*obj_ptr).header.get_map() }
     };
 
@@ -366,7 +370,10 @@ fn find_and_execute_method(
         let method = unsafe { (*slot).value };
 
         let word = method.to_ptr() as *const Word;
+        let self_obj = ctx.self_obj;
+        ctx.self_obj = obj;
         ctx.execute_word(word);
+        ctx.self_obj = self_obj;
     } else {
         ctx.push(Tagged::ffalse());
     }

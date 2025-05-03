@@ -173,17 +173,6 @@ impl Context {
             return;
         }
 
-        if let Some(method_body) = self.word_method(word) {
-            log::trace!("call method: {:?}", name);
-
-            let obj = self.pop();
-            let current_self = self.self_obj;
-            self.self_obj = obj;
-            self.execute(method_body);
-            self.self_obj = current_self;
-            return;
-        }
-
         log::trace!("call non primitive: {:?}", name);
         let quot_obj = unsafe { (*word).body };
         let quot = quot_obj.to_ptr() as _;
