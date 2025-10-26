@@ -12,4 +12,6 @@ pub use scheduler::*;
 pub use tagged::*;
 pub use visitor::{MarkVisitor, Visitor};
 
-pub struct VM {}
+pub struct VM {
+    scheduler: Scheduler,
+}

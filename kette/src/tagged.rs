@@ -422,7 +422,7 @@ impl TaggedValue {
 
     #[inline]
     pub fn is_small_int(self) -> bool {
-        (self.0 & Self::INT_TAG) == 0
+        (self.0 & 1) == Self::INT_TAG
     }
     #[inline]
     pub fn is_reference(self) -> bool {
