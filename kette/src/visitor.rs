@@ -1,6 +1,6 @@
 use crate::{
-    Array, ArrayMap, Heap, Map, MapType, Object, ObjectKind, ObjectType, SlotMap, SlotObject,
-    TaggedPtr, TaggedValue,
+    Array, ArrayMap, Map, MapType, Object, ObjectKind, ObjectType, SlotMap, SlotObject, TaggedPtr,
+    TaggedValue,
 };
 
 pub trait Visitable {
@@ -20,11 +20,9 @@ pub trait Visitor: Sized {
     fn visit_element(&mut self, value: TaggedValue) -> bool;
 }
 
-pub struct MarkVisitor<'h> {
-    _heap: &'h mut Heap,
-}
+pub struct MarkVisitor {}
 
-impl<'h> Visitor for MarkVisitor<'h> {
+impl Visitor for MarkVisitor {
     fn visit_element(&mut self, value: TaggedValue) -> bool {
         if value.is_small_int() {
             return false;
@@ -59,6 +57,7 @@ impl Visitable for Object {
                     let array_object = unsafe { std::mem::transmute::<_, &mut Array>(self) };
                     array_object.visit_edges(visitor);
                 }
+                ObjectType::ByteArray => (),
                 _ => {
                     unimplemented!()
                 }
@@ -103,7 +102,6 @@ impl Visitable for ArrayMap {
 impl Visitable for SlotObject {
     #[inline]
     fn visit_edges(&mut self, visitor: &mut impl Visitor) {
-        println!("visit slot_object!");
         self.slots().iter().for_each(|&slot| visitor.visit(slot));
     }
 }
@@ -111,7 +109,6 @@ impl Visitable for SlotObject {
 impl Visitable for Array {
     #[inline]
     fn visit_edges(&mut self, visitor: &mut impl Visitor) {
-        println!("visit array!");
         self.fields().iter().for_each(|&v| visitor.visit(v));
     }
 }
@@ -361,10 +358,8 @@ mod tests {
         //   root SlotObject [ 42, ptr->Array([7]) ]
         // Reachables to mark: root SlotObject, its SlotMap, Array object, ArrayMap.
         // Unreachable: an isolated SlotObject (left unreferenced).
-        let mut heap = DummyHeap::new();
-        let mut marker = MarkVisitor {
-            _heap: unsafe { std::mem::transmute(&mut heap) },
-        };
+        let heap = DummyHeap::new();
+        let mut marker = MarkVisitor {};
 
         // Allocate reachable array & maps
         let am = make_array_map(1);

@@ -1,6 +1,6 @@
 use std::ptr::NonNull;
 
-use crate::{TaggedPtr, TaggedU64, TaggedUsize, TaggedValue, Visitor, visitor::Visitable};
+use crate::{TaggedPtr, TaggedU64, TaggedUsize, TaggedValue};
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
@@ -164,6 +164,30 @@ impl Header {
     #[inline]
     pub fn encode_map(ty: MapType, age: u8, flags: HeaderFlags, data: u32) -> Header {
         Self::encode_raw(ObjectKind::Map, ty as u8, age, flags, data)
+    }
+
+    #[inline]
+    pub fn is_forwarded(&self) -> bool {
+        self.flags().contains(HeaderFlags::FORWARD)
+    }
+
+    #[inline]
+    pub unsafe fn forwarding_slot_ptr<T>(&self) -> *mut *mut T {
+        let self_ptr = (self as *const Header as *mut Header).cast::<u8>();
+        unsafe { self_ptr.add(size_of::<Header>()) as *mut *mut T }
+    }
+
+    #[inline]
+    pub unsafe fn set_forwarding_to<T>(&mut self, new_ptr: NonNull<T>) {
+        self.0 |= (HeaderFlags::FORWARD.bits() as u64) << Header::FLAGS_SHIFT;
+        let slot = unsafe { self.forwarding_slot_ptr::<T>() };
+        unsafe { slot.write(new_ptr.as_ptr()) };
+    }
+
+    #[inline]
+    pub unsafe fn get_forwarded<T>(&self) -> NonNull<T> {
+        let slot = unsafe { self.forwarding_slot_ptr::<T>() };
+        unsafe { NonNull::new_unchecked(slot.read()) }
     }
 
     // ---- getters ----
