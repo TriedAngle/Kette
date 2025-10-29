@@ -3,7 +3,7 @@ use std::{
     ptr::NonNull,
 };
 
-use crate::{Object, TaggedPtr, TaggedValue};
+use crate::{TaggedPtr, TaggedValue};
 
 #[derive(Debug, Clone, Copy)]
 pub struct View<T>(NonNull<T>);

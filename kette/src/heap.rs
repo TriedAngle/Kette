@@ -1,5 +1,5 @@
 use std::alloc::{self, Layout};
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::mem;
 use std::ptr::NonNull;
@@ -206,8 +206,8 @@ impl Visitable for RustAllocator {
             .map(|&a| TaggedValue::from(TaggedPtr::from_nonnull(a)))
             .for_each(|value| visitor.visit(value));
     }
-    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        unimplemented!()
+    fn visit_edges_mut(&mut self, _visitor: &mut impl Visitor) {
+        unreachable!("this shouldn't exist")
     }
 }
 

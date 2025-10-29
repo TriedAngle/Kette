@@ -4,7 +4,7 @@ use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
-use crate::{Object, ValueTag};
+use crate::ValueTag;
 
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash)]

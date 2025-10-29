@@ -9,6 +9,7 @@ pub struct Specials {
     pub specials: SpecialObjects,
 }
 
+#[allow(unused)]
 pub struct VM {
     scheduler: Scheduler,
 }

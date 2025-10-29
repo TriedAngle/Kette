@@ -1,7 +1,7 @@
 use std::mem;
 use std::ptr::NonNull;
 
-use crate::{TaggedPtr, TaggedU64, TaggedUsize, TaggedValue, Visitable};
+use crate::{TaggedPtr, TaggedUsize, TaggedValue, Visitable};
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
