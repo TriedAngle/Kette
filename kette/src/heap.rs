@@ -1,694 +1,609 @@
-// heap.rs - simple single-threaded mark & sweep GC using an mmap-backed heap.
-// Notes:
-// - ByteArray objects are not allocated on this heap (ignored in GC for now).
-// - We keep it very simple: bump-pointer allocation + a free-list rebuilt on
-//   every sweep. No coalescing (yet).
-// - Headers already include a MARK bit; we only use that bit for GC.
-// - Large allocations (bigger than LARGE_THRESHOLD bytes) are backed by their
-//   own anonymous mmap and tracked in `large_allocs`.
+use std::alloc::{self, Layout};
+use std::cell::{Cell, RefCell, RefMut};
+use std::collections::HashSet;
+use std::mem;
+use std::ptr::NonNull;
 
-#![allow(dead_code)]
-use std::ptr::{self, NonNull};
-
-use crate::visitor::MarkVisitor;
 use crate::{
-    Array, ArrayMap, ByteArray, Object, ObjectKind, ObjectType, SlotMap, SlotObject, TaggedU64,
-    TaggedUsize, TaggedValue, ValueTag, Visitor,
+    Array, ArrayMap, GenericObject, Object, SlotDescriptor, SlotMap, SlotObject, TaggedPtr,
+    TaggedValue, View, Visitable, Visitor,
 };
 
-#[cfg(unix)]
-mod sys {
-    use core::ffi::c_void;
-
-    pub const PROT_NONE: i32 = 0x0;
-    pub const PROT_READ: i32 = 0x1;
-    pub const PROT_WRITE: i32 = 0x2;
-    pub const PROT_EXEC: i32 = 0x4;
-
-    pub const MAP_FILE: i32 = 0x0;
-    pub const MAP_SHARED: i32 = 0x01;
-    pub const MAP_PRIVATE: i32 = 0x02;
-
-    #[cfg(target_os = "linux")]
-    pub const MAP_ANON: i32 = 0x20;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub const MAP_ANON: i32 = 0x1000;
-
-    pub const MAP_FAILED: isize = -1;
-
-    unsafe extern "C" {
-        pub fn mmap(
-            addr: *mut c_void,
-            length: usize,
-            prot: i32,
-            flags: i32,
-            fd: i32,
-            offset: isize,
-        ) -> *mut c_void;
-
-        pub fn munmap(addr: *mut c_void, length: usize) -> i32;
-    }
-
-    #[inline]
-    pub unsafe fn anonymous_mmap(len: usize) -> *mut u8 {
-        let p = unsafe {
-            mmap(
-                core::ptr::null_mut(),
-                len,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANON,
-                -1,
-                0,
-            )
-        };
-        if (p as isize) == MAP_FAILED {
-            core::ptr::null_mut()
-        } else {
-            p as *mut u8
-        }
-    }
-
-    #[inline]
-    pub unsafe fn anonymous_munmap(ptr: *mut u8, len: usize) {
-        let _ = unsafe { munmap(ptr.cast(), len) };
-    }
-}
-
-#[inline(always)]
-fn align_up(x: usize, a: usize) -> usize {
-    debug_assert!(a.is_power_of_two());
-    (x + (a - 1)) & !(a - 1)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FreeBlock {
-    off: usize,
-    len: usize,
-}
-
-#[derive(Debug)]
-struct LargeAlloc {
-    ptr: NonNull<Object>,
-    size: usize,
-    mmap_len: usize,
-}
-
-pub struct Heap {
-    base: NonNull<u8>,
-    len: usize,
-    top: usize,
-    free: Vec<FreeBlock>,
-    large_allocs: Vec<LargeAlloc>,
-    large_threshold: usize,
-}
+pub struct Heap {}
 
 impl Heap {
-    /// Create a new heap with `bytes` capacity (mmap-backed).
-    pub fn new(bytes: usize) -> Option<Self> {
-        unsafe {
-            let p = sys::anonymous_mmap(bytes);
-            NonNull::new(p).map(|nn| Self {
-                base: nn,
-                len: bytes,
-                top: 0,
-                free: Vec::new(),
-                large_allocs: Vec::new(),
-                large_threshold: 1 << 20,
-            })
-        }
-    }
-
     pub fn zeroed() -> Self {
+        Self {}
+    }
+}
+
+pub struct AllocationToken<'heap> {
+    bytes: &'heap mut [u8],
+    used: usize,
+}
+
+impl<'heap> AllocationToken<'heap> {
+    pub fn new(start: NonNull<u8>, size: usize) -> Self {
+        let bytes = unsafe { std::slice::from_raw_parts_mut(start.as_ptr(), size) };
+        Self { bytes, used: 0 }
+    }
+
+    fn current(&mut self) -> *mut u8 {
+        let ptr = self.bytes.as_mut_ptr();
+        unsafe { ptr.add(self.used) }
+    }
+
+    pub fn allocate_raw(&mut self, size: usize) -> NonNull<u8> {
+        assert!(self.bytes.len() - self.used >= size);
+        let current = self.current();
+        self.used += size;
+        unsafe { NonNull::new(current).unwrap_unchecked() }
+    }
+
+    pub fn allocate<T: Object>(&mut self) -> View<T> {
+        let size = mem::size_of::<T>();
+        View::new(self.allocate_raw(size).cast())
+    }
+}
+
+impl<'heap> Drop for AllocationToken<'heap> {
+    fn drop(&mut self) {
+        assert!(self.used == self.bytes.len())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GarbageCollectionStats {
+    /// count of objects
+    freed_objects: usize,
+    /// bytes of freed objecs
+    freed: usize,
+    /// count of survived objects
+    survived_objects: usize,
+}
+
+/// All allocators expect the layout to include the header !
+/// so internally allocators can use pointers to Header or GenericObject
+pub trait Allocator: Visitable {
+    fn allocate(&self, layout: Layout) -> Option<NonNull<u8>>;
+    fn free(&self, ptr: NonNull<u8>);
+    fn free_if<F>(&self, f: F)
+    where
+        F: FnMut(&NonNull<GenericObject>) -> bool;
+}
+
+pub trait GarbageCollector {
+    fn allocate_raw(&self, layout: Layout) -> NonNull<u8>;
+    #[inline]
+    fn allocate(&self, layout: Layout) -> AllocationToken<'_> {
+        let raw = self.allocate_raw(layout);
+        let token = AllocationToken::new(raw, layout.size());
+        token
+    }
+    /// while technically safe, the returned value is unsafe to use and should directly be populated with data
+    /// so the unsafe is here to discourage the usage
+    #[inline]
+    unsafe fn allocate_raw_slot_map(&self, total_slots: usize) -> View<SlotMap> {
+        let map_head = Layout::new::<SlotMap>();
+        let map_slots = Layout::array::<SlotDescriptor>(total_slots).unwrap();
+        let (layout, _) = map_head.extend(map_slots).unwrap();
+        let map: NonNull<SlotMap> = self.allocate_raw(layout).cast();
+        View::new(map)
+    }
+
+    /// TODO: assignable slots should be inferred by going through slots
+    fn allocate_slot_map(
+        &self,
+        assignable_slots: usize,
+        slots: &[SlotDescriptor],
+    ) -> View<SlotMap> {
+        let total_slots = slots.len();
+        let mut map = unsafe { self.allocate_raw_slot_map(total_slots) };
+        let map_slots_ptr = map.slots.as_mut_ptr();
+        unsafe { map.init(assignable_slots, total_slots) };
+        unsafe { std::ptr::copy_nonoverlapping(slots.as_ptr(), map_slots_ptr, total_slots) };
+        map
+    }
+
+    #[inline]
+    unsafe fn allocate_raw_slot_object(&self, slot_count: usize) -> View<SlotObject> {
+        let head = Layout::new::<SlotObject>();
+        let slots = Layout::array::<TaggedValue>(slot_count).unwrap();
+        let (layout, _) = head.extend(slots).unwrap();
+        let obj: NonNull<SlotObject> = self.allocate_raw(layout).cast();
+        View::new(obj)
+    }
+
+    fn allocate_slot_object_from_map(
+        &self,
+        map: View<SlotMap>,
+        values: &[TaggedValue],
+    ) -> View<SlotObject> {
+        let slot_count = map.assignable_slots.into();
+        assert!(
+            slot_count == values.len(),
+            "slots must match object slot count"
+        );
+        let mut obj = unsafe { self.allocate_raw_slot_object(slot_count) };
+        let slots_ptr = obj.slots.as_mut_ptr();
+        unsafe { obj.init(map.into()) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr(), slots_ptr, slot_count);
+        }
+        obj
+    }
+
+    fn allocate_array_map(&self, size: usize) -> View<ArrayMap> {
+        let layout = Layout::new::<ArrayMap>();
+        let raw: NonNull<ArrayMap> = self.allocate_raw(layout).cast();
+        let mut map = View::new(raw);
+        unsafe { map.init(size) };
+        map
+    }
+
+    #[inline]
+    unsafe fn allocate_raw_array(&self, size: usize) -> View<Array> {
+        let head = Layout::new::<SlotObject>();
+        let items = Layout::array::<TaggedValue>(size).unwrap();
+        let (layout, _) = head.extend(items).unwrap();
+        let array: NonNull<Array> = self.allocate_raw(layout).cast();
+        View::new(array)
+    }
+
+    /// This is unsafe because we didn't initialize the fields yet.
+    /// this array would be safe to write, but reading from unwritten fields could be arbitrary.
+    #[inline]
+    unsafe fn allocate_unsafe_array(&self, map: View<ArrayMap>) -> View<Array> {
+        let size: usize = map.size.into();
+        let mut array = unsafe { self.allocate_raw_array(size) };
+        unsafe { array.init(map.into()) };
+        array
+    }
+
+    fn allocate_filled_array(&self, map: View<ArrayMap>, value: TaggedValue) -> View<Array> {
+        let mut array = unsafe { self.allocate_unsafe_array(map) };
+        array.fields_mut().fill(value);
+        array
+    }
+
+    fn allocate_array(&self, map: View<ArrayMap>, values: &[TaggedValue]) -> View<Array> {
+        let mut array = unsafe { self.allocate_unsafe_array(map) };
+        assert!(array.len() == values.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr(), array.fields.as_mut_ptr(), values.len())
+        };
+        array
+    }
+
+    fn force_collect(&self) -> GarbageCollectionStats;
+    fn add_root(&self, object: TaggedPtr<GenericObject>);
+    fn remove_root(&self, object: TaggedPtr<GenericObject>);
+}
+
+pub struct RustAllocator {
+    allocations: RefCell<HashSet<NonNull<GenericObject>, ahash::RandomState>>,
+}
+
+impl RustAllocator {
+    pub fn new() -> Self {
         Self {
-            base: NonNull::dangling(),
-            top: 0,
-            len: 0,
-            free: Vec::new(),
-            large_threshold: 0,
-            large_allocs: Vec::new(),
+            allocations: RefCell::new(HashSet::default()),
         }
     }
 
-    /// Set the size threshold for off-heap "large" allocations.
-    pub fn set_large_threshold(&mut self, bytes: usize) {
-        self.large_threshold = bytes;
+    fn dealloc(obj: NonNull<GenericObject>) {
+        let size = unsafe { (*obj.as_ptr()).heap_size() };
+        let layout = unsafe { Layout::from_size_align_unchecked(size, 8) };
+        unsafe { alloc::dealloc(obj.as_ptr() as _, layout) };
     }
+}
 
-    /// Total capacity of the main heap (bytes).
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        self.len
+impl Visitable for RustAllocator {
+    fn visit_edges(&self, visitor: &impl crate::Visitor) {
+        let allocations = self.allocations.borrow_mut();
+        allocations
+            .iter()
+            .map(|&a| TaggedValue::from(TaggedPtr::from_nonnull(a)))
+            .for_each(|value| visitor.visit(value));
     }
-
-    /// Bytes currently bumped (not counting free-list blocks).
-    #[inline]
-    pub fn high_water(&self) -> usize {
-        self.top
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        unimplemented!()
     }
+}
 
-    /// Allocate a SlotMap on the heap.
-    pub fn alloc_slot_map(&mut self, assignable_slots: usize) -> Option<NonNull<SlotMap>> {
-        let layout_size = size_of::<SlotMap>();
-        let p = self.alloc_raw(layout_size, align_of::<SlotMap>())?;
-        unsafe {
-            let sm_ptr = p.cast::<SlotMap>();
-            // Construct in place.
-            let sm_val = SlotMap::new(TaggedU64::from(assignable_slots as u64));
-            ptr::write(sm_ptr.as_ptr(), sm_val);
-            Some(sm_ptr)
-        }
-    }
-
-    /// Allocate an ArrayMap on the heap.
-    pub fn alloc_array_map(&mut self, len: usize) -> Option<NonNull<ArrayMap>> {
-        let layout_size = size_of::<ArrayMap>();
-        let p = self.alloc_raw(layout_size, align_of::<ArrayMap>())?;
-        unsafe {
-            let am_ptr = p.cast::<ArrayMap>();
-            let am_val = ArrayMap::new(TaggedUsize::from(len));
-            ptr::write(am_ptr.as_ptr(), am_val);
-            Some(am_ptr)
-        }
-    }
-
-    /// Allocate a SlotObject with given `map` and initial `slots`.
-    pub fn alloc_slot_object(
-        &mut self,
-        map: NonNull<SlotMap>,
-        slots: &[TaggedValue],
-    ) -> Option<NonNull<SlotObject>> {
-        // Use the map's slot count to size the object.
-        let n = unsafe { map.as_ref().assignable_slots_count() };
-        if slots.len() > n {
-            // Strict: refuse to build a mismatched object.
+impl Allocator for RustAllocator {
+    fn allocate(&self, layout: Layout) -> Option<NonNull<u8>> {
+        let raw = unsafe { alloc::alloc(layout) };
+        if raw.is_null() {
             return None;
         }
+        let res = NonNull::new(raw.cast()).unwrap();
+        let mut allocations = self.allocations.borrow_mut();
+        allocations.insert(res);
+        unsafe { Some(NonNull::new(raw).unwrap_unchecked()) }
+    }
 
-        let bytes = size_of::<SlotObject>() + n * size_of::<TaggedValue>();
-        if bytes >= self.large_threshold {
-            return self.alloc_large_slot_object(map, slots);
-        }
+    fn free(&self, ptr: NonNull<u8>) {
+        let obj = ptr.cast();
+        let mut allocations = self.allocations.borrow_mut();
+        allocations.remove(&obj);
+        Self::dealloc(obj);
+    }
 
-        let p = self.alloc_raw(bytes, align_of::<SlotObject>())?;
-        unsafe {
-            let so_ptr = p.cast::<SlotObject>();
-            SlotObject::init(so_ptr, map);
-            let so = so_ptr.as_ptr();
-            // Write all n slots.
-            for (i, v) in slots.iter().copied().enumerate() {
-                (*so).set_slot_unchecked(i, v);
-            }
-            Some(so_ptr)
+    fn free_if<F>(&self, f: F)
+    where
+        F: FnMut(&NonNull<GenericObject>) -> bool,
+    {
+        let mut allocations = self.allocations.borrow_mut();
+        allocations.extract_if(f).for_each(|obj| Self::dealloc(obj));
+        allocations.shrink_to_fit();
+    }
+}
+
+pub struct HandleSet {}
+
+pub struct MarkAndSweepGCImpl<A: Allocator> {
+    allocator: A,
+    roots: HashSet<TaggedPtr<GenericObject>, ahash::RandomState>,
+    /// ignored for now, optimization for later.
+    #[allow(unused)]
+    handles: Option<NonNull<HandleSet>>,
+}
+
+pub struct MarkAndSweepGC<A: Allocator> {
+    inner: RefCell<MarkAndSweepGCImpl<A>>,
+}
+
+impl<A: Allocator> MarkAndSweepGCImpl<A> {
+    fn new(allocator: A) -> Self {
+        Self {
+            allocator,
+            roots: HashSet::default(),
+            handles: None,
         }
     }
 
-    /// Allocate an Array whose length is dictated by its ArrayMap.
-    /// The number of runtime values MUST equal the map's declared length.
-    pub fn alloc_array(
-        &mut self,
-        map: NonNull<ArrayMap>,
-        values: &[TaggedValue],
-    ) -> Option<NonNull<Array>> {
-        // Use the map's declared array length.
-        let n = unsafe { map.as_ref().size() };
-        if values.len() > n {
-            // Strict: refuse to build a mismatched array.
-            return None;
+    fn collect(&mut self) -> GarbageCollectionStats {
+        struct MarkVisitor<'a> {
+            queue: &'a mut Vec<TaggedPtr<GenericObject>>,
         }
-
-        let bytes = size_of::<Array>() + n * size_of::<TaggedValue>();
-        if bytes >= self.large_threshold {
-            return self.alloc_large_array(map, values);
-        }
-
-        let p = self.alloc_raw(bytes, align_of::<Array>())?;
-        unsafe {
-            let a_ptr = p.cast::<Array>();
-            Array::init(a_ptr, map);
-            let a = a_ptr.as_ptr();
-            for (i, v) in values.iter().copied().enumerate() {
-                (*a).set_unchecked(i, v);
-            }
-            Some(a_ptr)
-        }
-    }
-
-    /// Perform a full GC given a flat root set.
-    /// Returns total bytes reclaimed on both the main heap and large mmaps.
-    pub fn collect(&mut self, roots: &mut [TaggedValue]) -> usize {
-        // ---- Mark ----
-        {
-            let mut mv = MarkVisitor {};
-            for v in roots.iter().copied() {
-                mv.visit(v);
-            }
-            // drop mv before sweeping (mutable borrow)
-        }
-        // ---- Sweep ----
-        let mut freed = 0usize;
-
-        // Rebuild free-list from scratch.
-        self.free.clear();
-
-        // Sweep the main heap by scanning tagged words for headers.
-        let mut off = 0usize;
-        while off + size_of::<u64>() <= self.top {
-            let word_ptr = unsafe { self.base.as_ptr().add(off) as *mut u64 };
-            let word = unsafe { *word_ptr };
-            if (word & 0b11) == (ValueTag::Header as u64) {
-                let mut obj_ptr = unsafe { NonNull::new_unchecked(word_ptr.cast::<Object>()) };
-                let size = unsafe { self.object_size_bytes(obj_ptr) };
-                let obj_ref = unsafe { obj_ptr.as_mut() };
-                let header = &mut obj_ref.header;
-                if header.is_marked() {
-                    // Live: unmark for next cycle.
-                    header.unmark();
-                } else {
-                    // Dead: reclaim this region.
-                    self.free.push(FreeBlock { off, len: size });
-                    freed += size;
+        impl<'a> Visitor for MarkVisitor<'a> {
+            fn visit_mut(&mut self, value: TaggedValue) {
+                let Some(obj) = value.as_reference::<GenericObject>() else {
+                    return;
+                };
+                let ptr = obj.as_mut_ptr();
+                if unsafe { (*ptr).header.is_marked() } {
+                    return;
                 }
-                // Skip to the next object area.
-                off = off.saturating_add(align_up(size, size_of::<u64>()));
-            } else {
-                // Not a header: advance one word.
-                off += size_of::<u64>();
+                unsafe { (*ptr).header.mark() };
+                self.queue.push(obj);
             }
         }
 
-        // Sweep large mmaps.
-        // Keep only live ones; unmap the rest.
-        let mut i = 0usize;
-        while i < self.large_allocs.len() {
-            // SAFETY: each LargeAlloc.ptr points to the start of an object header
-            let obj = self.large_allocs[i].ptr;
-            let header = unsafe { &mut obj.as_ptr().cast::<Object>().as_mut().unwrap().header };
-            if header.is_marked() {
-                header.unmark();
-                i += 1;
-            } else {
-                let la = self.large_allocs.remove(i);
-                unsafe { sys::anonymous_munmap(la.ptr.as_ptr().cast::<u8>(), la.mmap_len) };
-                freed += la.size;
-            }
+        let mut stats = GarbageCollectionStats {
+            freed: 0,
+            survived_objects: 0,
+            freed_objects: 0,
+        };
+
+        let mut queue = Vec::<TaggedPtr<GenericObject>>::new();
+        queue.extend(&self.roots);
+
+        let mut marker = MarkVisitor { queue: &mut queue };
+        for &root in &self.roots {
+            marker.visit_mut(root.into());
+        }
+        println!("queue: {:?}", queue);
+
+        while let Some(mut object) = queue.pop() {
+            let mut marker = MarkVisitor { queue: &mut queue };
+            object.visit_edges_mut(&mut marker);
         }
 
-        freed
+        self.allocator.free_if(|obj| {
+            let ptr = obj.as_ptr();
+            if unsafe { (*ptr).header.is_marked() } {
+                stats.survived_objects += 1;
+                unsafe { (*ptr).header.unmark() };
+                return false;
+            }
+
+            stats.freed_objects += 1;
+            stats.freed += unsafe { (*ptr).heap_size() };
+
+            true
+        });
+        stats
     }
 
-    /// Allocate raw bytes within the main heap using a simple free-list + bump.
-    fn alloc_raw(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
-        // Try the free-list first (first-fit with alignment fixup).
-        let mut idx = 0usize;
-        while idx < self.free.len() {
-            let fb = self.free[idx];
-            let start = align_up(self.base.as_ptr() as usize + fb.off, align);
-            let aligned_off = start - self.base.as_ptr() as usize;
-            let end = aligned_off + size;
-            if end <= fb.off + fb.len {
-                // We can carve out here.
-                // Remove the block and push back the leftovers (at most 2).
-                self.free.remove(idx);
-                // Left prefix (if any)
-                if aligned_off > fb.off {
-                    self.free.push(FreeBlock {
-                        off: fb.off,
-                        len: aligned_off - fb.off,
-                    });
-                }
-                // Right suffix (if any)
-                if end < fb.off + fb.len {
-                    self.free.push(FreeBlock {
-                        off: end,
-                        len: (fb.off + fb.len) - end,
-                    });
-                }
-                return Some(unsafe {
-                    NonNull::new_unchecked(self.base.as_ptr().add(aligned_off))
-                });
-            } else {
-                idx += 1;
-            }
-        }
-
-        // Fallback to bump allocation.
-        let aligned_top = align_up(self.top + (self.base.as_ptr() as usize), align)
-            - (self.base.as_ptr() as usize);
-        let new_top = aligned_top.checked_add(size)?;
-        if new_top > self.len {
-            return None;
-        }
-        let p = unsafe { NonNull::new_unchecked(self.base.as_ptr().add(aligned_top)) };
-        self.top = new_top;
-        Some(p)
+    fn allocate_raw(&mut self, layout: Layout) -> NonNull<u8> {
+        let Some(allocation) = self.allocator.allocate(layout) else {
+            self.collect();
+            let Some(allocation) = self.allocator.allocate(layout) else {
+                panic!("No Space in Heap");
+            };
+            return allocation;
+        };
+        allocation
     }
 
-    /// Compute object size in bytes from its header (object or map).
-    unsafe fn object_size_bytes(&self, obj: NonNull<Object>) -> usize {
-        let oref = obj.as_ptr();
-        let hdr = unsafe { (*oref).header };
-        match hdr.kind() {
-            ObjectKind::Map => match hdr.map_type().expect("invalid map header") {
-                crate::MapType::Slot => size_of::<SlotMap>(),
-                crate::MapType::Array => size_of::<ArrayMap>(),
-            },
-            ObjectKind::Object => {
-                match hdr.object_type().expect("invalid object header") {
-                    ObjectType::Slot => {
-                        let so = unsafe { &*(oref as *const SlotObject) };
-                        let n = so.assignable_slots();
-                        size_of::<SlotObject>() + n * size_of::<TaggedValue>()
-                    }
-                    ObjectType::Array => {
-                        let a = unsafe { &*(oref as *const Array) };
-                        let n = a.len();
-                        size_of::<Array>() + n * size_of::<TaggedValue>()
-                    }
-                    ObjectType::ByteArray => {
-                        // Not on this heap; treat as just a header to avoid UB.
-                        size_of::<ByteArray>()
-                    }
-                    ObjectType::Max => size_of::<u64>(), // conservative
-                }
-            }
-        }
+    fn add_root(&mut self, object: TaggedPtr<GenericObject>) {
+        self.roots.insert(object);
     }
 
-    // ---- Large off-heap helpers ----
-
-    fn alloc_large_slot_object(
-        &mut self,
-        map: NonNull<SlotMap>,
-        slots: &[TaggedValue],
-    ) -> Option<NonNull<SlotObject>> {
-        let bytes = size_of::<SlotObject>() + slots.len() * size_of::<TaggedValue>();
-        unsafe {
-            let p = sys::anonymous_mmap(bytes);
-            let nn = NonNull::new(p)?;
-            let so_ptr = nn.cast::<SlotObject>();
-            SlotObject::init(so_ptr, map);
-            for (i, v) in slots.iter().copied().enumerate() {
-                so_ptr.as_ptr().as_mut().unwrap().set_slot_unchecked(i, v);
-            }
-            self.large_allocs.push(LargeAlloc {
-                ptr: so_ptr.cast::<Object>(),
-                size: bytes,
-                mmap_len: bytes, // already exact size; ok for munmap
-            });
-            Some(so_ptr)
-        }
+    fn remove_root(&mut self, object: TaggedPtr<GenericObject>) {
+        self.roots.remove(&object);
     }
+}
 
-    fn alloc_large_array(
-        &mut self,
-        map: NonNull<ArrayMap>,
-        values: &[TaggedValue],
-    ) -> Option<NonNull<Array>> {
-        let bytes = size_of::<Array>() + values.len() * size_of::<TaggedValue>();
-        unsafe {
-            let p = sys::anonymous_mmap(bytes);
-            let nn = NonNull::new(p)?;
-            let a_ptr = nn.cast::<Array>();
-            Array::init(a_ptr, map);
-            for (i, v) in values.iter().copied().enumerate() {
-                a_ptr.as_ptr().as_mut().unwrap().set_unchecked(i, v);
-            }
-            self.large_allocs.push(LargeAlloc {
-                ptr: a_ptr.cast::<Object>(),
-                size: bytes,
-                mmap_len: bytes,
-            });
-            Some(a_ptr)
+impl<A: Allocator> MarkAndSweepGC<A> {
+    pub fn new(allocator: A) -> Self {
+        let inner = MarkAndSweepGCImpl::new(allocator);
+        Self {
+            inner: RefCell::new(inner),
         }
     }
 }
 
-impl Drop for Heap {
-    fn drop(&mut self) {
-        // Unmap large allocations
-        for la in self.large_allocs.drain(..) {
-            unsafe { sys::anonymous_munmap(la.ptr.as_ptr().cast::<u8>(), la.mmap_len) };
-        }
-        // Unmap the main heap
-        unsafe { sys::anonymous_munmap(self.base.as_ptr(), self.len) };
+impl<A: Allocator> GarbageCollector for MarkAndSweepGC<A> {
+    fn allocate_raw(&self, layout: Layout) -> NonNull<u8> {
+        self.inner.borrow_mut().allocate_raw(layout)
+    }
+    fn force_collect(&self) -> GarbageCollectionStats {
+        self.inner.borrow_mut().collect()
+    }
+    fn add_root(&self, object: TaggedPtr<GenericObject>) {
+        self.inner.borrow_mut().add_root(object);
+    }
+    fn remove_root(&self, object: TaggedPtr<GenericObject>) {
+        self.inner.borrow_mut().remove_root(object);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::TaggedPtr;
+    use crate::*;
 
-    use super::*;
-    use std::ptr::NonNull;
-
-    // --- Helpers -------------------------------------------------------------
-
-    #[inline]
-    fn tv_obj(o: NonNull<Object>) -> TaggedValue {
-        TaggedPtr::<Object>::from_nonnull(o).into()
+    fn new_gc() -> MarkAndSweepGC<RustAllocator> {
+        MarkAndSweepGC::new(RustAllocator::new())
     }
 
-    #[inline]
-    fn tv_slot_map(m: NonNull<SlotMap>) -> TaggedValue {
-        TaggedPtr::<SlotMap>::from_nonnull(m).into()
+    fn alloc_empty_slot_map<G: GarbageCollector>(gc: &G) -> View<SlotMap> {
+        gc.allocate_slot_map(0, &[])
+    }
+    fn alloc_empty_slot_object<G: GarbageCollector>(
+        gc: &G,
+        map: View<SlotMap>,
+    ) -> View<SlotObject> {
+        gc.allocate_slot_object_from_map(map, &[])
     }
 
-    #[inline]
-    fn tv_array_map(m: NonNull<ArrayMap>) -> TaggedValue {
-        TaggedPtr::<ArrayMap>::from_nonnull(m).into()
+    fn alloc_empty_array<G: GarbageCollector>(gc: &G) -> (View<ArrayMap>, View<Array>) {
+        let amap = gc.allocate_array_map(0);
+        let array = unsafe { gc.allocate_unsafe_array(amap) };
+        (amap, array)
     }
 
-    #[inline]
-    fn tv_array(a: NonNull<Array>) -> TaggedValue {
-        TaggedPtr::<Array>::from_nonnull(a).into()
+    fn alloc_empty_byte_array<G: GarbageCollector>(gc: &G) -> View<ByteArray> {
+        let layout = std::alloc::Layout::new::<ByteArray>();
+        let raw: std::ptr::NonNull<ByteArray> = gc.allocate_raw(layout).cast();
+        let mut ba = View::new(raw);
+        // Initialize as an ObjectType::ByteArray with default flags/data.
+        ba.header = Header::encode_object(ObjectType::ByteArray, 0, HeaderFlags::empty(), 0);
+        ba
     }
 
-    fn make_heap() -> Heap {
-        // small heap is fine; we also exercise large allocs off-heap
-        let mut h = Heap::new(1024 * 64).expect("mmap heap");
-        // use a normal threshold by default, individual tests may override
-        h.set_large_threshold(1 << 20);
-        h
+    fn as_generic_object<T>(v: View<T>) -> TaggedPtr<GenericObject> {
+        let tp: TaggedPtr<T> = v.into();
+        unsafe { tp.cast() }
     }
-
-    // Build a simple object graph:
-    //   obj --slot0--> arr
-    // Maps are passed in and MUST be rooted by the caller.
-    fn make_object_pointing_to_array(
-        heap: &mut Heap,
-        smap: NonNull<SlotMap>,
-        amap: NonNull<ArrayMap>,
-    ) -> (NonNull<SlotObject>, NonNull<Array>) {
-        let arr = heap.alloc_array(amap, &[]).expect("array allocation");
-        let slots = [tv_array(arr)];
-        let obj = heap
-            .alloc_slot_object(smap, &slots)
-            .expect("object allocation");
-        (obj, arr)
-    }
-
-    // --- Tests ---------------------------------------------------------------
 
     #[test]
-    fn mark_keeps_reachable_objects_when_maps_are_rooted() {
-        let mut heap = make_heap();
+    fn collect_without_roots_frees_everything() {
+        let gc = new_gc();
 
-        // Create maps (must be in roots!)
-        let smap = heap.alloc_slot_map(1).expect("slot map");
-        let amap = heap.alloc_array_map(0).expect("array map");
+        // Allocate a mix of objects
+        let slot_map = alloc_empty_slot_map(&gc);
+        let _slot_obj = alloc_empty_slot_object(&gc, slot_map);
 
-        // An object with one slot pointing to an array.
-        let (obj, _arr) = make_object_pointing_to_array(&mut heap, smap, amap);
+        let (_amap, _arr) = alloc_empty_array(&gc);
+        let (_amap2, _arr2) = alloc_empty_array(&gc);
 
-        let top_before = heap.high_water();
-
-        // Roots: both maps AND the object (visitor doesn't walk maps from objects)
-        let mut roots = [tv_slot_map(smap), tv_array_map(amap), tv_obj(obj.cast())];
-
-        // Nothing should be freed; also live objects should be unmarked after sweep
-        let freed = heap.collect(&mut roots);
-        assert_eq!(freed, 0, "GC freed live objects unexpectedly");
-
-        // No allocations happened, high water unchanged.
+        // Nothing is rooted, so everything should be freed.
+        let stats = gc.force_collect();
         assert_eq!(
-            heap.high_water(),
-            top_before,
-            "high water should not move during a no-op collection"
+            stats.survived_objects, 0,
+            "no roots => nothing should survive"
         );
-    }
-
-    #[test]
-    fn sweeping_frees_unreachable_and_reuses_free_list() {
-        let mut heap = make_heap();
-
-        // Root maps only; object/array will be unreachable and must die.
-        let smap = heap.alloc_slot_map(1).expect("slot map");
-        let amap = heap.alloc_array_map(0).expect("array map");
-
-        let (obj, _arr) = make_object_pointing_to_array(&mut heap, smap, amap);
-
-        // Record the address of the object to later check hole reuse.
-        let obj_addr = obj.as_ptr() as usize;
-
-        // Snapshot bump top before GC (for later reuse check)
-        let top_before = heap.high_water();
-
-        // Only maps are rooted (as instructed), graph (obj->arr) is not.
-        let mut roots = [tv_slot_map(smap), tv_array_map(amap)];
-        let freed = heap.collect(&mut roots);
         assert!(
-            freed > 0,
-            "collector should have reclaimed unreachable object+array"
+            stats.freed_objects >= 5,
+            "we allocated at least 5 distinct objects"
         );
+        assert!(stats.freed > 0, "freed byte counter should be positive");
+    }
 
-        // Now allocate a same-shaped object; it should reuse the freed hole
-        // (free-list first-fit) and *not* bump the top.
-        let (obj2, _arr2) = make_object_pointing_to_array(&mut heap, smap, amap);
+    #[test]
+    fn rooted_object_survives_others_are_freed() {
+        let gc = new_gc();
+
+        // Two independent objects: root only one of them.
+        let slot_map = alloc_empty_slot_map(&gc);
+        let rooted = alloc_empty_slot_object(&gc, slot_map);
+
+        let slot_map2 = alloc_empty_slot_map(&gc);
+        let _unrooted = alloc_empty_slot_object(&gc, slot_map2);
+
+        // Add root for the first one.
+        gc.add_root(as_generic_object(rooted));
+
+        let stats = gc.force_collect();
         assert_eq!(
-            heap.high_water(),
-            top_before,
-            "allocation should reuse free block instead of bumping"
+            stats.survived_objects, 2,
+            "rooted object survives; its SlotMap survives too"
         );
         assert_eq!(
-            obj2.as_ptr() as usize,
-            obj_addr,
-            "free-list should hand back the same freed slot (first-fit)"
+            stats.freed_objects, 2,
+            "unrooted object and its SlotMap are freed"
         );
     }
 
     #[test]
-    fn collecting_twice_is_idempotent_when_nothing_changes() {
-        let mut heap = make_heap();
+    fn add_then_remove_root_changes_liveness() {
+        let gc = new_gc();
 
-        // Live graph (all rooted).
-        let smap = heap.alloc_slot_map(1).expect("slot map");
-        let amap = heap.alloc_array_map(0).expect("array map");
-        let (obj, _arr) = make_object_pointing_to_array(&mut heap, smap, amap);
+        let sm = alloc_empty_slot_map(&gc);
+        let obj = alloc_empty_slot_object(&gc, sm);
 
-        let mut roots = [tv_slot_map(smap), tv_array_map(amap), tv_obj(obj.cast())];
+        // First GC with the object rooted: it should survive.
+        gc.add_root(as_generic_object(obj));
+        let stats1 = gc.force_collect();
+        assert_eq!(
+            stats1.survived_objects, 2,
+            "rooted object and its SlotMap should survive"
+        );
+        assert_eq!(stats1.freed_objects, 0, "nothing unrooted was allocated");
 
-        // First pass
-        let freed1 = heap.collect(&mut roots);
-        assert_eq!(freed1, 0);
+        // Remove root, allocate a small extra object (to keep allocator set non-empty).
+        gc.remove_root(as_generic_object(obj));
+        let (_amap, _arr) = alloc_empty_array(&gc);
 
-        // Second pass
-        let freed2 = heap.collect(&mut roots);
-        assert_eq!(freed2, 0, "back-to-back GC should free nothing");
+        // Now the previously-rooted pair should be freed; the new array pair survives if not rooted?
+        // We did not root the array, so after this collection: the old pair is freed,
+        // and the new array + its map are also freed (no roots at all).
+        let stats2 = gc.force_collect();
+        assert!(
+            stats2.freed_objects >= 2,
+            "the previously rooted {obj:?}, {sm:?} should now be freed"
+        );
+        assert_eq!(
+            stats2.survived_objects, 0,
+            "no roots => nothing should survive"
+        );
     }
 
     #[test]
-    fn cyclic_unreachable_objects_are_collected_when_maps_are_rooted() {
-        let mut heap = make_heap();
+    fn surviving_objects_are_unmarked_after_sweep() {
+        let gc = new_gc();
 
-        let smap = heap.alloc_slot_map(1).expect("slot map");
-        let amap = heap.alloc_array_map(0).expect("array map");
+        let sm = alloc_empty_slot_map(&gc);
+        let obj = alloc_empty_slot_object(&gc, sm);
 
-        let slots_dummy = [tv_array_map(amap)]; // temporary to allocate shape
-        let o1 = heap.alloc_slot_object(smap, &slots_dummy).expect("o1");
-        let o2 = heap.alloc_slot_object(smap, &slots_dummy).expect("o2");
+        // Root it so it survives the sweep.
+        let obj_root = as_generic_object(obj);
+        gc.add_root(obj_root);
 
-        unsafe {
-            // o1.slot0 = o2
-            o1.as_ptr()
-                .as_mut()
-                .unwrap()
-                .set_slot_unchecked(0, tv_obj(o2.cast()));
-            // o2.slot0 = o1
-            o2.as_ptr()
-                .as_mut()
-                .unwrap()
-                .set_slot_unchecked(0, tv_obj(o1.cast()));
+        // Run GC
+        let _ = gc.force_collect();
+
+        // After sweep, survivors must be unmarked for the next cycle.
+        // SAFETY: obj_root points to a live object (we just collected with it rooted).
+        let gptr = obj_root.as_mut_ptr();
+        let header = unsafe { &(*gptr).header };
+        assert!(!header.is_marked(), "survivor must be unmarked after sweep");
+    }
+
+    #[test]
+    fn array_and_arraymap_can_be_allocated_and_collected() {
+        let gc = new_gc();
+
+        // Allocate an ArrayMap + Array (size 0).
+        let (_amap, arr) = alloc_empty_array(&gc);
+
+        // If we root the array, both it and its map survive.
+        gc.add_root(as_generic_object(arr));
+        let stats1 = gc.force_collect();
+        assert_eq!(
+            stats1.survived_objects, 2,
+            "rooted array and its ArrayMap should survive"
+        );
+        assert_eq!(stats1.freed_objects, 0);
+
+        // Drop the root and collect again; both should now be freed.
+        gc.remove_root(as_generic_object(arr));
+        let stats2 = gc.force_collect();
+        assert!(
+            stats2.freed_objects >= 2,
+            "array and its map should be freed when unrooted"
+        );
+        assert_eq!(stats2.survived_objects, 0);
+
+        // Make sure we can still allocate after freeing
+        let new_map = alloc_empty_slot_map(&gc);
+        let _new_obj = alloc_empty_slot_object(&gc, new_map); // using the old map View is fine; it was a copy
+        let stats3 = gc.force_collect();
+        // We didn't root the new pair; they should be freed too.
+        assert!(stats3.freed_objects >= 2);
+        assert_eq!(stats3.survived_objects, 0);
+    }
+
+    #[test]
+    fn arrays_and_slot_objects_with_values_are_tracked_transitively() {
+        let gc = new_gc();
+
+        // --- leaf objects the container values will point to ---
+        let leaf_a = alloc_empty_byte_array(&gc);
+        let leaf_b = alloc_empty_byte_array(&gc);
+
+        // Helper: TaggedValue reference from a View<T>.
+        fn ref_value<T>(v: View<T>) -> TaggedValue {
+            let tp: TaggedPtr<T> = v.into();
+            tp.into()
         }
 
-        let top_before = heap.high_water();
+        // --- an Array with 2 fields pointing to the leaves ---
+        let amap2 = gc.allocate_array_map(2);
+        let arr_vals = [ref_value(leaf_a), ref_value(leaf_b)];
+        let arr = gc.allocate_array(amap2, &arr_vals);
 
-        let mut roots = [tv_slot_map(smap), tv_array_map(amap)];
-        let freed = heap.collect(&mut roots);
+        // --- a SlotObject with 2 slots: [arr, leaf_b] ---
+        // We need a SlotMap with 2 assignable slots. Use the raw allocator to avoid having to
+        // provide real SlotDescriptors (they aren't used by GC marking anyways).
+        let sm2 = {
+            let mut sm = unsafe { gc.allocate_raw_slot_map(2) };
+            unsafe { sm.init(2, 2) };
+            sm
+        };
+        let obj_vals = [ref_value(arr), ref_value(leaf_b)];
+        let obj = gc.allocate_slot_object_from_map(sm2, &obj_vals);
+
+        // Root ONLY the slot object. Transitively, it should keep: obj, its SlotMap, arr, arr's ArrayMap, and both leaves.
+        gc.add_root(as_generic_object(obj));
+        let s1 = gc.force_collect();
         assert!(
-            freed > 0,
-            "cycle without a root must be collected by mark & sweep"
+            s1.survived_objects >= 6,
+            "rooted SlotObject should keep itself, its SlotMap, the Array, its ArrayMap, and both leaves alive"
         );
-
-        let _o3 = heap.alloc_slot_object(smap, &slots_dummy).expect("o3");
         assert_eq!(
-            heap.high_water(),
-            top_before,
-            "after freeing the cycle, subsequent allocation should reuse free space"
+            s1.freed_objects, 0,
+            "nothing should be freed while obj is the sole root"
         );
-    }
 
-    #[test]
-    fn large_allocation_off_heap_is_unmapped_when_unreachable() {
-        let mut heap = make_heap();
+        // Now unroot the SlotObject, but root the Array.
+        gc.remove_root(as_generic_object(obj));
+        gc.add_root(as_generic_object(arr));
 
-        heap.set_large_threshold(128);
-
-        let smap = heap.alloc_slot_map(1).expect("slot map");
-        let amap = heap.alloc_array_map(256).expect("array map");
-
-        let big_len = 256usize; // 256 * size_of<TaggedValue> + header >> 128
-        let values = vec![tv_slot_map(smap); big_len]; // arbitrary tagged values
-        let big_arr = heap
-            .alloc_array(amap, &values)
-            .expect("large array off-heap");
-
-        let obj_live_slots = [tv_array(big_arr)];
-        let obj_live = heap
-            .alloc_slot_object(smap, &obj_live_slots)
-            .expect("small object");
-
-        let mut roots_live = [
-            tv_slot_map(smap),
-            tv_array_map(amap),
-            tv_obj(obj_live.cast()),
-        ];
-        let freed_live = heap.collect(&mut roots_live);
-        assert_eq!(freed_live, 0, "live large object should not be freed");
-
-        let _replace_obj = heap
-            .alloc_slot_object(smap, &[])
-            .expect("replacement small object");
-        let mut roots_dead = [tv_slot_map(smap), tv_array_map(amap)];
-        let freed_dead = heap.collect(&mut roots_dead);
-
-        let expect_min = size_of::<Array>() + big_len * size_of::<TaggedValue>();
+        let s2 = gc.force_collect();
+        // The SlotObject + its SlotMap should now be freed; Array + ArrayMap + 2 leaves survive.
         assert!(
-            freed_dead >= expect_min,
-            "expected to reclaim >= {} bytes, actually freed {}",
-            expect_min,
-            freed_dead
+            s2.survived_objects >= 4,
+            "rooted Array should keep itself, its ArrayMap, and both leaves alive"
         );
-    }
+        assert!(
+            s2.freed_objects >= 2,
+            "the SlotObject and its SlotMap should now be freed"
+        );
 
-    #[test]
-    fn free_list_split_prefix_and_suffix_are_preserved() {
-        let mut heap = make_heap();
-
-        let smap = heap.alloc_slot_map(2).expect("slot map");
-        let amap = heap.alloc_array_map(2).expect("array map");
-
-        let a = heap.alloc_slot_object(smap, &[]).expect("A");
-        let _b = heap.alloc_slot_object(smap, &[]).expect("B");
-        let c = heap.alloc_slot_object(smap, &[]).expect("C");
-
-        let top_after_abc = heap.high_water();
-
-        let mut roots = [
-            tv_slot_map(smap),
-            tv_array_map(amap),
-            tv_obj(a.cast()),
-            tv_obj(c.cast()),
-        ];
-        let freed = heap.collect(&mut roots);
-        assert!(freed > 0, "B should have been reclaimed");
-
-        let _d = heap.alloc_slot_object(smap, &[]).expect("D");
+        // Finally, unroot everything and ensure it all goes away.
+        gc.remove_root(as_generic_object(arr));
+        let s3 = gc.force_collect();
         assert_eq!(
-            heap.high_water(),
-            top_after_abc,
-            "allocating into middle free block should not bump top"
+            s3.survived_objects, 0,
+            "with no roots, nothing should survive"
         );
-
-        let _e = heap.alloc_slot_object(smap, &[]).expect("E");
+        assert!(
+            s3.freed_objects >= 4,
+            "Array, ArrayMap, and the two leaves should be freed"
+        );
     }
 }

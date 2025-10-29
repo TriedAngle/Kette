@@ -1,6 +1,7 @@
+use std::mem;
 use std::ptr::NonNull;
 
-use crate::{TaggedPtr, TaggedU64, TaggedUsize, TaggedValue};
+use crate::{TaggedPtr, TaggedU64, TaggedUsize, TaggedValue, Visitable};
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
@@ -35,14 +36,19 @@ pub enum MapType {
     Array = 1,
 }
 
+// TODO: in our current garbage collector iteration objects do not move, thus pin does nothing.
+// in future iterations of the garbage collector, we will move objects to defragment.
+// if objects are currently in a FFI context, we will pin them so they don't move.
 bitflags::bitflags! {
     pub struct HeaderFlags: u8 {
         const MARK    = 1 << 0;
         const PIN     = 1 << 1;
-        const FORWARD = 1 << 2;
-        const LARGE   = 1 << 3;
+        const LARGE   = 1 << 2;
     }
 }
+
+// ValueTag::Header + ObjectKind::Object + ObjectType::Max
+pub const HEADER_FREE: u8 = 0b11111011;
 
 // Bit layout:
 //
@@ -54,37 +60,57 @@ bitflags::bitflags! {
 // [16..<32 reserved]     16 bits  (unused; keep zeroed for now)
 // [32..<64 data]         32 bits  (general-purpose payload)
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash)]
 pub struct Header(u64);
 
+pub trait Object: Sized + Visitable {
+    fn header(&self) -> &Header {
+        unsafe { std::mem::transmute::<&Self, &Header>(self) }
+    }
+    fn header_mut(&mut self) -> &mut Header {
+        unsafe { std::mem::transmute::<&mut Self, &mut Header>(self) }
+    }
+    fn heap_size(&self) -> usize;
+}
+
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Object {
+#[derive(Debug, Copy, Clone, Hash)]
+pub struct GenericObject {
     pub header: Header,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Map {
     pub header: Header,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
+pub struct SlotDescriptor {
+    pub name: TaggedPtr<ByteArray>,
+    pub kind: TaggedPtr<GenericObject>,
+    pub value: TaggedValue,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct SlotMap {
     pub map: Map,
-    pub assignable_slots: TaggedU64,
+    pub assignable_slots: TaggedUsize,
+    pub total_slots: TaggedUsize,
+    pub slots: [SlotDescriptor; 0],
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct ArrayMap {
     pub map: Map,
-    size: TaggedUsize,
+    pub size: TaggedUsize,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct SlotObject {
     pub header: Header,
     pub map: TaggedPtr<SlotMap>,
@@ -92,7 +118,7 @@ pub struct SlotObject {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Array {
     pub header: Header,
     pub map: TaggedPtr<ArrayMap>,
@@ -100,10 +126,17 @@ pub struct Array {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct ByteArray {
     pub header: Header,
     pub data: [u8; 0],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct FreeLocation {
+    pub header: Header,
+    pub next: Option<*mut FreeLocation>,
 }
 
 impl Header {
@@ -128,7 +161,6 @@ impl Header {
     pub const DATA_SHIFT: u64 = 32;
     pub const DATA_MASK: u64 = 0xFFFF_FFFFu64 << Self::DATA_SHIFT;
 
-    // ---- Suggested sub-layout inside DATA ----
     const DATA_LO16_MASK: u32 = 0xFFFF; // cached size/slots
 
     #[inline]
@@ -136,7 +168,6 @@ impl Header {
         Self(0)
     }
 
-    // Unified low-level encode that takes the raw 5-bit type.
     #[inline]
     fn encode_raw(
         kind: ObjectKind,
@@ -167,21 +198,9 @@ impl Header {
     }
 
     #[inline]
-    pub fn is_forwarded(&self) -> bool {
-        self.flags().contains(HeaderFlags::FORWARD)
-    }
-
-    #[inline]
     pub unsafe fn forwarding_slot_ptr<T>(&self) -> *mut *mut T {
         let self_ptr = (self as *const Header as *mut Header).cast::<u8>();
         unsafe { self_ptr.add(size_of::<Header>()) as *mut *mut T }
-    }
-
-    #[inline]
-    pub unsafe fn set_forwarding_to<T>(&mut self, new_ptr: NonNull<T>) {
-        self.0 |= (HeaderFlags::FORWARD.bits() as u64) << Header::FLAGS_SHIFT;
-        let slot = unsafe { self.forwarding_slot_ptr::<T>() };
-        unsafe { slot.write(new_ptr.as_ptr()) };
     }
 
     #[inline]
@@ -190,7 +209,6 @@ impl Header {
         unsafe { NonNull::new_unchecked(slot.read()) }
     }
 
-    // ---- getters ----
     #[inline]
     pub fn kind(self) -> ObjectKind {
         if ((self.0 & Self::KIND_MASK) >> Self::KIND_SHIFT) as u8 == 0 {
@@ -234,6 +252,20 @@ impl Header {
     }
 
     #[inline]
+    pub fn is_free(&self) -> bool {
+        (self.0 as u8) == HEADER_FREE
+    }
+
+    #[inline]
+    pub fn new_free(size: u64) -> Self {
+        debug_assert!(size <= 0x00FF_FFFF_FFFF_FFFF, "Size must fit in 56 bits");
+
+        let mut bits = HEADER_FREE as u64;
+        bits |= size << 8;
+        Header(bits)
+    }
+
+    #[inline]
     pub fn age(self) -> u8 {
         ((self.0 & Self::AGE_MASK) >> Self::AGE_SHIFT) as u8
     }
@@ -248,7 +280,6 @@ impl Header {
         ((self.0 & Self::DATA_MASK) >> Self::DATA_SHIFT) as u32
     }
 
-    // ---- setters ----
     #[inline]
     pub fn set_kind(&mut self, kind: ObjectKind) -> &mut Self {
         self.0 = (self.0 & !Self::KIND_MASK) | (((kind as u64) & 0x1) << Self::KIND_SHIFT);
@@ -290,7 +321,6 @@ impl Header {
         self
     }
 
-    // ---- convenience bits ----
     #[inline]
     pub fn is_marked(self) -> bool {
         self.flags().contains(HeaderFlags::MARK)
@@ -327,8 +357,8 @@ impl Header {
 
 impl Map {
     #[inline]
-    pub fn init_with_type(&mut self, mt: MapType) {
-        self.header = Header::encode_map(mt, 0, HeaderFlags::empty(), 0);
+    pub unsafe fn init(&mut self, ty: MapType) {
+        self.header = Header::encode_map(ty, 0, HeaderFlags::empty(), 0);
     }
 
     #[inline]
@@ -339,31 +369,23 @@ impl Map {
 
 impl SlotMap {
     #[inline]
-    pub fn new(assignable_slots: TaggedU64) -> Self {
-        let mut m = Map {
-            header: Header::zeroed(),
-        };
-        m.init_with_type(MapType::Slot);
-        Self {
-            map: m,
-            assignable_slots,
-        }
+    pub unsafe fn init(&mut self, assignable_slots: usize, total_slots: usize) {
+        self.assignable_slots = assignable_slots.into();
+        self.total_slots = total_slots.into();
+        unsafe { self.map.init(MapType::Slot) };
     }
 
     #[inline]
     pub fn assignable_slots_count(&self) -> usize {
-        u64::from(self.assignable_slots) as usize
+        usize::from(self.assignable_slots) as usize
     }
 }
 
 impl ArrayMap {
     #[inline]
-    pub fn new(size: TaggedUsize) -> Self {
-        let mut m = Map {
-            header: Header::zeroed(),
-        };
-        m.init_with_type(MapType::Array);
-        Self { map: m, size }
+    pub unsafe fn init(&mut self, size: usize) {
+        self.size = size.into();
+        unsafe { self.map.init(MapType::Array) };
     }
 
     #[inline]
@@ -373,20 +395,18 @@ impl ArrayMap {
 }
 
 impl SlotObject {
-    pub fn init(mut me: NonNull<Self>, map: NonNull<SlotMap>) {
+    pub unsafe fn init(&mut self, map: TaggedPtr<SlotMap>) {
         let map_ref = unsafe { map.as_ref() };
         let slots = map_ref.assignable_slots_count();
-
         let cache16 = if slots > u16::MAX as usize {
             0xFFFF
         } else {
             slots as u16
         };
 
-        let me = unsafe { me.as_mut() };
-        me.header = Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
-        me.header.set_data_lo16(cache16);
-        me.map = TaggedPtr::from_nonnull(map);
+        self.map = map;
+        self.header = Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+        self.header.set_data_lo16(cache16);
     }
 
     #[inline]
@@ -456,11 +476,9 @@ impl SlotObject {
     }
 }
 
-// ---------------------- Array ----------------------
-
 impl Array {
     /// Initialize an Array with `map`. Caches size (u16) in header DATA[0..16].
-    pub fn init(mut me: NonNull<Self>, map: NonNull<ArrayMap>) {
+    pub unsafe fn init(&mut self, map: TaggedPtr<ArrayMap>) {
         let map_ref = unsafe { map.as_ref() };
         let size = map_ref.size();
 
@@ -470,10 +488,9 @@ impl Array {
             size as u16
         };
 
-        let me = unsafe { me.as_mut() };
-        me.header = Header::encode_object(ObjectType::Array, 0, HeaderFlags::empty(), 0);
-        me.header.set_data_lo16(cache16);
-        me.map = TaggedPtr::from_nonnull(map);
+        self.header = Header::encode_object(ObjectType::Array, 0, HeaderFlags::empty(), 0);
+        self.header.set_data_lo16(cache16);
+        self.map = map;
     }
 
     #[inline]
@@ -544,5 +561,113 @@ impl Array {
     #[inline]
     pub unsafe fn set_unchecked(&mut self, index: usize, value: TaggedValue) {
         unsafe { self.fields_mut_ptr().add(index).write(value) };
+    }
+}
+
+impl FreeLocation {
+    #[inline]
+    pub fn new(size: u64, next: Option<*mut FreeLocation>) -> Self {
+        Self {
+            header: Header::new_free(size),
+            next,
+        }
+    }
+
+    /// Set the next free location pointer
+    #[inline]
+    pub fn set_next(&mut self, next: Option<*mut FreeLocation>) {
+        self.next = next;
+    }
+
+    /// Get the next free location pointer
+    #[inline]
+    pub fn get_next(&self) -> Option<*mut FreeLocation> {
+        self.next
+    }
+
+    /// Get the size of this free memory block
+    #[inline]
+    pub fn size(&self) -> u64 {
+        debug_assert!(self.header.is_free(), "Header must be a free object");
+        self.header.0 >> 8
+    }
+
+    /// Update the size of this free memory block
+    #[inline]
+    pub fn set_size(&mut self, size: u64) {
+        self.header = Header::new_free(size);
+    }
+}
+
+impl Object for GenericObject {
+    fn heap_size(&self) -> usize {
+        match self.header.kind() {
+            ObjectKind::Map => {
+                let map = unsafe { std::mem::transmute::<_, &Map>(self) };
+                map.heap_size()
+            }
+            ObjectKind::Object => match self.header.object_type().unwrap() {
+                ObjectType::Slot => {
+                    let slot_object = unsafe { std::mem::transmute::<_, &SlotObject>(self) };
+                    slot_object.heap_size()
+                }
+                ObjectType::Array => {
+                    let array = unsafe { std::mem::transmute::<_, &Array>(self) };
+                    array.heap_size()
+                }
+                ObjectType::ByteArray => {
+                    let byte_array = unsafe { std::mem::transmute::<_, &ByteArray>(self) };
+                    byte_array.heap_size()
+                }
+                _ => {
+                    unimplemented!()
+                }
+            },
+        }
+    }
+}
+
+impl Object for Map {
+    fn heap_size(&self) -> usize {
+        match self.header.map_type().unwrap() {
+            MapType::Slot => {
+                let map = unsafe { std::mem::transmute::<_, &SlotMap>(self) };
+                map.heap_size()
+            }
+            MapType::Array => {
+                let map = unsafe { std::mem::transmute::<_, &ArrayMap>(self) };
+                map.heap_size()
+            }
+        }
+    }
+}
+
+impl Object for SlotObject {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>() + self.assignable_slots() * mem::size_of::<TaggedValue>()
+    }
+}
+
+impl Object for SlotMap {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>() // TODO: add slots  
+    }
+}
+
+impl Object for Array {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>() + self.len() * mem::size_of::<TaggedValue>()
+    }
+}
+
+impl Object for ArrayMap {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
+
+impl Object for ByteArray {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
     }
 }

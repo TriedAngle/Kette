@@ -4,10 +4,10 @@ use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
-use crate::ValueTag;
+use crate::{Object, ValueTag};
 
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Hash)]
 pub struct TaggedPtr<T> {
     raw: NonZeroUsize,
     _marker: PhantomData<T>,
@@ -107,7 +107,7 @@ impl<T> TaggedPtr<T> {
         unsafe { &mut *self.as_mut_ptr() }
     }
 
-    pub unsafe fn qualify<U>(self) -> TaggedPtr<U> {
+    pub unsafe fn cast<U>(self) -> TaggedPtr<U> {
         unsafe { std::mem::transmute(self) }
     }
 }
@@ -445,6 +445,14 @@ impl TaggedValue {
     pub fn from_small_usize(v: usize) -> Self {
         TaggedUsize::new(v).into()
     }
+
+    #[inline]
+    pub fn as_reference<T>(self) -> Option<TaggedPtr<T>> {
+        if self.is_reference() {
+            return Some(TaggedPtr::from(self));
+        }
+        None
+    }
 }
 
 impl From<TaggedI64> for TaggedValue {
@@ -674,7 +682,7 @@ mod tests {
 
         // Cross-qualify: TaggedPtr<U> via qualify
         // Safety: we're only reinterpreting the phantom type parameter for the test.
-        let p_u32: TaggedPtr<u32> = unsafe { p2.qualify::<u32>() };
+        let p_u32: TaggedPtr<u32> = unsafe { p2.cast::<u32>() };
         // Addresses should match; we're not dereferencing as u32.
         assert_eq!(p_u32.as_ptr() as *const u8, (&x as *const u64) as *const u8);
     }
