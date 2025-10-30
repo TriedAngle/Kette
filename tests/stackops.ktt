@@ -1,0 +1,16 @@
+// unimplemented
+// expect:
+// 10
+// t
+// 3
+// 0
+// 5
+// 5
+// 321
+10 20 over dropd fixnum>str println 
+@context stack-count 0 = >str println
+
+0 3 swap swap >str println >str println
+5 dup >str println >str println
+
+1 2 3 rot >str print >str print >str print "\n" println

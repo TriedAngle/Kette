@@ -1,0 +1,4 @@
+// unimplemented
+// expect:
+// 30
+10 [ 20 + ] call >str println

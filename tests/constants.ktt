@@ -1,0 +1,5 @@
+// unimplemented
+// expect:
+// t
+
+(| two :: 2 . |) two 2 = >str println ;

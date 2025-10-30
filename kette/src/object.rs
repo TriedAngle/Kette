@@ -338,7 +338,6 @@ impl Header {
         self
     }
 
-    // ---- DATA helpers ----
     /// Extracts the cached 16-bit value from DATA (used by SlotObject/Array for small sizes).
     #[inline]
     pub fn data_lo16(self) -> u16 {

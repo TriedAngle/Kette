@@ -1,0 +1,30 @@
+// unimplemented
+// expect:
+// fizzbuzz
+// 14
+// 13
+// fizz
+// 11
+// buzz
+// fizz
+// 8
+// 7
+// fizz
+// buzz
+// 4
+// fizz
+// 2
+// 1
+
+(|
+    fizzbuzz -> ( count -- ) [
+        dup [ 3 % 0 = ] [ 5 % 0 = ] bi@ and [ 
+            "fizzbuzz" println
+        ] [ 
+            dup 3 % 0 = [ "fizz" println ] [
+            dup 5 % 0 = [ "buzz" println ] [
+            dup >str println
+        ] if ] if ] if
+        1 - dup 0 > [ fizzbuzz ] when ] .
+|) 15 swap fizzbuzz
+

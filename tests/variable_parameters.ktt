@@ -1,0 +1,9 @@
+// unimplemented
+// expect:
+// 8
+
+3 5 (|
+    add => ( x y -- z ) [
+        x y + z<
+    ] .
+|) add >str println
