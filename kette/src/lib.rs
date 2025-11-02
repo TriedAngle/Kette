@@ -1,6 +1,7 @@
 mod actors;
 mod bytecode;
 mod heap;
+mod heap2;
 mod interning;
 mod interpreter;
 mod object;
@@ -19,6 +20,7 @@ pub use heap::{
 };
 pub use object::*;
 pub use scheduler::*;
+pub use system::{PAGE_SIZE, map_memory, unmap_memory};
 pub use tagged::*;
 pub use view::View;
 pub use visitor::{Visitable, Visitor};

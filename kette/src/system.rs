@@ -1,3 +1,5 @@
+use std::ptr::NonNull;
+
 #[cfg(unix)]
 #[allow(unused)]
 mod unix {
@@ -56,3 +58,16 @@ mod unix {
         let _ = unsafe { munmap(ptr.cast(), len) };
     }
 }
+
+pub const PAGE_SIZE: usize = 4096;
+
+pub fn map_memory(size: usize) -> Option<NonNull<u8>> {
+    let ptr = unsafe { unix::anonymous_mmap(size) };
+    NonNull::new(ptr)
+}
+
+pub fn unmap_memory(ptr: NonNull<u8>, size: usize) {
+    unsafe { unix::anonymous_munmap(ptr.as_ptr(), size) };
+}
+
+// TODO add windows allocation and generic interface abstraction
