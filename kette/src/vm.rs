@@ -1,28 +1,31 @@
-use std::{
-    alloc::{self, Layout},
-    ptr::NonNull,
-};
+use std::{marker::PhantomData, sync::Arc};
 
-use crate::{GenericObject, Scheduler, TaggedPtr};
-
+use crate::{GenericObject, Heap, HeapProxy, TaggedPtr};
+#[derive(Debug)]
 pub struct SpecialObjects {
     pub true_object: TaggedPtr<GenericObject>,
     pub false_object: TaggedPtr<GenericObject>,
 }
-
-pub struct Specials {
-    pub specials: SpecialObjects,
+#[derive(Debug)]
+pub struct VMShared {
+    specials: SpecialObjects,
+    _marker: PhantomData<*const ()>,
 }
 
 #[allow(unused)]
 pub struct VM {
-    scheduler: Scheduler,
+    inner: Arc<VMShared>,
+    heap: Heap,
+    _marker: PhantomData<*const ()>,
 }
 
-impl VM {
-    pub fn allocate_off_heap(&self, layout: Layout) -> TaggedPtr<GenericObject> {
-        let ptr = unsafe { alloc::alloc(layout) };
-        let tagged = TaggedPtr::from_nonnull(NonNull::new(ptr).unwrap());
-        unsafe { tagged.cast() }
-    }
+impl VM {}
+
+#[derive(Debug)]
+pub struct VMProxy {
+    vm: Arc<VMShared>,
+    heap: HeapProxy,
 }
+
+unsafe impl Send for VMProxy {}
+unsafe impl Sync for VMProxy {}

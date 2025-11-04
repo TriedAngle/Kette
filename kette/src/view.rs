@@ -8,6 +8,9 @@ use crate::{TaggedPtr, TaggedValue};
 #[derive(Debug, Clone, Copy)]
 pub struct View<T>(NonNull<T>);
 
+unsafe impl<T: Send> Send for View<T> {}
+unsafe impl<T: Sync> Sync for View<T> {}
+
 impl<T> View<T> {
     pub fn new(ptr: NonNull<T>) -> Self {
         Self(ptr)

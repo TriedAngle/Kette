@@ -164,7 +164,7 @@ impl Header {
     const DATA_LO16_MASK: u32 = 0xFFFF; // cached size/slots
 
     #[inline]
-    pub fn zeroed() -> Self {
+    pub const fn zeroed() -> Self {
         Self(0)
     }
 

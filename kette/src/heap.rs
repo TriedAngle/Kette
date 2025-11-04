@@ -1,609 +1,827 @@
-use std::alloc::{self, Layout};
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::mem;
-use std::ptr::NonNull;
-
-use crate::{
-    Array, ArrayMap, GenericObject, Object, SlotDescriptor, SlotMap, SlotObject, TaggedPtr,
-    TaggedValue, View, Visitable, Visitor,
+use std::{
+    cell::{RefCell, UnsafeCell},
+    marker::PhantomData,
+    ptr::{self, NonNull},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
-pub struct Heap {}
+use bitflags::bitflags;
+use parking_lot::Mutex;
+
+use crate::map_memory;
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum PageType {
+    Boxed,
+    Unboxed,
+}
+
+// TODO: add more control, like growth, gc ratios
+// also investigate automatic resizing, dynamic change of rations
+// sbcl offers dynamic heap growth, investigate how that works
+pub struct HeapCreateInfo {
+    size: usize,
+    generations: Option<usize>,
+    generation_size: Option<usize>,
+    page_size: Option<usize>,
+    // rounds to the nearest page
+    tlab_size: Option<usize>,
+    // size of a dirty line, default 512
+    dirty_line_size: Option<usize>,
+    // max slack
+    max_slack: Option<usize>,
+}
+
+// TODO: do minimum, maybe even maximum or other constraints
+// some combinations probably don't make sense, or we require some minimums
+// for example to get both a bytepage and an object page within the nursery we want at least 2
+// pages there
+#[derive(Debug)]
+pub struct HeapSettings {
+    generations: usize,
+    // size of a single generation compared to total heap in discrete percent
+    generation_size: usize,
+    page_size: usize,
+    tlab_size: usize,
+    dirty_line_size: usize,
+    // max allowed slack on a page, if a page reaches lower than this, we might retire it
+    // mainly useful for allocations that are almost size of a page or multi pages and reach end of
+    // another page, small allocations do not trigger this
+    max_slack: usize,
+}
+
+impl Default for HeapSettings {
+    fn default() -> Self {
+        Self {
+            generations: 4,
+            generation_size: 5,
+            page_size: 32768,
+            tlab_size: 8192,
+            dirty_line_size: 512,
+            max_slack: 4096,
+        }
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Copy, Clone)]
+    pub struct PageFlags: u8 {
+        const Used = 1 << 0;
+        const Unboxed = 1 << 1;
+        const Large = 1 << 2;
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PageMeta {
+    bytes_used: u16,
+    offset_first: u16,
+    generation: u8,
+    flags: PageFlags,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct AllocSearchInfo {
+    size: usize,
+    ptype: PageType,
+    generation: u8,
+    allow_split: bool,
+}
+
+pub struct AllocationSelection {
+    start: usize,
+    count: usize,
+    first_capacity_page: usize,
+}
+
+pub struct AllocationInfo {
+    start: NonNull<u8>,
+    size: usize,
+    page_index: usize,
+    large: bool,
+    ptype: PageType,
+}
+
+pub struct Heap {
+    inner: Arc<HeapShared>,
+    _marker: PhantomData<*const ()>,
+}
+#[derive(Debug)]
+pub struct HeapShared {
+    pub start: NonNull<u8>,
+    pub end: NonNull<u8>,
+    pub settings: HeapSettings,
+    pub lock: Mutex<()>,
+    pub gc_active: AtomicBool,
+    pub epoch: AtomicUsize,
+    pub pages: RefCell<Box<[PageMeta]>>,
+    pub dirty: UnsafeCell<Box<[u8]>>,
+    _marker: PhantomData<*const ()>,
+}
+#[derive(Debug)]
+pub struct TLAB {
+    start: NonNull<u8>,
+    end: NonNull<u8>,
+    bump: usize,
+    size: usize,
+}
+#[derive(Debug)]
+pub struct HeapProxy {
+    heap: Arc<HeapShared>,
+    epoch: usize,
+    boxed_tlab: TLAB,
+    unboxed_tlab: TLAB,
+}
+
+unsafe impl Send for HeapProxy {}
+unsafe impl Sync for HeapProxy {}
 
 impl Heap {
-    pub fn zeroed() -> Self {
-        Self {}
-    }
-}
+    pub fn new(info: HeapCreateInfo) -> Self {
+        let size = info.size;
+        let start = map_memory(size).unwrap();
+        let end_ptr = unsafe { start.as_ptr().add(size) };
+        let end = unsafe { NonNull::new_unchecked(end_ptr) };
 
-pub struct AllocationToken<'heap> {
-    bytes: &'heap mut [u8],
-    used: usize,
-}
+        let mut settings = HeapSettings::default();
+        info.generations.inspect(|&val| settings.generations = val);
+        info.generation_size
+            .inspect(|&val| settings.generation_size = val);
+        info.page_size.inspect(|&val| settings.page_size = val);
+        info.tlab_size.inspect(|&val| settings.tlab_size = val);
+        info.dirty_line_size
+            .inspect(|&val| settings.dirty_line_size = val);
+        info.max_slack.inspect(|&val| settings.max_slack = val);
 
-impl<'heap> AllocationToken<'heap> {
-    pub fn new(start: NonNull<u8>, size: usize) -> Self {
-        let bytes = unsafe { std::slice::from_raw_parts_mut(start.as_ptr(), size) };
-        Self { bytes, used: 0 }
-    }
+        let page_count = size / settings.page_size;
 
-    fn current(&mut self) -> *mut u8 {
-        let ptr = self.bytes.as_mut_ptr();
-        unsafe { ptr.add(self.used) }
-    }
-
-    pub fn allocate_raw(&mut self, size: usize) -> NonNull<u8> {
-        assert!(self.bytes.len() - self.used >= size);
-        let current = self.current();
-        self.used += size;
-        unsafe { NonNull::new(current).unwrap_unchecked() }
-    }
-
-    pub fn allocate<T: Object>(&mut self) -> View<T> {
-        let size = mem::size_of::<T>();
-        View::new(self.allocate_raw(size).cast())
-    }
-}
-
-impl<'heap> Drop for AllocationToken<'heap> {
-    fn drop(&mut self) {
-        assert!(self.used == self.bytes.len())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GarbageCollectionStats {
-    /// count of objects
-    freed_objects: usize,
-    /// bytes of freed objecs
-    freed: usize,
-    /// count of survived objects
-    survived_objects: usize,
-}
-
-/// All allocators expect the layout to include the header !
-/// so internally allocators can use pointers to Header or GenericObject
-pub trait Allocator: Visitable {
-    fn allocate(&self, layout: Layout) -> Option<NonNull<u8>>;
-    fn free(&self, ptr: NonNull<u8>);
-    fn free_if<F>(&self, f: F)
-    where
-        F: FnMut(&NonNull<GenericObject>) -> bool;
-}
-
-pub trait GarbageCollector {
-    fn allocate_raw(&self, layout: Layout) -> NonNull<u8>;
-    #[inline]
-    fn allocate(&self, layout: Layout) -> AllocationToken<'_> {
-        let raw = self.allocate_raw(layout);
-        let token = AllocationToken::new(raw, layout.size());
-        token
-    }
-    /// while technically safe, the returned value is unsafe to use and should directly be populated with data
-    /// so the unsafe is here to discourage the usage
-    #[inline]
-    unsafe fn allocate_raw_slot_map(&self, total_slots: usize) -> View<SlotMap> {
-        let map_head = Layout::new::<SlotMap>();
-        let map_slots = Layout::array::<SlotDescriptor>(total_slots).unwrap();
-        let (layout, _) = map_head.extend(map_slots).unwrap();
-        let map: NonNull<SlotMap> = self.allocate_raw(layout).cast();
-        View::new(map)
-    }
-
-    /// TODO: assignable slots should be inferred by going through slots
-    fn allocate_slot_map(
-        &self,
-        assignable_slots: usize,
-        slots: &[SlotDescriptor],
-    ) -> View<SlotMap> {
-        let total_slots = slots.len();
-        let mut map = unsafe { self.allocate_raw_slot_map(total_slots) };
-        let map_slots_ptr = map.slots.as_mut_ptr();
-        unsafe { map.init(assignable_slots, total_slots) };
-        unsafe { std::ptr::copy_nonoverlapping(slots.as_ptr(), map_slots_ptr, total_slots) };
-        map
-    }
-
-    #[inline]
-    unsafe fn allocate_raw_slot_object(&self, slot_count: usize) -> View<SlotObject> {
-        let head = Layout::new::<SlotObject>();
-        let slots = Layout::array::<TaggedValue>(slot_count).unwrap();
-        let (layout, _) = head.extend(slots).unwrap();
-        let obj: NonNull<SlotObject> = self.allocate_raw(layout).cast();
-        View::new(obj)
-    }
-
-    fn allocate_slot_object_from_map(
-        &self,
-        map: View<SlotMap>,
-        values: &[TaggedValue],
-    ) -> View<SlotObject> {
-        let slot_count = map.assignable_slots.into();
-        assert!(
-            slot_count == values.len(),
-            "slots must match object slot count"
-        );
-        let mut obj = unsafe { self.allocate_raw_slot_object(slot_count) };
-        let slots_ptr = obj.slots.as_mut_ptr();
-        unsafe { obj.init(map.into()) };
-        unsafe {
-            std::ptr::copy_nonoverlapping(values.as_ptr(), slots_ptr, slot_count);
-        }
-        obj
-    }
-
-    fn allocate_array_map(&self, size: usize) -> View<ArrayMap> {
-        let layout = Layout::new::<ArrayMap>();
-        let raw: NonNull<ArrayMap> = self.allocate_raw(layout).cast();
-        let mut map = View::new(raw);
-        unsafe { map.init(size) };
-        map
-    }
-
-    #[inline]
-    unsafe fn allocate_raw_array(&self, size: usize) -> View<Array> {
-        let head = Layout::new::<SlotObject>();
-        let items = Layout::array::<TaggedValue>(size).unwrap();
-        let (layout, _) = head.extend(items).unwrap();
-        let array: NonNull<Array> = self.allocate_raw(layout).cast();
-        View::new(array)
-    }
-
-    /// This is unsafe because we didn't initialize the fields yet.
-    /// this array would be safe to write, but reading from unwritten fields could be arbitrary.
-    #[inline]
-    unsafe fn allocate_unsafe_array(&self, map: View<ArrayMap>) -> View<Array> {
-        let size: usize = map.size.into();
-        let mut array = unsafe { self.allocate_raw_array(size) };
-        unsafe { array.init(map.into()) };
-        array
-    }
-
-    fn allocate_filled_array(&self, map: View<ArrayMap>, value: TaggedValue) -> View<Array> {
-        let mut array = unsafe { self.allocate_unsafe_array(map) };
-        array.fields_mut().fill(value);
-        array
-    }
-
-    fn allocate_array(&self, map: View<ArrayMap>, values: &[TaggedValue]) -> View<Array> {
-        let mut array = unsafe { self.allocate_unsafe_array(map) };
-        assert!(array.len() == values.len());
-        unsafe {
-            std::ptr::copy_nonoverlapping(values.as_ptr(), array.fields.as_mut_ptr(), values.len())
-        };
-        array
-    }
-
-    fn force_collect(&self) -> GarbageCollectionStats;
-    fn add_root(&self, object: TaggedPtr<GenericObject>);
-    fn remove_root(&self, object: TaggedPtr<GenericObject>);
-}
-
-pub struct RustAllocator {
-    allocations: RefCell<HashSet<NonNull<GenericObject>, ahash::RandomState>>,
-}
-
-impl RustAllocator {
-    pub fn new() -> Self {
+        let shared = HeapShared::new(start, end, page_count, settings);
         Self {
-            allocations: RefCell::new(HashSet::default()),
+            inner: shared,
+            _marker: PhantomData::default(),
         }
     }
 
-    fn dealloc(obj: NonNull<GenericObject>) {
-        let size = unsafe { (*obj.as_ptr()).heap_size() };
-        let layout = unsafe { Layout::from_size_align_unchecked(size, 8) };
-        unsafe { alloc::dealloc(obj.as_ptr() as _, layout) };
-    }
-}
-
-impl Visitable for RustAllocator {
-    fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        let allocations = self.allocations.borrow_mut();
-        allocations
-            .iter()
-            .map(|&a| TaggedValue::from(TaggedPtr::from_nonnull(a)))
-            .for_each(|value| visitor.visit(value));
-    }
-    fn visit_edges_mut(&mut self, _visitor: &mut impl Visitor) {
-        unreachable!("this shouldn't exist")
-    }
-}
-
-impl Allocator for RustAllocator {
-    fn allocate(&self, layout: Layout) -> Option<NonNull<u8>> {
-        let raw = unsafe { alloc::alloc(layout) };
-        if raw.is_null() {
-            return None;
-        }
-        let res = NonNull::new(raw.cast()).unwrap();
-        let mut allocations = self.allocations.borrow_mut();
-        allocations.insert(res);
-        unsafe { Some(NonNull::new(raw).unwrap_unchecked()) }
-    }
-
-    fn free(&self, ptr: NonNull<u8>) {
-        let obj = ptr.cast();
-        let mut allocations = self.allocations.borrow_mut();
-        allocations.remove(&obj);
-        Self::dealloc(obj);
-    }
-
-    fn free_if<F>(&self, f: F)
-    where
-        F: FnMut(&NonNull<GenericObject>) -> bool,
-    {
-        let mut allocations = self.allocations.borrow_mut();
-        allocations.extract_if(f).for_each(|obj| Self::dealloc(obj));
-        allocations.shrink_to_fit();
-    }
-}
-
-pub struct HandleSet {}
-
-pub struct MarkAndSweepGCImpl<A: Allocator> {
-    allocator: A,
-    roots: HashSet<TaggedPtr<GenericObject>, ahash::RandomState>,
-    /// ignored for now, optimization for later.
-    #[allow(unused)]
-    handles: Option<NonNull<HandleSet>>,
-}
-
-pub struct MarkAndSweepGC<A: Allocator> {
-    inner: RefCell<MarkAndSweepGCImpl<A>>,
-}
-
-impl<A: Allocator> MarkAndSweepGCImpl<A> {
-    fn new(allocator: A) -> Self {
-        Self {
-            allocator,
-            roots: HashSet::default(),
-            handles: None,
-        }
-    }
-
-    fn collect(&mut self) -> GarbageCollectionStats {
-        struct MarkVisitor<'a> {
-            queue: &'a mut Vec<TaggedPtr<GenericObject>>,
-        }
-        impl<'a> Visitor for MarkVisitor<'a> {
-            fn visit_mut(&mut self, value: TaggedValue) {
-                let Some(obj) = value.as_reference::<GenericObject>() else {
-                    return;
-                };
-                let ptr = obj.as_mut_ptr();
-                if unsafe { (*ptr).header.is_marked() } {
-                    return;
-                }
-                unsafe { (*ptr).header.mark() };
-                self.queue.push(obj);
-            }
-        }
-
-        let mut stats = GarbageCollectionStats {
-            freed: 0,
-            survived_objects: 0,
-            freed_objects: 0,
+    pub fn create_proxy(&self) -> HeapProxy {
+        let heap = self.inner.clone();
+        let epoch = self.inner.epoch.load(Ordering::Relaxed);
+        let proxy = HeapProxy {
+            heap,
+            epoch,
+            boxed_tlab: TLAB::empty(),
+            unboxed_tlab: TLAB::empty(),
         };
+        proxy
+    }
+}
 
-        let mut queue = Vec::<TaggedPtr<GenericObject>>::new();
-        queue.extend(&self.roots);
+impl HeapShared {
+    pub fn new(
+        start: NonNull<u8>,
+        end: NonNull<u8>,
+        page_count: usize,
+        settings: HeapSettings,
+    ) -> Arc<Self> {
+        let pages = vec![PageMeta::empty(); page_count];
+        let pages: Box<[PageMeta]> = Box::from(pages);
+        let pages = RefCell::new(pages);
 
-        let mut marker = MarkVisitor { queue: &mut queue };
-        for &root in &self.roots {
-            marker.visit_mut(root.into());
-        }
-        println!("queue: {:?}", queue);
+        let dirty_count = settings.page_size * page_count / settings.dirty_line_size;
+        let dirty = vec![0; dirty_count];
+        let dirty: Box<[u8]> = Box::from(dirty);
+        let dirty = UnsafeCell::new(dirty);
 
-        while let Some(mut object) = queue.pop() {
-            let mut marker = MarkVisitor { queue: &mut queue };
-            object.visit_edges_mut(&mut marker);
-        }
-
-        self.allocator.free_if(|obj| {
-            let ptr = obj.as_ptr();
-            if unsafe { (*ptr).header.is_marked() } {
-                stats.survived_objects += 1;
-                unsafe { (*ptr).header.unmark() };
-                return false;
-            }
-
-            stats.freed_objects += 1;
-            stats.freed += unsafe { (*ptr).heap_size() };
-
-            true
-        });
-        stats
+        let new = Self {
+            start,
+            end,
+            settings,
+            epoch: AtomicUsize::new(0),
+            gc_active: AtomicBool::new(false),
+            lock: Mutex::new(()),
+            pages,
+            dirty,
+            _marker: PhantomData::default(),
+        };
+        Arc::new(new)
     }
 
-    fn allocate_raw(&mut self, layout: Layout) -> NonNull<u8> {
-        let Some(allocation) = self.allocator.allocate(layout) else {
-            self.collect();
-            let Some(allocation) = self.allocator.allocate(layout) else {
-                panic!("No Space in Heap");
+    pub fn allocate(&self, info: AllocSearchInfo) -> AllocationInfo {
+        let _lock = self.lock.lock();
+        if let Some(res) = self.next_fit_find_pages(info) {
+            return self.finalize_pages(res, info);
+        }
+
+        self.minor_gc();
+
+        if let Some(res) = self.next_fit_find_pages(info) {
+            return self.finalize_pages(res, info);
+        }
+        panic!("VM out of memory")
+    }
+
+    fn minor_gc(&self) {
+        unimplemented!("TODO: implement minor gc")
+    }
+
+    fn major_gc(&self) {
+        unimplemented!("TODO: implement major gc")
+    }
+
+    fn finalize_pages(
+        &self,
+        selection: AllocationSelection,
+        search: AllocSearchInfo,
+    ) -> AllocationInfo {
+        let start_index = selection.start;
+        let end_index = selection.start + selection.count;
+
+        let mut flags = PageFlags::Used;
+        if search.ptype == PageType::Unboxed {
+            flags.insert(PageFlags::Unboxed);
+        }
+        if search.size > self.settings.page_size - self.settings.max_slack {
+            flags.insert(PageFlags::Large);
+        }
+        let total_size = search.size;
+        let mut pages = self.pages.borrow_mut();
+
+        let start_ptr: *mut u8;
+        // TODO: maybe unify this
+        if flags.contains(PageFlags::Large) {
+            let mut remaining_size = 0;
+
+            for page_idx in start_index..end_index {
+                let bytes_used = self.settings.page_size.min(remaining_size);
+                let page = &mut pages[page_idx];
+                page.flags = flags;
+                page.generation = search.generation;
+                page.bytes_used = bytes_used as u16;
+                page.offset_first = 0;
+                remaining_size -= self.settings.page_size;
+                // I am not sure if this can ever fall below 0
+            }
+            start_ptr = unsafe {
+                self.start
+                    .as_ptr()
+                    .add(start_index * self.settings.page_size)
             };
-            return allocation;
-        };
-        allocation
-    }
+        } else {
+            let old_used = pages[start_index].bytes_used as usize;
 
-    fn add_root(&mut self, object: TaggedPtr<GenericObject>) {
-        self.roots.insert(object);
-    }
+            if selection.count == 1 {
+                let page = &mut pages[start_index];
+                page.bytes_used += total_size as u16;
+                page.flags = flags;
+                page.generation = search.generation;
+                start_ptr = unsafe {
+                    self.start
+                        .as_ptr()
+                        .add(start_index * self.settings.page_size + old_used)
+                };
+            } else {
+                let first_page_fit =
+                    self.settings.page_size - pages[start_index].bytes_used as usize;
+                let remaining = total_size - first_page_fit;
+                pages[start_index].bytes_used = self.settings.page_size as u16;
 
-    fn remove_root(&mut self, object: TaggedPtr<GenericObject>) {
-        self.roots.remove(&object);
-    }
-}
+                let split_page = &mut pages[start_index + 1];
+                split_page.bytes_used = remaining as u16;
+                split_page.flags = flags;
+                split_page.generation = search.generation;
+                split_page.offset_first = first_page_fit as u16;
+                start_ptr = unsafe {
+                    self.start
+                        .as_ptr()
+                        .add(start_index * self.settings.page_size + old_used)
+                };
+            }
+        }
 
-impl<A: Allocator> MarkAndSweepGC<A> {
-    pub fn new(allocator: A) -> Self {
-        let inner = MarkAndSweepGCImpl::new(allocator);
-        Self {
-            inner: RefCell::new(inner),
+        let start = unsafe { NonNull::new_unchecked(start_ptr) };
+
+        AllocationInfo {
+            start,
+            size: search.size,
+            page_index: start_index,
+            large: search.size > self.settings.page_size,
+            ptype: search.ptype,
         }
     }
+
+    // TODO: Right now we don't allow to allocate on large pages
+    // this is because right now I feel lazy to get it to work
+    // this should be changed
+    fn next_fit_find_pages(&self, search: AllocSearchInfo) -> Option<AllocationSelection> {
+        // big allocations
+        if search.size > self.settings.page_size - self.settings.max_slack {
+            return self.find_free_pages(search);
+        }
+
+        let pages = self.pages.borrow();
+        let mut page_idx: Option<usize> = None;
+        let mut extend = false;
+        // TODO: maybe do two passes, so we don't greedily take a page but prefer used ones
+        //       in this case we would remove the third case and make an extra loop for that
+        //       that gets called if case1&case2 loop didn't yield a result
+        // Two cases:
+        // Case 1: same type+gen & page has free memory
+        // Case 2: same type+gen & page has some free memory, but page afterwards is free
+        // case 3: page is free
+        for (idx, page) in pages.iter().enumerate() {
+            if page.page_type() == search.ptype
+                && !page.is_large()
+                && page.generation == search.generation
+            {
+                // Case 1
+                if self.settings.page_size - page.bytes_used as usize >= search.size {
+                    page_idx = Some(idx);
+                    break;
+                }
+
+                // Case 2
+                if search.allow_split && idx + 1 < pages.len() {
+                    let next = &pages[idx + 1];
+                    if next.is_free() {
+                        page_idx = Some(idx);
+                        extend = true;
+                        break;
+                    }
+                }
+            }
+
+            // Case 3
+            if page.is_free() {
+                page_idx = Some(idx);
+            }
+        }
+
+        page_idx.map(|start| AllocationSelection {
+            start,
+            count: if extend { 2 } else { 1 },
+            first_capacity_page: pages[start].bytes_used as usize,
+        })
+    }
+
+    fn find_free_pages(&self, search: AllocSearchInfo) -> Option<AllocationSelection> {
+        // TODO: we don't need size and count, they are bijective here
+        let pages = self.pages.borrow();
+        let mut size = 0;
+        let mut count = 0;
+        let mut current_start: Option<usize> = None;
+        for (idx, page) in pages.iter().enumerate() {
+            if page.is_free() {
+                if current_start.is_none() {
+                    current_start = Some(idx);
+                }
+                size += self.settings.page_size;
+                count += 1;
+            } else {
+                size = 0;
+                current_start = None;
+                count = 0;
+            }
+
+            if size >= search.size {
+                break;
+            }
+        }
+        if let Some(start) = current_start {
+            let res = AllocationSelection {
+                start,
+                count,
+                first_capacity_page: 0,
+            };
+            return Some(res);
+        }
+
+        None
+    }
 }
 
-impl<A: Allocator> GarbageCollector for MarkAndSweepGC<A> {
-    fn allocate_raw(&self, layout: Layout) -> NonNull<u8> {
-        self.inner.borrow_mut().allocate_raw(layout)
+impl HeapProxy {
+    fn tlab_alloc(&mut self, size: usize, ptype: PageType) -> Option<NonNull<u8>> {
+        match ptype {
+            PageType::Boxed => self.boxed_tlab.allocate(size),
+            PageType::Unboxed => self.unboxed_tlab.allocate(size),
+        }
     }
-    fn force_collect(&self) -> GarbageCollectionStats {
-        self.inner.borrow_mut().collect()
+
+    fn exchange_tlab(&mut self, ptype: PageType) {
+        let size = self.heap.settings.tlab_size;
+        let search = AllocSearchInfo {
+            size,
+            ptype: ptype,
+            generation: 0,
+            allow_split: false,
+        };
+        let res = self.heap.allocate(search);
+        let start = res.start;
+        let size = res.size;
+        let end_ptr = unsafe { start.as_ptr().add(size) };
+        let end = unsafe { NonNull::new_unchecked(end_ptr) };
+        let tlab = TLAB {
+            start,
+            end,
+            bump: 0,
+            size: size,
+        };
+
+        match ptype {
+            PageType::Boxed => self.boxed_tlab = tlab,
+            PageType::Unboxed => self.unboxed_tlab = tlab,
+        }
     }
-    fn add_root(&self, object: TaggedPtr<GenericObject>) {
-        self.inner.borrow_mut().add_root(object);
+
+    fn maybe_wait_epoch(&mut self) -> bool {
+        let heap_epoch = self.heap.epoch.load(Ordering::Relaxed);
+        if self.epoch == heap_epoch {
+            return false;
+        }
+
+        while self.heap.gc_active.load(Ordering::Relaxed) {
+            std::hint::spin_loop()
+        }
+
+        self.epoch = self.heap.epoch.load(Ordering::Relaxed);
+        return true;
     }
-    fn remove_root(&self, object: TaggedPtr<GenericObject>) {
-        self.inner.borrow_mut().remove_root(object);
+
+    pub fn allocate_raw(&mut self, size: usize, ptype: PageType) -> NonNull<u8> {
+        if self.maybe_wait_epoch() {
+            self.exchange_tlab(ptype);
+        }
+
+        if size > self.heap.settings.tlab_size {
+            let info = AllocSearchInfo {
+                size,
+                ptype,
+                generation: 0,
+                allow_split: true,
+            };
+            let res = self.heap.allocate(info);
+            return res.start;
+        }
+
+        if let Some(allocation) = self.tlab_alloc(size, ptype) {
+            return allocation;
+        }
+
+        self.exchange_tlab(ptype);
+
+        self.tlab_alloc(size, ptype)
+            .expect("Tlab allocation must work")
+    }
+
+    pub fn allocate_boxed_raw(&mut self, size: usize) -> NonNull<u8> {
+        self.allocate_raw(size, PageType::Boxed)
+    }
+
+    pub fn allocate_unboxed_raw(&mut self, size: usize) -> NonNull<u8> {
+        // TODO: implement alignment if necessary
+        self.allocate_raw(size, PageType::Unboxed)
+    }
+}
+
+impl TLAB {
+    pub fn empty() -> Self {
+        Self {
+            start: NonNull::dangling(),
+            end: NonNull::dangling(),
+            size: 0,
+            bump: 0,
+        }
+    }
+
+    pub fn allocate(&mut self, size: usize) -> Option<NonNull<u8>> {
+        if self.bump + size <= self.size {
+            let ptr = unsafe { self.start.as_ptr().add(self.bump) };
+            self.bump += size;
+            return Some(unsafe { NonNull::new_unchecked(ptr) });
+        }
+        None
+    }
+}
+
+impl PageMeta {
+    pub fn empty() -> Self {
+        Self {
+            flags: PageFlags::empty(),
+            offset_first: 0,
+            bytes_used: 0,
+            generation: 0,
+        }
+    }
+    #[inline]
+    fn is_free(&self) -> bool {
+        !self.flags.contains(PageFlags::Used) && !self.flags.contains(PageFlags::Large)
+    }
+    #[inline]
+    fn is_large(&self) -> bool {
+        self.flags.contains(PageFlags::Large)
+    }
+    #[inline]
+    fn page_type(&self) -> PageType {
+        if self.flags.contains(PageFlags::Unboxed) {
+            PageType::Unboxed
+        } else {
+            PageType::Boxed
+        }
+    }
+    #[inline]
+    fn capacity_tail_bytes(&self, page_size: usize) -> usize {
+        let used = self.bytes_used as usize;
+        if used >= page_size {
+            0
+        } else {
+            page_size - used
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::*;
+    use super::*;
+    use std::sync::Arc;
 
-    fn new_gc() -> MarkAndSweepGC<RustAllocator> {
-        MarkAndSweepGC::new(RustAllocator::new())
+    fn mk_heap(total_pages: usize, page_size: usize, tlab_size: usize) -> Heap {
+        let total_bytes = total_pages * page_size;
+        let info = HeapCreateInfo {
+            size: total_bytes,
+            generations: Some(2),
+            generation_size: Some(10),
+            page_size: Some(page_size),
+            tlab_size: Some(tlab_size),
+            dirty_line_size: None,
+            max_slack: None, // keep default (4096) unless caller changes settings
+        };
+        Heap::new(info)
     }
 
-    fn alloc_empty_slot_map<G: GarbageCollector>(gc: &G) -> View<SlotMap> {
-        gc.allocate_slot_map(0, &[])
-    }
-    fn alloc_empty_slot_object<G: GarbageCollector>(
-        gc: &G,
-        map: View<SlotMap>,
-    ) -> View<SlotObject> {
-        gc.allocate_slot_object_from_map(map, &[])
-    }
-
-    fn alloc_empty_array<G: GarbageCollector>(gc: &G) -> (View<ArrayMap>, View<Array>) {
-        let amap = gc.allocate_array_map(0);
-        let array = unsafe { gc.allocate_unsafe_array(amap) };
-        (amap, array)
-    }
-
-    fn alloc_empty_byte_array<G: GarbageCollector>(gc: &G) -> View<ByteArray> {
-        let layout = std::alloc::Layout::new::<ByteArray>();
-        let raw: std::ptr::NonNull<ByteArray> = gc.allocate_raw(layout).cast();
-        let mut ba = View::new(raw);
-        // Initialize as an ObjectType::ByteArray with default flags/data.
-        ba.header = Header::encode_object(ObjectType::ByteArray, 0, HeaderFlags::empty(), 0);
-        ba
-    }
-
-    fn as_generic_object<T>(v: View<T>) -> TaggedPtr<GenericObject> {
-        let tp: TaggedPtr<T> = v.into();
-        unsafe { tp.cast() }
+    fn page_flags_contains(flags: PageFlags, has: &[PageFlags], not: &[PageFlags]) -> bool {
+        has.iter().all(|f| flags.contains(*f)) && not.iter().all(|f| !flags.contains(*f))
     }
 
     #[test]
-    fn collect_without_roots_frees_everything() {
-        let gc = new_gc();
+    fn tlab_bootstrap_sets_page_flags_and_bytes_used() {
+        // 8 pages of 32 KiB; tlab = 8 KiB (fits in one page comfortably)
+        let page_size = 32 * 1024;
+        let tlab_size = 8 * 1024;
+        let heap = mk_heap(8, page_size, tlab_size);
 
-        // Allocate a mix of objects
-        let slot_map = alloc_empty_slot_map(&gc);
-        let _slot_obj = alloc_empty_slot_object(&gc, slot_map);
+        let mut p = heap.create_proxy();
 
-        let (_amap, _arr) = alloc_empty_array(&gc);
-        let (_amap2, _arr2) = alloc_empty_array(&gc);
+        // First tiny boxed allocation will *bootstrap* a boxed TLAB.
+        let _a = p.allocate_boxed_raw(16);
 
-        // Nothing is rooted, so everything should be freed.
-        let stats = gc.force_collect();
-        assert_eq!(
-            stats.survived_objects, 0,
-            "no roots => nothing should survive"
-        );
-        assert!(
-            stats.freed_objects >= 5,
-            "we allocated at least 5 distinct objects"
-        );
-        assert!(stats.freed > 0, "freed byte counter should be positive");
-    }
-
-    #[test]
-    fn rooted_object_survives_others_are_freed() {
-        let gc = new_gc();
-
-        // Two independent objects: root only one of them.
-        let slot_map = alloc_empty_slot_map(&gc);
-        let rooted = alloc_empty_slot_object(&gc, slot_map);
-
-        let slot_map2 = alloc_empty_slot_map(&gc);
-        let _unrooted = alloc_empty_slot_object(&gc, slot_map2);
-
-        // Add root for the first one.
-        gc.add_root(as_generic_object(rooted));
-
-        let stats = gc.force_collect();
-        assert_eq!(
-            stats.survived_objects, 2,
-            "rooted object survives; its SlotMap survives too"
-        );
-        assert_eq!(
-            stats.freed_objects, 2,
-            "unrooted object and its SlotMap are freed"
-        );
-    }
-
-    #[test]
-    fn add_then_remove_root_changes_liveness() {
-        let gc = new_gc();
-
-        let sm = alloc_empty_slot_map(&gc);
-        let obj = alloc_empty_slot_object(&gc, sm);
-
-        // First GC with the object rooted: it should survive.
-        gc.add_root(as_generic_object(obj));
-        let stats1 = gc.force_collect();
-        assert_eq!(
-            stats1.survived_objects, 2,
-            "rooted object and its SlotMap should survive"
-        );
-        assert_eq!(stats1.freed_objects, 0, "nothing unrooted was allocated");
-
-        // Remove root, allocate a small extra object (to keep allocator set non-empty).
-        gc.remove_root(as_generic_object(obj));
-        let (_amap, _arr) = alloc_empty_array(&gc);
-
-        // Now the previously-rooted pair should be freed; the new array pair survives if not rooted?
-        // We did not root the array, so after this collection: the old pair is freed,
-        // and the new array + its map are also freed (no roots at all).
-        let stats2 = gc.force_collect();
-        assert!(
-            stats2.freed_objects >= 2,
-            "the previously rooted {obj:?}, {sm:?} should now be freed"
-        );
-        assert_eq!(
-            stats2.survived_objects, 0,
-            "no roots => nothing should survive"
-        );
-    }
-
-    #[test]
-    fn surviving_objects_are_unmarked_after_sweep() {
-        let gc = new_gc();
-
-        let sm = alloc_empty_slot_map(&gc);
-        let obj = alloc_empty_slot_object(&gc, sm);
-
-        // Root it so it survives the sweep.
-        let obj_root = as_generic_object(obj);
-        gc.add_root(obj_root);
-
-        // Run GC
-        let _ = gc.force_collect();
-
-        // After sweep, survivors must be unmarked for the next cycle.
-        // SAFETY: obj_root points to a live object (we just collected with it rooted).
-        let gptr = obj_root.as_mut_ptr();
-        let header = unsafe { &(*gptr).header };
-        assert!(!header.is_marked(), "survivor must be unmarked after sweep");
-    }
-
-    #[test]
-    fn array_and_arraymap_can_be_allocated_and_collected() {
-        let gc = new_gc();
-
-        // Allocate an ArrayMap + Array (size 0).
-        let (_amap, arr) = alloc_empty_array(&gc);
-
-        // If we root the array, both it and its map survive.
-        gc.add_root(as_generic_object(arr));
-        let stats1 = gc.force_collect();
-        assert_eq!(
-            stats1.survived_objects, 2,
-            "rooted array and its ArrayMap should survive"
-        );
-        assert_eq!(stats1.freed_objects, 0);
-
-        // Drop the root and collect again; both should now be freed.
-        gc.remove_root(as_generic_object(arr));
-        let stats2 = gc.force_collect();
-        assert!(
-            stats2.freed_objects >= 2,
-            "array and its map should be freed when unrooted"
-        );
-        assert_eq!(stats2.survived_objects, 0);
-
-        // Make sure we can still allocate after freeing
-        let new_map = alloc_empty_slot_map(&gc);
-        let _new_obj = alloc_empty_slot_object(&gc, new_map); // using the old map View is fine; it was a copy
-        let stats3 = gc.force_collect();
-        // We didn't root the new pair; they should be freed too.
-        assert!(stats3.freed_objects >= 2);
-        assert_eq!(stats3.survived_objects, 0);
-    }
-
-    #[test]
-    fn arrays_and_slot_objects_with_values_are_tracked_transitively() {
-        let gc = new_gc();
-
-        // --- leaf objects the container values will point to ---
-        let leaf_a = alloc_empty_byte_array(&gc);
-        let leaf_b = alloc_empty_byte_array(&gc);
-
-        // Helper: TaggedValue reference from a View<T>.
-        fn ref_value<T>(v: View<T>) -> TaggedValue {
-            let tp: TaggedPtr<T> = v.into();
-            tp.into()
+        {
+            let pages = p.heap.pages.borrow();
+            // Expect first page to be boxed+used, with bytes_used = tlab_size
+            let pg0 = pages[0];
+            assert!(
+                page_flags_contains(
+                    pg0.flags,
+                    &[PageFlags::Used],
+                    &[PageFlags::Unboxed, PageFlags::Large]
+                ),
+                "first page should be Used (boxed), flags = {:?}",
+                pg0.flags
+            );
+            assert_eq!(
+                pg0.bytes_used as usize, tlab_size,
+                "boxed TLAB should consume tlab_size bytes in first page"
+            );
         }
 
-        // --- an Array with 2 fields pointing to the leaves ---
-        let amap2 = gc.allocate_array_map(2);
-        let arr_vals = [ref_value(leaf_a), ref_value(leaf_b)];
-        let arr = gc.allocate_array(amap2, &arr_vals);
+        let _b = p.allocate_unboxed_raw(24);
 
-        // --- a SlotObject with 2 slots: [arr, leaf_b] ---
-        // We need a SlotMap with 2 assignable slots. Use the raw allocator to avoid having to
-        // provide real SlotDescriptors (they aren't used by GC marking anyways).
-        let sm2 = {
-            let mut sm = unsafe { gc.allocate_raw_slot_map(2) };
-            unsafe { sm.init(2, 2) };
-            sm
+        {
+            let pages = p.heap.pages.borrow();
+            // Expect second page (typically) to be unboxed+used, also with tlab_size used.
+            // If allocator ever reorders differently, at minimum *one* page must be unboxed
+            // with tlab_size used. We'll find it.
+            let (idx, pg) = pages
+                .iter()
+                .enumerate()
+                .find(|(_, pg)| {
+                    page_flags_contains(
+                        pg.flags,
+                        &[PageFlags::Used, PageFlags::Unboxed],
+                        &[PageFlags::Large],
+                    )
+                })
+                .expect("expected an unboxed TLAB page");
+            assert_eq!(
+                pg.bytes_used as usize, tlab_size,
+                "unboxed TLAB page bytes_used mismatch at page {}",
+                idx
+            );
+        }
+    }
+
+    #[test]
+    fn page_wrap_split_sets_offset_first_and_bytes_used_correctly() {
+        let page_size = 32 * 1024;
+        let heap = mk_heap(8, page_size, 8 * 1024);
+
+        // 1) Put 20 KiB on page 0.
+        let first = AllocSearchInfo {
+            size: 20 * 1024,
+            ptype: PageType::Boxed,
+            generation: 0,
+            allow_split: false,
         };
-        let obj_vals = [ref_value(arr), ref_value(leaf_b)];
-        let obj = gc.allocate_slot_object_from_map(sm2, &obj_vals);
+        let res1 = heap.inner.allocate(first);
+        assert_eq!(
+            res1.page_index, 0,
+            "first small allocation should land on page 0"
+        );
 
-        // Root ONLY the slot object. Transitively, it should keep: obj, its SlotMap, arr, arr's ArrayMap, and both leaves.
-        gc.add_root(as_generic_object(obj));
-        let s1 = gc.force_collect();
-        assert!(
-            s1.survived_objects >= 6,
-            "rooted SlotObject should keep itself, its SlotMap, the Array, its ArrayMap, and both leaves alive"
+        // 2) Request 16 KiB with allow_split: should fill remaining 12 KiB on page 0 and spill 4 KiB into page 1.
+        let split_bytes = 16 * 1024;
+        let split = AllocSearchInfo {
+            size: split_bytes,
+            ptype: PageType::Boxed,
+            generation: 0,
+            allow_split: true,
+        };
+        let res2 = heap.inner.allocate(split);
+        assert_eq!(
+            res2.page_index, 0,
+            "split allocation should begin on page 0"
+        );
+
+        // Verify page accounting
+        let pages = heap.inner.pages.borrow();
+        let p0 = pages[0];
+        let p1 = pages[1];
+
+        // Page 0 should be completely full now
+        assert_eq!(
+            p0.bytes_used as usize, page_size,
+            "page 0 should be filled by the split"
+        );
+        assert!(page_flags_contains(
+            p0.flags,
+            &[PageFlags::Used],
+            &[PageFlags::Unboxed, PageFlags::Large]
+        ));
+
+        // Page 1 should have 'remaining' bytes and offset pointing to where the first object started (the backward offset)
+        let first_page_fit = page_size - (20 * 1024);
+        let expected_into_p1 = split_bytes - first_page_fit; // 16 KiB - 12 KiB = 4 KiB
+        assert_eq!(
+            p1.bytes_used as usize, expected_into_p1,
+            "page 1 should contain the spillover after the split"
         );
         assert_eq!(
-            s1.freed_objects, 0,
-            "nothing should be freed while obj is the sole root"
+            p1.offset_first as usize, first_page_fit,
+            "offset_first must equal how much of the allocation fit on the previous page (backwards offset)"
         );
+        assert!(page_flags_contains(
+            p1.flags,
+            &[PageFlags::Used],
+            &[PageFlags::Unboxed, PageFlags::Large]
+        ));
+    }
 
-        // Now unroot the SlotObject, but root the Array.
-        gc.remove_root(as_generic_object(obj));
-        gc.add_root(as_generic_object(arr));
+    #[test]
+    fn tlab_refreshes_when_exhausted_and_bump_resets() {
+        let page_size = 32 * 1024;
+        let tlab_size = 128; // small to force quick refresh
+        let heap = mk_heap(4, page_size, tlab_size);
+        let mut p = heap.create_proxy();
 
-        let s2 = gc.force_collect();
-        // The SlotObject + its SlotMap should now be freed; Array + ArrayMap + 2 leaves survive.
-        assert!(
-            s2.survived_objects >= 4,
-            "rooted Array should keep itself, its ArrayMap, and both leaves alive"
-        );
-        assert!(
-            s2.freed_objects >= 2,
-            "the SlotObject and its SlotMap should now be freed"
-        );
-
-        // Finally, unroot everything and ensure it all goes away.
-        gc.remove_root(as_generic_object(arr));
-        let s3 = gc.force_collect();
+        // First boxed TLAB is created on first small alloc.
+        let a = p.allocate_boxed_raw(64);
+        let bump_after_a = p.boxed_tlab.bump;
         assert_eq!(
-            s3.survived_objects, 0,
-            "with no roots, nothing should survive"
+            bump_after_a, 64,
+            "after first 64B alloc, TLAB bump must be 64"
+        );
+
+        // Second alloc won't fit in remaining 64 (we ask for 80).
+        let b = p.allocate_boxed_raw(80);
+        // A refresh should have happened; the new TLAB's bump should now be 80.
+        let bump_after_b = p.boxed_tlab.bump;
+        assert_eq!(
+            bump_after_b, 80,
+            "TLAB bump should reset on refresh and then advance by new size"
+        );
+
+        // Pointers should not be equal (likely from different places within page/heap).
+        assert_ne!(
+            a.as_ptr(),
+            b.as_ptr(),
+            "post-refresh allocation should yield a different address"
+        );
+
+        // Check that the underlying page bytes_used increased by exactly two TLAB chunks
+        {
+            let pages = p.heap.pages.borrow();
+            let pg0 = pages[0];
+            assert_eq!(
+                pg0.bytes_used as usize,
+                tlab_size * 2,
+                "two TLAB grabs should consume two chunks from the page"
+            );
+        }
+
+        // Do the same for unboxed to ensure independent TLABs
+        let _u1 = p.allocate_unboxed_raw(32);
+        assert_eq!(p.unboxed_tlab.bump, 32);
+        // skip tlab allocation as this is bigger than the tlab, tlab stays the same
+        let _u2 = p.allocate_unboxed_raw(200);
+        assert_eq!(p.unboxed_tlab.bump, 32);
+
+        // Ensure the unboxed page is marked unboxed
+        let pages = p.heap.pages.borrow();
+        let (idx, unboxed_pg) = pages
+            .iter()
+            .enumerate()
+            .find(|(_, pg)| {
+                page_flags_contains(pg.flags, &[PageFlags::Used, PageFlags::Unboxed], &[])
+            })
+            .expect("expected an unboxed page after unboxed TLAB usage");
+        assert!(
+            unboxed_pg.bytes_used as usize >= tlab_size,
+            "unboxed page {} should have at least one TLAB chunk",
+            idx
+        );
+    }
+
+    #[test]
+    fn multithreaded_allocations_produce_both_boxed_and_unboxed_pages() {
+        let page_size = 32 * 1024;
+        let tlab_size = 8 * 1024;
+        let heap = mk_heap(64, page_size, tlab_size);
+        let heap_arc = Arc::new(heap);
+
+        let threads = 8usize;
+        let iters = 1000usize;
+
+        use std::collections::HashSet;
+        use std::sync::{Arc as SyncArc, Mutex as SyncMutex};
+        let seen: SyncArc<SyncMutex<HashSet<usize>>> = SyncArc::new(SyncMutex::new(HashSet::new()));
+
+        let mut handles = Vec::new();
+        for t in 0..threads {
+            let heap_clone = heap_arc.clone();
+            let seen_clone = seen.clone();
+            let proxy = heap_clone.create_proxy();
+            handles.push(std::thread::spawn(move || {
+                let mut proxy = proxy;
+                for i in 0..iters {
+                    let size = 16 + (i % 32);
+                    let ptr = if (t + i) % 2 == 0 {
+                        proxy.allocate_boxed_raw(size)
+                    } else {
+                        proxy.allocate_unboxed_raw(size)
+                    };
+                    let addr = ptr.as_ptr() as usize;
+                    let mut set = seen_clone.lock().unwrap();
+                    assert!(
+                        set.insert(addr),
+                        "duplicate pointer detected across threads (addr = {:p})",
+                        ptr.as_ptr()
+                    );
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        let pages = heap_arc.inner.pages.borrow();
+        let mut boxed_used_pages = 0usize;
+        let mut unboxed_used_pages = 0usize;
+
+        for (idx, pg) in pages.iter().enumerate() {
+            if pg.flags.contains(PageFlags::Large) {
+                panic!(
+                    "unexpected Large page from small TLAB-based allocs (page {})",
+                    idx
+                );
+            }
+            if pg.flags.contains(PageFlags::Used) {
+                match pg.page_type() {
+                    PageType::Boxed => boxed_used_pages += 1,
+                    PageType::Unboxed => unboxed_used_pages += 1,
+                }
+            }
+        }
+
+        assert!(
+            boxed_used_pages > 0,
+            "expected at least one boxed page in use after mixed allocations"
         );
         assert!(
-            s3.freed_objects >= 4,
-            "Array, ArrayMap, and the two leaves should be freed"
+            unboxed_used_pages > 0,
+            "expected at least one unboxed page in use after mixed allocations"
         );
     }
 }

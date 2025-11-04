@@ -1,16 +1,12 @@
 use std::ptr::NonNull;
 
-use crate::{ActorId, SlotMap, TaggedValue, View, interning::InternedId};
+use crate::{SlotMap, TaggedValue, View, interning::InternedId};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Message(InternedId);
 
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
-    FiberYield,
-    ActorYield {
-        id: ActorId,
-    },
     Send {
         message: Message,
     },
@@ -43,6 +39,11 @@ pub enum Instruction {
     Return,
 }
 
+// TODO: replace instructions to actual byte instructions
+// use a design similar to arm, 8 byte opcode + 24 byte data?
+// we can also do it like riscV and add additional compressed instructions
+// but at least for high level "parsing", we should keep something like the current instructions
+// we can also optimize this further and inline the instructions into the Block itself
 pub struct Block {
     instructions: Vec<Instruction>,
 }
