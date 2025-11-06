@@ -17,7 +17,6 @@ fn fixnum_binop(ctx: &mut PrimitiveContext, op: Fixnum2Op) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-// TODO: duplication is silly, maybe another trait
 type Fixnum2LogicOp =
     fn(ctx: &mut PrimitiveContext, a: TaggedI64, b: TaggedI64) -> Result<bool, IntegerError>;
 fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> ExecutionResult {
@@ -25,11 +24,10 @@ fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> Executi
     let b = TaggedI64::from(ctx.arguments[0]);
     match op(ctx, a, b) {
         Ok(res) => {
-            if res {
-                ctx.result[0] = ctx.vm.shared.specials.true_object.into();
-            } else {
-                ctx.result[0] = ctx.vm.shared.specials.false_object.into();
-            }
+            ctx.result[0] = match res {
+                true => ctx.vm.shared.specials.true_object.into(),
+                false => ctx.vm.shared.specials.false_object.into(),
+            };
         }
         Err(err) => return ExecutionResult::IntegerError(err),
     }
@@ -155,4 +153,23 @@ pub fn fixnum_geq(ctx: &mut PrimitiveContext) -> ExecutionResult {
         let res = a >= b;
         Ok(res)
     })
+}
+
+pub fn is_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let is_a = ctx.receiver.is_small_int();
+    ctx.result[0] = match is_a {
+        true => ctx.vm.shared.specials.true_object.into(),
+        false => ctx.vm.shared.specials.false_object.into(),
+    };
+    ExecutionResult::Normal
+}
+
+pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let is_a = ctx.receiver.is_small_int();
+    let is_b = ctx.arguments[0].is_small_int();
+    ctx.result[0] = match is_a && is_b {
+        true => ctx.vm.shared.specials.true_object.into(),
+        false => ctx.vm.shared.specials.false_object.into(),
+    };
+    ExecutionResult::Normal
 }

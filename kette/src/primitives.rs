@@ -66,6 +66,8 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
 }
 
 pub const PRIMITIVES: &[PrimitiveMessage] = &[
+    PrimitiveMessage::new("fixnum?", 0, 1, fixnum::is_fixnum),
+    PrimitiveMessage::new("2fixnum?", 1, 1, fixnum::is_2fixnum),
     PrimitiveMessage::new("fixnum+", 1, 1, fixnum::fixnum_add),
     PrimitiveMessage::new("fixnum-", 1, 1, fixnum::fixnum_sub),
     PrimitiveMessage::new("fixnum*", 1, 1, fixnum::fixnum_mul),
