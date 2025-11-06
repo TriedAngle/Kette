@@ -8,7 +8,7 @@ pub struct SpecialObjects {
 }
 #[derive(Debug)]
 pub struct VMShared {
-    specials: SpecialObjects,
+    pub specials: SpecialObjects,
     _marker: PhantomData<*const ()>,
 }
 
@@ -23,8 +23,8 @@ impl VM {}
 
 #[derive(Debug)]
 pub struct VMProxy {
-    vm: Arc<VMShared>,
-    heap: HeapProxy,
+    pub shared: Arc<VMShared>,
+    pub heap: HeapProxy,
 }
 
 unsafe impl Send for VMProxy {}

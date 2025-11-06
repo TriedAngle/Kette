@@ -129,6 +129,7 @@ pub struct Array {
 #[derive(Debug, Copy, Clone)]
 pub struct ByteArray {
     pub header: Header,
+    pub size: TaggedUsize,
     pub data: [u8; 0],
 }
 
@@ -563,6 +564,25 @@ impl Array {
     }
 }
 
+impl ByteArray {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.size.into()
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        let len = self.len();
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), len) }
+    }
+
+    #[inline]
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        let len = self.len();
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), len) }
+    }
+}
+
 impl FreeLocation {
     #[inline]
     pub fn new(size: u64, next: Option<*mut FreeLocation>) -> Self {
@@ -667,6 +687,6 @@ impl Object for ArrayMap {
 
 impl Object for ByteArray {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
+        mem::size_of::<Self>() + self.len()
     }
 }
