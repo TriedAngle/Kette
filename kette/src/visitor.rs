@@ -1,6 +1,6 @@
 use crate::{
-    Array, ArrayMap, ByteArray, GenericObject, Map, MapType, ObjectKind, ObjectType, SlotMap,
-    SlotObject, TaggedPtr, TaggedValue,
+    Array, ArrayMap, ByteArray, ExecutableMap, GenericObject, Map, MapType, ObjectKind, ObjectType,
+    SlotMap, SlotObject, TaggedPtr, TaggedValue,
 };
 
 pub trait Visitable {
@@ -76,13 +76,15 @@ impl Visitable for Map {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         match self.header.map_type() {
             Some(MapType::Slot) => unsafe {
-                let sm: &mut SlotMap = &mut *(self as *mut Map as *mut SlotMap);
+                let sm: &mut SlotMap = &mut *(self as *mut Map as *mut _);
                 sm.visit_edges_mut(visitor);
             },
             Some(MapType::Array) => unsafe {
-                let am: &mut ArrayMap = &mut *(self as *mut Map as *mut ArrayMap);
+                let am: &mut ArrayMap = &mut *(self as *mut Map as *mut _);
                 am.visit_edges_mut(visitor);
             },
+            // TODO: nothing to visit until we transform executable map to a slot map
+            Some(MapType::Executable) => (),
             None => {
                 panic!("visiting map type that doesnt exist")
             }
@@ -100,6 +102,8 @@ impl Visitable for Map {
                 let am: &ArrayMap = &*(self as *const Map as *const ArrayMap);
                 am.visit_edges(visitor);
             },
+            // TODO: nothing to visit until we transform executable map to a slot map
+            Some(MapType::Executable) => (),
             None => {
                 panic!("visiting map type that doesnt exist")
             }
@@ -148,13 +152,13 @@ impl Visitable for SlotObject {
 impl Visitable for Array {
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        visitor.visit_mut(self.map.into());
+        // visitor.visit_mut(self.map.into());
         self.fields().iter().for_each(|&obj| visitor.visit_mut(obj));
     }
 
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        visitor.visit(self.map.into());
+        // visitor.visit(self.map.into());
         self.fields().iter().for_each(|&obj| visitor.visit(obj));
     }
 }

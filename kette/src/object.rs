@@ -1,7 +1,10 @@
 use std::mem;
 use std::ptr::NonNull;
 
-use crate::{TaggedPtr, TaggedUsize, TaggedValue, Visitable};
+use crate::{ExecutableMap, TaggedPtr, TaggedUsize, TaggedValue, Visitable};
+
+// TODO: consider removing copy and clone from most things
+// also make Debug "real", right now its mostly useless.
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
@@ -32,8 +35,9 @@ pub enum ObjectType {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MapType {
-    Slot = 0,
-    Array = 1,
+    Slot = 000,
+    Array = 001,
+    Executable = 010,
 }
 
 // TODO: in our current garbage collector iteration objects do not move, thus pin does nothing.
@@ -102,11 +106,23 @@ pub struct SlotMap {
     pub slots: [SlotDescriptor; 0],
 }
 
+// TODO: find a way to implement specific functions for arrays of some specific n
+// we could introduce <size> as part of the the map.
+// the question is, would that be good for the game? I am not sure yet
+// keep it dynamically sized, and then figure out a nice way to have both dynamic and sized arrays.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ArrayMap {
     pub map: Map,
-    pub size: TaggedUsize,
+}
+
+// we don't actually use this map except once,
+// every bytearray will have this map
+// it doesnt give information beyond that.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ByteArrayMap {
+    pub map: Map,
 }
 
 #[repr(C)]
@@ -121,7 +137,7 @@ pub struct SlotObject {
 #[derive(Debug, Copy, Clone)]
 pub struct Array {
     pub header: Header,
-    pub map: TaggedPtr<ArrayMap>,
+    pub size: TaggedUsize,
     pub fields: [TaggedValue; 0],
 }
 
@@ -135,9 +151,30 @@ pub struct ByteArray {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct StackEffect {
+    pub header: Header,
+    pub input: TaggedPtr<Array>,
+    pub output: TaggedPtr<Array>,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct FreeLocation {
     pub header: Header,
     pub next: Option<*mut FreeLocation>,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub enum SlotKind {
+    Data,
+    Method,
+    Const,
+}
+
+#[repr(C)]
+pub struct MapCreateInfo<'a> {
+    pub slots: &'a [(&'a str, SlotKind, TaggedValue)],
 }
 
 impl Header {
@@ -383,15 +420,15 @@ impl SlotMap {
 
 impl ArrayMap {
     #[inline]
-    pub unsafe fn init(&mut self, size: usize) {
-        self.size = size.into();
+    pub unsafe fn init(&mut self /* size: usize */) {
+        // self.size = size.into();
         unsafe { self.map.init(MapType::Array) };
     }
 
-    #[inline]
-    pub fn size(&self) -> usize {
-        usize::from(self.size)
-    }
+    // #[inline]
+    // pub fn size(&self) -> usize {
+    //     usize::from(self.size)
+    // }
 }
 
 impl SlotObject {
@@ -478,19 +515,16 @@ impl SlotObject {
 
 impl Array {
     /// Initialize an Array with `map`. Caches size (u16) in header DATA[0..16].
-    pub unsafe fn init(&mut self, map: TaggedPtr<ArrayMap>) {
-        let map_ref = unsafe { map.as_ref() };
-        let size = map_ref.size();
-
-        let cache16 = if size > u16::MAX as usize {
-            0xFFFF
-        } else {
-            size as u16
-        };
+    pub unsafe fn init(&mut self, size: usize) {
+        // let cache16 = if size > u16::MAX as usize {
+        //     0xFFFF
+        // } else {
+        //     size as u16
+        // };
 
         self.header = Header::encode_object(ObjectType::Array, 0, HeaderFlags::empty(), 0);
-        self.header.set_data_lo16(cache16);
-        self.map = map;
+        self.size = size.into();
+        // self.header.set_data_lo16(cache16);
     }
 
     #[inline]
@@ -506,13 +540,14 @@ impl Array {
     /// Length of the array. Uses cached 16-bit size if available, otherwise reads the map.
     #[inline]
     pub fn len(&self) -> usize {
-        let cached = self.header.data_lo16();
-        if cached != u16::MAX {
-            cached as usize
-        } else {
-            let map = unsafe { self.map.as_ref() };
-            map.size()
-        }
+        // let cached = self.header.data_lo16();
+        // if cached != u16::MAX {
+        //     cached as usize
+        // } else {
+        //     let map = unsafe { self.map.as_ref() };
+        //     map.size()
+        // }
+        self.size.into()
     }
 
     #[inline]
@@ -655,6 +690,10 @@ impl Object for Map {
             }
             MapType::Array => {
                 let map = unsafe { std::mem::transmute::<_, &ArrayMap>(self) };
+                map.heap_size()
+            }
+            MapType::Executable => {
+                let map = unsafe { std::mem::transmute::<_, &ExecutableMap>(self) };
                 map.heap_size()
             }
         }

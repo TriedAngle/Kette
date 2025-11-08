@@ -6,6 +6,16 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use crate::ValueTag;
 
+// TODO: this is currently not the greatest and logical system
+// I think at the end I should have the following:
+// Value: any `object`, ptr or small int
+// Tagged<T: Value>: still like value but typed
+// Handle<T: HeapObject>: any heap located object
+//
+// Tagged<T> would replace most of current tagging system.
+// Handle<T> would represent a heap object that we KNOW is GC safe (we root them)
+// we can implement safe deref for Handle<T> and some unsafe deref for Tagged
+
 #[repr(transparent)]
 #[derive(Copy, Clone, Hash)]
 pub struct TaggedPtr<T> {
@@ -418,6 +428,11 @@ impl TaggedValue {
     #[inline]
     pub fn raw(self) -> u64 {
         self.0
+    }
+
+    #[inline]
+    pub fn zero() -> Self {
+        Self(0)
     }
 
     #[inline]

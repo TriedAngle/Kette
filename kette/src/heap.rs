@@ -23,17 +23,18 @@ pub enum PageType {
 // TODO: add more control, like growth, gc ratios
 // also investigate automatic resizing, dynamic change of rations
 // sbcl offers dynamic heap growth, investigate how that works
+#[derive(Debug, Default)]
 pub struct HeapCreateInfo {
-    size: usize,
-    generations: Option<usize>,
-    generation_size: Option<usize>,
-    page_size: Option<usize>,
+    pub size: usize,
+    pub generations: Option<usize>,
+    pub generation_size: Option<usize>,
+    pub page_size: Option<usize>,
     // rounds to the nearest page
-    tlab_size: Option<usize>,
+    pub tlab_size: Option<usize>,
     // size of a dirty line, default 512
-    dirty_line_size: Option<usize>,
+    pub dirty_line_size: Option<usize>,
     // max slack
-    max_slack: Option<usize>,
+    pub max_slack: Option<usize>,
 }
 
 // TODO: do minimum, maybe even maximum or other constraints
@@ -484,6 +485,18 @@ impl HeapProxy {
     pub fn allocate_unboxed_raw(&mut self, size: usize) -> NonNull<u8> {
         // TODO: implement alignment if necessary
         self.allocate_raw(size, PageType::Unboxed)
+    }
+
+    pub fn create_proxy(&self) -> HeapProxy {
+        let heap = self.heap.clone();
+        let epoch = self.heap.epoch.load(Ordering::Relaxed);
+        let proxy = HeapProxy {
+            heap,
+            epoch,
+            boxed_tlab: TLAB::empty(),
+            unboxed_tlab: TLAB::empty(),
+        };
+        proxy
     }
 }
 
