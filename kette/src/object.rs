@@ -1,10 +1,10 @@
 use std::mem;
 use std::ptr::NonNull;
 
-use crate::{ExecutableMap, Tagged, Value, ValueTag, Visitable};
-
-// TODO: consider removing copy and clone from most things
-// also make Debug "real", right now its mostly useless.
+use crate::{
+    Array, ArrayMap, ByteArray, ExecutableMap, SlotMap, SlotObject, Tagged, Value, ValueTag,
+    Visitable, Visitor,
+};
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -80,79 +80,19 @@ pub trait HeapObject: Object {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Hash)]
-pub struct GenericObject {
+#[derive(Debug)]
+pub struct HeapValue {
     pub header: Header,
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct Map {
     pub header: Header,
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SlotDescriptor {
-    pub name: Tagged<ByteArray>,
-    pub kind: Tagged<GenericObject>,
-    pub value: Value,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SlotMap {
-    pub map: Map,
-    pub assignable_slots: Tagged<usize>,
-    pub total_slots: Tagged<usize>,
-    pub slots: [SlotDescriptor; 0],
-}
-
-// TODO: find a way to implement specific functions for arrays of some specific n
-// we could introduce <size> as part of the the map.
-// the question is, would that be good for the game? I am not sure yet
-// keep it dynamically sized, and then figure out a nice way to have both dynamic and sized arrays.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct ArrayMap {
-    pub map: Map,
-}
-
-// we don't actually use this map except once,
-// every bytearray will have this map
-// it doesnt give information beyond that.
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct ByteArrayMap {
-    pub map: Map,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct SlotObject {
-    pub header: Header,
-    pub map: Tagged<SlotMap>,
-    pub slots: [Value; 0],
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct Array {
-    pub header: Header,
-    pub size: Tagged<usize>,
-    pub fields: [Value; 0],
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct ByteArray {
-    pub header: Header,
-    pub size: Tagged<usize>,
-    pub data: [u8; 0],
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct StackEffect {
     pub header: Header,
     pub input: Tagged<Array>,
@@ -406,220 +346,6 @@ impl Map {
     }
 }
 
-impl SlotMap {
-    #[inline]
-    pub unsafe fn init(&mut self, assignable_slots: usize, total_slots: usize) {
-        self.assignable_slots = assignable_slots.into();
-        self.total_slots = total_slots.into();
-        unsafe { self.map.init(MapType::Slot) };
-    }
-
-    #[inline]
-    pub fn assignable_slots_count(&self) -> usize {
-        usize::from(self.assignable_slots) as usize
-    }
-}
-
-impl ArrayMap {
-    #[inline]
-    pub unsafe fn init(&mut self /* size: usize */) {
-        // self.size = size.into();
-        unsafe { self.map.init(MapType::Array) };
-    }
-
-    // #[inline]
-    // pub fn size(&self) -> usize {
-    //     usize::from(self.size)
-    // }
-}
-
-impl SlotObject {
-    pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
-        let map_ref = unsafe { map.as_ref() };
-        let slots = map_ref.assignable_slots_count();
-        let cache16 = if slots > u16::MAX as usize {
-            0xFFFF
-        } else {
-            slots as u16
-        };
-
-        self.map = map;
-        self.header = Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
-        self.header.set_data_lo16(cache16);
-    }
-
-    #[inline]
-    fn slots_ptr(&self) -> *const Value {
-        self.slots.as_ptr()
-    }
-
-    #[inline]
-    fn slots_mut_ptr(&mut self) -> *mut Value {
-        self.slots.as_mut_ptr()
-    }
-
-    #[inline]
-    pub fn slots(&self) -> &[Value] {
-        let len = self.assignable_slots();
-        unsafe { std::slice::from_raw_parts(self.slots_ptr(), len) }
-    }
-
-    /// Borrow all slots as a mutable slice (checked).
-    #[inline]
-    pub fn slots_mut(&mut self) -> &mut [Value] {
-        let len = self.assignable_slots();
-        unsafe { std::slice::from_raw_parts_mut(self.slots_mut_ptr(), len) }
-    }
-
-    #[inline]
-    pub fn assignable_slots(&self) -> usize {
-        let cached16 = self.header.data_lo16();
-
-        if cached16 != u16::MAX {
-            cached16 as usize
-        } else {
-            let map = unsafe { self.map.as_ref() };
-            map.assignable_slots_count()
-        }
-    }
-
-    #[inline]
-    pub fn get_slot(&self, index: usize) -> Option<Value> {
-        if index < self.assignable_slots() {
-            Some(unsafe { self.slots_ptr().add(index).read() })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub fn set_slot(&mut self, index: usize, value: Value) -> bool {
-        if index < self.assignable_slots() {
-            unsafe { self.slots_mut_ptr().add(index).write(value) };
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Caller must ensure `index < assignable_slots()`.
-    #[inline]
-    pub unsafe fn get_slot_unchecked(&self, index: usize) -> Value {
-        unsafe { self.slots_ptr().add(index).read() }
-    }
-
-    /// Caller must ensure `index < assignable_slots()`.
-    #[inline]
-    pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {
-        unsafe { self.slots_mut_ptr().add(index).write(value) };
-    }
-}
-
-impl Array {
-    /// Initialize an Array with `map`. Caches size (u16) in header DATA[0..16].
-    pub unsafe fn init(&mut self, size: usize) {
-        // let cache16 = if size > u16::MAX as usize {
-        //     0xFFFF
-        // } else {
-        //     size as u16
-        // };
-
-        self.header = Header::encode_object(ObjectType::Array, 0, HeaderFlags::empty(), 0);
-        self.size = size.into();
-        // self.header.set_data_lo16(cache16);
-    }
-
-    #[inline]
-    fn fields_ptr(&self) -> *const Value {
-        self.fields.as_ptr()
-    }
-
-    #[inline]
-    fn fields_mut_ptr(&mut self) -> *mut Value {
-        self.fields.as_mut_ptr()
-    }
-
-    /// Length of the array. Uses cached 16-bit size if available, otherwise reads the map.
-    #[inline]
-    pub fn len(&self) -> usize {
-        // let cached = self.header.data_lo16();
-        // if cached != u16::MAX {
-        //     cached as usize
-        // } else {
-        //     let map = unsafe { self.map.as_ref() };
-        //     map.size()
-        // }
-        self.size.into()
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    #[inline]
-    pub fn fields(&self) -> &[Value] {
-        let len = self.len();
-        unsafe { std::slice::from_raw_parts(self.fields_ptr(), len) }
-    }
-
-    #[inline]
-    pub fn fields_mut(&mut self) -> &mut [Value] {
-        let len = self.len();
-        unsafe { std::slice::from_raw_parts_mut(self.fields_mut_ptr(), len) }
-    }
-
-    #[inline]
-    pub fn get(&self, index: usize) -> Option<Value> {
-        if index < self.len() {
-            Some(unsafe { self.fields_ptr().add(index).read() })
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub fn set(&mut self, index: usize, value: Value) -> bool {
-        if index < self.len() {
-            unsafe { self.fields_mut_ptr().add(index).write(value) };
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Caller must ensure `index < len()`.
-    #[inline]
-    pub unsafe fn get_unchecked(&self, index: usize) -> Value {
-        unsafe { self.fields_ptr().add(index).read() }
-    }
-
-    /// Caller must ensure `index < len()`.
-    #[inline]
-    pub unsafe fn set_unchecked(&mut self, index: usize, value: Value) {
-        unsafe { self.fields_mut_ptr().add(index).write(value) };
-    }
-}
-
-impl ByteArray {
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.size.into()
-    }
-
-    #[inline]
-    pub fn as_bytes(&self) -> &[u8] {
-        let len = self.len();
-        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), len) }
-    }
-
-    #[inline]
-    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        let len = self.len();
-        unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), len) }
-    }
-}
-
 impl FreeLocation {
     #[inline]
     pub fn new(size: u64, next: Option<*mut FreeLocation>) -> Self {
@@ -655,8 +381,8 @@ impl FreeLocation {
     }
 }
 
-impl Object for GenericObject {}
-impl HeapObject for GenericObject {
+impl Object for HeapValue {}
+impl HeapObject for HeapValue {
     fn heap_size(&self) -> usize {
         match self.header.kind() {
             ObjectKind::Map => {
@@ -676,6 +402,60 @@ impl HeapObject for GenericObject {
                     let byte_array = unsafe { std::mem::transmute::<_, &ByteArray>(self) };
                     byte_array.heap_size()
                 }
+                _ => {
+                    unimplemented!()
+                }
+            },
+        }
+    }
+}
+
+// Idea:
+// visiting an object means we visit only its direct nodes.
+// so when we call on a generic object, we dispatch here on the actual object types.
+// the actual object types will then call visitor.visit() on its edges.
+impl Visitable for HeapValue {
+    #[inline]
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        match self.header.kind() {
+            ObjectKind::Map => {
+                let map = unsafe { std::mem::transmute::<_, &mut Map>(self) };
+                map.visit_edges_mut(visitor);
+            }
+            ObjectKind::Object => match self.header.object_type().unwrap() {
+                ObjectType::Slot => {
+                    let slot_object = unsafe { std::mem::transmute::<_, &mut SlotObject>(self) };
+                    slot_object.visit_edges_mut(visitor);
+                }
+                ObjectType::Array => {
+                    let array_object = unsafe { std::mem::transmute::<_, &mut Array>(self) };
+                    array_object.visit_edges_mut(visitor);
+                }
+                ObjectType::ByteArray => (),
+                _ => {
+                    unimplemented!()
+                }
+            },
+        }
+    }
+
+    #[inline]
+    fn visit_edges(&self, visitor: &impl Visitor) {
+        match self.header.kind() {
+            ObjectKind::Map => {
+                let map = unsafe { std::mem::transmute::<_, &Map>(self) };
+                map.visit_edges(visitor);
+            }
+            ObjectKind::Object => match self.header.object_type().unwrap() {
+                ObjectType::Slot => {
+                    let slot_object = unsafe { std::mem::transmute::<_, &SlotObject>(self) };
+                    slot_object.visit_edges(visitor);
+                }
+                ObjectType::Array => {
+                    let array_object = unsafe { std::mem::transmute::<_, &Array>(self) };
+                    array_object.visit_edges(visitor);
+                }
+                ObjectType::ByteArray => (),
                 _ => {
                     unimplemented!()
                 }
@@ -712,37 +492,43 @@ impl HeapObject for StackEffect {
 }
 impl Visitable for StackEffect {}
 
-impl Object for SlotObject {}
-impl HeapObject for SlotObject {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.assignable_slots() * mem::size_of::<Value>()
+// just like object, we dispatch here.
+impl Visitable for Map {
+    #[inline]
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        match self.header.map_type() {
+            Some(MapType::Slot) => unsafe {
+                let sm: &mut SlotMap = &mut *(self as *mut Map as *mut _);
+                sm.visit_edges_mut(visitor);
+            },
+            Some(MapType::Array) => unsafe {
+                let am: &mut ArrayMap = &mut *(self as *mut Map as *mut _);
+                am.visit_edges_mut(visitor);
+            },
+            // TODO: nothing to visit until we transform executable map to a slot map
+            Some(MapType::Executable) => (),
+            None => {
+                panic!("visiting map type that doesnt exist")
+            }
+        }
     }
-}
 
-impl Object for SlotMap {}
-impl HeapObject for SlotMap {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() // TODO: add slots  
-    }
-}
-
-impl Object for Array {}
-impl HeapObject for Array {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.len() * mem::size_of::<Value>()
-    }
-}
-
-impl Object for ArrayMap {}
-impl HeapObject for ArrayMap {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-
-impl Object for ByteArray {}
-impl HeapObject for ByteArray {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.len()
+    #[inline]
+    fn visit_edges(&self, visitor: &impl Visitor) {
+        match self.header.map_type() {
+            Some(MapType::Slot) => unsafe {
+                let sm: &SlotMap = &*(self as *const Map as *const SlotMap);
+                sm.visit_edges(visitor);
+            },
+            Some(MapType::Array) => unsafe {
+                let am: &ArrayMap = &*(self as *const Map as *const ArrayMap);
+                am.visit_edges(visitor);
+            },
+            // TODO: nothing to visit until we transform executable map to a slot map
+            Some(MapType::Executable) => (),
+            None => {
+                panic!("visiting map type that doesnt exist")
+            }
+        }
     }
 }

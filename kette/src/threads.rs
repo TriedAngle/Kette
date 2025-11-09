@@ -36,8 +36,7 @@ pub struct ThreadInfo {
 #[derive(Debug)]
 pub struct ThreadObject {
     pub header: Header,
-    // TODO: we can use a Tagged<*mut Thread> here
-    pub vm_thead: Tagged<usize>,
+    pub vm_thead: Tagged<*mut VMThread>,
 }
 
 impl Visitable for ThreadObject {}

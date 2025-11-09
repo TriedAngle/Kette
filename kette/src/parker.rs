@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use crate::{GenericObject, Handle};
+use crate::{Handle, Value};
 
 const PARKED: u8 = 0b01;
 const TOKEN: u8 = 0b10;
@@ -18,7 +18,7 @@ pub struct NativeParker {
     state: AtomicU8,
     lock: Mutex<()>,
     cv: Condvar,
-    blocker: Cell<Option<Handle<GenericObject>>>,
+    blocker: Cell<Option<Handle<Value>>>,
 }
 
 unsafe impl Send for NativeParker {}
@@ -34,7 +34,7 @@ impl NativeParker {
         }
     }
 
-    pub fn park(&self, obj: Handle<GenericObject>) {
+    pub fn park(&self, obj: Handle<Value>) {
         self.blocker.set(Some(obj));
 
         // Fast path: unpark before park => just ignore
@@ -92,7 +92,7 @@ impl NativeParker {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Header, NativeThread};
+    use crate::{Header, HeapValue, NativeThread};
 
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
@@ -256,26 +256,21 @@ mod tests {
         );
     }
 
-    fn dummy_view() -> Handle<GenericObject> {
-        static mut DUMMY: GenericObject = GenericObject {
+    fn dummy_view() -> Handle<HeapValue> {
+        static mut DUMMY: HeapValue = HeapValue {
             header: Header::zeroed(),
         };
         let view = unsafe { Handle::from_ptr(&raw mut DUMMY) };
         view
     }
 
-    /// Spawns a NativeThread that will call `parker.park(obj)` and block.
-    /// The test thread then `unpark`s to release it.
     #[test]
     fn park_blocks_then_unparks_with_native_spawn() {
-        // Channel to send parker + object into the spawned thread.
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<Value>)>();
 
-        // This flag is flipped after park() returns in the spawned thread.
         let returned = Arc::new(AtomicBool::new(false));
         let returned2 = returned.clone();
 
-        // Spawn a native thread that waits for a (parker, obj) and then parks.
         let nt = NativeThread::spawn(move || {
             let (parker, obj) = rx.recv().expect("parker/object not sent");
             // This should block until unpark().
@@ -283,23 +278,18 @@ mod tests {
             returned2.store(true, SeqCst);
         });
 
-        // Create a parker tied to the spawned thread.
         let parker = Arc::new(NativeParker::new());
 
-        // Send the parker and the object to the spawned thread and give it a moment to park.
-        tx.send((parker.clone(), dummy_view())).unwrap();
+        tx.send((parker.clone(), dummy_view().into())).unwrap();
         std::thread::sleep(Duration::from_millis(50));
 
-        // It should still be blocked.
         assert!(
             !returned.load(SeqCst),
             "park() returned too early without unpark"
         );
 
-        // Now unpark: this should release the park() call promptly.
         parker.unpark();
 
-        // Wait bounded time for the parked thread to finish.
         let start = Instant::now();
         while !returned.load(SeqCst) && start.elapsed() < Duration::from_secs(1) {
             std::thread::sleep(Duration::from_millis(5));
@@ -309,14 +299,12 @@ mod tests {
             "park() did not return after unpark()"
         );
 
-        // Join the native thread (exercise the real handle created by NativeThread::spawn).
         nt.join();
     }
 
-    /// If a token is delivered *before* a thread calls park(), it should not block.
     #[test]
     fn pre_delivered_token_means_no_block() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<Value>)>();
         let returned = Arc::new(AtomicBool::new(false));
         let returned2 = returned.clone();
 
@@ -335,11 +323,10 @@ mod tests {
 
         let parker = Arc::new(NativeParker::new());
 
-        // Deliver the token *before* the other thread calls park()
         parker.unpark();
 
         // Now let the thread call park(); it should return quickly.
-        tx.send((parker.clone(), dummy_view())).unwrap();
+        tx.send((parker.clone(), dummy_view().into())).unwrap();
 
         let start = Instant::now();
         while !returned.load(SeqCst) && start.elapsed() < Duration::from_secs(1) {
@@ -355,7 +342,7 @@ mod tests {
 
     #[test]
     fn back_to_back_unparks_before_wake_do_not_leave_token() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<Value>)>();
         let phase1_done = Arc::new(AtomicBool::new(false));
         let phase1_done2 = phase1_done.clone();
 
@@ -366,11 +353,11 @@ mod tests {
             phase1_done2.store(true, SeqCst);
 
             let obj2 = dummy_view();
-            parker.park(obj2);
+            parker.park(obj2.into());
         });
 
         let parker = Arc::new(NativeParker::new());
-        tx.send((parker.clone(), dummy_view())).unwrap();
+        tx.send((parker.clone(), dummy_view().into())).unwrap();
 
         std::thread::sleep(Duration::from_millis(50));
         parker.unpark();
@@ -393,7 +380,7 @@ mod tests {
 
     #[test]
     fn second_unpark_after_first_wake_makes_next_park_instant() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<Value>)>();
         let phase1_done = Arc::new(AtomicBool::new(false));
         let phase1_done2 = phase1_done.clone();
         let phase2_returned = Arc::new(AtomicBool::new(false));
@@ -407,7 +394,7 @@ mod tests {
 
             let obj2 = dummy_view();
             let t0 = Instant::now();
-            parker.park(obj2);
+            parker.park(obj2.into());
             phase2_returned2.store(true, SeqCst);
             assert!(
                 t0.elapsed() < Duration::from_millis(50),
@@ -416,7 +403,7 @@ mod tests {
         });
 
         let parker = Arc::new(NativeParker::new());
-        tx.send((parker.clone(), dummy_view())).unwrap();
+        tx.send((parker.clone(), dummy_view().into())).unwrap();
 
         std::thread::sleep(Duration::from_millis(50));
         parker.unpark();
@@ -446,7 +433,7 @@ mod tests {
 
     #[test]
     fn unpark_from_another_native_thread() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<Value>)>();
         let woke = Arc::new(AtomicBool::new(false));
         let woke2 = woke.clone();
 
@@ -457,7 +444,7 @@ mod tests {
         });
 
         let parker = Arc::new(NativeParker::new());
-        tx.send((parker.clone(), dummy_view())).unwrap();
+        tx.send((parker.clone(), dummy_view().into())).unwrap();
 
         let signaller = NativeThread::spawn({
             let parker = parker.clone();

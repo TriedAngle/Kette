@@ -33,14 +33,14 @@ pub struct Value(u64);
 #[derive(Debug, Clone, Copy)]
 pub struct Tagged<T: Object> {
     data: u64,
-    _marker: PhantomData<*const T>,
+    _marker: PhantomData<*mut T>,
 }
 
 /// GC safe Reference to a HeapObject or an SMI
 #[derive(Debug, Copy, Clone)]
 pub struct Handle<T: Object> {
     data: u64,
-    _marker: PhantomData<*const T>,
+    _marker: PhantomData<*mut T>,
 }
 
 unsafe impl Send for Value {}
@@ -49,8 +49,8 @@ unsafe impl Sync for Value {}
 unsafe impl<T: Object> Send for Tagged<T> {}
 unsafe impl<T: Object> Sync for Tagged<T> {}
 
-unsafe impl<T: HeapObject> Send for Handle<T> {}
-unsafe impl<T: HeapObject> Sync for Handle<T> {}
+unsafe impl<T: Object> Send for Handle<T> {}
+unsafe impl<T: Object> Sync for Handle<T> {}
 
 impl Value {
     pub fn from_fixnum(value: i64) -> Self {
@@ -72,19 +72,19 @@ impl Value {
         Self::from_u64(0)
     }
 
-    pub fn is_fixnum(self) -> bool {
+    pub fn is_fixnum(&self) -> bool {
         self.0 & 0b1 == ValueTag::Fixnum as u64
     }
 
-    pub fn is_object(self) -> bool {
+    pub fn is_object(&self) -> bool {
         self.0 & OBECT_TAG_MASK == ValueTag::Reference as u64
     }
 
-    pub fn is_header(self) -> bool {
+    pub fn is_header(&self) -> bool {
         self.0 & OBECT_TAG_MASK == ValueTag::Header as u64
     }
 
-    pub fn as_tagged_fixnum<T: PtrSizedObject>(self) -> Option<Tagged<T>> {
+    pub fn as_tagged_fixnum<T: PtrSizedObject>(&self) -> Option<Tagged<T>> {
         if self.is_fixnum() {
             // SAFETY: we tested this
             let tagged = unsafe { Tagged::new_raw(self.0) };
@@ -93,7 +93,7 @@ impl Value {
         None
     }
 
-    pub fn as_tagged_object<T: HeapObject>(self) -> Option<Tagged<T>> {
+    pub fn as_tagged_object<T: HeapObject>(&self) -> Option<Tagged<T>> {
         if self.is_object() {
             // SAFETY: we tested this
             let tagged = unsafe { Tagged::new_raw(self.0) };
@@ -102,65 +102,11 @@ impl Value {
         None
     }
 
-    pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
+    pub unsafe fn as_handle_unchecked(&self) -> Handle<Value> {
         Handle {
             data: self.0,
             _marker: PhantomData,
         }
-    }
-}
-
-impl Handle<Value> {
-    /// Value is already tagged
-    pub unsafe fn as_tagged<T: Object>(self) -> Tagged<T> {
-        let tagged = self.data;
-        // SAFETY: this is not safe, use at own caution
-        unsafe { Tagged::new_raw(tagged) }
-    }
-
-    pub unsafe fn as_fixnum<T: PtrSizedObject + From<Tagged<T>>>(self) -> T {
-        // SAFETY: this is not safe, use at own caution
-        let tagged = unsafe { self.as_tagged() };
-        T::from(tagged)
-    }
-
-    pub fn inner(self) -> Value {
-        Value(self.data)
-    }
-}
-
-// this is safe, ptr sized are always valid hadnles
-impl From<i64> for Handle<i64> {
-    fn from(value: i64) -> Self {
-        Handle {
-            data: value.cast_unsigned(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl From<Handle<i64>> for Handle<Value> {
-    fn from(value: Handle<i64>) -> Handle<Value> {
-        let value = Value::from_u64(value.data);
-        Handle {
-            data: value.0,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T: Object> Handle<T> {
-    pub unsafe fn cast<U: Object>(&self) -> Handle<U> {
-        Handle {
-            data: self.data,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T: Object> From<Tagged<T>> for Value {
-    fn from(value: Tagged<T>) -> Self {
-        Value(value.data)
     }
 }
 
@@ -171,6 +117,11 @@ impl<T: Object> Tagged<T> {
             data: value,
             _marker: PhantomData,
         }
+    }
+
+    #[inline]
+    pub fn as_value(&self) -> Value {
+        Value(self.data)
     }
 }
 
@@ -190,6 +141,13 @@ impl<T: PtrSizedObject> Tagged<T> {
     pub fn restore_u64(self) -> u64 {
         self.data >> 1
     }
+
+    pub fn from_raw(value: T) -> Self {
+        Self {
+            data: value.as_ptr_sized(),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<T: HeapObject> Tagged<T> {
@@ -207,12 +165,6 @@ impl<T: HeapObject> Tagged<T> {
 
     #[inline]
     pub fn as_ptr(&self) -> *mut T {
-        // TODO: this debug assert is probbaly useless here
-        debug_assert_eq!(
-            self.data & OBECT_TAG_MASK,
-            ValueTag::Reference as u64,
-            "Tagged is not a valid pointer"
-        );
         let untagged = self.data & !(ValueTag::Reference as u64);
         untagged as _
     }
@@ -249,16 +201,37 @@ impl<T: HeapObject> Tagged<T> {
     }
 }
 
-impl<T: PtrSizedObject> Handle<T> {
-    pub fn as_fixnum(self) -> Tagged<T> {
-        let raw = self.data;
-        let tagged = raw << 1;
-        // SAFETY: we are typesafe and do the transformation
-        unsafe { Tagged::new_raw(tagged) }
+impl Tagged<i64> {
+    pub fn as_i64(self) -> i64 {
+        i64::from(self)
+    }
+
+    pub fn raw_i64(self) -> i64 {
+        self.data.cast_signed()
+    }
+}
+
+impl<T: Object> From<Tagged<T>> for Value {
+    fn from(value: Tagged<T>) -> Self {
+        value.as_value()
+    }
+}
+
+impl<T: PtrSizedObject> From<T> for Tagged<T> {
+    #[inline]
+    fn from(value: T) -> Self {
+        Self::new_value(value)
     }
 }
 
 impl<T: Object> Handle<T> {
+    pub unsafe fn cast<U: Object>(&self) -> Handle<U> {
+        Handle {
+            data: self.data,
+            _marker: PhantomData,
+        }
+    }
+
     pub unsafe fn from_ptr(ptr: *mut T) -> Self {
         Self {
             data: ptr as _,
@@ -274,15 +247,71 @@ impl<T: HeapObject> Handle<T> {
         unsafe { Tagged::new_raw(tagged) }
     }
 
+    pub fn as_value_handle(&self) -> Handle<Value> {
+        let raw = self.data;
+        let tagged = raw | (ValueTag::Reference as u64);
+        Handle::<Value> {
+            data: tagged,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn as_ptr(&self) -> *mut T {
         self.data as _
     }
 }
 
-impl<T: PtrSizedObject> From<T> for Tagged<T> {
-    #[inline]
-    fn from(value: T) -> Self {
-        Self::new_value(value)
+impl<T: PtrSizedObject> Handle<T> {
+    pub fn as_fixnum(self) -> Tagged<T> {
+        let raw = self.data;
+        let tagged = raw << 1;
+        // SAFETY: we are typesafe and do the transformation
+        unsafe { Tagged::new_raw(tagged) }
+    }
+}
+
+impl Handle<Value> {
+    /// Value is already tagged
+    pub unsafe fn as_tagged<T: Object>(self) -> Tagged<T> {
+        let tagged = self.data;
+        // SAFETY: this is not safe, use at own caution
+        unsafe { Tagged::new_raw(tagged) }
+    }
+
+    pub unsafe fn as_fixnum<T: PtrSizedObject + From<Tagged<T>>>(self) -> T {
+        // SAFETY: this is not safe, use at own caution
+        let tagged = unsafe { self.as_tagged() };
+        T::from(tagged)
+    }
+
+    pub fn inner(self) -> Value {
+        Value(self.data)
+    }
+}
+
+impl<T: HeapObject> From<Handle<T>> for Handle<Value> {
+    fn from(value: Handle<T>) -> Self {
+        value.as_value_handle()
+    }
+}
+
+// this is safe, ptr sized are always valid hadnles
+impl From<i64> for Handle<i64> {
+    fn from(value: i64) -> Self {
+        Handle {
+            data: value.cast_unsigned(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl From<Handle<i64>> for Handle<Value> {
+    fn from(value: Handle<i64>) -> Handle<Value> {
+        let value = Value::from_u64(value.data);
+        Handle {
+            data: value.0,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -332,25 +361,6 @@ impl<T: HeapObject> DerefMut for Handle<T> {
         // SAFETY: we know that Handle is always valid
         // of course, we must take thread safety into account here on the user side
         unsafe { &mut *self.as_ptr() }
-    }
-}
-
-impl Tagged<i64> {
-    pub fn as_i64(self) -> i64 {
-        i64::from(self)
-    }
-
-    pub fn raw_i64(self) -> i64 {
-        self.data.cast_signed()
-    }
-}
-
-impl<T: PtrSizedObject> Tagged<T> {
-    pub fn from_raw(value: T) -> Self {
-        Self {
-            data: value.as_ptr_sized(),
-            _marker: PhantomData,
-        }
     }
 }
 
@@ -405,20 +415,27 @@ impl PtrSizedObject for i64 {
     }
 }
 
+impl<T> Visitable for *mut T {}
+impl<T> Object for *mut T {}
+impl<T> PtrSizedObject for *mut T {
+    #[inline]
+    fn as_ptr_sized(self) -> u64 {
+        self as _
+    }
+    fn from_ptr_sized(value: u64) -> Self {
+        value as _
+    }
+}
+
 #[cfg(test)]
 mod value_tests {
     use super::*;
 
-    /// A simple heap object to use in tests. Large alignment ensures low 2 bits are 0.
-    #[repr(C)]
-    #[derive(Debug)]
-    // #[derive(Copy, Clone)]
     struct TestObj {
         n: i64,
         m: usize,
     }
 
-    // Minimal trait impls to satisfy bounds (assuming these are marker traits in your crate).
     impl Visitable for TestObj {}
     impl Object for TestObj {}
     impl HeapObject for TestObj {}
