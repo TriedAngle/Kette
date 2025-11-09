@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use crate::{GenericObject, View};
+use crate::{GenericObject, Handle};
 
 const PARKED: u8 = 0b01;
 const TOKEN: u8 = 0b10;
@@ -18,7 +18,7 @@ pub struct NativeParker {
     state: AtomicU8,
     lock: Mutex<()>,
     cv: Condvar,
-    blocker: Cell<Option<View<GenericObject>>>,
+    blocker: Cell<Option<Handle<GenericObject>>>,
 }
 
 unsafe impl Send for NativeParker {}
@@ -34,7 +34,7 @@ impl NativeParker {
         }
     }
 
-    pub fn park(&self, obj: View<GenericObject>) {
+    pub fn park(&self, obj: Handle<GenericObject>) {
         self.blocker.set(Some(obj));
 
         // Fast path: unpark before park => just ignore
@@ -256,11 +256,11 @@ mod tests {
         );
     }
 
-    fn dummy_view() -> View<GenericObject> {
+    fn dummy_view() -> Handle<GenericObject> {
         static mut DUMMY: GenericObject = GenericObject {
             header: Header::zeroed(),
         };
-        let view = View::from_ptr(&raw mut DUMMY).unwrap();
+        let view = unsafe { Handle::from_ptr(&raw mut DUMMY) };
         view
     }
 
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn park_blocks_then_unparks_with_native_spawn() {
         // Channel to send parker + object into the spawned thread.
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, View<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
 
         // This flag is flipped after park() returns in the spawned thread.
         let returned = Arc::new(AtomicBool::new(false));
@@ -316,7 +316,7 @@ mod tests {
     /// If a token is delivered *before* a thread calls park(), it should not block.
     #[test]
     fn pre_delivered_token_means_no_block() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, View<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
         let returned = Arc::new(AtomicBool::new(false));
         let returned2 = returned.clone();
 
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn back_to_back_unparks_before_wake_do_not_leave_token() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, View<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
         let phase1_done = Arc::new(AtomicBool::new(false));
         let phase1_done2 = phase1_done.clone();
 
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn second_unpark_after_first_wake_makes_next_park_instant() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, View<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
         let phase1_done = Arc::new(AtomicBool::new(false));
         let phase1_done2 = phase1_done.clone();
         let phase2_returned = Arc::new(AtomicBool::new(false));
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn unpark_from_another_native_thread() {
-        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, View<GenericObject>)>();
+        let (tx, rx) = mpsc::channel::<(Arc<NativeParker>, Handle<GenericObject>)>();
         let woke = Arc::new(AtomicBool::new(false));
         let woke2 = woke.clone();
 

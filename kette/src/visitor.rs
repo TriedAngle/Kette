@@ -1,18 +1,18 @@
 use crate::{
-    Array, ArrayMap, ByteArray, ExecutableMap, GenericObject, Map, MapType, ObjectKind, ObjectType,
-    SlotMap, SlotObject, TaggedPtr, TaggedValue,
+    Array, ArrayMap, ByteArray, GenericObject, Map, MapType, ObjectKind, ObjectType, SlotMap,
+    SlotObject, Tagged, Value,
 };
 
 pub trait Visitable {
-    fn visit_edges(&self, visitor: &impl Visitor);
-    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor);
+    fn visit_edges(&self, _visitor: &impl Visitor) {}
+    fn visit_edges_mut(&mut self, _visitor: &mut impl Visitor) {}
 }
 
 pub trait Visitor: Sized {
-    fn visit(&self, value: TaggedValue) {
+    fn visit(&self, value: Value) {
         let _ = value;
     }
-    fn visit_mut(&mut self, value: TaggedValue) {
+    fn visit_mut(&mut self, value: Value) {
         let _ = value;
     }
 }
@@ -171,7 +171,7 @@ impl Visitable for ByteArray {
     fn visit_edges(&self, _visitor: &impl Visitor) {}
 }
 
-impl Visitable for TaggedPtr<GenericObject> {
+impl Visitable for Tagged<GenericObject> {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         let obj = unsafe { self.as_mut() };
         obj.visit_edges_mut(visitor);

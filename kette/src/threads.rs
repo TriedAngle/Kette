@@ -2,14 +2,14 @@ use std::{
     cell::UnsafeCell,
     ops::Deref,
     sync::Arc,
-    thread::{self, JoinHandle, ThreadId},
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
-    Header, NativeParker, TaggedUsize, VMProxy, View,
+    Handle, Header, HeapObject, NativeParker, Object, Tagged, VMProxy, Visitable,
     execution::{ExecutionState, Executor},
 };
 
@@ -36,15 +36,20 @@ pub struct ThreadInfo {
 #[derive(Debug)]
 pub struct ThreadObject {
     pub header: Header,
-    pub vm_thead: TaggedUsize,
+    // TODO: we can use a Tagged<*mut Thread> here
+    pub vm_thead: Tagged<usize>,
 }
+
+impl Visitable for ThreadObject {}
+impl Object for ThreadObject {}
+impl HeapObject for ThreadObject {}
 
 #[derive(Debug)]
 pub struct VMThreadShared {
     pub info: Mutex<ThreadInfo>,
     pub vm: VMProxy,
     pub parker: NativeParker,
-    pub user_thread: View<ThreadObject>,
+    pub user_thread: Handle<ThreadObject>,
 }
 
 #[derive(Debug)]
@@ -74,7 +79,7 @@ unsafe impl Send for NativeThread {}
 unsafe impl Sync for NativeThread {}
 
 impl VMThreadShared {
-    pub fn new(vm: VMProxy, user_thread: View<ThreadObject>, is_virtual: bool) -> Arc<Self> {
+    pub fn new(vm: VMProxy, user_thread: Handle<ThreadObject>, is_virtual: bool) -> Arc<Self> {
         let info = ThreadInfo {
             state: ThreadState::Created,
             is_vm: true,
@@ -94,7 +99,7 @@ impl VMThreadShared {
 impl VMThread {
     pub fn new_native(
         vm: VMProxy,
-        user_thread: View<ThreadObject>,
+        user_thread: Handle<ThreadObject>,
         executor: ExecutionState,
     ) -> Self {
         let shared = VMThreadShared::new(vm, user_thread, false);
@@ -119,7 +124,7 @@ impl VMThread {
     // a virtual spawns without a native nor a carrier, the carrier is set when running.
     pub fn new_virtual(
         vm: VMProxy,
-        user_thread: View<ThreadObject>,
+        user_thread: Handle<ThreadObject>,
         _executor: ExecutionState,
     ) -> Self {
         let shared = VMThreadShared::new(vm, user_thread, true);

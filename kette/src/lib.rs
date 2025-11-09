@@ -13,7 +13,6 @@ mod selector;
 mod system;
 mod tagged;
 mod threads;
-mod view;
 mod visitor;
 mod vm;
 
@@ -26,8 +25,7 @@ pub use execution::{ExecutionResult, ExecutionState, Executor};
 pub use parker::NativeParker;
 pub use primitives::{PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive};
 pub use system::{PAGE_SIZE, map_memory, unmap_memory};
-pub use tagged::*;
+pub use tagged::{Handle, OBECT_TAG_MASK, Tagged, Value, ValueTag};
 pub use threads::*;
-pub use view::View;
 pub use visitor::{Visitable, Visitor};
 pub use vm::*;

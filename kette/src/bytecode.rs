@@ -1,6 +1,6 @@
 use std::ptr::NonNull;
 
-use crate::{SlotMap, TaggedValue, View, interning::InternedId};
+use crate::{Value, interning::InternedId};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Message(InternedId);
@@ -27,14 +27,14 @@ pub enum Instruction {
     },
     CreateArray {
         size: usize,
-        fill: TaggedValue,
+        fill: Value,
     },
     CreateByteArray {
         size: usize,
         data: Option<NonNull<u8>>,
     },
     CreateObject {
-        map: View<SlotMap>,
+        // map: View<SlotMap>,
     },
     Return,
 }

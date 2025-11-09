@@ -1,16 +1,17 @@
 use std::mem;
 
-use crate::{Array, ExecutableMap, Header, Object, StackEffect, TaggedPtr, Visitable};
+use crate::{Array, ExecutableMap, Header, HeapObject, Object, StackEffect, Tagged, Visitable};
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct QuotationMap {
     pub map: ExecutableMap,
     // this effect must be inferred at the creation of the map/quotation
-    pub effect: TaggedPtr<StackEffect>,
+    pub effect: Tagged<StackEffect>,
 }
 
-impl Object for QuotationMap {
+impl Object for QuotationMap {}
+impl HeapObject for QuotationMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
@@ -24,5 +25,5 @@ impl Visitable for QuotationMap {
 #[derive(Debug)]
 pub struct Quotation {
     pub header: Header,
-    pub body: TaggedPtr<Array>,
+    pub body: Tagged<Array>,
 }

@@ -1,4 +1,4 @@
-use crate::{ExecutionResult, ExecutionState, Executor, TaggedValue, VMProxy, VMThreadProxy};
+use crate::{ExecutionResult, ExecutionState, Executor, Handle, VMProxy, VMThreadProxy, Value};
 
 mod bytearray;
 mod fixnum;
@@ -36,19 +36,19 @@ pub struct PrimitiveContext<'ex, 'arg> {
     pub vm: &'ex VMProxy,
     // in normal calls receiver message receiver are the same
     // but if with super, or delegate they may differ
-    pub message_receiver: TaggedValue,
-    pub receiver: TaggedValue,
-    pub arguments: &'arg [TaggedValue],
-    pub result: &'arg mut [TaggedValue],
+    pub message_receiver: Handle<Value>,
+    pub receiver: Handle<Value>,
+    pub arguments: &'arg [Handle<Value>],
+    pub result: &'arg mut [Handle<Value>],
 }
 
 impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     pub fn new(
         executor: &'ex mut Executor,
-        receiver: TaggedValue,
-        message_receiver: TaggedValue,
-        arguments: &'arg [TaggedValue],
-        result: &'arg mut [TaggedValue],
+        receiver: Handle<Value>,
+        message_receiver: Handle<Value>,
+        arguments: &'arg [Handle<Value>],
+        result: &'arg mut [Handle<Value>],
     ) -> Self {
         let state = &mut executor.state;
         let thread = &executor.thread;

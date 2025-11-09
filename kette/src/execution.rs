@@ -1,11 +1,11 @@
-use crate::{TaggedValue, VMThreadProxy};
+use crate::{VMThreadProxy, Value};
 
 // TODO: automate their construction and give them mostly fixed sizes
 // we don't need a full Vector in most cases, we often don't want bounds check in fast path
 #[derive(Debug)]
 pub struct ExecutionState {
-    pub stack: Vec<TaggedValue>,
-    pub return_stack: Vec<TaggedValue>,
+    pub stack: Vec<Value>,
+    pub return_stack: Vec<Value>,
     // pub handlers:
 }
 
@@ -28,11 +28,11 @@ pub enum ExecutionResult {
 }
 
 impl ExecutionState {
-    pub fn push(&mut self, value: TaggedValue) {
+    pub fn push(&mut self, value: Value) {
         self.stack.push(value);
     }
 
-    pub fn pop(&mut self) -> TaggedValue {
+    pub fn pop(&mut self) -> Value {
         self.stack.pop().expect("stack should not underflow")
     }
 }

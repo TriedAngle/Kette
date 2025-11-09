@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::{ByteArray, Map, Object, StackEffect, TaggedPtr, TaggedValue, Visitable};
+use crate::{ByteArray, HeapObject, Map, Object, StackEffect, Tagged, Visitable};
 
 // TODO: these maps should probably become slot maps,
 // this way we can make methods "real" objects
@@ -9,7 +9,8 @@ use crate::{ByteArray, Map, Object, StackEffect, TaggedPtr, TaggedValue, Visitab
 #[derive(Debug)]
 pub struct ExecutableMap {
     pub map: Map,
-    pub code: TaggedValue,
+    // TODO: we could directly use Tagged<*mut Code> here probably
+    pub code: Tagged<usize>,
 }
 
 #[repr(C)]
@@ -17,17 +18,20 @@ pub struct ExecutableMap {
 pub struct MethodMap {
     pub map: ExecutableMap,
     // this effefct must be declared
-    pub effect: TaggedPtr<StackEffect>,
-    pub name: TaggedPtr<ByteArray>,
+    pub effect: Tagged<StackEffect>,
+    pub name: Tagged<ByteArray>,
 }
 
-impl Object for ExecutableMap {
+impl Object for ExecutableMap {}
+impl Object for MethodMap {}
+
+impl HeapObject for ExecutableMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
 }
 
-impl Object for MethodMap {
+impl HeapObject for MethodMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }

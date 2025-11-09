@@ -1,7 +1,7 @@
 use std::{
     cell::{RefCell, UnsafeCell},
     marker::PhantomData,
-    ptr::{self, NonNull},
+    ptr::NonNull,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},

@@ -1,15 +1,13 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::{
-    ByteArray, GenericObject, Header, Heap, HeapCreateInfo, HeapProxy, MapCreateInfo, SlotMap,
-    TaggedPtr, TaggedValue,
-};
+use crate::{Handle, Heap, HeapCreateInfo, HeapProxy, Value};
+
 #[derive(Debug)]
 pub struct SpecialObjects {
     // pub bytearray_map: TaggedValue,
     // pub array_map: TaggedValue,
-    pub true_object: TaggedValue,
-    pub false_object: TaggedValue,
+    pub true_object: Handle<Value>,
+    pub false_object: Handle<Value>,
 }
 
 #[derive(Debug)]
@@ -119,8 +117,8 @@ impl VMProxy {
 impl SpecialObjects {
     pub fn null() -> Self {
         Self {
-            true_object: TaggedValue::zero(),
-            false_object: TaggedValue::zero(),
+            true_object: unsafe { Value::zero().as_handle_unchecked() },
+            false_object: unsafe { Value::zero().as_handle_unchecked() },
         }
     }
 }

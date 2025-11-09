@@ -1,18 +1,10 @@
 use std::mem;
 use std::ptr::NonNull;
 
-use crate::{ExecutableMap, TaggedPtr, TaggedUsize, TaggedValue, Visitable};
+use crate::{ExecutableMap, Tagged, Value, ValueTag, Visitable};
 
 // TODO: consider removing copy and clone from most things
 // also make Debug "real", right now its mostly useless.
-
-#[repr(u8)]
-#[derive(Debug, Copy, Clone)]
-pub enum ValueTag {
-    Integer = 0b00,
-    Reference = 0b01,
-    Header = 0b11,
-}
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -67,14 +59,24 @@ pub const HEADER_FREE: u8 = 0b11111011;
 #[derive(Debug, Copy, Clone, Hash)]
 pub struct Header(u64);
 
-pub trait Object: Sized + Visitable {
+pub trait Object: Sized + Visitable {}
+
+pub trait PtrSizedObject: Object {
+    fn as_ptr_sized(self) -> u64;
+    fn from_ptr_sized(value: u64) -> Self;
+}
+
+pub trait HeapObject: Object {
     fn header(&self) -> &Header {
         unsafe { std::mem::transmute::<&Self, &Header>(self) }
     }
     fn header_mut(&mut self) -> &mut Header {
         unsafe { std::mem::transmute::<&mut Self, &mut Header>(self) }
     }
-    fn heap_size(&self) -> usize;
+
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
 }
 
 #[repr(C)]
@@ -92,17 +94,17 @@ pub struct Map {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SlotDescriptor {
-    pub name: TaggedPtr<ByteArray>,
-    pub kind: TaggedPtr<GenericObject>,
-    pub value: TaggedValue,
+    pub name: Tagged<ByteArray>,
+    pub kind: Tagged<GenericObject>,
+    pub value: Value,
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SlotMap {
     pub map: Map,
-    pub assignable_slots: TaggedUsize,
-    pub total_slots: TaggedUsize,
+    pub assignable_slots: Tagged<usize>,
+    pub total_slots: Tagged<usize>,
     pub slots: [SlotDescriptor; 0],
 }
 
@@ -129,23 +131,23 @@ pub struct ByteArrayMap {
 #[derive(Debug, Copy, Clone)]
 pub struct SlotObject {
     pub header: Header,
-    pub map: TaggedPtr<SlotMap>,
-    pub slots: [TaggedValue; 0],
+    pub map: Tagged<SlotMap>,
+    pub slots: [Value; 0],
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Array {
     pub header: Header,
-    pub size: TaggedUsize,
-    pub fields: [TaggedValue; 0],
+    pub size: Tagged<usize>,
+    pub fields: [Value; 0],
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ByteArray {
     pub header: Header,
-    pub size: TaggedUsize,
+    pub size: Tagged<usize>,
     pub data: [u8; 0],
 }
 
@@ -153,8 +155,8 @@ pub struct ByteArray {
 #[derive(Debug, Copy, Clone)]
 pub struct StackEffect {
     pub header: Header,
-    pub input: TaggedPtr<Array>,
-    pub output: TaggedPtr<Array>,
+    pub input: Tagged<Array>,
+    pub output: Tagged<Array>,
 }
 
 #[repr(C)]
@@ -174,7 +176,7 @@ pub enum SlotKind {
 
 #[repr(C)]
 pub struct MapCreateInfo<'a> {
-    pub slots: &'a [(&'a str, SlotKind, TaggedValue)],
+    pub slots: &'a [(&'a str, SlotKind, Value)],
 }
 
 impl Header {
@@ -432,7 +434,7 @@ impl ArrayMap {
 }
 
 impl SlotObject {
-    pub unsafe fn init(&mut self, map: TaggedPtr<SlotMap>) {
+    pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
         let map_ref = unsafe { map.as_ref() };
         let slots = map_ref.assignable_slots_count();
         let cache16 = if slots > u16::MAX as usize {
@@ -447,24 +449,24 @@ impl SlotObject {
     }
 
     #[inline]
-    fn slots_ptr(&self) -> *const TaggedValue {
+    fn slots_ptr(&self) -> *const Value {
         self.slots.as_ptr()
     }
 
     #[inline]
-    fn slots_mut_ptr(&mut self) -> *mut TaggedValue {
+    fn slots_mut_ptr(&mut self) -> *mut Value {
         self.slots.as_mut_ptr()
     }
 
     #[inline]
-    pub fn slots(&self) -> &[TaggedValue] {
+    pub fn slots(&self) -> &[Value] {
         let len = self.assignable_slots();
         unsafe { std::slice::from_raw_parts(self.slots_ptr(), len) }
     }
 
     /// Borrow all slots as a mutable slice (checked).
     #[inline]
-    pub fn slots_mut(&mut self) -> &mut [TaggedValue] {
+    pub fn slots_mut(&mut self) -> &mut [Value] {
         let len = self.assignable_slots();
         unsafe { std::slice::from_raw_parts_mut(self.slots_mut_ptr(), len) }
     }
@@ -482,7 +484,7 @@ impl SlotObject {
     }
 
     #[inline]
-    pub fn get_slot(&self, index: usize) -> Option<TaggedValue> {
+    pub fn get_slot(&self, index: usize) -> Option<Value> {
         if index < self.assignable_slots() {
             Some(unsafe { self.slots_ptr().add(index).read() })
         } else {
@@ -491,7 +493,7 @@ impl SlotObject {
     }
 
     #[inline]
-    pub fn set_slot(&mut self, index: usize, value: TaggedValue) -> bool {
+    pub fn set_slot(&mut self, index: usize, value: Value) -> bool {
         if index < self.assignable_slots() {
             unsafe { self.slots_mut_ptr().add(index).write(value) };
             true
@@ -502,13 +504,13 @@ impl SlotObject {
 
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
-    pub unsafe fn get_slot_unchecked(&self, index: usize) -> TaggedValue {
+    pub unsafe fn get_slot_unchecked(&self, index: usize) -> Value {
         unsafe { self.slots_ptr().add(index).read() }
     }
 
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
-    pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: TaggedValue) {
+    pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {
         unsafe { self.slots_mut_ptr().add(index).write(value) };
     }
 }
@@ -528,12 +530,12 @@ impl Array {
     }
 
     #[inline]
-    fn fields_ptr(&self) -> *const TaggedValue {
+    fn fields_ptr(&self) -> *const Value {
         self.fields.as_ptr()
     }
 
     #[inline]
-    fn fields_mut_ptr(&mut self) -> *mut TaggedValue {
+    fn fields_mut_ptr(&mut self) -> *mut Value {
         self.fields.as_mut_ptr()
     }
 
@@ -556,19 +558,19 @@ impl Array {
     }
 
     #[inline]
-    pub fn fields(&self) -> &[TaggedValue] {
+    pub fn fields(&self) -> &[Value] {
         let len = self.len();
         unsafe { std::slice::from_raw_parts(self.fields_ptr(), len) }
     }
 
     #[inline]
-    pub fn fields_mut(&mut self) -> &mut [TaggedValue] {
+    pub fn fields_mut(&mut self) -> &mut [Value] {
         let len = self.len();
         unsafe { std::slice::from_raw_parts_mut(self.fields_mut_ptr(), len) }
     }
 
     #[inline]
-    pub fn get(&self, index: usize) -> Option<TaggedValue> {
+    pub fn get(&self, index: usize) -> Option<Value> {
         if index < self.len() {
             Some(unsafe { self.fields_ptr().add(index).read() })
         } else {
@@ -577,7 +579,7 @@ impl Array {
     }
 
     #[inline]
-    pub fn set(&mut self, index: usize, value: TaggedValue) -> bool {
+    pub fn set(&mut self, index: usize, value: Value) -> bool {
         if index < self.len() {
             unsafe { self.fields_mut_ptr().add(index).write(value) };
             true
@@ -588,13 +590,13 @@ impl Array {
 
     /// Caller must ensure `index < len()`.
     #[inline]
-    pub unsafe fn get_unchecked(&self, index: usize) -> TaggedValue {
+    pub unsafe fn get_unchecked(&self, index: usize) -> Value {
         unsafe { self.fields_ptr().add(index).read() }
     }
 
     /// Caller must ensure `index < len()`.
     #[inline]
-    pub unsafe fn set_unchecked(&mut self, index: usize, value: TaggedValue) {
+    pub unsafe fn set_unchecked(&mut self, index: usize, value: Value) {
         unsafe { self.fields_mut_ptr().add(index).write(value) };
     }
 }
@@ -653,7 +655,8 @@ impl FreeLocation {
     }
 }
 
-impl Object for GenericObject {
+impl Object for GenericObject {}
+impl HeapObject for GenericObject {
     fn heap_size(&self) -> usize {
         match self.header.kind() {
             ObjectKind::Map => {
@@ -681,7 +684,8 @@ impl Object for GenericObject {
     }
 }
 
-impl Object for Map {
+impl Object for Map {}
+impl HeapObject for Map {
     fn heap_size(&self) -> usize {
         match self.header.map_type().unwrap() {
             MapType::Slot => {
@@ -700,31 +704,44 @@ impl Object for Map {
     }
 }
 
-impl Object for SlotObject {
+impl Object for StackEffect {}
+impl HeapObject for StackEffect {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.assignable_slots() * mem::size_of::<TaggedValue>()
+        mem::size_of::<Self>()
+    }
+}
+impl Visitable for StackEffect {}
+
+impl Object for SlotObject {}
+impl HeapObject for SlotObject {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>() + self.assignable_slots() * mem::size_of::<Value>()
     }
 }
 
-impl Object for SlotMap {
+impl Object for SlotMap {}
+impl HeapObject for SlotMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>() // TODO: add slots  
     }
 }
 
-impl Object for Array {
+impl Object for Array {}
+impl HeapObject for Array {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.len() * mem::size_of::<TaggedValue>()
+        mem::size_of::<Self>() + self.len() * mem::size_of::<Value>()
     }
 }
 
-impl Object for ArrayMap {
+impl Object for ArrayMap {}
+impl HeapObject for ArrayMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
 }
 
-impl Object for ByteArray {
+impl Object for ByteArray {}
+impl HeapObject for ByteArray {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>() + self.len()
     }
