@@ -123,10 +123,10 @@ pub struct HeapShared {
     pub epoch: AtomicUsize,
     pub pages: RefCell<Box<[PageMeta]>>,
     pub dirty: UnsafeCell<Box<[u8]>>,
-    _marker: PhantomData<*const ()>,
 }
+
 #[derive(Debug)]
-pub struct TLAB {
+pub struct Tlab {
     start: NonNull<u8>,
     end: NonNull<u8>,
     bump: usize,
@@ -136,12 +136,15 @@ pub struct TLAB {
 pub struct HeapProxy {
     heap: Arc<HeapShared>,
     epoch: usize,
-    boxed_tlab: TLAB,
-    unboxed_tlab: TLAB,
+    boxed_tlab: Tlab,
+    unboxed_tlab: Tlab,
 }
 
 unsafe impl Send for HeapProxy {}
 unsafe impl Sync for HeapProxy {}
+
+unsafe impl Send for HeapShared {}
+unsafe impl Sync for HeapShared {}
 
 impl Heap {
     pub fn new(info: HeapCreateInfo) -> Self {
@@ -165,20 +168,19 @@ impl Heap {
         let shared = HeapShared::new(start, end, page_count, settings);
         Self {
             inner: shared,
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         }
     }
 
     pub fn create_proxy(&self) -> HeapProxy {
         let heap = self.inner.clone();
         let epoch = self.inner.epoch.load(Ordering::Relaxed);
-        let proxy = HeapProxy {
+        HeapProxy {
             heap,
             epoch,
-            boxed_tlab: TLAB::empty(),
-            unboxed_tlab: TLAB::empty(),
-        };
-        proxy
+            boxed_tlab: Tlab::empty(),
+            unboxed_tlab: Tlab::empty(),
+        }
     }
 }
 
@@ -207,7 +209,6 @@ impl HeapShared {
             lock: Mutex::new(()),
             pages,
             dirty,
-            _marker: PhantomData::default(),
         };
         Arc::new(new)
     }
@@ -417,7 +418,7 @@ impl HeapProxy {
         let size = self.heap.settings.tlab_size;
         let search = AllocSearchInfo {
             size,
-            ptype: ptype,
+            ptype,
             generation: 0,
             allow_split: false,
         };
@@ -426,11 +427,11 @@ impl HeapProxy {
         let size = res.size;
         let end_ptr = unsafe { start.as_ptr().add(size) };
         let end = unsafe { NonNull::new_unchecked(end_ptr) };
-        let tlab = TLAB {
+        let tlab = Tlab {
             start,
             end,
             bump: 0,
-            size: size,
+            size,
         };
 
         match ptype {
@@ -450,7 +451,7 @@ impl HeapProxy {
         }
 
         self.epoch = self.heap.epoch.load(Ordering::Relaxed);
-        return true;
+        true
     }
 
     pub fn allocate_raw(&mut self, size: usize, ptype: PageType) -> NonNull<u8> {
@@ -491,17 +492,16 @@ impl HeapProxy {
     pub fn create_proxy(&self) -> HeapProxy {
         let heap = self.heap.clone();
         let epoch = self.heap.epoch.load(Ordering::Relaxed);
-        let proxy = HeapProxy {
+        HeapProxy {
             heap,
             epoch,
-            boxed_tlab: TLAB::empty(),
-            unboxed_tlab: TLAB::empty(),
-        };
-        proxy
+            boxed_tlab: Tlab::empty(),
+            unboxed_tlab: Tlab::empty(),
+        }
     }
 }
 
-impl TLAB {
+impl Tlab {
     pub fn empty() -> Self {
         Self {
             start: NonNull::dangling(),
@@ -549,11 +549,7 @@ impl PageMeta {
     #[inline]
     fn capacity_tail_bytes(&self, page_size: usize) -> usize {
         let used = self.bytes_used as usize;
-        if used >= page_size {
-            0
-        } else {
-            page_size - used
-        }
+        page_size.saturating_sub(used)
     }
 }
 

@@ -12,19 +12,21 @@ pub struct ByteArray {
 
 impl ByteArray {
     #[inline]
-    pub fn len(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.size.into()
     }
 
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        let len = self.len();
+        let len = self.size();
+        // SAFETY: byterray must be correctly sized
         unsafe { std::slice::from_raw_parts(self.data.as_ptr(), len) }
     }
 
     #[inline]
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        let len = self.len();
+        let len = self.size();
+        // SAFETY: byterray must be correctly sized
         unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), len) }
     }
 }
@@ -32,7 +34,7 @@ impl ByteArray {
 impl Object for ByteArray {}
 impl HeapObject for ByteArray {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.len()
+        mem::size_of::<Self>() + self.size()
     }
 }
 

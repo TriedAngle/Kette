@@ -141,7 +141,7 @@ impl NativeThread {
     }
     pub fn spawn<F>(f: F) -> Arc<Self>
     where
-        F: FnOnce() -> (),
+        F: FnOnce(),
         F: Send + 'static,
     {
         let jt = Arc::new(Self {

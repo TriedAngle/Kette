@@ -20,7 +20,7 @@ mod visitor;
 mod vm;
 
 // pub use actors::*;
-pub use arrays::{Array, ArrayMap};
+pub use arrays::Array;
 pub use bytearrays::ByteArray;
 pub use bytecode::{Block, Instruction, Message};
 pub use heap::{Heap, HeapCreateInfo, HeapProxy, HeapSettings};

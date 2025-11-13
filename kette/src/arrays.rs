@@ -1,19 +1,18 @@
 use std::mem;
 
 use crate::{
-    Header, HeaderFlags, HeapObject, Map, MapType, Object, ObjectType, Tagged, Value, Visitable,
-    Visitor,
+    Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Value, Visitable, Visitor,
 };
 
 // TODO: find a way to implement specific functions for arrays of some specific n
 // we could introduce <size> as part of the the map.
 // the question is, would that be good for the game? I am not sure yet
 // keep it dynamically sized, and then figure out a nice way to have both dynamic and sized arrays.
-#[repr(C)]
-#[derive(Debug)]
-pub struct ArrayMap {
-    pub map: Map,
-}
+// #[repr(C)]
+// #[derive(Debug)]
+// pub struct ArrayMap {
+//     pub map: Map,
+// }
 
 #[repr(C)]
 #[derive(Debug)]
@@ -23,31 +22,26 @@ pub struct Array {
     pub fields: [Value; 0],
 }
 
-impl ArrayMap {
-    #[inline]
-    pub unsafe fn init(&mut self /* size: usize */) {
-        // self.size = size.into();
-        unsafe { self.map.init(MapType::Array) };
-    }
-
-    // #[inline]
-    // pub fn size(&self) -> usize {
-    //     usize::from(self.size)
-    // }
-}
+// impl ArrayMap {
+//     #[inline]
+//     pub unsafe fn init(&mut self /* size: usize */) {
+//         // self.size = size.into();
+//         unsafe { self.map.init(MapType::Array) };
+//     }
+//
+//     // #[inline]
+//     // pub fn size(&self) -> usize {
+//     //     usize::from(self.size)
+//     // }
+// }
 
 impl Array {
-    /// Initialize an Array with `map`. Caches size (u16) in header DATA[0..16].
+    /// Initialize a slot object
+    /// # Safety
+    /// internal api, shouldn't be called
     pub unsafe fn init(&mut self, size: usize) {
-        // let cache16 = if size > u16::MAX as usize {
-        //     0xFFFF
-        // } else {
-        //     size as u16
-        // };
-
         self.header = Header::encode_object(ObjectType::Array, 0, HeaderFlags::empty(), 0);
         self.size = size.into();
-        // self.header.set_data_lo16(cache16);
     }
 
     #[inline]
@@ -61,30 +55,30 @@ impl Array {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.size.into()
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.size() == 0
     }
 
     #[inline]
     pub fn fields(&self) -> &[Value] {
-        let len = self.len();
+        let len = self.size();
         unsafe { std::slice::from_raw_parts(self.fields_ptr(), len) }
     }
 
     #[inline]
     pub fn fields_mut(&mut self) -> &mut [Value] {
-        let len = self.len();
+        let len = self.size();
         unsafe { std::slice::from_raw_parts_mut(self.fields_mut_ptr(), len) }
     }
 
     #[inline]
     pub fn get(&self, index: usize) -> Option<Value> {
-        if index < self.len() {
+        if index < self.size() {
             Some(unsafe { self.fields_ptr().add(index).read() })
         } else {
             None
@@ -93,7 +87,7 @@ impl Array {
 
     #[inline]
     pub fn set(&mut self, index: usize, value: Value) -> bool {
-        if index < self.len() {
+        if index < self.size() {
             unsafe { self.fields_mut_ptr().add(index).write(value) };
             true
         } else {
@@ -101,12 +95,14 @@ impl Array {
         }
     }
 
+    /// # Safety
     /// Caller must ensure `index < len()`.
     #[inline]
     pub unsafe fn get_unchecked(&self, index: usize) -> Value {
         unsafe { self.fields_ptr().add(index).read() }
     }
 
+    /// # Safety
     /// Caller must ensure `index < len()`.
     #[inline]
     pub unsafe fn set_unchecked(&mut self, index: usize, value: Value) {
@@ -117,14 +113,9 @@ impl Array {
 impl Object for Array {}
 impl HeapObject for Array {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.len() * mem::size_of::<Value>()
+        mem::size_of::<Self>() + self.size() * mem::size_of::<Value>()
     }
 }
-
-impl Object for ArrayMap {}
-impl HeapObject for ArrayMap {}
-
-impl Visitable for ArrayMap {}
 impl Visitable for Array {
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
@@ -136,3 +127,8 @@ impl Visitable for Array {
         self.fields().iter().for_each(|&obj| visitor.visit(obj));
     }
 }
+
+// impl Object for ArrayMap {}
+// impl HeapObject for ArrayMap {}
+//
+// impl Visitable for ArrayMap {}

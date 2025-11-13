@@ -120,6 +120,9 @@ impl Value {
         None
     }
 
+    /// Create a handle from a value
+    /// # Safety
+    /// Caller must make sure Value doesn't get allocated
     pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
         Handle {
             data: self.0,
@@ -146,7 +149,7 @@ impl<T: Object> Tagged<T> {
 impl<T: PtrSizedObject> Tagged<T> {
     #[inline]
     pub fn new_value(value: T) -> Self {
-        let value = value.as_ptr_sized();
+        let value = value.to_ptr_sized();
         let tagged = value << 1;
         unsafe { Self::new_raw(tagged) }
     }
@@ -162,7 +165,7 @@ impl<T: PtrSizedObject> Tagged<T> {
 
     pub fn from_raw(value: T) -> Self {
         Self {
-            data: value.as_ptr_sized(),
+            data: value.to_ptr_sized(),
             _marker: PhantomData,
         }
     }
@@ -187,6 +190,10 @@ impl<T: HeapObject> Tagged<T> {
         untagged as _
     }
 
+    /// Get a reference to a T
+    /// # Safety
+    /// this is overall not safe as we do not guarantee GC invocations inbetween.
+    /// please consider using Handle<T> deref
     #[inline]
     pub unsafe fn as_ref<'a>(self) -> &'a T {
         debug_assert_eq!(
@@ -200,6 +207,10 @@ impl<T: HeapObject> Tagged<T> {
         unsafe { &*ptr }
     }
 
+    /// Get a mutable reference to a T
+    /// # Safety
+    /// this is overall not safe as we do not guarantee GC invocations inbetween.
+    /// please consider using Handle<T> deref mut
     #[inline]
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
         debug_assert_eq!(
@@ -211,11 +222,6 @@ impl<T: HeapObject> Tagged<T> {
         let ptr = untagged as *mut T;
         // SAFETY: we did a check, but this is still not safe as GC can kill this
         unsafe { &mut *ptr }
-    }
-
-    #[inline]
-    pub unsafe fn as_tagged(self) -> Tagged<T> {
-        Tagged::from(self)
     }
 }
 
@@ -243,6 +249,10 @@ impl<T: PtrSizedObject> From<T> for Tagged<T> {
 }
 
 impl<T: Object> Handle<T> {
+    /// Cast a Handle<T> to a Handle<U>
+    /// # Safety
+    /// the layout of T and U must be at least partially the same at the same offsets
+    /// for example if U or T is the prefix of the other.
     pub unsafe fn cast<U: Object>(self) -> Handle<U> {
         Handle {
             data: self.data,
@@ -250,6 +260,9 @@ impl<T: Object> Handle<T> {
         }
     }
 
+    /// Create a handle from a pointer
+    /// # Safety
+    /// the pointer must be a valid heap object
     pub unsafe fn from_ptr(ptr: *mut T) -> Self {
         Self {
             data: ptr as _,
@@ -259,12 +272,14 @@ impl<T: Object> Handle<T> {
 }
 
 impl<T: HeapObject> Handle<T> {
+    #[inline]
     pub fn as_object(self) -> Tagged<T> {
         let raw = self.data;
         let tagged = raw | (ValueTag::Reference as u64);
         unsafe { Tagged::new_raw(tagged) }
     }
 
+    #[inline]
     pub fn as_value_handle(self) -> Handle<Value> {
         let raw = self.data;
         let tagged = raw | (ValueTag::Reference as u64);
@@ -274,6 +289,7 @@ impl<T: HeapObject> Handle<T> {
         }
     }
 
+    #[inline]
     pub fn as_ptr(self) -> *mut T {
         self.data as _
     }
@@ -289,13 +305,20 @@ impl<T: PtrSizedObject> Handle<T> {
 }
 
 impl Handle<Value> {
-    /// Value is already tagged
+    /// convert handle of a value to a tagged value
+    /// # Safety
+    /// Value is already tagged,
+    /// but Tagged<T> does not protect against GC invocations
     pub unsafe fn as_tagged<T: Object>(self) -> Tagged<T> {
         let tagged = self.data;
         // SAFETY: this is not safe, use at own caution
         unsafe { Tagged::new_raw(tagged) }
     }
 
+    /// convert to a fixnum
+    /// # Safety
+    /// caller must make sure that the Value is representing a T: PtrSizedObject
+    /// and not for example a pointer or header
     pub unsafe fn as_fixnum<T: PtrSizedObject + From<Tagged<T>>>(self) -> T {
         // SAFETY: this is not safe, use at own caution
         let tagged = unsafe { self.as_tagged() };
@@ -400,7 +423,7 @@ impl Visitable for u64 {}
 impl Object for u64 {}
 impl PtrSizedObject for u64 {
     #[inline]
-    fn as_ptr_sized(self) -> u64 {
+    fn to_ptr_sized(self) -> u64 {
         self
     }
 
@@ -413,7 +436,7 @@ impl Visitable for usize {}
 impl Object for usize {}
 impl PtrSizedObject for usize {
     #[inline]
-    fn as_ptr_sized(self) -> u64 {
+    fn to_ptr_sized(self) -> u64 {
         self as u64
     }
     fn from_ptr_sized(value: u64) -> Self {
@@ -425,7 +448,7 @@ impl Visitable for i64 {}
 impl Object for i64 {}
 impl PtrSizedObject for i64 {
     #[inline]
-    fn as_ptr_sized(self) -> u64 {
+    fn to_ptr_sized(self) -> u64 {
         self.cast_unsigned()
     }
     fn from_ptr_sized(value: u64) -> Self {
@@ -437,7 +460,7 @@ impl<T> Visitable for *mut T {}
 impl<T> Object for *mut T {}
 impl<T> PtrSizedObject for *mut T {
     #[inline]
-    fn as_ptr_sized(self) -> u64 {
+    fn to_ptr_sized(self) -> u64 {
         self as _
     }
     fn from_ptr_sized(value: u64) -> Self {

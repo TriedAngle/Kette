@@ -31,6 +31,10 @@ pub struct SlotObject {
 }
 
 impl SlotMap {
+    /// Initialize a slot map
+    /// this is unsafe as this is intended to be a mostly internal api
+    /// # Safety
+    /// the reference must be valid and assignable slots < total slots
     #[inline]
     pub unsafe fn init(&mut self, assignable_slots: usize, total_slots: usize) {
         self.assignable_slots = assignable_slots.into();
@@ -40,11 +44,14 @@ impl SlotMap {
 
     #[inline]
     pub fn assignable_slots_count(&self) -> usize {
-        usize::from(self.assignable_slots) as usize
+        self.assignable_slots.into()
     }
 }
 
 impl SlotObject {
+    /// Initialize a slot object
+    /// # Safety
+    /// the reference must be valid and assignable slots < total slots
     pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
         self.map = map;
         self.header = Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
@@ -63,6 +70,7 @@ impl SlotObject {
     #[inline]
     pub fn slots(&self) -> &[Value] {
         let len = self.assignable_slots();
+        // SAFETY: pointer and length must be valid
         unsafe { std::slice::from_raw_parts(self.slots_ptr(), len) }
     }
 
@@ -70,19 +78,15 @@ impl SlotObject {
     #[inline]
     pub fn slots_mut(&mut self) -> &mut [Value] {
         let len = self.assignable_slots();
+        // SAFETY: pointer and length must be valid
         unsafe { std::slice::from_raw_parts_mut(self.slots_mut_ptr(), len) }
     }
 
     #[inline]
     pub fn assignable_slots(&self) -> usize {
-        let cached16 = self.header.data_lo16();
-
-        if cached16 != u16::MAX {
-            cached16 as usize
-        } else {
-            let map = unsafe { self.map.as_ref() };
-            map.assignable_slots_count()
-        }
+        // SAFETY: every object MUST have a map object
+        let map = unsafe { self.map.as_ref() };
+        map.assignable_slots_count()
     }
 
     #[inline]
@@ -104,12 +108,16 @@ impl SlotObject {
         }
     }
 
+    /// get the slot at index
+    /// # Safety
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
     pub unsafe fn get_slot_unchecked(&self, index: usize) -> Value {
         unsafe { self.slots_ptr().add(index).read() }
     }
 
+    /// get the slot at index
+    /// # Safety
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
     pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {

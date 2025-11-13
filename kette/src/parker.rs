@@ -13,7 +13,7 @@ use crate::{Handle, Value};
 
 const PARKED: u8 = 0b01;
 const TOKEN: u8 = 0b10;
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct NativeParker {
     state: AtomicU8,
     lock: Mutex<()>,

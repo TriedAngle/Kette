@@ -50,7 +50,7 @@ impl VM {
         let new = Self {
             inner: Arc::new(inner),
             heap,
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         };
 
         match info.image {

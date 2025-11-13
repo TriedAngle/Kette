@@ -164,8 +164,8 @@ pub fn fixnum_geq(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn is_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
     ctx.result[0] = match is_a {
-        true => ctx.vm.shared.specials.true_object.into(),
-        false => ctx.vm.shared.specials.false_object.into(),
+        true => ctx.vm.shared.specials.true_object,
+        false => ctx.vm.shared.specials.false_object,
     };
     ExecutionResult::Normal
 }
@@ -174,8 +174,8 @@ pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
     let is_b = ctx.arguments[0].inner().is_fixnum();
     ctx.result[0] = match is_a && is_b {
-        true => ctx.vm.shared.specials.true_object.into(),
-        false => ctx.vm.shared.specials.false_object.into(),
+        true => ctx.vm.shared.specials.true_object,
+        false => ctx.vm.shared.specials.false_object,
     };
     ExecutionResult::Normal
 }

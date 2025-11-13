@@ -1,9 +1,8 @@
 use std::mem;
-use std::ptr::NonNull;
 
 use crate::{
-    Array, ArrayMap, ByteArray, ExecutableMap, SlotMap, SlotObject, Tagged, Value, ValueTag,
-    Visitable, Visitor,
+    Array, ByteArray, ExecutableMap, SlotMap, SlotObject, Tagged, Value, ValueTag, Visitable,
+    Visitor,
 };
 
 #[repr(u8)]
@@ -27,9 +26,9 @@ pub enum ObjectType {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MapType {
-    Slot = 000,
-    Array = 001,
-    Executable = 010,
+    Slot = 0b000,
+    // Array = 0b001,
+    Executable = 0b010,
 }
 
 // TODO: in our current garbage collector iteration objects do not move, thus pin does nothing.
@@ -62,7 +61,7 @@ pub struct Header(u64);
 pub trait Object: Sized + Visitable {}
 
 pub trait PtrSizedObject: Object {
-    fn as_ptr_sized(self) -> u64;
+    fn to_ptr_sized(self) -> u64;
     fn from_ptr_sized(value: u64) -> Self;
 }
 
@@ -178,18 +177,6 @@ impl Header {
     }
 
     #[inline]
-    pub unsafe fn forwarding_slot_ptr<T>(&self) -> *mut *mut T {
-        let self_ptr = (self as *const Header as *mut Header).cast::<u8>();
-        unsafe { self_ptr.add(size_of::<Header>()) as *mut *mut T }
-    }
-
-    #[inline]
-    pub unsafe fn get_forwarded<T>(&self) -> NonNull<T> {
-        let slot = unsafe { self.forwarding_slot_ptr::<T>() };
-        unsafe { NonNull::new_unchecked(slot.read()) }
-    }
-
-    #[inline]
     pub fn kind(self) -> ObjectKind {
         if ((self.0 & Self::KIND_MASK) >> Self::KIND_SHIFT) as u8 == 0 {
             ObjectKind::Object
@@ -226,7 +213,7 @@ impl Header {
         }
         Some(match self.type_bits() {
             0 => MapType::Slot,
-            1 => MapType::Array,
+            // 1 => MapType::Array,
             _ => return None,
         })
     }
@@ -335,6 +322,8 @@ impl Header {
 }
 
 impl Map {
+    /// # Safety
+    /// internal api
     #[inline]
     pub unsafe fn init(&mut self, ty: MapType) {
         self.header = Header::encode_map(ty, 0, HeaderFlags::empty(), 0);
@@ -386,20 +375,21 @@ impl HeapObject for HeapValue {
     fn heap_size(&self) -> usize {
         match self.header.kind() {
             ObjectKind::Map => {
-                let map = unsafe { std::mem::transmute::<_, &Map>(self) };
+                let map = unsafe { std::mem::transmute::<&HeapValue, &Map>(self) };
                 map.heap_size()
             }
             ObjectKind::Object => match self.header.object_type().unwrap() {
                 ObjectType::Slot => {
-                    let slot_object = unsafe { std::mem::transmute::<_, &SlotObject>(self) };
+                    let slot_object =
+                        unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
                     slot_object.heap_size()
                 }
                 ObjectType::Array => {
-                    let array = unsafe { std::mem::transmute::<_, &Array>(self) };
+                    let array = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
                     array.heap_size()
                 }
                 ObjectType::ByteArray => {
-                    let byte_array = unsafe { std::mem::transmute::<_, &ByteArray>(self) };
+                    let byte_array = unsafe { std::mem::transmute::<&HeapValue, &ByteArray>(self) };
                     byte_array.heap_size()
                 }
                 _ => {
@@ -419,16 +409,18 @@ impl Visitable for HeapValue {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         match self.header.kind() {
             ObjectKind::Map => {
-                let map = unsafe { std::mem::transmute::<_, &mut Map>(self) };
+                let map = unsafe { std::mem::transmute::<&mut HeapValue, &mut Map>(self) };
                 map.visit_edges_mut(visitor);
             }
             ObjectKind::Object => match self.header.object_type().unwrap() {
                 ObjectType::Slot => {
-                    let slot_object = unsafe { std::mem::transmute::<_, &mut SlotObject>(self) };
+                    let slot_object =
+                        unsafe { std::mem::transmute::<&mut HeapValue, &mut SlotObject>(self) };
                     slot_object.visit_edges_mut(visitor);
                 }
                 ObjectType::Array => {
-                    let array_object = unsafe { std::mem::transmute::<_, &mut Array>(self) };
+                    let array_object =
+                        unsafe { std::mem::transmute::<&mut HeapValue, &mut Array>(self) };
                     array_object.visit_edges_mut(visitor);
                 }
                 ObjectType::ByteArray => (),
@@ -443,16 +435,17 @@ impl Visitable for HeapValue {
     fn visit_edges(&self, visitor: &impl Visitor) {
         match self.header.kind() {
             ObjectKind::Map => {
-                let map = unsafe { std::mem::transmute::<_, &Map>(self) };
+                let map = unsafe { std::mem::transmute::<&HeapValue, &Map>(self) };
                 map.visit_edges(visitor);
             }
             ObjectKind::Object => match self.header.object_type().unwrap() {
                 ObjectType::Slot => {
-                    let slot_object = unsafe { std::mem::transmute::<_, &SlotObject>(self) };
+                    let slot_object =
+                        unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
                     slot_object.visit_edges(visitor);
                 }
                 ObjectType::Array => {
-                    let array_object = unsafe { std::mem::transmute::<_, &Array>(self) };
+                    let array_object = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
                     array_object.visit_edges(visitor);
                 }
                 ObjectType::ByteArray => (),
@@ -469,15 +462,15 @@ impl HeapObject for Map {
     fn heap_size(&self) -> usize {
         match self.header.map_type().unwrap() {
             MapType::Slot => {
-                let map = unsafe { std::mem::transmute::<_, &SlotMap>(self) };
+                let map = unsafe { std::mem::transmute::<&Map, &SlotMap>(self) };
                 map.heap_size()
             }
-            MapType::Array => {
-                let map = unsafe { std::mem::transmute::<_, &ArrayMap>(self) };
-                map.heap_size()
-            }
+            // MapType::Array => {
+            //     let map = unsafe { std::mem::transmute::<_, &ArrayMap>(self) };
+            //     map.heap_size()
+            // }
             MapType::Executable => {
-                let map = unsafe { std::mem::transmute::<_, &ExecutableMap>(self) };
+                let map = unsafe { std::mem::transmute::<&Map, &ExecutableMap>(self) };
                 map.heap_size()
             }
         }
@@ -501,10 +494,10 @@ impl Visitable for Map {
                 let sm: &mut SlotMap = &mut *(self as *mut Map as *mut _);
                 sm.visit_edges_mut(visitor);
             },
-            Some(MapType::Array) => unsafe {
-                let am: &mut ArrayMap = &mut *(self as *mut Map as *mut _);
-                am.visit_edges_mut(visitor);
-            },
+            // Some(MapType::Array) => unsafe {
+            //     let am: &mut ArrayMap = &mut *(self as *mut Map as *mut _);
+            //     am.visit_edges_mut(visitor);
+            // },
             // TODO: nothing to visit until we transform executable map to a slot map
             Some(MapType::Executable) => (),
             None => {
@@ -520,10 +513,10 @@ impl Visitable for Map {
                 let sm: &SlotMap = &*(self as *const Map as *const SlotMap);
                 sm.visit_edges(visitor);
             },
-            Some(MapType::Array) => unsafe {
-                let am: &ArrayMap = &*(self as *const Map as *const ArrayMap);
-                am.visit_edges(visitor);
-            },
+            // Some(MapType::Array) => unsafe {
+            //     let am: &ArrayMap = &*(self as *const Map as *const ArrayMap);
+            //     am.visit_edges(visitor);
+            // },
             // TODO: nothing to visit until we transform executable map to a slot map
             Some(MapType::Executable) => (),
             None => {
