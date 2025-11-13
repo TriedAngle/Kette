@@ -1,6 +1,6 @@
 mod bytecode;
 mod heap;
-mod interning;
+// mod interning;
 mod interpreter;
 mod object;
 // mod scheduler;
@@ -22,16 +22,20 @@ mod vm;
 // pub use actors::*;
 pub use arrays::{Array, ArrayMap};
 pub use bytearrays::ByteArray;
-pub use executable::ExecutableMap;
+pub use bytecode::{Block, Instruction, Message};
 pub use heap::{Heap, HeapCreateInfo, HeapProxy, HeapSettings};
 pub use object::*;
 pub use slots::{SlotDescriptor, SlotMap, SlotObject};
 // pub use scheduler::*;
+pub use executable::{ExecutableMap, MethodMap};
 pub use execution::{ExecutionResult, ExecutionState, Executor};
 pub use parker::NativeParker;
 pub use primitives::{PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive};
+pub use quotations::{Quotation, QuotationMap};
 pub use system::{PAGE_SIZE, map_memory, unmap_memory};
 pub use tagged::{Handle, OBECT_TAG_MASK, Tagged, Value, ValueTag};
-pub use threads::*;
+pub use threads::{
+    NativeThread, ThreadInfo, ThreadObject, ThreadState, VMThread, VMThreadProxy, VMThreadShared,
+};
 pub use visitor::{Visitable, Visitor};
-pub use vm::*;
+pub use vm::{VM, VMCreateInfo, VMProxy, VMShared};

@@ -13,8 +13,10 @@ pub struct SpecialObjects {
 #[derive(Debug)]
 pub struct VMShared {
     pub specials: SpecialObjects,
-    _marker: PhantomData<*const ()>,
 }
+
+unsafe impl Send for VMShared {}
+unsafe impl Sync for VMShared {}
 
 #[allow(unused)]
 pub struct VM {
@@ -42,7 +44,6 @@ impl VM {
     pub fn new(info: VMCreateInfo) -> Self {
         let inner = VMShared {
             specials: SpecialObjects::null(),
-            _marker: PhantomData::default(),
         };
         let heap = Heap::new(info.heap);
 
@@ -67,7 +68,7 @@ impl VM {
         }
     }
 
-    fn init_from_image(&self, image_path: &str) {
+    fn init_from_image(&self, _image_path: &str) {
         unimplemented!("TODO: images are not implemented yet")
     }
 

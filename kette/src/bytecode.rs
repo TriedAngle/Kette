@@ -1,9 +1,10 @@
 use std::ptr::NonNull;
 
-use crate::{Value, interning::InternedId};
+use crate::Value;
 
+#[allow(unused)]
 #[derive(Debug, Clone, Copy)]
-pub struct Message(InternedId);
+pub struct Message(usize);
 
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
@@ -44,6 +45,7 @@ pub enum Instruction {
 // we can also do it like riscV and add additional compressed instructions
 // but at least for high level "parsing", we should keep something like the current instructions
 // we can also optimize this further and inline the instructions into the Block itself
+#[allow(unused)]
 pub struct Block {
     instructions: Vec<Instruction>,
 }

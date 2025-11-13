@@ -243,7 +243,7 @@ impl<T: PtrSizedObject> From<T> for Tagged<T> {
 }
 
 impl<T: Object> Handle<T> {
-    pub unsafe fn cast<U: Object>(&self) -> Handle<U> {
+    pub unsafe fn cast<U: Object>(self) -> Handle<U> {
         Handle {
             data: self.data,
             _marker: PhantomData,
@@ -259,13 +259,13 @@ impl<T: Object> Handle<T> {
 }
 
 impl<T: HeapObject> Handle<T> {
-    pub fn as_object(&self) -> Tagged<T> {
+    pub fn as_object(self) -> Tagged<T> {
         let raw = self.data;
         let tagged = raw | (ValueTag::Reference as u64);
         unsafe { Tagged::new_raw(tagged) }
     }
 
-    pub fn as_value_handle(&self) -> Handle<Value> {
+    pub fn as_value_handle(self) -> Handle<Value> {
         let raw = self.data;
         let tagged = raw | (ValueTag::Reference as u64);
         Handle::<Value> {
@@ -274,7 +274,7 @@ impl<T: HeapObject> Handle<T> {
         }
     }
 
-    pub fn as_ptr(&self) -> *mut T {
+    pub fn as_ptr(self) -> *mut T {
         self.data as _
     }
 }
