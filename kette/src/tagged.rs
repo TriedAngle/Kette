@@ -30,14 +30,14 @@ pub struct Value(u64);
 
 /// A tagged value
 /// same memory layout as Value but Typed
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Tagged<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
 }
 
 /// GC safe Reference to a HeapObject or an SMI
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct Handle<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
@@ -51,6 +51,24 @@ unsafe impl<T: Object> Sync for Tagged<T> {}
 
 unsafe impl<T: Object> Send for Handle<T> {}
 unsafe impl<T: Object> Sync for Handle<T> {}
+
+// we need custom clone implementation as default considers "owning" T
+// but this represents a pointer to a T, not T itself
+impl<T: Object> Clone for Tagged<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Object> Copy for Tagged<T> {}
+
+impl<T: Object> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: Object> Copy for Handle<T> {}
 
 impl Value {
     pub fn from_fixnum(value: i64) -> Self {
@@ -84,7 +102,7 @@ impl Value {
         self.0 & OBECT_TAG_MASK == ValueTag::Header as u64
     }
 
-    pub fn as_tagged_fixnum<T: PtrSizedObject>(&self) -> Option<Tagged<T>> {
+    pub fn as_tagged_fixnum<T: PtrSizedObject>(self) -> Option<Tagged<T>> {
         if self.is_fixnum() {
             // SAFETY: we tested this
             let tagged = unsafe { Tagged::new_raw(self.0) };
@@ -93,7 +111,7 @@ impl Value {
         None
     }
 
-    pub fn as_tagged_object<T: HeapObject>(&self) -> Option<Tagged<T>> {
+    pub fn as_tagged_object<T: HeapObject>(self) -> Option<Tagged<T>> {
         if self.is_object() {
             // SAFETY: we tested this
             let tagged = unsafe { Tagged::new_raw(self.0) };
@@ -102,7 +120,7 @@ impl Value {
         None
     }
 
-    pub unsafe fn as_handle_unchecked(&self) -> Handle<Value> {
+    pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
         Handle {
             data: self.0,
             _marker: PhantomData,
@@ -164,13 +182,13 @@ impl<T: HeapObject> Tagged<T> {
     }
 
     #[inline]
-    pub fn as_ptr(&self) -> *mut T {
+    pub fn as_ptr(self) -> *mut T {
         let untagged = self.data & !(ValueTag::Reference as u64);
         untagged as _
     }
 
     #[inline]
-    pub unsafe fn as_ref(&self) -> &T {
+    pub unsafe fn as_ref<'a>(self) -> &'a T {
         debug_assert_eq!(
             self.data & OBECT_TAG_MASK,
             ValueTag::Reference as u64,
@@ -183,7 +201,7 @@ impl<T: HeapObject> Tagged<T> {
     }
 
     #[inline]
-    pub unsafe fn as_mut(&self) -> &mut T {
+    pub unsafe fn as_mut<'a>(self) -> &'a mut T {
         debug_assert_eq!(
             self.data & OBECT_TAG_MASK,
             ValueTag::Reference as u64,
