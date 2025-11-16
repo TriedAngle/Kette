@@ -1,6 +1,7 @@
 #![allow(unused)]
 use std::{
     cell::{RefCell, UnsafeCell},
+    collections::HashSet,
     marker::PhantomData,
     ptr::NonNull,
     sync::{
@@ -10,9 +11,9 @@ use std::{
 };
 
 use bitflags::bitflags;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
-use crate::{Handle, HeapObject, Tagged, Value, map_memory};
+use crate::{Handle, HeapObject, Tagged, Value, Visitable, map_memory};
 
 pub const HANDLE_SET_SIZE: usize = 20;
 
@@ -126,6 +127,7 @@ pub struct HeapShared {
     pub epoch: AtomicUsize,
     pub pages: RefCell<Box<[PageMeta]>>,
     pub dirty: UnsafeCell<Box<[u8]>>,
+    pub handles: RwLock<HashSet<NonNull<HandleSet>, ahash::RandomState>>,
 }
 
 #[derive(Debug)]
@@ -212,6 +214,7 @@ impl HeapShared {
             lock: Mutex::new(()),
             pages,
             dirty,
+            handles: RwLock::new(HashSet::default()),
         };
         Arc::new(new)
     }
@@ -407,6 +410,11 @@ impl HeapShared {
 
         None
     }
+
+    pub fn register_handle_set(&self, set: &HandleSet) {
+        let mut handles = self.handles.write();
+        handles.insert(NonNull::from_ref(set));
+    }
 }
 
 impl HeapProxy {
@@ -501,6 +509,10 @@ impl HeapProxy {
             boxed_tlab: Tlab::empty(),
             unboxed_tlab: Tlab::empty(),
         }
+    }
+
+    pub fn register_handle_set(&self, set: &HandleSet) {
+        self.heap.register_handle_set(set);
     }
 }
 
@@ -605,12 +617,26 @@ impl Drop for HandleSet {
     }
 }
 
+impl Visitable for HandleSet {
+    fn visit_edges(&self, visitor: &impl crate::Visitor) {
+        self.handles[0..self.bump]
+            .iter()
+            .for_each(|&val| visitor.visit(val));
+
+        if let Some(mut next) = self.next {
+            // SAFETY: handle sets are thread local
+            let next = unsafe { next.as_ref() };
+            next.visit_edges(visitor);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{Object, Visitable};
+    use crate::{Object, Visitable, Visitor};
 
     use super::*;
-    use std::sync::Arc;
+    use std::{rc::Rc, sync::Arc};
 
     fn mk_heap(total_pages: usize, page_size: usize, tlab_size: usize) -> Heap {
         let total_bytes = total_pages * page_size;
@@ -980,5 +1006,51 @@ mod tests {
 
         // parent.next must be None again
         assert!(parent.next.is_none());
+    }
+
+    #[test]
+    fn visitable_handleset_visits_all_handles_including_next() {
+        #[derive(Debug)]
+        struct CollectVisitor {
+            pub visited: Rc<RefCell<Vec<Value>>>,
+        }
+
+        impl Visitor for CollectVisitor {
+            fn visit(&self, value: Value) {
+                self.visited.borrow_mut().push(value);
+            }
+        }
+
+        let visited = Rc::new(RefCell::new(Vec::new()));
+        let visitor = CollectVisitor {
+            visited: visited.clone(),
+        };
+
+        let mut first = HandleSet::new();
+        let mut second = HandleSet::new();
+        second.link_prev(&mut first);
+
+        let mut o1 = boxed_obj(1);
+        let mut o2 = boxed_obj(2);
+        let mut o3 = boxed_obj(3);
+
+        let t1 = Tagged::<TestObj>::new_ptr(&mut *o1);
+        let t2 = Tagged::<TestObj>::new_ptr(&mut *o2);
+        let t3 = Tagged::<TestObj>::new_ptr(&mut *o3);
+
+        first.promote(t1);
+        first.promote(t2);
+        second.promote(t3);
+
+        first.visit_edges(&visitor);
+
+        let visited_vals = visited.borrow().clone();
+
+        let expected = vec![t1.as_value(), t2.as_value(), t3.as_value()];
+
+        assert_eq!(
+            visited_vals, expected,
+            "Visitor did not record expected handle values"
+        );
     }
 }

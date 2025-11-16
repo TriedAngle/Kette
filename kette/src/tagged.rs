@@ -25,7 +25,7 @@ pub const OBECT_TAG_MASK: u64 = 0b11;
 
 /// A generic Value
 #[repr(transparent)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Value(u64);
 
 /// A tagged value
