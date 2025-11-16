@@ -27,13 +27,37 @@ pub enum ExecutionResult {
     Panic,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionStateCreateInfo {
+    pub stack_size: usize,
+    pub return_stack_size: usize,
+}
+
 impl ExecutionState {
+    pub fn new(info: &ExecutionStateCreateInfo) -> Self {
+        let stack = Vec::with_capacity(info.stack_size);
+        let return_stack = Vec::with_capacity(info.return_stack_size);
+        Self {
+            stack,
+            return_stack,
+        }
+    }
     pub fn push(&mut self, value: Value) {
         self.stack.push(value);
     }
 
     pub fn pop(&mut self) -> Value {
         self.stack.pop().expect("stack should not underflow")
+    }
+
+    pub fn push_return(&mut self, value: Value) {
+        self.return_stack.push(value);
+    }
+
+    pub fn pop_return(&mut self) -> Value {
+        self.return_stack
+            .pop()
+            .expect("return stack should not underflow")
     }
 }
 

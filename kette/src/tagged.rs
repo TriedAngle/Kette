@@ -223,6 +223,17 @@ impl<T: HeapObject> Tagged<T> {
         // SAFETY: we did a check, but this is still not safe as GC can kill this
         unsafe { &mut *ptr }
     }
+
+    /// promote Tagged<T> to a Handle<T>
+    /// # Safety
+    /// the GC must be made aware of the Object or prevented from running
+    #[inline]
+    pub unsafe fn promote_to_handle(self) -> Handle<T> {
+        let untagged = self.data & !(ValueTag::Reference as u64);
+        let ptr = untagged as *mut T;
+        // SAFETY: valid pointer
+        unsafe { Handle::from_ptr(ptr) }
+    }
 }
 
 impl Tagged<i64> {

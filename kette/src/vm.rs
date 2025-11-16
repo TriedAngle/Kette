@@ -4,8 +4,10 @@ use crate::{Handle, Heap, HeapCreateInfo, HeapProxy, Value};
 
 #[derive(Debug)]
 pub struct SpecialObjects {
-    // pub bytearray_map: TaggedValue,
-    // pub array_map: TaggedValue,
+    pub bytearray_traits: Handle<Value>,
+    pub array_traits: Handle<Value>,
+    pub fixnum_traits: Handle<Value>,
+    pub float_traits: Handle<Value>,
     pub true_object: Handle<Value>,
     pub false_object: Handle<Value>,
 }
@@ -13,6 +15,7 @@ pub struct SpecialObjects {
 #[derive(Debug)]
 pub struct VMShared {
     pub specials: SpecialObjects,
+    pub heap: Heap,
 }
 
 unsafe impl Send for VMShared {}
@@ -21,7 +24,6 @@ unsafe impl Sync for VMShared {}
 #[allow(unused)]
 pub struct VM {
     inner: Arc<VMShared>,
-    heap: Heap,
     _marker: PhantomData<*const ()>,
 }
 
@@ -42,14 +44,15 @@ pub struct VMCreateInfo {
 
 impl VM {
     pub fn new(info: VMCreateInfo) -> Self {
+        let heap = Heap::new(info.heap);
+
         let inner = VMShared {
             specials: SpecialObjects::null(),
+            heap,
         };
-        let heap = Heap::new(info.heap);
 
         let new = Self {
             inner: Arc::new(inner),
-            heap,
             _marker: PhantomData,
         };
 
@@ -64,7 +67,7 @@ impl VM {
     pub fn new_proxy(&self) -> VMProxy {
         VMProxy {
             shared: self.inner.clone(),
-            heap: self.heap.create_proxy(),
+            heap: self.inner.heap.create_proxy(),
         }
     }
 
@@ -78,33 +81,7 @@ impl VM {
     }
 }
 
-impl VMShared {
-    // creates a map, then object, then links map in object, returns object
-    // fn allocate_empty_object_with_map_off_heap<'a>(desc: &MapCreateInfo<'a>) -> Box<GenericObject> {
-    //     let slots = desc.slots.iter().map(|&(name, kind, value)| {
-    //         let name_size = name.len() + 1;
-    //         let ba = Box::new(x)
-    //     });
-    //     unimplemented!()
-    // }
-
-    // fn off_heap_bytearray(&self, data: &[u8]) -> Box<ByteArray> {
-    //     let total = size_of::<ByteArray>() + data.len();
-    //
-    //     let mut storage = vec![0u8; total].into_boxed_slice();
-    //     let base = storage.as_mut_ptr();
-    //
-    //     unsafe {
-    //         (base as *mut Header).write(Header::null());
-    //         (base.add(size_of::<Header>()) as *mut TaggedUsize).write(bytes.len().into());
-    //         let data_dst = base.add(size_of::<ByteArray>());
-    //         ptr::copy_nonoverlapping(bytes.as_ptr(), data_dst, bytes.len());
-    //     }
-    //
-    //     Self { storage }
-    // }
-    // }
-}
+impl VMShared {}
 
 impl VMProxy {
     pub fn create_proxy(&self) -> Self {
@@ -118,6 +95,10 @@ impl VMProxy {
 impl SpecialObjects {
     pub fn null() -> Self {
         Self {
+            bytearray_traits: unsafe { Value::zero().as_handle_unchecked() },
+            array_traits: unsafe { Value::zero().as_handle_unchecked() },
+            fixnum_traits: unsafe { Value::zero().as_handle_unchecked() },
+            float_traits: unsafe { Value::zero().as_handle_unchecked() },
             true_object: unsafe { Value::zero().as_handle_unchecked() },
             false_object: unsafe { Value::zero().as_handle_unchecked() },
         }

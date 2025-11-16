@@ -12,7 +12,9 @@ use std::{
 use bitflags::bitflags;
 use parking_lot::Mutex;
 
-use crate::map_memory;
+use crate::{Handle, HeapObject, Tagged, Value, map_memory};
+
+pub const HANDLE_SET_SIZE: usize = 20;
 
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -109,6 +111,7 @@ pub struct AllocationInfo {
     ptype: PageType,
 }
 
+#[derive(Debug)]
 pub struct Heap {
     inner: Arc<HeapShared>,
     _marker: PhantomData<*const ()>,
@@ -553,8 +556,59 @@ impl PageMeta {
     }
 }
 
+#[derive(Debug)]
+pub struct HandleSet {
+    pub prev: Option<NonNull<Self>>,
+    pub next: Option<NonNull<Self>>,
+    pub bump: usize,
+    pub handles: [Value; HANDLE_SET_SIZE],
+}
+
+impl HandleSet {
+    pub fn new() -> Self {
+        Self {
+            prev: None,
+            next: None,
+            bump: 0,
+            handles: [Value::zero(); HANDLE_SET_SIZE],
+        }
+    }
+
+    pub fn link_prev(&mut self, prev: &mut Self) {
+        assert!(self.prev.is_none(), "Trying to link already linked handles");
+        assert!(prev.next.is_none(), "Trying to link already linked handles");
+
+        prev.next = Some(NonNull::new(self).expect("Not null"));
+        self.prev = Some(NonNull::new(prev).expect("Non null"));
+    }
+
+    pub fn promote<T: HeapObject>(&mut self, tagged: Tagged<T>) -> Handle<T> {
+        assert!(self.bump < HANDLE_SET_SIZE, "Handle Set full");
+        let value = tagged.as_value();
+        self.handles[self.bump] = value;
+        self.bump += 1;
+        // SAFETY: the GC is made aware of the object
+        unsafe { tagged.promote_to_handle() }
+    }
+}
+
+impl Drop for HandleSet {
+    fn drop(&mut self) {
+        if let Some(_next) = self.next {
+            panic!("Handle Set cannot be dropped while other depends on it")
+        }
+        if let Some(mut prev) = self.prev {
+            // SAFETY: handle sets are thread local
+            let prev = unsafe { prev.as_mut() };
+            prev.next = None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::{Object, Visitable};
+
     use super::*;
     use std::sync::Arc;
 
@@ -833,5 +887,98 @@ mod tests {
             unboxed_used_pages > 0,
             "expected at least one unboxed page in use after mixed allocations"
         );
+    }
+
+    #[derive(Debug)]
+    struct TestObj {
+        pub x: i64,
+    }
+
+    impl Visitable for TestObj {}
+    impl Object for TestObj {}
+    impl HeapObject for TestObj {}
+
+    fn boxed_obj(x: i64) -> Box<TestObj> {
+        Box::new(TestObj { x })
+    }
+
+    #[test]
+    fn new_handle_set_has_zero_bump_and_no_prev_next() {
+        let hs = HandleSet::new();
+        assert_eq!(hs.bump, 0);
+        assert!(hs.prev.is_none());
+        assert!(hs.next.is_none());
+    }
+
+    #[test]
+    fn linking_prev_and_next_sets_works() {
+        let mut first = HandleSet::new();
+        let mut second = HandleSet::new();
+
+        second.link_prev(&mut first);
+
+        assert!(first.next.is_some());
+        assert!(second.prev.is_some());
+
+        let next_ptr = first.next.unwrap();
+        assert_eq!(next_ptr.as_ptr(), &second as *const _ as *mut _);
+
+        let prev_ptr = second.prev.unwrap();
+        assert_eq!(prev_ptr.as_ptr(), &mut first as *mut _);
+    }
+
+    #[test]
+    fn promote_stores_value_and_increments_bump() {
+        let mut set = HandleSet::new();
+
+        let mut obj = boxed_obj(123);
+        let tagged = Tagged::<TestObj>::new_ptr(&mut *obj);
+
+        let h = set.promote(tagged);
+
+        assert_eq!(set.bump, 1);
+
+        assert_eq!(h.x, 123);
+    }
+
+    #[test]
+    #[should_panic(expected = "Handle Set full")]
+    fn promote_panics_when_full() {
+        let mut set = HandleSet::new();
+
+        for idx in 0..HANDLE_SET_SIZE {
+            let mut obj = boxed_obj(idx as i64);
+            let tagged = Tagged::<TestObj>::new_ptr(obj.as_mut());
+            set.promote(tagged);
+        }
+
+        let mut extra = boxed_obj(99);
+        let extra_tagged = Tagged::<TestObj>::new_ptr(&mut *extra);
+        set.promote(extra_tagged);
+    }
+
+    #[test]
+    #[should_panic(expected = "Handle Set cannot be dropped while other depends on it")]
+    fn dropping_set_with_next_panics() {
+        let mut first = HandleSet::new();
+        let mut second = HandleSet::new();
+        second.link_prev(&mut first);
+
+        drop(first);
+    }
+
+    #[test]
+    fn dropping_child_unlinks_from_prev() {
+        let mut parent = HandleSet::new();
+
+        {
+            let mut child = HandleSet::new();
+            child.link_prev(&mut parent);
+            assert!(parent.next.is_some());
+            drop(child);
+        }
+
+        // parent.next must be None again
+        assert!(parent.next.is_none());
     }
 }

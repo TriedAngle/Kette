@@ -161,7 +161,6 @@ impl NativeThread {
     }
 
     pub fn join_timeout(&self, dur: Duration) -> bool {
-        // fast path
         {
             if *self.done.0.lock() {
                 return true;
@@ -194,4 +193,8 @@ impl NativeThread {
             .as_ref()
             .map(|handle| handle.thread().clone())
     }
+
+    // pub fn new_main() -> Self {
+    //
+    // }
 }

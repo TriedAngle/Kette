@@ -1,6 +1,5 @@
 mod bytecode;
 mod heap;
-// mod interning;
 mod interpreter;
 mod object;
 // mod scheduler;
@@ -29,7 +28,7 @@ pub use object::*;
 pub use slots::{SlotDescriptor, SlotMap, SlotObject};
 // pub use scheduler::*;
 pub use executable::{ExecutableMap, MethodMap};
-pub use execution::{ExecutionResult, ExecutionState, Executor};
+pub use execution::{ExecutionResult, ExecutionState, ExecutionStateCreateInfo, Executor};
 pub use parker::NativeParker;
 pub use parser::{ParsedToken, Parser, Token};
 pub use primitives::{PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive};
