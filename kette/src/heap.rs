@@ -143,6 +143,7 @@ pub struct HeapProxy {
     epoch: usize,
     boxed_tlab: Tlab,
     unboxed_tlab: Tlab,
+    handle_set: Box<HandleSet>,
 }
 
 unsafe impl Send for HeapProxy {}
@@ -180,11 +181,20 @@ impl Heap {
     pub fn create_proxy(&self) -> HeapProxy {
         let heap = self.inner.clone();
         let epoch = self.inner.epoch.load(Ordering::Relaxed);
+
+        let mut handle_set = Box::new(HandleSet::new());
+        let nonnull = unsafe { NonNull::new_unchecked(handle_set.as_mut()) };
+        {
+            let mut handles = heap.handles.write();
+            handles.insert(nonnull);
+        }
+
         HeapProxy {
             heap,
             epoch,
             boxed_tlab: Tlab::empty(),
             unboxed_tlab: Tlab::empty(),
+            handle_set,
         }
     }
 }
@@ -503,11 +513,21 @@ impl HeapProxy {
     pub fn create_proxy(&self) -> HeapProxy {
         let heap = self.heap.clone();
         let epoch = self.heap.epoch.load(Ordering::Relaxed);
+
+        let mut handle_set = Box::new(HandleSet::new());
+        // Safety: we just create this here
+        let nonnull = unsafe { NonNull::new_unchecked(handle_set.as_mut()) };
+        {
+            let mut handles = heap.handles.write();
+            handles.insert(nonnull);
+        }
+
         HeapProxy {
             heap,
             epoch,
             boxed_tlab: Tlab::empty(),
             unboxed_tlab: Tlab::empty(),
+            handle_set,
         }
     }
 
@@ -545,14 +565,17 @@ impl PageMeta {
             generation: 0,
         }
     }
+
     #[inline]
     fn is_free(&self) -> bool {
         !self.flags.contains(PageFlags::Used) && !self.flags.contains(PageFlags::Large)
     }
+
     #[inline]
     fn is_large(&self) -> bool {
         self.flags.contains(PageFlags::Large)
     }
+
     #[inline]
     fn page_type(&self) -> PageType {
         if self.flags.contains(PageFlags::Unboxed) {
@@ -561,6 +584,7 @@ impl PageMeta {
             PageType::Boxed
         }
     }
+
     #[inline]
     fn capacity_tail_bytes(&self, page_size: usize) -> usize {
         let used = self.bytes_used as usize;
@@ -574,6 +598,12 @@ pub struct HandleSet {
     pub next: Option<NonNull<Self>>,
     pub bump: usize,
     pub handles: [Value; HANDLE_SET_SIZE],
+}
+
+impl Default for HandleSet {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HandleSet {
@@ -601,6 +631,15 @@ impl HandleSet {
         self.bump += 1;
         // SAFETY: the GC is made aware of the object
         unsafe { tagged.promote_to_handle() }
+    }
+}
+
+impl Drop for HeapProxy {
+    fn drop(&mut self) {
+        assert!(self.handle_set.next.is_none(), "sanity check");
+        let mut handles = self.heap.handles.write();
+        let nonnull = unsafe { NonNull::new_unchecked(self.handle_set.as_mut()) };
+        handles.remove(&nonnull);
     }
 }
 
