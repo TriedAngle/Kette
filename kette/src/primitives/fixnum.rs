@@ -28,8 +28,8 @@ fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> Executi
     match op(ctx, a, b) {
         Ok(res) => {
             ctx.result[0] = match res {
-                true => ctx.vm.shared.specials.true_object,
-                false => ctx.vm.shared.specials.false_object,
+                true => ctx.thread.vm.shared.specials.true_object,
+                false => ctx.thread.vm.shared.specials.false_object,
             };
         }
         Err(err) => return ExecutionResult::IntegerError(err),
@@ -164,8 +164,8 @@ pub fn fixnum_geq(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn is_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
     ctx.result[0] = match is_a {
-        true => ctx.vm.shared.specials.true_object,
-        false => ctx.vm.shared.specials.false_object,
+        true => ctx.thread.vm.shared.specials.true_object,
+        false => ctx.thread.vm.shared.specials.false_object,
     };
     ExecutionResult::Normal
 }
@@ -174,8 +174,8 @@ pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
     let is_b = ctx.arguments[0].inner().is_fixnum();
     ctx.result[0] = match is_a && is_b {
-        true => ctx.vm.shared.specials.true_object,
-        false => ctx.vm.shared.specials.false_object,
+        true => ctx.thread.vm.shared.specials.true_object,
+        false => ctx.thread.vm.shared.specials.false_object,
     };
     ExecutionResult::Normal
 }

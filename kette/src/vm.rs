@@ -66,7 +66,6 @@ impl VM {
     pub fn new_proxy(&self) -> VMProxy {
         VMProxy {
             shared: self.inner.clone(),
-            heap: self.inner.heap.create_proxy(),
         }
     }
 
@@ -86,7 +85,6 @@ impl VMProxy {
     pub fn create_proxy(&self) -> Self {
         Self {
             shared: self.shared.clone(),
-            heap: self.heap.create_proxy(),
         }
     }
 }
