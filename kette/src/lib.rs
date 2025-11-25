@@ -6,7 +6,7 @@ mod object;
 mod arrays;
 mod bytearrays;
 mod executable;
-mod execution;
+mod executor;
 mod parker;
 mod parser;
 mod primitives;
@@ -28,7 +28,9 @@ pub use object::*;
 pub use slots::{SlotDescriptor, SlotMap, SlotObject};
 // pub use scheduler::*;
 pub use executable::{ExecutableMap, MethodMap};
-pub use execution::{ExecutionResult, ExecutionState, ExecutionStateCreateInfo, Executor};
+pub use executor::{
+    ExecutionResult, ExecutionState, ExecutionStateCreateInfo, Executor, IntegerError,
+};
 pub use parker::NativeParker;
 pub use parser::{ParsedToken, Parser, Token};
 pub use primitives::{PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive};

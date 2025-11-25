@@ -1,6 +1,6 @@
 use std::ops::Neg;
 
-use crate::{ExecutionResult, PrimitiveContext, Tagged, execution::IntegerError};
+use crate::{ExecutionResult, IntegerError, PrimitiveContext, Tagged};
 
 // TODO: handle overflows and/or promotion
 
@@ -10,7 +10,7 @@ type Fixnum2Op = fn(
     b: Tagged<i64>,
 ) -> Result<Tagged<i64>, IntegerError>;
 
-fn fixnum_binop(ctx: &mut PrimitiveContext, op: Fixnum2Op) -> ExecutionResult {
+fn fixnum_binop(ctx: &mut PrimitiveContext<'_, '_>, op: Fixnum2Op) -> ExecutionResult {
     let a = unsafe { ctx.receiver.as_tagged::<i64>() };
     let b = unsafe { ctx.arguments[0].as_tagged::<i64>() };
     match op(ctx, a, b) {

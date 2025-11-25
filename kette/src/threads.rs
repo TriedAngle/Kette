@@ -10,7 +10,7 @@ use parking_lot::{Condvar, Mutex};
 
 use crate::{
     Handle, Header, HeapObject, NativeParker, Object, Tagged, VMProxy, Visitable,
-    execution::{ExecutionState, Executor},
+    executor::{ExecutionState, Executor},
 };
 
 #[derive(Debug)]
