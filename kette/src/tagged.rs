@@ -10,7 +10,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{HeapObject, Object, PtrSizedObject, Visitable};
+use crate::{HeapObject, HeapValue, Object, PtrSizedObject, Visitable};
 
 #[allow(unused)]
 #[repr(u8)]
@@ -124,6 +124,16 @@ impl Value {
     /// # Safety
     /// Caller must make sure Value doesn't get allocated
     pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
+        Handle {
+            data: self.0,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a handle from a value
+    /// # Safety
+    /// Caller must make sure Value doesn't get allocated
+    pub unsafe fn as_heap_handle_unchecked(self) -> Handle<HeapValue> {
         Handle {
             data: self.0,
             _marker: PhantomData,

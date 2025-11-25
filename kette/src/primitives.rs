@@ -1,14 +1,23 @@
-use crate::{ExecutionResult, ExecutionState, Executor, Handle, VMProxy, VMThreadProxy, Value};
+use crate::{
+    ExecutionResult, ExecutionState, Executor, Handle, HeapProxy, Parser, ParserRegistry, VMProxy,
+    VMThreadProxy, Value,
+};
 
 mod bytearray;
 mod fixnum;
+mod parsing;
 mod stack;
 
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone)]
 pub struct PrimitiveMessageIndex(usize);
 
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone)]
+pub struct PrimitiveParserIndex(usize);
+
 pub type PrimitiveFunction = fn(&mut PrimitiveContext) -> ExecutionResult;
+pub type PrimitiveParserFunction = fn(&mut PrimitiveParserContext) -> ExecutionResult;
 
 // self does not count as input
 // e.g. `+` => `3 5 +` has inputs: 1
@@ -31,10 +40,22 @@ impl<'a> PrimitiveMessage<'a> {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct PrimitiveParser<'a> {
+    pub name: &'a str,
+    pub ptr: PrimitiveParserFunction,
+}
+
+impl<'a> PrimitiveParser<'a> {
+    pub const fn new(name: &'a str, ptr: PrimitiveParserFunction) -> Self {
+        Self { name, ptr }
+    }
+}
+
 pub struct PrimitiveContext<'ex, 'arg> {
     pub state: &'ex mut ExecutionState,
     pub thread: &'ex VMThreadProxy,
-    pub vm: &'ex VMProxy,
+    pub heap: &'ex mut HeapProxy,
     // in normal calls receiver message receiver are the same
     // but if with super, or delegate they may differ
     pub message_receiver: Handle<Value>,
@@ -53,11 +74,11 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     ) -> Self {
         let state = &mut executor.state;
         let thread = &executor.thread;
-        let vm = &thread.vm;
+        let heap = &mut executor.heap;
         Self {
             state,
             thread,
-            vm,
+            heap,
             message_receiver,
             receiver,
             arguments,
@@ -66,7 +87,50 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     }
 }
 
+pub struct PrimitiveParserContext<'ex, 'code> {
+    pub state: &'ex mut ExecutionState,
+    pub thread: &'ex VMThreadProxy,
+    pub heap: &'ex mut HeapProxy,
+    pub parser: &'ex mut Parser<'code>,
+    pub parsers: &'ex ParserRegistry,
+}
+
+impl<'ex, 'code> PrimitiveParserContext<'ex, 'code> {
+    pub fn new(
+        executor: &'ex mut Executor,
+        parser: &'ex mut Parser<'code>,
+        parsers: &'ex ParserRegistry,
+    ) -> Self {
+        let state = &mut executor.state;
+        let thread = &executor.thread;
+        let heap = &mut executor.heap;
+        Self {
+            state,
+            thread,
+            heap,
+            parser,
+            parsers,
+        }
+    }
+}
+
 pub const PRIMITIVES: &[PrimitiveMessage] = &[
+    // Stack
+    PrimitiveMessage::new("dup", 1, 2, stack::dup),
+    PrimitiveMessage::new("drop", 1, 0, stack::drop),
+    PrimitiveMessage::new("2drop", 2, 0, stack::drop2),
+    PrimitiveMessage::new("3drop", 3, 0, stack::drop3),
+    PrimitiveMessage::new("swap", 2, 2, stack::swap),
+    PrimitiveMessage::new("over", 2, 3, stack::over),
+    PrimitiveMessage::new("rot", 3, 3, stack::rot),
+    PrimitiveMessage::new("-rot", 3, 3, stack::neg_rot),
+    PrimitiveMessage::new("spin", 3, 3, stack::spin),
+    PrimitiveMessage::new("dupd", 3, 3, stack::dupd),
+    PrimitiveMessage::new("dropd", 2, 2, stack::dropd),
+    PrimitiveMessage::new("2dropd", 3, 3, stack::dropd2),
+    PrimitiveMessage::new("swapd", 3, 3, stack::swapd),
+    PrimitiveMessage::new("dip", 2, 1, stack::dip),
+    // Fixnum
     PrimitiveMessage::new("fixnum?", 0, 1, fixnum::is_fixnum),
     PrimitiveMessage::new("2fixnum?", 1, 1, fixnum::is_2fixnum),
     PrimitiveMessage::new("fixnum+", 1, 1, fixnum::fixnum_add),
@@ -83,26 +147,20 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum-gt", 1, 1, fixnum::fixnum_gt),
     PrimitiveMessage::new("fixnum-leq", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum-geq", 1, 1, fixnum::fixnum_geq),
+    // Bytearrays
     PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
-    PrimitiveMessage::new("bytearray-print", 0, 0, bytearray::bytearray_print),
-    PrimitiveMessage::new("bytearray-println", 0, 0, bytearray::bytearray_println),
-    PrimitiveMessage::new("dup", 1, 2, stack::dup),
-    PrimitiveMessage::new("drop", 1, 0, stack::drop),
-    PrimitiveMessage::new("2drop", 2, 0, stack::drop2),
-    PrimitiveMessage::new("3drop", 3, 0, stack::drop3),
-    PrimitiveMessage::new("swap", 2, 2, stack::swap),
-    PrimitiveMessage::new("over", 2, 3, stack::over),
-    PrimitiveMessage::new("rot", 3, 3, stack::rot),
-    PrimitiveMessage::new("-rot", 3, 3, stack::neg_rot),
-    PrimitiveMessage::new("spin", 3, 3, stack::spin),
-    PrimitiveMessage::new("dupd", 3, 3, stack::dupd),
-    PrimitiveMessage::new("dropd", 2, 2, stack::dropd),
-    PrimitiveMessage::new("2dropd", 3, 3, stack::dropd2),
-    PrimitiveMessage::new("swapd", 3, 3, stack::swapd),
-    PrimitiveMessage::new("dip", 2, 1, stack::dip),
+    PrimitiveMessage::new("bytearray-print", 1, 0, bytearray::bytearray_print),
+    PrimitiveMessage::new("bytearray-println", 1, 0, bytearray::bytearray_println),
 ];
+
+pub const PRIMITIVE_PARSERS: &[PrimitiveParser] = &[];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
     debug_assert!(id.0 < PRIMITIVES.len());
     PRIMITIVES[id.0]
+}
+
+pub fn get_primitive_parser(id: PrimitiveParserIndex) -> PrimitiveParser<'static> {
+    debug_assert!(id.0 < PRIMITIVES.len());
+    PRIMITIVE_PARSERS[id.0]
 }

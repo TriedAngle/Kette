@@ -30,7 +30,6 @@ pub struct VM {
 #[derive(Debug)]
 pub struct VMProxy {
     pub shared: Arc<VMShared>,
-    pub heap: HeapProxy,
 }
 
 unsafe impl Send for VMProxy {}

@@ -1,6 +1,6 @@
-use std::mem;
+use std::{mem, ptr};
 
-use crate::{Header, HeapObject, Object, Tagged, Visitable, Visitor};
+use crate::{Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Visitable, Visitor};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -11,6 +11,40 @@ pub struct ByteArray {
 }
 
 impl ByteArray {
+    /// Inititalize ByteArray with correct header and size
+    /// # Safety
+    /// this sets metadata, should only be called internally
+    /// memory allocation must be at least size
+    pub unsafe fn init(&mut self, size: usize) {
+        self.header = Header::encode_object(ObjectType::ByteArray, 0, HeaderFlags::empty(), 0);
+        self.size = size.into();
+    }
+
+    /// Inititalize ByteArray with correct header, size and zeroed memory
+    /// # Safety
+    /// this sets metadata, should only be called internally
+    /// memory allocation must be at least size
+    pub unsafe fn init_zeroed(&mut self, size: usize) {
+        // Safety: same contract as above
+        unsafe { self.init(size) };
+        let data = self.data.as_mut_ptr();
+        // Safety: allocated with correct size
+        unsafe { ptr::write_bytes(data, 0, size) };
+    }
+
+    /// Inititalize ByteArray with correct header, size and data
+    /// # Safety
+    /// this sets metadata, should only be called internally
+    /// data must be same size as allocated
+    pub unsafe fn init_data(&mut self, data: &[u8]) {
+        let size = data.len();
+        // Safety: same contract as above
+        unsafe { self.init(size) };
+        let own_data = self.data.as_mut_ptr();
+        // Safety: allocated with correct size
+        unsafe { ptr::copy_nonoverlapping(data.as_ptr(), own_data, size) };
+    }
+
     #[inline]
     pub fn size(&self) -> usize {
         self.size.into()

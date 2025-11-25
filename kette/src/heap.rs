@@ -3,6 +3,7 @@ use std::{
     cell::{RefCell, UnsafeCell},
     collections::HashSet,
     marker::PhantomData,
+    mem,
     ptr::NonNull,
     sync::{
         Arc,
@@ -13,7 +14,7 @@ use std::{
 use bitflags::bitflags;
 use parking_lot::{Mutex, RwLock};
 
-use crate::{Handle, HeapObject, Tagged, Value, Visitable, map_memory};
+use crate::{ByteArray, Handle, HeapObject, Tagged, Value, Visitable, map_memory};
 
 pub const HANDLE_SET_SIZE: usize = 20;
 
@@ -508,6 +509,37 @@ impl HeapProxy {
     pub fn allocate_unboxed_raw(&mut self, size: usize) -> NonNull<u8> {
         // TODO: implement alignment if necessary
         self.allocate_raw(size, PageType::Unboxed)
+    }
+
+    /// Allocate a raw unitialized bytearray
+    /// # Safety
+    /// caller must ensure initialization
+    pub unsafe fn allocate_bytearray_raw(&mut self, size: usize) -> NonNull<ByteArray> {
+        let size = mem::size_of::<ByteArray>() + size;
+        self.allocate_unboxed_raw(size).cast::<ByteArray>()
+    }
+
+    pub fn allocate_bytearray(&mut self, size: usize) -> Tagged<ByteArray> {
+        // Safety: we will initialize here
+        let mut raw = unsafe { self.allocate_bytearray_raw(size) };
+        // Safety: we just allocated this
+        let ba = unsafe { raw.as_mut() };
+        // Safety: correct size allocation
+        unsafe { (*ba).init_zeroed(size) };
+
+        Tagged::new_ptr(raw.as_ptr())
+    }
+
+    pub fn allocate_bytearray_data(&mut self, data: &[u8]) -> Tagged<ByteArray> {
+        let size = data.len();
+        // Safety: we will initialize here
+        let mut raw = unsafe { self.allocate_bytearray_raw(size) };
+        // Safety: we just allocated this
+        let ba = unsafe { raw.as_mut() };
+        // Safety: correct size allocation
+        unsafe { (*ba).init_data(data) };
+
+        Tagged::new_ptr(raw.as_ptr())
     }
 
     pub fn create_proxy(&self) -> HeapProxy {

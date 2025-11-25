@@ -9,7 +9,7 @@ use std::{
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
-    Handle, Header, HeapObject, NativeParker, Object, Tagged, VMProxy, Visitable,
+    Handle, Header, HeapObject, HeapProxy, NativeParker, Object, Tagged, VMProxy, Visitable,
     executor::{ExecutionState, Executor},
 };
 
@@ -98,6 +98,7 @@ impl VMThreadShared {
 impl VMThread {
     pub fn new_native(
         vm: VMProxy,
+        heap: HeapProxy,
         user_thread: Handle<ThreadObject>,
         executor: ExecutionState,
     ) -> Self {
@@ -110,7 +111,7 @@ impl VMThread {
                 let id: u64 = unsafe { std::mem::transmute(thread_id) };
                 info.thread_id = id;
             }
-            let executor = Executor::new(proxy, executor);
+            let executor = Executor::new(proxy, heap, executor);
             executor.run();
         });
         Self {

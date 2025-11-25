@@ -1,4 +1,4 @@
-use crate::{VMThreadProxy, Value};
+use crate::{HeapProxy, VMThreadProxy, Value};
 
 // TODO: automate their construction and give them mostly fixed sizes
 // we don't need a full Vector in most cases, we often don't want bounds check in fast path
@@ -12,14 +12,17 @@ pub struct ExecutionState {
 #[derive(Debug)]
 pub struct Executor {
     pub thread: VMThreadProxy,
+    pub heap: HeapProxy,
     pub state: ExecutionState,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IntegerError {
     Overflow,
     DivisionByZero,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ExecutionResult {
     Normal,
     IntegerError(IntegerError),
@@ -147,8 +150,12 @@ impl ExecutionState {
 }
 
 impl Executor {
-    pub fn new(thread: VMThreadProxy, state: ExecutionState) -> Self {
-        Self { thread, state }
+    pub fn new(thread: VMThreadProxy, heap: HeapProxy, state: ExecutionState) -> Self {
+        Self {
+            thread,
+            heap,
+            state,
+        }
     }
 
     pub fn run(self) {}

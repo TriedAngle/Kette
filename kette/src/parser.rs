@@ -1,8 +1,12 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+
+use parking_lot::RwLock;
+
+use crate::executable::ParserObject;
 
 #[derive(Debug)]
-pub struct Parser {
-    pub code: Arc<[u8]>,
+pub struct Parser<'code> {
+    pub code: &'code [u8],
     pub end: usize,
     pub offset: usize,
 }
@@ -20,9 +24,9 @@ pub enum ParsedToken {
     Float(f64),
 }
 
-impl Parser {
+impl<'code> Parser<'code> {
     #[inline]
-    pub fn new(code: Arc<[u8]>) -> Self {
+    pub fn new(code: &'code [u8]) -> Self {
         let end = code.len();
         Self {
             code,
@@ -110,13 +114,20 @@ impl Parser {
     }
 }
 
+pub struct ParserRegistry {
+    inner: RwLock<ParserRegistryInner>,
+}
+
+struct ParserRegistryInner {
+    pub parses: HashMap<String, ParserObject>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
-    fn parse_all(code: &str) -> (Parser, Vec<ParsedToken>) {
-        let mut p = Parser::new(Arc::from(code.as_bytes()));
+    fn parse_all<'code>(code: &'code str) -> (Parser<'code>, Vec<ParsedToken>) {
+        let mut p = Parser::new(code.as_bytes());
         let mut out = Vec::new();
         while let Some(t) = p.parse_next() {
             out.push(t);
@@ -126,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_skip_whitespace_and_is_done() {
-        let mut p = Parser::new(Arc::from(b"   foo".as_slice()));
+        let mut p = Parser::new(b"   foo");
         assert!(!p.is_done());
         p.skip_whitespace();
         assert_eq!(p.offset, 3);
@@ -134,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_identifier_token() {
-        let mut p = Parser::new(Arc::from(b"hello".as_slice()));
+        let mut p = Parser::new(b"hello");
         let tok = p.parse_next().unwrap();
         match tok {
             ParsedToken::Identifier(t) => {

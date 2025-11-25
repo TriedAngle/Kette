@@ -32,8 +32,11 @@ pub use executor::{
     ExecutionResult, ExecutionState, ExecutionStateCreateInfo, Executor, IntegerError,
 };
 pub use parker::NativeParker;
-pub use parser::{ParsedToken, Parser, Token};
-pub use primitives::{PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive};
+pub use parser::{ParsedToken, Parser, ParserRegistry, Token};
+pub use primitives::{
+    PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, PrimitiveParserContext,
+    PrimitiveParserFunction, get_primitive,
+};
 pub use quotations::{Quotation, QuotationMap};
 pub use system::{PAGE_SIZE, map_memory, unmap_memory};
 pub use tagged::{Handle, OBECT_TAG_MASK, Tagged, Value, ValueTag};
