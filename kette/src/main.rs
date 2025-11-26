@@ -1,4 +1,7 @@
-use kette::{ExecutionState, ExecutionStateCreateInfo, HeapCreateInfo, VM, VMCreateInfo};
+use kette::{
+    ExecutionState, ExecutionStateCreateInfo, Executor, HeapCreateInfo, VM, VMCreateInfo, VMThread,
+    VMThreadProxy,
+};
 
 const _CODE: &str = r#"
 5 77 fixnum+ fixnum>utf8-bytes bytearray-println
@@ -12,9 +15,16 @@ fn main() {
         },
     });
 
-    let _main_proxy = vm.new_proxy();
-    let _main_state = ExecutionState::new(&ExecutionStateCreateInfo {
+    let main_proxy = vm.new_proxy();
+    let heap = main_proxy.shared.heap.create_proxy();
+
+    let state = ExecutionState::new(&ExecutionStateCreateInfo {
         stack_size: 128,
         return_stack_size: 128,
     });
+
+    let main_thread = VMThread::new_main(main_proxy);
+    let main_thread_proxy = VMThreadProxy(main_thread.inner.clone());
+
+    let _executor = Executor::new(main_thread_proxy, heap, state);
 }

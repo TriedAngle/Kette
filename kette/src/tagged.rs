@@ -301,6 +301,11 @@ impl<T: HeapObject> Handle<T> {
     }
 
     #[inline]
+    pub fn as_value(self) -> Value {
+        self.as_object().as_value()
+    }
+
+    #[inline]
     pub fn as_value_handle(self) -> Handle<Value> {
         let raw = self.data;
         let tagged = raw | (ValueTag::Reference as u64);
@@ -311,8 +316,29 @@ impl<T: HeapObject> Handle<T> {
     }
 
     #[inline]
+    pub fn as_heap_value_handle(self) -> Handle<HeapValue> {
+        let raw = self.data;
+        let tagged = raw | (ValueTag::Reference as u64);
+        Handle::<HeapValue> {
+            data: tagged,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
     pub fn as_ptr(self) -> *mut T {
         self.data as _
+    }
+
+    /// Create a null handle
+    /// # Safety
+    /// only for initialization or super special cases
+    /// must make sure to not dereference this
+    pub unsafe fn null() -> Handle<T> {
+        Self {
+            data: 0,
+            _marker: PhantomData,
+        }
     }
 }
 

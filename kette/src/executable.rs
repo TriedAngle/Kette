@@ -37,6 +37,7 @@ pub struct ParserObject {
 impl Object for ExecutableMap {}
 impl Object for MethodMap {}
 impl Object for ParserMap {}
+impl Object for ParserObject {}
 
 impl HeapObject for ExecutableMap {
     fn heap_size(&self) -> usize {
@@ -56,6 +57,12 @@ impl HeapObject for ParserMap {
     }
 }
 
+impl HeapObject for ParserObject {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
+
 impl Visitable for ExecutableMap {
     fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
@@ -66,6 +73,11 @@ impl Visitable for MethodMap {
 }
 
 impl Visitable for ParserMap {
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+}
+
+impl Visitable for ParserObject {
     fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
 }

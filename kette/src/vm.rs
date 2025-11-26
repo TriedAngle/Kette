@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::{Handle, Heap, HeapCreateInfo, HeapProxy, Value};
+use crate::{ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, Strings, Value};
 
 #[derive(Debug)]
 pub struct SpecialObjects {
@@ -16,6 +16,7 @@ pub struct SpecialObjects {
 pub struct VMShared {
     pub specials: SpecialObjects,
     pub heap: Heap,
+    pub strings: Strings,
 }
 
 unsafe impl Send for VMShared {}
@@ -48,6 +49,7 @@ impl VM {
         let inner = VMShared {
             specials: SpecialObjects::null(),
             heap,
+            strings: Strings::new(),
         };
 
         let new = Self {
@@ -73,19 +75,21 @@ impl VM {
         unimplemented!("TODO: images are not implemented yet")
     }
 
-    // TODO: special objects should be allocated on a static/pinned region on the heap
+    // TODO: special objects should be allocated on the startup heap
     fn init_new(&self) {
         // let true_object = Arc::new(GenericObject::)
     }
 }
-
-impl VMShared {}
 
 impl VMProxy {
     pub fn create_proxy(&self) -> Self {
         Self {
             shared: self.shared.clone(),
         }
+    }
+
+    pub fn intern_string(&self, s: &str, heap: &mut HeapProxy) -> Handle<ByteArray> {
+        self.shared.strings.get(s, heap)
     }
 }
 

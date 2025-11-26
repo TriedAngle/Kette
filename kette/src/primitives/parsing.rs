@@ -23,11 +23,7 @@ pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
         }
         ParsedToken::Identifier(token) => {
             let s = p.get_token_string(token);
-            // TODO: use string interning
-            // for that we can use a new type
-            // like Word { ba: ByteArray }
-            // this way we can also differentiate between Strings and Messages
-            let ba = heap.allocate_bytearray_data(s.as_bytes());
+            let ba = ctx.thread.vm.intern_string(s, heap);
             let value = ba.as_value();
             state.push(value);
         }
@@ -36,13 +32,36 @@ pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-pub fn parse_until_inner(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
+pub fn parse_until(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
+    if ctx.state.depth() < 1 {
+        return ExecutionResult::Panic("Datastack underflow");
+    }
+
+    let mut accum = Vec::new();
+    // Safety: depth check
+    let end = unsafe { ctx.state.pop_unchecked() };
+    // Safety: heap deletion will be paused while parsing and requires ByteArray
+    let end = unsafe { end.as_handle_unchecked().cast::<ByteArray>() };
+    let end = unsafe { str::from_utf8_unchecked(end.as_bytes()) };
+
+    let res = parse_until_inner(ctx, end, &mut accum);
+    if res != ExecutionResult::Normal {
+        return ExecutionResult::Panic("Parsing failed!");
+    }
+
+    unimplemented!()
+    // let array =
+}
+
+fn parse_until_inner(
+    ctx: &mut PrimitiveParserContext,
+    end: &str,
+    accum: &mut Vec<Value>,
+) -> ExecutionResult {
     let state = &mut ctx.state;
     if state.depth() < 2 {
         return ExecutionResult::Panic("Datastack underflow");
     }
-    let end = unsafe { state.pop_unchecked() };
-    let accum = unsafe { state.pop_unchecked() };
 
     while parse_next(ctx) != ExecutionResult::Normal {
         let state = &mut ctx.state;
@@ -70,9 +89,17 @@ pub fn parse_until_inner(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
             continue;
         }
 
+        // Safety: checked
         let ba = unsafe { handle.cast::<ByteArray>() };
-
         let bytes = ba.as_bytes();
+        // Safety: when parsing we can be sure this is valid utf8
+        let name = unsafe { str::from_utf8_unchecked(bytes) };
+
+        if let Some(_parser) = ctx.parsers.get(name) {
+            unimplemented!("parses not implemented yet");
+        }
+
+        state.push(next);
     }
 
     ExecutionResult::Normal

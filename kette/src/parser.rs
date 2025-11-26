@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use parking_lot::RwLock;
 
-use crate::executable::ParserObject;
+use crate::{Handle, executable::ParserObject};
 
 #[derive(Debug)]
 pub struct Parser<'code> {
@@ -115,11 +115,20 @@ impl<'code> Parser<'code> {
 }
 
 pub struct ParserRegistry {
-    inner: RwLock<ParserRegistryInner>,
+    inner: RwLock<HashMap<String, Handle<ParserObject>, ahash::RandomState>>,
 }
 
-struct ParserRegistryInner {
-    pub parses: HashMap<String, ParserObject>,
+impl ParserRegistry {
+    pub fn new() -> Self {
+        Self {
+            inner: RwLock::new(HashMap::default()),
+        }
+    }
+
+    pub fn get(&self, message: &str) -> Option<Handle<ParserObject>> {
+        let inner = self.inner.read();
+        inner.get(message).copied()
+    }
 }
 
 #[cfg(test)]

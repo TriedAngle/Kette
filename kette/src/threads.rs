@@ -52,7 +52,7 @@ pub struct VMThreadShared {
 }
 
 #[derive(Debug)]
-pub struct VMThreadProxy(Arc<VMThreadShared>);
+pub struct VMThreadProxy(pub Arc<VMThreadShared>);
 
 impl Deref for VMThreadProxy {
     type Target = VMThreadShared;
@@ -96,6 +96,18 @@ impl VMThreadShared {
 }
 
 impl VMThread {
+    pub fn new_main(vm: VMProxy) -> Self {
+        // SAFETY: we will not dereference this
+        let thread_obj = unsafe { Handle::null() };
+        let shared = VMThreadShared::new(vm, thread_obj, false);
+        shared.info.lock().thread_id = 0;
+
+        Self {
+            inner: shared,
+            native: None,
+            carrier: None,
+        }
+    }
     pub fn new_native(
         vm: VMProxy,
         heap: HeapProxy,

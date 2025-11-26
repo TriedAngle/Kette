@@ -7,6 +7,7 @@ mod bytearray;
 mod fixnum;
 mod parsing;
 mod stack;
+mod threads;
 
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone)]
@@ -151,6 +152,14 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
     PrimitiveMessage::new("bytearray-print", 1, 0, bytearray::bytearray_print),
     PrimitiveMessage::new("bytearray-println", 1, 0, bytearray::bytearray_println),
+    // Threads
+    PrimitiveMessage::new("<thread-native>", 0, 0, threads::create_native),
+    PrimitiveMessage::new("thread-join", 0, 0, threads::join),
+    PrimitiveMessage::new("thread-join-timeout", 1, 0, threads::join_timeout),
+    PrimitiveMessage::new("park", 1, 0, threads::park),
+    PrimitiveMessage::new("park-nanos", 2, 0, threads::park_nanos),
+    PrimitiveMessage::new("park-until", 2, 0, threads::park_until),
+    PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
 ];
 
 pub const PRIMITIVE_PARSERS: &[PrimitiveParser] = &[];

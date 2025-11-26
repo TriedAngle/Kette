@@ -1,6 +1,8 @@
 mod bytecode;
 mod heap;
+mod interning;
 mod interpreter;
+mod lookup;
 mod object;
 // mod scheduler;
 mod arrays;
@@ -31,6 +33,7 @@ pub use executable::{ExecutableMap, MethodMap};
 pub use executor::{
     ExecutionResult, ExecutionState, ExecutionStateCreateInfo, Executor, IntegerError,
 };
+pub use interning::Strings;
 pub use parker::NativeParker;
 pub use parser::{ParsedToken, Parser, ParserRegistry, Token};
 pub use primitives::{
