@@ -1,42 +1,18 @@
-use std::ptr::NonNull;
-
-use crate::Value;
-
-#[allow(unused)]
-#[derive(Debug, Clone, Copy)]
-pub struct Message(usize);
+use crate::{Handle, Message, Quotation, Tagged, Value};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
-    Send {
-        message: Message,
-    },
-    SelfSend {
-        message: Message,
-    },
-    SuperSend {
-        message: Message,
-    },
-    DelegateSend {
-        message: Message,
-    },
-    CreateFixnum {
-        value: i64,
-    },
-    CreateFloat {
-        value: f64,
-    },
-    CreateArray {
-        size: usize,
-        fill: Value,
-    },
-    CreateByteArray {
-        size: usize,
-        data: Option<NonNull<u8>>,
-    },
-    CreateObject {
-        // map: View<SlotMap>,
-    },
+    Send { message: Handle<Message> },
+    SuperSend { message: Handle<Message> },
+    DelegateSend { message: Handle<Message> },
+    PushSelf,
+    PushValue { value: Value },
+    PushFixnum { value: i64 },
+    PushQuotaton { value: Handle<Quotation> },
+    // TODO implement this
+    // PushFloat {
+    //     value: f64,
+    // },
     Return,
 }
 
@@ -47,5 +23,5 @@ pub enum Instruction {
 // we can also optimize this further and inline the instructions into the Block itself
 #[allow(unused)]
 pub struct Block {
-    instructions: Vec<Instruction>,
+    pub instructions: Vec<Instruction>,
 }

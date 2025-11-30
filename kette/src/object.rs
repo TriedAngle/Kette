@@ -1,9 +1,9 @@
 use std::mem;
 
 use crate::{
-    ActivationObject, Array, ByteArray, MethodMap, QuotationMap, SlotMap, SlotObject, Tagged,
-    Value, ValueTag, Visitable, Visitor,
-    lookup::{LookupResult, Selector, VisitedLink},
+    ActivationObject, Array, ByteArray, LookupResult, Message, MethodMap, Quotation, QuotationMap,
+    Selector, SlotMap, SlotObject, Value, ValueTag, Visitable, VisitedLink, Visitor,
+    executable::Method,
 };
 
 #[repr(u8)]
@@ -20,6 +20,9 @@ pub enum ObjectType {
     Array = 0b00010,
     ByteArray = 0b00011,
     Activation = 0b0100,
+    Method = 0b0101,
+    Quotation = 0b0111,
+    Message = 0b1000,
     Max = 0b11111,
 }
 
@@ -63,7 +66,7 @@ pub struct Header(u64);
 
 pub trait Object: Sized + Visitable {
     fn lookup(&self, selector: Selector<'_>, link: Option<&VisitedLink>) -> LookupResult {
-        unimplemented!("type is not lookupable")
+        unimplemented!("lookup with:{selector:?} and {link:?} on type that is not lookupable");
     }
 }
 
@@ -95,14 +98,6 @@ pub struct HeapValue {
 #[derive(Debug)]
 pub struct Map {
     pub header: Header,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct StackEffect {
-    pub header: Header,
-    pub input: Tagged<Array>,
-    pub output: Tagged<Array>,
 }
 
 #[repr(C)]
@@ -406,29 +401,45 @@ impl Object for HeapValue {
 }
 impl HeapObject for HeapValue {
     fn heap_size(&self) -> usize {
-        match self.header.kind() {
+        let obj = match self.header.kind() {
             ObjectKind::Map => {
                 let map = unsafe { std::mem::transmute::<&HeapValue, &Map>(self) };
-                map.heap_size()
+                return map.heap_size();
             }
-            ObjectKind::Object => match self.header.object_type().unwrap() {
-                ObjectType::Slot => {
-                    let slot_object =
-                        unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
-                    slot_object.heap_size()
-                }
-                ObjectType::Array => {
-                    let array = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
-                    array.heap_size()
-                }
-                ObjectType::ByteArray => {
-                    let byte_array = unsafe { std::mem::transmute::<&HeapValue, &ByteArray>(self) };
-                    byte_array.heap_size()
-                }
-                _ => {
-                    unimplemented!()
-                }
-            },
+            ObjectKind::Object => self,
+        };
+
+        match obj.header.object_type().unwrap() {
+            ObjectType::Slot => {
+                let slot_object = unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
+                slot_object.heap_size()
+            }
+            ObjectType::Array => {
+                let array_object = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
+                array_object.heap_size()
+            }
+            ObjectType::Activation => {
+                let activation =
+                    unsafe { std::mem::transmute::<&HeapValue, &ActivationObject>(self) };
+                activation.heap_size()
+            }
+            ObjectType::Quotation => {
+                let quotation = unsafe { std::mem::transmute::<&HeapValue, &Quotation>(self) };
+                quotation.heap_size()
+            }
+            ObjectType::Method => {
+                let method = unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
+                method.heap_size()
+            }
+            ObjectType::Message => {
+                let message = unsafe { std::mem::transmute::<&HeapValue, &Message>(self) };
+                message.heap_size()
+            }
+            ObjectType::ByteArray => {
+                let message = unsafe { std::mem::transmute::<&HeapValue, &ByteArray>(self) };
+                message.heap_size()
+            }
+            ObjectType::Max => unreachable!(),
         }
     }
 }
@@ -444,49 +455,85 @@ impl Visitable for HeapValue {
             ObjectKind::Map => {
                 let map = unsafe { std::mem::transmute::<&mut HeapValue, &mut Map>(self) };
                 map.visit_edges_mut(visitor);
+                return;
             }
-            ObjectKind::Object => match self.header.object_type().unwrap() {
-                ObjectType::Slot => {
-                    let slot_object =
-                        unsafe { std::mem::transmute::<&mut HeapValue, &mut SlotObject>(self) };
-                    slot_object.visit_edges_mut(visitor);
-                }
-                ObjectType::Array => {
-                    let array_object =
-                        unsafe { std::mem::transmute::<&mut HeapValue, &mut Array>(self) };
-                    array_object.visit_edges_mut(visitor);
-                }
-                ObjectType::ByteArray => (),
-                _ => {
-                    unimplemented!()
-                }
-            },
-        }
+            ObjectKind::Object => (),
+        };
+
+        match self.header.object_type().unwrap() {
+            ObjectType::Slot => {
+                let slot_object =
+                    unsafe { std::mem::transmute::<&mut HeapValue, &mut SlotObject>(self) };
+                slot_object.visit_edges_mut(visitor);
+            }
+            ObjectType::Array => {
+                let array_object =
+                    unsafe { std::mem::transmute::<&mut HeapValue, &mut Array>(self) };
+                array_object.visit_edges_mut(visitor);
+            }
+            ObjectType::Activation => {
+                let activation =
+                    unsafe { std::mem::transmute::<&mut HeapValue, &mut ActivationObject>(self) };
+                activation.visit_edges_mut(visitor);
+            }
+            ObjectType::Quotation => {
+                let quotation =
+                    unsafe { std::mem::transmute::<&mut HeapValue, &mut Quotation>(self) };
+                quotation.visit_edges_mut(visitor);
+            }
+            ObjectType::Method => {
+                let method = unsafe { std::mem::transmute::<&mut HeapValue, &mut Method>(self) };
+                method.visit_edges_mut(visitor);
+            }
+            ObjectType::Message => {
+                let message = unsafe { std::mem::transmute::<&mut HeapValue, &mut Message>(self) };
+                message.visit_edges_mut(visitor);
+            }
+            ObjectType::ByteArray => (),
+            ObjectType::Max => unreachable!(),
+        };
     }
 
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        match self.header.kind() {
+        let obj = match self.header.kind() {
             ObjectKind::Map => {
                 let map = unsafe { std::mem::transmute::<&HeapValue, &Map>(self) };
                 map.visit_edges(visitor);
+                return;
             }
-            ObjectKind::Object => match self.header.object_type().unwrap() {
-                ObjectType::Slot => {
-                    let slot_object =
-                        unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
-                    slot_object.visit_edges(visitor);
-                }
-                ObjectType::Array => {
-                    let array_object = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
-                    array_object.visit_edges(visitor);
-                }
-                ObjectType::ByteArray => (),
-                _ => {
-                    unimplemented!()
-                }
-            },
-        }
+            ObjectKind::Object => self,
+        };
+
+        match obj.header.object_type().unwrap() {
+            ObjectType::Slot => {
+                let slot_object = unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
+                slot_object.visit_edges(visitor);
+            }
+            ObjectType::Array => {
+                let array_object = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
+                array_object.visit_edges(visitor);
+            }
+            ObjectType::Activation => {
+                let activation =
+                    unsafe { std::mem::transmute::<&HeapValue, &ActivationObject>(self) };
+                activation.visit_edges(visitor);
+            }
+            ObjectType::Quotation => {
+                let quotation = unsafe { std::mem::transmute::<&HeapValue, &Quotation>(self) };
+                quotation.visit_edges(visitor);
+            }
+            ObjectType::Method => {
+                let method = unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
+                method.visit_edges(visitor);
+            }
+            ObjectType::Message => {
+                let message = unsafe { std::mem::transmute::<&HeapValue, &Message>(self) };
+                message.visit_edges(visitor);
+            }
+            ObjectType::ByteArray => (),
+            ObjectType::Max => unreachable!(),
+        };
     }
 }
 
@@ -510,14 +557,6 @@ impl HeapObject for Map {
     }
 }
 
-impl Object for StackEffect {}
-impl HeapObject for StackEffect {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-impl Visitable for StackEffect {}
-
 // just like object, we dispatch here.
 impl Visitable for Map {
     #[inline]
@@ -527,11 +566,6 @@ impl Visitable for Map {
                 let sm: &mut SlotMap = &mut *(self as *mut Map as *mut _);
                 sm.visit_edges_mut(visitor);
             },
-            // Some(MapType::Array) => unsafe {
-            //     let am: &mut ArrayMap = &mut *(self as *mut Map as *mut _);
-            //     am.visit_edges_mut(visitor);
-            // },
-            // TODO: nothing to visit until we transform executable map to a slot map
             Some(MapType::Method) => unsafe {
                 let sm: &mut MethodMap = &mut *(self as *mut Map as *mut _);
                 sm.visit_edges_mut(visitor);
@@ -553,11 +587,6 @@ impl Visitable for Map {
                 let sm: &SlotMap = &*(self as *const Map as *const _);
                 sm.visit_edges(visitor);
             },
-            // Some(MapType::Array) => unsafe {
-            //     let am: &ArrayMap = &*(self as *const Map as *const ArrayMap);
-            //     am.visit_edges(visitor);
-            // },
-            // TODO: nothing to visit until we transform executable map to a slot map
             Some(MapType::Method) => unsafe {
                 let sm: &MethodMap = &*(self as *const Map as *const _);
                 sm.visit_edges(visitor);

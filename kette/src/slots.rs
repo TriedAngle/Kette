@@ -164,12 +164,12 @@ impl Visitable for SlotMap {
 impl Visitable for SlotObject {
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        visitor.visit_mut(self.map.as_value());
+        visitor.visit_mut(self.map.into());
         self.slots().iter().for_each(|&obj| visitor.visit_mut(obj));
     }
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        visitor.visit(self.map.as_value());
+        visitor.visit(self.map.into());
         self.slots().iter().for_each(|&obj| visitor.visit(obj));
     }
 }

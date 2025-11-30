@@ -122,6 +122,13 @@ impl Value {
         None
     }
 
+    /// # Safety
+    /// check if this is a heap object
+    pub unsafe fn as_tagged_object_unchecked<T: HeapObject>(self) -> Tagged<T> {
+        // Safety: by contract this is a T
+        unsafe { Tagged::new_raw(self.0) }
+    }
+
     /// Create a handle from a value
     /// # Safety
     /// Caller must make sure Value doesn't get allocated
@@ -291,6 +298,12 @@ impl<T: Object> Handle<T> {
             data: ptr as _,
             _marker: PhantomData,
         }
+    }
+}
+
+impl<T: Object> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
     }
 }
 

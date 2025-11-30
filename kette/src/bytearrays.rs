@@ -63,6 +63,10 @@ impl ByteArray {
         // SAFETY: byterray must be correctly sized
         unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), len) }
     }
+
+    pub fn as_utf8(&self) -> Result<&str, ()> {
+        str::from_utf8(self.as_bytes()).map_err(|_| ())
+    }
 }
 
 impl Object for ByteArray {}

@@ -34,49 +34,56 @@ pub struct ParserObject {
     pub map: Tagged<ParserMap>,
 }
 
-impl Object for ExecutableMap {}
-impl Object for MethodMap {}
-impl Object for ParserMap {}
-impl Object for ParserObject {}
+#[repr(C)]
+#[derive(Debug)]
+pub struct Method {
+    pub header: Header,
+    pub map: Tagged<MethodMap>,
+}
 
+impl Object for ExecutableMap {}
 impl HeapObject for ExecutableMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
 }
+impl Visitable for ExecutableMap {
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+}
 
+impl Object for MethodMap {}
 impl HeapObject for MethodMap {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
-}
-
-impl HeapObject for ParserMap {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-
-impl HeapObject for ParserObject {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-
-impl Visitable for ExecutableMap {
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
 }
 impl Visitable for MethodMap {
     fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
 }
 
+impl Object for Method {}
+impl HeapObject for Method {}
+impl Visitable for Method {}
+
+impl Object for ParserMap {}
+impl HeapObject for ParserMap {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
 impl Visitable for ParserMap {
     fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
 }
 
+impl Object for ParserObject {}
+impl HeapObject for ParserObject {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
 impl Visitable for ParserObject {
     fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}

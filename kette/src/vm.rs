@@ -1,6 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::{ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Strings, Value};
+use crate::{
+    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Message, Strings, Value,
+};
 
 #[derive(Debug)]
 pub struct SpecialObjects {
@@ -10,6 +12,8 @@ pub struct SpecialObjects {
     pub float_traits: Handle<HeapValue>,
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
+
+    pub message_self: Handle<ByteArray>,
 }
 
 #[derive(Debug)]
@@ -103,6 +107,7 @@ impl SpecialObjects {
             float_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
             true_object: unsafe { Value::zero().as_heap_handle_unchecked() },
             false_object: unsafe { Value::zero().as_heap_handle_unchecked() },
+            message_self: unsafe { Value::zero().as_heap_handle_unchecked().cast() },
         }
     }
 }

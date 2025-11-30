@@ -1,9 +1,9 @@
 use kette::{
-    ExecutionState, ExecutionStateCreateInfo, Executor, HeapCreateInfo, VM, VMCreateInfo, VMThread,
-    VMThreadProxy,
+    ExecutionState, ExecutionStateCreateInfo, Executor, HeapCreateInfo, Parser, VM, VMCreateInfo,
+    VMThread, VMThreadProxy,
 };
 
-const _CODE: &str = r#"
+const CODE: &str = r#"
 5 77 fixnum+ fixnum>utf8-bytes bytearray-println
 "#;
 
@@ -27,4 +27,13 @@ fn main() {
     let main_thread_proxy = VMThreadProxy(main_thread.inner.clone());
 
     let _executor = Executor::new(main_thread_proxy, heap, state);
+
+    let mut parser = Parser::new(CODE.as_bytes());
+
+    // let mut parsed = Vec::new();
+    // while let Some(parse) = parser.parse_next() {
+    //     match parse {
+    //
+    //     }
+    // }
 }

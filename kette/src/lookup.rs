@@ -10,6 +10,7 @@ pub struct Selector<'vm> {
 }
 
 /// used to find and break cycles
+#[derive(Debug)]
 pub struct VisitedLink {
     pub prev: Option<NonNull<Self>>,
     pub value: Value,
