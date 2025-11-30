@@ -1,8 +1,9 @@
 use std::mem;
 
 use crate::{
-    Array, ByteArray, ExecutableMap, SlotMap, SlotObject, Tagged, Value, ValueTag, Visitable,
-    Visitor,
+    ActivationObject, Array, ByteArray, MethodMap, QuotationMap, SlotMap, SlotObject, Tagged,
+    Value, ValueTag, Visitable, Visitor,
+    lookup::{LookupResult, Selector, VisitedLink},
 };
 
 #[repr(u8)]
@@ -18,6 +19,7 @@ pub enum ObjectType {
     Slot = 0b00000,
     Array = 0b00010,
     ByteArray = 0b00011,
+    Activation = 0b0100,
     Max = 0b11111,
 }
 
@@ -28,7 +30,8 @@ pub enum ObjectType {
 pub enum MapType {
     Slot = 0b000,
     // Array = 0b001,
-    Executable = 0b010,
+    Method = 0b100,
+    Quotation = 0b101,
 }
 
 // TODO: in our current garbage collector iteration objects do not move, thus pin does nothing.
@@ -58,7 +61,11 @@ pub const HEADER_FREE: u8 = 0b11111011;
 #[derive(Debug, Copy, Clone, Hash)]
 pub struct Header(u64);
 
-pub trait Object: Sized + Visitable {}
+pub trait Object: Sized + Visitable {
+    fn lookup(&self, selector: Selector<'_>, link: Option<&VisitedLink>) -> LookupResult {
+        unimplemented!("type is not lookupable")
+    }
+}
 
 pub trait PtrSizedObject: Object {
     fn to_ptr_sized(self) -> u64;
@@ -370,7 +377,33 @@ impl FreeLocation {
     }
 }
 
-impl Object for HeapValue {}
+impl Object for HeapValue {
+    fn lookup(&self, selector: Selector, link: Option<&VisitedLink>) -> LookupResult {
+        match self
+            .header
+            .object_type()
+            .expect("maps do not implement lookup, must be object")
+        {
+            ObjectType::Slot => {
+                let slot_object = unsafe { std::mem::transmute::<&HeapValue, &SlotObject>(self) };
+                slot_object.lookup(selector, link)
+            }
+            ObjectType::Array => {
+                let array = unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
+                array.lookup(selector, link)
+            }
+            ObjectType::ByteArray => {
+                let byte_array = unsafe { std::mem::transmute::<&HeapValue, &ByteArray>(self) };
+                byte_array.lookup(selector, link)
+            }
+            ObjectType::Activation => {
+                let activation = unsafe { mem::transmute::<&HeapValue, &ActivationObject>(self) };
+                activation.lookup(selector, link)
+            }
+            _ => unimplemented!("object type not implemented"),
+        }
+    }
+}
 impl HeapObject for HeapValue {
     fn heap_size(&self) -> usize {
         match self.header.kind() {
@@ -465,12 +498,12 @@ impl HeapObject for Map {
                 let map = unsafe { std::mem::transmute::<&Map, &SlotMap>(self) };
                 map.heap_size()
             }
-            // MapType::Array => {
-            //     let map = unsafe { std::mem::transmute::<_, &ArrayMap>(self) };
-            //     map.heap_size()
-            // }
-            MapType::Executable => {
-                let map = unsafe { std::mem::transmute::<&Map, &ExecutableMap>(self) };
+            MapType::Method => {
+                let map = unsafe { std::mem::transmute::<&Map, &MethodMap>(self) };
+                map.heap_size()
+            }
+            MapType::Quotation => {
+                let map = unsafe { std::mem::transmute::<&Map, &QuotationMap>(self) };
                 map.heap_size()
             }
         }
@@ -499,7 +532,14 @@ impl Visitable for Map {
             //     am.visit_edges_mut(visitor);
             // },
             // TODO: nothing to visit until we transform executable map to a slot map
-            Some(MapType::Executable) => (),
+            Some(MapType::Method) => unsafe {
+                let sm: &mut MethodMap = &mut *(self as *mut Map as *mut _);
+                sm.visit_edges_mut(visitor);
+            },
+            Some(MapType::Quotation) => unsafe {
+                let sm: &mut QuotationMap = &mut *(self as *mut Map as *mut _);
+                sm.visit_edges_mut(visitor);
+            },
             None => {
                 panic!("visiting map type that doesnt exist")
             }
@@ -510,7 +550,7 @@ impl Visitable for Map {
     fn visit_edges(&self, visitor: &impl Visitor) {
         match self.header.map_type() {
             Some(MapType::Slot) => unsafe {
-                let sm: &SlotMap = &*(self as *const Map as *const SlotMap);
+                let sm: &SlotMap = &*(self as *const Map as *const _);
                 sm.visit_edges(visitor);
             },
             // Some(MapType::Array) => unsafe {
@@ -518,7 +558,14 @@ impl Visitable for Map {
             //     am.visit_edges(visitor);
             // },
             // TODO: nothing to visit until we transform executable map to a slot map
-            Some(MapType::Executable) => (),
+            Some(MapType::Method) => unsafe {
+                let sm: &MethodMap = &*(self as *const Map as *const _);
+                sm.visit_edges(visitor);
+            },
+            Some(MapType::Quotation) => unsafe {
+                let sm: &QuotationMap = &*(self as *const Map as *const _);
+                sm.visit_edges(visitor);
+            },
             None => {
                 panic!("visiting map type that doesnt exist")
             }

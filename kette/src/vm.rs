@@ -1,15 +1,15 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::{ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, Strings, Value};
+use crate::{ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Strings, Value};
 
 #[derive(Debug)]
 pub struct SpecialObjects {
-    pub bytearray_traits: Handle<Value>,
-    pub array_traits: Handle<Value>,
-    pub fixnum_traits: Handle<Value>,
-    pub float_traits: Handle<Value>,
-    pub true_object: Handle<Value>,
-    pub false_object: Handle<Value>,
+    pub bytearray_traits: Handle<HeapValue>,
+    pub array_traits: Handle<HeapValue>,
+    pub fixnum_traits: Handle<HeapValue>,
+    pub float_traits: Handle<HeapValue>,
+    pub true_object: Handle<HeapValue>,
+    pub false_object: Handle<HeapValue>,
 }
 
 #[derive(Debug)]
@@ -46,8 +46,9 @@ impl VM {
     pub fn new(info: VMCreateInfo) -> Self {
         let heap = Heap::new(info.heap);
 
+        // Safety: we initialize these right after
         let inner = VMShared {
-            specials: SpecialObjects::null(),
+            specials: unsafe { SpecialObjects::null() },
             heap,
             strings: Strings::new(),
         };
@@ -94,14 +95,14 @@ impl VMProxy {
 }
 
 impl SpecialObjects {
-    pub fn null() -> Self {
+    pub unsafe fn null() -> Self {
         Self {
-            bytearray_traits: unsafe { Value::zero().as_handle_unchecked() },
-            array_traits: unsafe { Value::zero().as_handle_unchecked() },
-            fixnum_traits: unsafe { Value::zero().as_handle_unchecked() },
-            float_traits: unsafe { Value::zero().as_handle_unchecked() },
-            true_object: unsafe { Value::zero().as_handle_unchecked() },
-            false_object: unsafe { Value::zero().as_handle_unchecked() },
+            bytearray_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
+            array_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
+            fixnum_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
+            float_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
+            true_object: unsafe { Value::zero().as_heap_handle_unchecked() },
+            false_object: unsafe { Value::zero().as_heap_handle_unchecked() },
         }
     }
 }

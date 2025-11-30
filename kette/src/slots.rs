@@ -1,15 +1,22 @@
-use std::mem;
+use std::{marker::PhantomData, mem};
 
 use crate::{
     ByteArray, Header, HeaderFlags, HeapObject, Map, MapType, Object, ObjectType, Tagged, Value,
     Visitable, Visitor,
 };
-
+///
+/// Data slot: offset to value in object
+/// Const slot: value
+/// Parent slot: constant lookup (static?)
+/// Assignable Parent slot: normal data slot that is also parent
+/// Method slot: method
 #[repr(C)]
 #[derive(Debug)]
-pub struct SlotDescriptor {
+pub struct SlotInfo {
+    /// guaranteed to be interned
     pub name: Tagged<ByteArray>,
-    pub kind: Tagged<Value>,
+    pub metadata: Tagged<usize>,
+    pub userdata: Tagged<usize>,
     pub value: Value,
 }
 
@@ -19,7 +26,7 @@ pub struct SlotMap {
     pub map: Map,
     pub assignable_slots: Tagged<usize>,
     pub total_slots: Tagged<usize>,
-    pub slots: [SlotDescriptor; 0],
+    pub slots: [SlotInfo; 0],
 }
 
 #[repr(C)]
@@ -31,6 +38,8 @@ pub struct SlotObject {
 }
 
 impl SlotMap {
+    pub unsafe fn init_with_data(&mut self, slots: &[SlotInfo]) {}
+
     /// Initialize a slot map
     /// this is unsafe as this is intended to be a mostly internal api
     /// # Safety

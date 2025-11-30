@@ -10,7 +10,9 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{HeapObject, HeapValue, Object, PtrSizedObject, Visitable};
+use crate::{
+    HeapObject, HeapValue, LookupResult, Object, PtrSizedObject, Selector, Visitable, VisitedLink,
+};
 
 #[allow(unused)]
 #[repr(u8)]
@@ -464,7 +466,18 @@ impl<T: PtrSizedObject> From<Tagged<T>> for Handle<Value> {
 }
 
 impl Visitable for Value {}
-impl Object for Value {}
+impl Object for Value {
+    fn lookup(&self, selector: Selector<'_>, link: Option<&VisitedLink>) -> LookupResult {
+        if let Some(_num) = self.as_tagged_fixnum::<i64>() {
+            let traits = selector.vm.specials.fixnum_traits;
+            return traits.lookup(selector, link);
+        }
+
+        // Safety: if its not a fixnum it must be a heap object
+        let object = unsafe { self.as_heap_handle_unchecked() };
+        object.lookup(selector, link)
+    }
+}
 
 impl Visitable for u64 {}
 impl Object for u64 {}

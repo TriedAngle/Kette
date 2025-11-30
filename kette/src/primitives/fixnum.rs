@@ -1,6 +1,6 @@
 use std::ops::Neg;
 
-use crate::{ExecutionResult, IntegerError, PrimitiveContext, Tagged};
+use crate::{ExecutionResult, Handle, IntegerError, PrimitiveContext, Tagged, Value};
 
 // TODO: handle overflows and/or promotion
 
@@ -26,12 +26,7 @@ fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> Executi
     let a = unsafe { ctx.receiver.as_tagged::<i64>() };
     let b = unsafe { ctx.arguments[0].as_tagged::<i64>() };
     match op(ctx, a, b) {
-        Ok(res) => {
-            ctx.result[0] = match res {
-                true => ctx.thread.vm.shared.specials.true_object,
-                false => ctx.thread.vm.shared.specials.false_object,
-            };
-        }
+        Ok(res) => ctx.result[0] = bool_object(ctx, res),
         Err(err) => return ExecutionResult::IntegerError(err),
     }
     ExecutionResult::Normal
@@ -163,19 +158,20 @@ pub fn fixnum_geq(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 pub fn is_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
-    ctx.result[0] = match is_a {
-        true => ctx.thread.vm.shared.specials.true_object,
-        false => ctx.thread.vm.shared.specials.false_object,
-    };
+    ctx.result[0] = bool_object(ctx, is_a);
     ExecutionResult::Normal
 }
 
 pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
     let is_b = ctx.arguments[0].inner().is_fixnum();
-    ctx.result[0] = match is_a && is_b {
-        true => ctx.thread.vm.shared.specials.true_object,
-        false => ctx.thread.vm.shared.specials.false_object,
-    };
+    ctx.result[0] = bool_object(ctx, is_a && is_b);
     ExecutionResult::Normal
+}
+
+fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
+    match cond {
+        true => ctx.thread.vm.shared.specials.true_object.into(),
+        false => ctx.thread.vm.shared.specials.false_object.into(),
+    }
 }

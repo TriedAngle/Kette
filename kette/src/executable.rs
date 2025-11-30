@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::{ByteArray, Header, HeapObject, Map, Object, StackEffect, Tagged, Visitable};
+use crate::{ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged, Visitable};
 
 // TODO: these maps should probably become slot maps,
 // this way we can make methods "real" objects
@@ -8,7 +8,7 @@ use crate::{ByteArray, Header, HeapObject, Map, Object, StackEffect, Tagged, Vis
 #[repr(C)]
 #[derive(Debug)]
 pub struct ExecutableMap {
-    pub map: Map,
+    pub map: SlotMap,
     // TODO: we could directly use Tagged<*mut Code> here probably
     pub code: Tagged<usize>,
 }

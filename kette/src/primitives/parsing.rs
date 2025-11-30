@@ -1,7 +1,4 @@
-use crate::{
-    ByteArray, ExecutionResult, HeapValue, ObjectType, ParsedToken, PrimitiveParserContext, Tagged,
-    Value,
-};
+use crate::{ByteArray, ExecutionResult, ObjectType, ParsedToken, PrimitiveParserContext, Value};
 
 pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
     let p = &mut ctx.parser;
@@ -10,7 +7,7 @@ pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
 
     let Some(token) = p.parse_next() else {
         ctx.state
-            .push(ctx.thread.vm.shared.specials.false_object.inner());
+            .push(ctx.thread.vm.shared.specials.false_object.as_value());
         return ExecutionResult::Normal;
     };
 
@@ -69,7 +66,7 @@ fn parse_until_inner(
 
         // Safety: parse_next must return
         let next = unsafe { state.pop_unchecked() };
-        if next == vm.shared.specials.false_object.inner() {
+        if next == vm.shared.specials.false_object.as_value() {
             return ExecutionResult::Panic(
                 "Illegal: End of Input reached while trying to parse until",
             );
