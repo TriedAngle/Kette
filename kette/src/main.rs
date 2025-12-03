@@ -1,6 +1,6 @@
 use kette::{
     Block, ExecutionState, ExecutionStateInfo, HeapCreateInfo, Instruction, Interpreter, Parser,
-    ThreadProxy, ThreadShared, ThreadState, VM, VMCreateInfo, VMThread,
+    ThreadProxy, ThreadShared, ThreadState, VM, VMCreateInfo, VMThread, primitive_index,
 };
 
 const CODE: &str = r#"
@@ -12,12 +12,14 @@ fn demo_compiled() -> Block {
         instructions: vec![
             Instruction::PushFixnum { value: 10 },
             Instruction::PushFixnum { value: 20 },
-            Instruction::SendNamed { message: "fixnum+" },
-            Instruction::SendNamed {
-                message: "fixnum>utf8-bytes",
+            Instruction::SendPrimitive {
+                id: primitive_index("fixnum+"),
             },
-            Instruction::SendNamed {
-                message: "bytearray-println",
+            Instruction::SendPrimitive {
+                id: primitive_index("fixnum>utf8-bytes"),
+            },
+            Instruction::SendPrimitive {
+                id: primitive_index("bytearray-println"),
             },
         ],
     }
@@ -27,6 +29,7 @@ fn main() {
     let vm = VM::new(VMCreateInfo {
         image: None,
         heap: HeapCreateInfo {
+            size: 1024 * 32 * 2,
             ..Default::default()
         },
     });
@@ -44,14 +47,9 @@ fn main() {
 
     let proxy = vm.new_proxy();
 
-    let interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
+    let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
 
-    // let mut parser = Parser::new(CODE.as_bytes());
-    //
-    // let mut parsed = Vec::new();
-    // while let Some(parse) = parser.parse_next() {
-    //     // match parse {
-    //
-    //     // }
-    // }
+    for instruction in demo_compiled().instructions {
+        interpreter.execute_bytecode(instruction);
+    }
 }

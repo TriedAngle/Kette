@@ -398,6 +398,24 @@ impl<T: HeapObject> From<Handle<T>> for Handle<Value> {
     }
 }
 
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
+        Value::from_fixnum(value)
+    }
+}
+
+impl From<u64> for Value {
+    fn from(value: u64) -> Self {
+        Value::from_u64(value)
+    }
+}
+
+impl From<usize> for Value {
+    fn from(value: usize) -> Self {
+        Value::from_usize(value)
+    }
+}
+
 // this is safe, ptr sized are always valid hadnles
 impl From<i64> for Handle<i64> {
     fn from(value: i64) -> Self {
@@ -415,6 +433,12 @@ impl From<Handle<i64>> for Handle<Value> {
             data: value.0,
             _marker: PhantomData,
         }
+    }
+}
+
+impl From<Handle<Value>> for Value {
+    fn from(value: Handle<Value>) -> Self {
+        value.inner()
     }
 }
 

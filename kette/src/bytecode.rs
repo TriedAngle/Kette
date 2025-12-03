@@ -1,4 +1,4 @@
-use crate::{Handle, Message, Quotation, Tagged, Value};
+use crate::{Handle, Message, PrimitiveMessageIndex, Quotation, Tagged, Value};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
@@ -15,7 +15,10 @@ pub enum Instruction {
     // },
     Return,
 
-    // Debug implementations
+    // Optimization / Testing / Friendly User interface
+    SendPrimitive { id: PrimitiveMessageIndex },
+
+    // Debug / friendly user interface
     SendNamed { message: &'static str },
     SuperSendNamed { message: &'static str },
     DelegatSendeNamed { message: &'static str },

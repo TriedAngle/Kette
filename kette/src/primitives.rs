@@ -58,9 +58,6 @@ pub struct PrimitiveContext<'ex, 'arg> {
     pub vm: &'ex VMProxy,
     pub thread: &'ex ThreadProxy,
     pub heap: &'ex mut HeapProxy,
-    // in normal calls receiver message receiver are the same
-    // but if with super, or delegate they may differ
-    pub message_receiver: Handle<Value>,
     pub receiver: Handle<Value>,
     pub arguments: &'arg [Handle<Value>],
     pub result: &'arg mut [Handle<Value>],
@@ -70,7 +67,6 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     pub fn new(
         interpreter: &'ex mut Interpreter,
         receiver: Handle<Value>,
-        message_receiver: Handle<Value>,
         arguments: &'arg [Handle<Value>],
         result: &'arg mut [Handle<Value>],
     ) -> Self {
@@ -83,11 +79,36 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
             vm,
             thread,
             heap,
-            message_receiver,
             receiver,
             arguments,
             result,
         }
+    }
+
+    pub fn call<'m>(
+        message: &'m PrimitiveMessage,
+        interpreter: &'ex mut Interpreter,
+        receiver: Handle<Value>,
+        arguments: &'arg [Handle<Value>],
+        result: &'arg mut [Handle<Value>],
+    ) -> ExecutionResult {
+        let mut ctx = Self::new(interpreter, receiver, arguments, result);
+
+        (message.ptr)(&mut ctx)
+    }
+}
+
+impl<'m> PrimitiveMessage<'m> {
+    pub fn call<'ex, 'arg>(
+        &'m self,
+        interpreter: &'ex mut Interpreter,
+        receiver: Handle<Value>,
+        arguments: &'arg [Handle<Value>],
+        result: &'arg mut [Handle<Value>],
+    ) -> ExecutionResult {
+        let mut ctx = PrimitiveContext::new(interpreter, receiver, arguments, result);
+
+        (self.ptr)(&mut ctx)
     }
 }
 
@@ -156,8 +177,8 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum-geq", 1, 1, fixnum::fixnum_geq),
     // Bytearrays
     PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
-    PrimitiveMessage::new("bytearray-print", 1, 0, bytearray::bytearray_print),
-    PrimitiveMessage::new("bytearray-println", 1, 0, bytearray::bytearray_println),
+    PrimitiveMessage::new("bytearray-print", 0, 0, bytearray::bytearray_print),
+    PrimitiveMessage::new("bytearray-println", 0, 0, bytearray::bytearray_println),
     // Threads
     PrimitiveMessage::new("<thread-native>", 0, 0, threads::create_native),
     PrimitiveMessage::new("thread-join", 0, 0, threads::join),
@@ -168,6 +189,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
 ];
 
+// TODO: merge this
 pub const PRIMITIVE_PARSERS: &[PrimitiveParser] = &[];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
@@ -175,7 +197,10 @@ pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
     PRIMITIVES[id.0]
 }
 
-pub fn get_primitive_parser(id: PrimitiveParserIndex) -> PrimitiveParser<'static> {
-    debug_assert!(id.0 < PRIMITIVES.len());
-    PRIMITIVE_PARSERS[id.0]
+pub fn primitive_index(name: &str) -> PrimitiveMessageIndex {
+    PRIMITIVES
+        .iter()
+        .position(|prim| prim.name == name)
+        .map(PrimitiveMessageIndex)
+        .expect("Primitive Exists")
 }
