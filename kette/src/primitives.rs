@@ -1,6 +1,6 @@
 use crate::{
-    ExecutionResult, ExecutionState, Executor, Handle, HeapProxy, Parser, ParserRegistry, VMProxy,
-    VMThreadProxy, Value,
+    ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter, Parser, ParserRegistry,
+    ThreadProxy, VMProxy, Value,
 };
 
 mod bytearray;
@@ -55,7 +55,8 @@ impl<'a> PrimitiveParser<'a> {
 
 pub struct PrimitiveContext<'ex, 'arg> {
     pub state: &'ex mut ExecutionState,
-    pub thread: &'ex VMThreadProxy,
+    pub vm: &'ex VMProxy,
+    pub thread: &'ex ThreadProxy,
     pub heap: &'ex mut HeapProxy,
     // in normal calls receiver message receiver are the same
     // but if with super, or delegate they may differ
@@ -67,17 +68,19 @@ pub struct PrimitiveContext<'ex, 'arg> {
 
 impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     pub fn new(
-        executor: &'ex mut Executor,
+        interpreter: &'ex mut Interpreter,
         receiver: Handle<Value>,
         message_receiver: Handle<Value>,
         arguments: &'arg [Handle<Value>],
         result: &'arg mut [Handle<Value>],
     ) -> Self {
-        let state = &mut executor.state;
-        let thread = &executor.thread;
-        let heap = &mut executor.heap;
+        let state = &mut interpreter.state;
+        let vm = &interpreter.vm;
+        let thread = &interpreter.thread;
+        let heap = &mut interpreter.heap;
         Self {
             state,
+            vm,
             thread,
             heap,
             message_receiver,
@@ -90,7 +93,8 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
 
 pub struct PrimitiveParserContext<'ex, 'code> {
     pub state: &'ex mut ExecutionState,
-    pub thread: &'ex VMThreadProxy,
+    pub vm: &'ex VMProxy,
+    pub thread: &'ex ThreadProxy,
     pub heap: &'ex mut HeapProxy,
     pub parser: &'ex mut Parser<'code>,
     pub parsers: &'ex ParserRegistry,
@@ -98,15 +102,17 @@ pub struct PrimitiveParserContext<'ex, 'code> {
 
 impl<'ex, 'code> PrimitiveParserContext<'ex, 'code> {
     pub fn new(
-        executor: &'ex mut Executor,
+        interpreter: &'ex mut Interpreter,
         parser: &'ex mut Parser<'code>,
         parsers: &'ex ParserRegistry,
     ) -> Self {
-        let state = &mut executor.state;
-        let thread = &executor.thread;
-        let heap = &mut executor.heap;
+        let state = &mut interpreter.state;
+        let thread = &interpreter.thread;
+        let heap = &mut interpreter.heap;
+        let vm = &interpreter.vm;
         Self {
             state,
+            vm,
             thread,
             heap,
             parser,

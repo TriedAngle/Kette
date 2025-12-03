@@ -14,6 +14,11 @@ pub enum Instruction {
     //     value: f64,
     // },
     Return,
+
+    // Debug implementations
+    SendNamed { message: &'static str },
+    SuperSendNamed { message: &'static str },
+    DelegatSendeNamed { message: &'static str },
 }
 
 // TODO: replace instructions to actual byte instructions

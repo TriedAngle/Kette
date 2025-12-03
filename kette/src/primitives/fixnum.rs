@@ -171,7 +171,7 @@ pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
     match cond {
-        true => ctx.thread.vm.shared.specials.true_object.into(),
-        false => ctx.thread.vm.shared.specials.false_object.into(),
+        true => ctx.vm.shared.specials.true_object.into(),
+        false => ctx.vm.shared.specials.false_object.into(),
     }
 }

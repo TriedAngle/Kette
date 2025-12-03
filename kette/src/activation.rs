@@ -13,6 +13,7 @@ pub enum ActivationType {
 pub struct Activation {
     pub object: ActivationObject,
     pub ty: ActivationType,
+    pub stack_ptr: usize,
 }
 
 pub struct ActivationObject {
@@ -97,8 +98,17 @@ impl ActivationStack {
         self.0.last_mut().expect("top most exists")
     }
 
-    pub fn new_activation(&mut self, ty: ActivationType, object: ActivationObject) {
-        let activation = Activation { object, ty };
+    pub fn new_activation(
+        &mut self,
+        ty: ActivationType,
+        object: ActivationObject,
+        stack_ptr: usize,
+    ) {
+        let activation = Activation {
+            object,
+            ty,
+            stack_ptr,
+        };
 
         self.0.push(activation);
     }

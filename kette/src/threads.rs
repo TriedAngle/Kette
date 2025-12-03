@@ -9,8 +9,8 @@ use std::{
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
-    Handle, Header, HeapObject, HeapProxy, NativeParker, Object, Tagged, VMProxy, Visitable,
-    executor::{ExecutionState, Executor},
+    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter, NativeParker, Object,
+    Tagged, VMProxy, Visitable,
 };
 
 #[derive(Debug)]
@@ -44,18 +44,17 @@ impl Object for ThreadObject {}
 impl HeapObject for ThreadObject {}
 
 #[derive(Debug)]
-pub struct VMThreadShared {
+pub struct ThreadShared {
     pub info: Mutex<ThreadInfo>,
-    pub vm: VMProxy,
     pub parker: NativeParker,
     pub user_thread: Handle<ThreadObject>,
 }
 
 #[derive(Debug)]
-pub struct VMThreadProxy(pub Arc<VMThreadShared>);
+pub struct ThreadProxy(pub Arc<ThreadShared>);
 
-impl Deref for VMThreadProxy {
-    type Target = VMThreadShared;
+impl Deref for ThreadProxy {
+    type Target = ThreadShared;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -63,7 +62,7 @@ impl Deref for VMThreadProxy {
 
 #[repr(C)]
 pub struct VMThread {
-    pub inner: Arc<VMThreadShared>,
+    pub inner: Arc<ThreadShared>,
     pub native: Option<Arc<NativeThread>>,
     pub carrier: Option<Arc<VMThread>>,
 }
@@ -77,8 +76,8 @@ pub struct NativeThread {
 unsafe impl Send for NativeThread {}
 unsafe impl Sync for NativeThread {}
 
-impl VMThreadShared {
-    pub fn new(vm: VMProxy, user_thread: Handle<ThreadObject>, is_virtual: bool) -> Arc<Self> {
+impl ThreadShared {
+    pub fn new(user_thread: Handle<ThreadObject>, is_virtual: bool) -> Arc<Self> {
         let info = ThreadInfo {
             state: ThreadState::Created,
             is_vm: true,
@@ -88,7 +87,6 @@ impl VMThreadShared {
         let parker = NativeParker::new();
         Arc::new(Self {
             info: Mutex::new(info),
-            vm,
             parker,
             user_thread,
         })
@@ -96,10 +94,10 @@ impl VMThreadShared {
 }
 
 impl VMThread {
-    pub fn new_main(vm: VMProxy) -> Self {
+    pub fn new_main() -> Self {
         // SAFETY: we will not dereference this
         let thread_obj = unsafe { Handle::null() };
-        let shared = VMThreadShared::new(vm, thread_obj, false);
+        let shared = ThreadShared::new(thread_obj, false);
         shared.info.lock().thread_id = 0;
 
         Self {
@@ -114,8 +112,8 @@ impl VMThread {
         user_thread: Handle<ThreadObject>,
         executor: ExecutionState,
     ) -> Self {
-        let shared = VMThreadShared::new(vm, user_thread, false);
-        let proxy = VMThreadProxy(shared.clone());
+        let shared = ThreadShared::new(user_thread, false);
+        let proxy = ThreadProxy(shared.clone());
         let native = NativeThread::spawn(move || {
             {
                 let mut info = proxy.info.lock();
@@ -123,8 +121,8 @@ impl VMThread {
                 let id: u64 = unsafe { std::mem::transmute(thread_id) };
                 info.thread_id = id;
             }
-            let executor = Executor::new(proxy, heap, executor);
-            executor.run();
+            let _interpreter = Interpreter::new(vm, proxy, heap, executor);
+            // executor.run();
         });
         Self {
             inner: shared,
@@ -134,12 +132,8 @@ impl VMThread {
     }
 
     // a virtual spawns without a native nor a carrier, the carrier is set when running.
-    pub fn new_virtual(
-        vm: VMProxy,
-        user_thread: Handle<ThreadObject>,
-        _executor: ExecutionState,
-    ) -> Self {
-        let shared = VMThreadShared::new(vm, user_thread, true);
+    pub fn new_virtual(user_thread: Handle<ThreadObject>, _executor: ExecutionState) -> Self {
+        let shared = ThreadShared::new(user_thread, true);
         Self {
             inner: shared,
             native: None,

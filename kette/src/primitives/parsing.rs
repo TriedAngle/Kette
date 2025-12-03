@@ -7,7 +7,7 @@ pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
 
     let Some(token) = p.parse_next() else {
         ctx.state
-            .push(ctx.thread.vm.shared.specials.false_object.as_value());
+            .push(ctx.vm.shared.specials.false_object.as_value());
         return ExecutionResult::Normal;
     };
 
@@ -20,7 +20,7 @@ pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
         }
         ParsedToken::Identifier(token) => {
             let s = p.get_token_string(token);
-            let ba = ctx.thread.vm.intern_string(s, heap);
+            let ba = ctx.vm.intern_string(s, heap);
             let value = ba.as_value();
             state.push(value);
         }
@@ -62,7 +62,7 @@ fn parse_until_inner(
 
     while parse_next(ctx) != ExecutionResult::Normal {
         let state = &mut ctx.state;
-        let vm = &ctx.thread.vm;
+        let vm = &ctx.vm;
 
         // Safety: parse_next must return
         let next = unsafe { state.pop_unchecked() };

@@ -1,56 +1,39 @@
-use crate::{HeapProxy, VMThreadProxy, Value};
+use crate::Value;
 
 // TODO: automate their construction and give them mostly fixed sizes
 // we don't need a full Vector in most cases, we often don't want bounds check in fast path
 #[derive(Debug)]
 pub struct ExecutionState {
     pub stack: Vec<Value>,
+    pub depth: usize,
     pub return_stack: Vec<Value>,
     // pub handlers:
 }
 
-#[derive(Debug)]
-pub struct Executor {
-    pub thread: VMThreadProxy,
-    pub heap: HeapProxy,
-    pub state: ExecutionState,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum IntegerError {
-    Overflow,
-    DivisionByZero,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ExecutionResult {
-    Normal,
-    IntegerError(IntegerError),
-    Yield,
-    Panic(&'static str),
-}
-
 #[derive(Debug, Clone, Default)]
-pub struct ExecutionStateCreateInfo {
+pub struct ExecutionStateInfo {
     pub stack_size: usize,
     pub return_stack_size: usize,
 }
 
 impl ExecutionState {
-    pub fn new(info: &ExecutionStateCreateInfo) -> Self {
+    pub fn new(info: &ExecutionStateInfo) -> Self {
         let stack = Vec::with_capacity(info.stack_size);
         let return_stack = Vec::with_capacity(info.return_stack_size);
         Self {
             stack,
+            depth: 0,
             return_stack,
         }
     }
 
     pub fn push(&mut self, value: Value) {
+        self.depth += 1;
         self.stack.push(value);
     }
 
     pub fn pop(&mut self) -> Option<Value> {
+        self.depth -= 1;
         self.stack.pop()
     }
 
@@ -91,12 +74,13 @@ impl ExecutionState {
     }
 
     pub fn depth(&self) -> usize {
-        self.stack.len()
+        self.depth
     }
 
     /// # Safety
     /// caller must make sure that at least one element is in the stack
     pub unsafe fn pop_unchecked(&mut self) -> Value {
+        self.depth -= 1;
         let new_len = self.stack.len() - 1;
         // Safety: depth check
         unsafe { self.stack.set_len(new_len) };
@@ -147,16 +131,4 @@ impl ExecutionState {
         let value = unsafe { self.pop_return_unchecked() };
         self.push(value);
     }
-}
-
-impl Executor {
-    pub fn new(thread: VMThreadProxy, heap: HeapProxy, state: ExecutionState) -> Self {
-        Self {
-            thread,
-            heap,
-            state,
-        }
-    }
-
-    pub fn run(self) {}
 }
