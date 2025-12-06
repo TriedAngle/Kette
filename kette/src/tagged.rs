@@ -39,6 +39,11 @@ pub struct Tagged<T: Object> {
 }
 
 /// GC safe Reference to a HeapObject or an SMI
+///
+/// Wraps a **Tagged** value (not a raw pointer).
+/// It guarantees that the underlying object is kept alive by the GC.
+///
+/// Memory Layout: Identical to `Value` and `Tagged<T>`.
 #[derive(Debug)]
 pub struct Handle<T: Object> {
     data: u64,
@@ -131,7 +136,7 @@ impl Value {
 
     /// Create a handle from a value
     /// # Safety
-    /// Caller must make sure Value doesn't get allocated
+    /// Caller must make sure Value doesn't get allocated/moved without GC knowing
     pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
         Handle {
             data: self.0,
@@ -141,7 +146,7 @@ impl Value {
 
     /// Create a handle from a value
     /// # Safety
-    /// Caller must make sure Value doesn't get allocated
+    /// Caller must make sure Value doesn't get allocated/moved without GC knowing
     pub unsafe fn as_heap_handle_unchecked(self) -> Handle<HeapValue> {
         Handle {
             data: self.0,
@@ -248,10 +253,10 @@ impl<T: HeapObject> Tagged<T> {
     /// the GC must be made aware of the Object or prevented from running
     #[inline]
     pub unsafe fn promote_to_handle(self) -> Handle<T> {
-        let untagged = self.data & !(ValueTag::Reference as u64);
-        let ptr = untagged as *mut T;
-        // SAFETY: valid pointer
-        unsafe { Handle::from_ptr(ptr) }
+        Handle {
+            data: self.data,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -294,10 +299,32 @@ impl<T: Object> Handle<T> {
     /// # Safety
     /// the pointer must be a valid heap object
     pub unsafe fn from_ptr(ptr: *mut T) -> Self {
+        let value = ptr as u64;
+        debug_assert_eq!(
+            value & OBECT_TAG_MASK,
+            0,
+            "pointer must be aligned so low 2 bits are free"
+        );
+        let tagged = value | (ValueTag::Reference as u64);
         Self {
-            data: ptr as _,
+            data: tagged,
             _marker: PhantomData,
         }
+    }
+
+    /// Convert to a Tagged<T>.
+    ///
+    /// This is safe because Handle guarantees the object exists.
+    /// However, the resulting Tagged<T> does not prevent GC.
+    #[inline]
+    pub fn as_tagged<U: Object>(self) -> Tagged<U> {
+        unsafe { Tagged::new_raw(self.data) }
+    }
+
+    /// Returns the internal tagged raw bits
+    #[inline]
+    pub fn raw_tagged_u64(self) -> u64 {
+        self.data
     }
 }
 
@@ -310,39 +337,39 @@ impl<T: Object> PartialEq for Handle<T> {
 impl<T: HeapObject> Handle<T> {
     #[inline]
     pub fn as_object(self) -> Tagged<T> {
-        let raw = self.data;
-        let tagged = raw | (ValueTag::Reference as u64);
-        unsafe { Tagged::new_raw(tagged) }
+        unsafe { Tagged::new_raw(self.data) }
     }
 
     #[inline]
     pub fn as_value(self) -> Value {
-        self.as_object().as_value()
+        Value(self.data)
     }
 
     #[inline]
     pub fn as_value_handle(self) -> Handle<Value> {
-        let raw = self.data;
-        let tagged = raw | (ValueTag::Reference as u64);
         Handle::<Value> {
-            data: tagged,
+            data: self.data,
             _marker: PhantomData,
         }
     }
 
     #[inline]
     pub fn as_heap_value_handle(self) -> Handle<HeapValue> {
-        let raw = self.data;
-        let tagged = raw | (ValueTag::Reference as u64);
         Handle::<HeapValue> {
-            data: tagged,
+            data: self.data,
             _marker: PhantomData,
         }
     }
 
     #[inline]
     pub fn as_ptr(self) -> *mut T {
-        self.data as _
+        debug_assert_eq!(
+            self.data & OBECT_TAG_MASK,
+            ValueTag::Reference as u64,
+            "Handle data must be tagged as a Reference to be converted to a pointer"
+        );
+        let untagged = self.data & !(ValueTag::Reference as u64);
+        untagged as _
     }
 
     /// Create a null handle
@@ -350,8 +377,10 @@ impl<T: HeapObject> Handle<T> {
     /// only for initialization or super special cases
     /// must make sure to not dereference this
     pub unsafe fn null() -> Handle<T> {
+        // We tag it as a reference, so it looks like a valid (but null) tagged pointer
+        let null_tagged = (0u64) | (ValueTag::Reference as u64);
         Self {
-            data: 0,
+            data: null_tagged,
             _marker: PhantomData,
         }
     }
@@ -359,10 +388,8 @@ impl<T: HeapObject> Handle<T> {
 
 impl<T: PtrSizedObject> Handle<T> {
     pub fn as_fixnum(self) -> Tagged<T> {
-        let raw = self.data;
-        let tagged = raw << 1;
-        // SAFETY: we are typesafe and do the transformation
-        unsafe { Tagged::new_raw(tagged) }
+        // Handle is already tagged.
+        unsafe { Tagged::new_raw(self.data) }
     }
 }
 
@@ -371,10 +398,8 @@ impl Handle<Value> {
     /// # Safety
     /// Value is already tagged,
     /// but Tagged<T> does not protect against GC invocations
-    pub unsafe fn as_tagged<T: Object>(self) -> Tagged<T> {
-        let tagged = self.data;
-        // SAFETY: this is not safe, use at own caution
-        unsafe { Tagged::new_raw(tagged) }
+    pub unsafe fn into_tagged<T: Object>(self) -> Tagged<T> {
+        unsafe { Tagged::new_raw(self.data) }
     }
 
     /// convert to a fixnum
@@ -382,13 +407,20 @@ impl Handle<Value> {
     /// caller must make sure that the Value is representing a T: PtrSizedObject
     /// and not for example a pointer or header
     pub unsafe fn as_fixnum<T: PtrSizedObject + From<Tagged<T>>>(self) -> T {
-        // SAFETY: this is not safe, use at own caution
-        let tagged = unsafe { self.as_tagged() };
+        let tagged = unsafe { Tagged::new_raw(self.data) };
         T::from(tagged)
     }
 
     pub fn inner(self) -> Value {
         Value(self.data)
+    }
+
+    pub fn is_fixnum(&self) -> bool {
+        self.data & 0b1 == ValueTag::Fixnum as u64
+    }
+
+    pub fn is_object(&self) -> bool {
+        self.data & OBECT_TAG_MASK == ValueTag::Reference as u64
     }
 }
 
@@ -416,11 +448,13 @@ impl From<usize> for Value {
     }
 }
 
-// this is safe, ptr sized are always valid hadnles
+// this is safe, ptr sized are always valid handles
 impl From<i64> for Handle<i64> {
     fn from(value: i64) -> Self {
+        let casted = value.cast_unsigned();
+        let tagged = casted << 1;
         Handle {
-            data: value.cast_unsigned(),
+            data: tagged,
             _marker: PhantomData,
         }
     }
@@ -428,9 +462,8 @@ impl From<i64> for Handle<i64> {
 
 impl From<Handle<i64>> for Handle<Value> {
     fn from(value: Handle<i64>) -> Handle<Value> {
-        let value = Value::from_u64(value.data);
         Handle {
-            data: value.0,
+            data: value.data,
             _marker: PhantomData,
         }
     }
@@ -442,14 +475,6 @@ impl From<Handle<Value>> for Value {
     }
 }
 
-// TODO-RUST: why does this not work?
-// impl<T: PtrSizedObject> From<Tagged<T>> for T {
-//     #[inline]
-//     fn from(value: Tagged<T>) -> Self {
-//         let raw= value.raw();
-//         Self::from_ptr_sized(raw)
-//     }
-// }
 impl<T: PtrSizedObject> From<Tagged<T>> for usize {
     #[inline]
     fn from(value: Tagged<T>) -> Self {
@@ -478,15 +503,16 @@ impl<T: PtrSizedObject> From<Tagged<T>> for i64 {
 impl<T: HeapObject> Deref for Handle<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        // SAFETY: we know that Handle is always valid
+        // SAFETY: we know that Handle is always valid and kept alive by GC.
+        // We must strip the tag to get the raw pointer.
         unsafe { &*self.as_ptr() }
     }
 }
 
 impl<T: HeapObject> DerefMut for Handle<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: we know that Handle is always valid
-        // of course, we must take thread safety into account here on the user side
+        // SAFETY: Handle is valid.
+        // Thread safety is the user's responsibility.
         unsafe { &mut *self.as_ptr() }
     }
 }
@@ -684,27 +710,27 @@ mod value_tests {
     }
 
     #[test]
-    fn handle_from_fixnum_and_into_handle_value() {
-        let h_i: Handle<i64> = Handle::from(321i64);
-        let h_v: Handle<Value> = h_i.into();
-        let v = h_v.inner();
-        assert!(v.is_fixnum());
-
-        let t_fix = v
-            .as_tagged_fixnum::<i64>()
-            .expect("should be tagged fixnum");
-        assert_eq!(t_fix.as_i64(), 321);
-    }
-
-    #[test]
-    fn handle_object_as_object_and_deref() {
+    fn handle_stores_tagged_data_internally() {
         let mut boxed = boxed_test_obj(10, 20);
         let ptr = &mut *boxed as *mut TestObj;
 
         let handle: Handle<TestObj> = unsafe { Handle::from_ptr(ptr) };
-        let tagged = handle.as_object();
-        assert_eq!(tagged.data & OBECT_TAG_MASK, ValueTag::Reference as u64);
 
+        // The internal data should have the reference tag bit (0b01) set
+        assert_eq!(handle.data & OBECT_TAG_MASK, ValueTag::Reference as u64);
+
+        // Masking it should equal the original pointer
+        assert_eq!(handle.data & !OBECT_TAG_MASK, ptr as u64);
+    }
+
+    #[test]
+    fn handle_object_deref_masks_tag_correctly() {
+        let mut boxed = boxed_test_obj(10, 20);
+        let ptr = &mut *boxed as *mut TestObj;
+
+        let handle: Handle<TestObj> = unsafe { Handle::from_ptr(ptr) };
+
+        // Dereferencing involves masking the tag, then reading memory
         assert_eq!(handle.n, 10);
         assert_eq!(handle.m, 20);
 
@@ -719,14 +745,32 @@ mod value_tests {
     }
 
     #[test]
+    fn handle_value_retains_fixnum_tag() {
+        // Create an i64 handle
+        let h_i: Handle<i64> = Handle::from(321i64);
+        // Cast to Value handle
+        let h_v: Handle<Value> = h_i.into();
+
+        // The handle data should look like a fixnum (tag 0)
+        assert!(h_v.is_fixnum());
+        assert!(!h_v.is_object());
+
+        // Recover value
+        let v = h_v.inner();
+        assert_eq!(v.as_tagged_fixnum::<i64>().unwrap().as_i64(), 321);
+    }
+
+    #[test]
     fn handle_cast_between_object_and_value() {
         let mut boxed = boxed_test_obj(5, 6);
         let ptr = &mut *boxed as *mut TestObj;
 
         let h_obj: Handle<TestObj> = unsafe { Handle::from_ptr(ptr) };
         let h_val: Handle<Value> = unsafe { h_obj.cast::<Value>() };
-        let h_obj_back: Handle<TestObj> = unsafe { h_val.cast::<TestObj>() };
 
+        assert!(h_val.is_object());
+
+        let h_obj_back: Handle<TestObj> = unsafe { h_val.cast::<TestObj>() };
         assert_eq!(h_obj.as_ptr(), h_obj_back.as_ptr());
     }
 

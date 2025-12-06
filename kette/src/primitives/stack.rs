@@ -35,7 +35,7 @@ macro_rules! shuffle {
     };
 }
 
-shuffle! { 
+shuffle! {
     dup: x -- x x ;
 
     drop: x -- ;
@@ -65,12 +65,10 @@ shuffle! {
     swapd: x y z -- y x z ;
 }
 
-
 /// removes x, calls q, puts x again
 /// x q -- x
 pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [x, q] = inputs(ctx);
-
 
     // TODO: do executable map check and execute.
     // TODO: add callstack once added

@@ -44,6 +44,7 @@ impl Interpreter {
             Instruction::PushFixnum { value } => self.state.push(value.into()),
             Instruction::SendPrimitive { id } => {
                 let message = get_primitive(id);
+                println!("call: {:?}", message.name);
                 let receiver = self.state.pop().expect("must have item");
                 let receiver = unsafe { receiver.as_handle_unchecked() };
                 let inputs = unsafe { self.state.stack_pop_slice_unchecked(message.inputs) };
@@ -67,5 +68,7 @@ impl Interpreter {
             // Instruction::Send { message } => self.state.push(value.into()),
             _ => unimplemented!(),
         }
+
+        println!("stack: {:?}", self.state.depth);
     }
 }

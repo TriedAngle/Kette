@@ -26,6 +26,12 @@ fn demo_compiled() -> Block {
             Instruction::SendPrimitive {
                 id: primitive_index("bytearray-println"),
             },
+            Instruction::SendPrimitive {
+                id: primitive_index("fixnum>utf8-bytes"),
+            },
+            Instruction::SendPrimitive {
+                id: primitive_index("bytearray-println"),
+            },
         ],
     }
 }

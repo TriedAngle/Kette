@@ -11,8 +11,8 @@ type Fixnum2Op = fn(
 ) -> Result<Tagged<i64>, IntegerError>;
 
 fn fixnum_binop(ctx: &mut PrimitiveContext<'_, '_>, op: Fixnum2Op) -> ExecutionResult {
-    let a = unsafe { ctx.receiver.as_tagged::<i64>() };
-    let b = unsafe { ctx.inputs[0].as_tagged::<i64>() };
+    let a = ctx.receiver.as_tagged::<i64>();
+    let b = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = res.into(),
         Err(err) => return ExecutionResult::IntegerError(err),
@@ -23,8 +23,8 @@ fn fixnum_binop(ctx: &mut PrimitiveContext<'_, '_>, op: Fixnum2Op) -> ExecutionR
 type Fixnum2LogicOp =
     fn(ctx: &mut PrimitiveContext, a: Tagged<i64>, b: Tagged<i64>) -> Result<bool, IntegerError>;
 fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> ExecutionResult {
-    let a = unsafe { ctx.receiver.as_tagged::<i64>() };
-    let b = unsafe { ctx.inputs[0].as_tagged::<i64>() };
+    let a = ctx.receiver.as_tagged::<i64>();
+    let b = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = bool_object(ctx, res),
         Err(err) => return ExecutionResult::IntegerError(err),

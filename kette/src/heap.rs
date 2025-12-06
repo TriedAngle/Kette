@@ -429,10 +429,10 @@ impl HeapShared {
 }
 
 impl HeapProxy {
-    fn tlab_alloc(&mut self, size: usize, ptype: PageType) -> Option<NonNull<u8>> {
+    fn tlab_alloc(&mut self, size: usize, align: usize, ptype: PageType) -> Option<NonNull<u8>> {
         match ptype {
-            PageType::Boxed => self.boxed_tlab.allocate(size),
-            PageType::Unboxed => self.unboxed_tlab.allocate(size),
+            PageType::Boxed => self.boxed_tlab.allocate(size, align),
+            PageType::Unboxed => self.unboxed_tlab.allocate(size, align),
         }
     }
 
@@ -476,11 +476,19 @@ impl HeapProxy {
         true
     }
 
-    pub fn allocate_raw(&mut self, size: usize, ptype: PageType) -> NonNull<u8> {
+    pub fn allocate_raw(&mut self, size: usize, align: usize, ptype: PageType) -> NonNull<u8> {
         if self.maybe_wait_epoch() {
             self.exchange_tlab(ptype);
         }
 
+        // Fast path: TLAB allocation
+        if let Some(allocation) = self.tlab_alloc(size, align, ptype) {
+            return allocation;
+        }
+
+        // Slow path: Large object or TLAB refresh needed
+
+        // Check if object is too large for TLAB
         if size > self.heap.settings.tlab_size {
             let info = AllocSearchInfo {
                 size,
@@ -488,57 +496,64 @@ impl HeapProxy {
                 generation: 0,
                 allow_split: true,
             };
+
+            // NOTE: The underlying HeapShared::allocate works on page granularity or gap filling.
+            // New pages are always page-aligned (4KB+), which satisfies most object alignments.
+            // If the allocator fills a gap in an existing page, strict alignment isn't guaranteed
+            // by AllocSearchInfo currently.
+            // However, since size > tlab_size, it typically allocates a fresh Large Page
+            // or a significant chunk which is usually aligned enough for standard types.
             let res = self.heap.allocate(info);
             return res.start;
         }
 
-        if let Some(allocation) = self.tlab_alloc(size, ptype) {
-            return allocation;
-        }
-
+        // TLAB exhausted, get a new one
         self.exchange_tlab(ptype);
 
-        self.tlab_alloc(size, ptype)
-            .expect("Tlab allocation must work")
+        // Retry allocation in new TLAB
+        self.tlab_alloc(size, align, ptype)
+            .expect("Tlab allocation must work after refresh for object smaller than Tlab")
     }
 
     pub fn allocate_boxed_raw(&mut self, size: usize) -> NonNull<u8> {
-        self.allocate_raw(size, PageType::Boxed)
+        // Boxed objects (pointers) usually require machine word alignment
+        self.allocate_raw(size, mem::align_of::<usize>(), PageType::Boxed)
     }
 
-    pub fn allocate_unboxed_raw(&mut self, size: usize) -> NonNull<u8> {
-        // TODO: implement alignment if necessary
-        self.allocate_raw(size, PageType::Unboxed)
+    /// Allocates unboxed raw memory.
+    pub fn allocate_unboxed_raw(&mut self, size: usize, align: usize) -> NonNull<u8> {
+        let align = if align == 0 { 1 } else { align };
+        self.allocate_raw(size, align, PageType::Unboxed)
     }
 
-    /// Allocate a raw unitialized bytearray
-    /// # Safety
-    /// caller must ensure initialization
     pub unsafe fn allocate_bytearray_raw(&mut self, size: usize) -> NonNull<ByteArray> {
-        let size = mem::size_of::<ByteArray>() + size;
-        self.allocate_unboxed_raw(size).cast::<ByteArray>()
+        // We allocate enough space for the struct header + the data payload
+        let total_size = mem::size_of::<ByteArray>() + size;
+
+        // Ensure the ByteArray struct itself is aligned correctly.
+        // The data payload (u8) has alignment 1, so the struct alignment is the constraint.
+        let align = mem::align_of::<ByteArray>();
+
+        self.allocate_unboxed_raw(total_size, align)
+            .cast::<ByteArray>()
     }
 
+    // allocate_bytearray and allocate_bytearray_data remain mostly the same,
+    // relying on the updated allocate_bytearray_raw
     pub fn allocate_bytearray(&mut self, size: usize) -> Tagged<ByteArray> {
-        // Safety: we will initialize here
         let mut raw = unsafe { self.allocate_bytearray_raw(size) };
-        // Safety: we just allocated this
         let ba = unsafe { raw.as_mut() };
-        // Safety: correct size allocation
         unsafe { (*ba).init_zeroed(size) };
-
         Tagged::new_ptr(raw.as_ptr())
     }
 
     pub fn allocate_bytearray_data(&mut self, data: &[u8]) -> Tagged<ByteArray> {
         let size = data.len();
-        // Safety: we will initialize here
         let mut raw = unsafe { self.allocate_bytearray_raw(size) };
-        // Safety: we just allocated this
         let ba = unsafe { raw.as_mut() };
-        // Safety: correct size allocation
         unsafe { (*ba).init_data(data) };
-
+        // Debug print
+        // println!("ba: {:?}, {:?}", ba as *const ByteArray, std::str::from_utf8(ba.as_bytes()));
         Tagged::new_ptr(raw.as_ptr())
     }
 
@@ -578,10 +593,23 @@ impl Tlab {
         }
     }
 
-    pub fn allocate(&mut self, size: usize) -> Option<NonNull<u8>> {
-        if self.bump + size <= self.size {
-            let ptr = unsafe { self.start.as_ptr().add(self.bump) };
-            self.bump += size;
+    pub fn allocate(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
+        let start_ptr = self.start.as_ptr();
+        let current_ptr = unsafe { start_ptr.add(self.bump) };
+
+        let offset = current_ptr.align_offset(align);
+
+        if offset == usize::MAX {
+            return None;
+        }
+
+        let padded_size = size + offset;
+
+        if self.bump + padded_size <= self.size {
+            let ptr = unsafe { current_ptr.add(offset) };
+
+            self.bump += padded_size;
+
             return Some(unsafe { NonNull::new_unchecked(ptr) });
         }
         None
@@ -758,7 +786,7 @@ mod tests {
             );
         }
 
-        let _b = p.allocate_unboxed_raw(24);
+        let _b = p.allocate_unboxed_raw(24, 8);
 
         {
             let pages = p.heap.pages.borrow();
@@ -893,10 +921,10 @@ mod tests {
         }
 
         // Do the same for unboxed to ensure independent TLABs
-        let _u1 = p.allocate_unboxed_raw(32);
+        let _u1 = p.allocate_unboxed_raw(32, 0);
         assert_eq!(p.unboxed_tlab.bump, 32);
         // skip tlab allocation as this is bigger than the tlab, tlab stays the same
-        let _u2 = p.allocate_unboxed_raw(200);
+        let _u2 = p.allocate_unboxed_raw(200, 0);
         assert_eq!(p.unboxed_tlab.bump, 32);
 
         // Ensure the unboxed page is marked unboxed
@@ -941,7 +969,7 @@ mod tests {
                     let ptr = if (t + i) % 2 == 0 {
                         proxy.allocate_boxed_raw(size)
                     } else {
-                        proxy.allocate_unboxed_raw(size)
+                        proxy.allocate_unboxed_raw(size, 8)
                     };
                     let addr = ptr.as_ptr() as usize;
                     let mut set = seen_clone.lock().unwrap();
