@@ -59,16 +59,16 @@ pub struct PrimitiveContext<'ex, 'arg> {
     pub thread: &'ex ThreadProxy,
     pub heap: &'ex mut HeapProxy,
     pub receiver: Handle<Value>,
-    pub arguments: &'arg [Handle<Value>],
-    pub result: &'arg mut [Handle<Value>],
+    pub inputs: &'arg [Handle<Value>],
+    pub outputs: &'arg mut [Handle<Value>],
 }
 
 impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     pub fn new(
         interpreter: &'ex mut Interpreter,
         receiver: Handle<Value>,
-        arguments: &'arg [Handle<Value>],
-        result: &'arg mut [Handle<Value>],
+        inputs: &'arg [Handle<Value>],
+        outputs: &'arg mut [Handle<Value>],
     ) -> Self {
         let state = &mut interpreter.state;
         let vm = &interpreter.vm;
@@ -80,8 +80,8 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
             thread,
             heap,
             receiver,
-            arguments,
-            result,
+            inputs,
+            outputs,
         }
     }
 
@@ -89,10 +89,10 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
         message: &'m PrimitiveMessage,
         interpreter: &'ex mut Interpreter,
         receiver: Handle<Value>,
-        arguments: &'arg [Handle<Value>],
-        result: &'arg mut [Handle<Value>],
+        inputs: &'arg [Handle<Value>],
+        outputs: &'arg mut [Handle<Value>],
     ) -> ExecutionResult {
-        let mut ctx = Self::new(interpreter, receiver, arguments, result);
+        let mut ctx = Self::new(interpreter, receiver, inputs, outputs);
 
         (message.ptr)(&mut ctx)
     }
@@ -103,10 +103,10 @@ impl<'m> PrimitiveMessage<'m> {
         &'m self,
         interpreter: &'ex mut Interpreter,
         receiver: Handle<Value>,
-        arguments: &'arg [Handle<Value>],
-        result: &'arg mut [Handle<Value>],
+        inputs: &'arg [Handle<Value>],
+        outputs: &'arg mut [Handle<Value>],
     ) -> ExecutionResult {
-        let mut ctx = PrimitiveContext::new(interpreter, receiver, arguments, result);
+        let mut ctx = PrimitiveContext::new(interpreter, receiver, inputs, outputs);
 
         (self.ptr)(&mut ctx)
     }

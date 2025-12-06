@@ -1,235 +1,81 @@
-use crate::{ExecutionResult, PrimitiveContext};
+use crate::{ExecutionResult, Handle, PrimitiveContext, Value};
 
-/// x -- x x
-pub fn dup(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
+/// TODO: change this all into input + output format
 
-    if s.depth() < 1 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let x = unsafe { s.stack_get_nth_unchecked(0) };
-    s.push(x);
-
-    ExecutionResult::Normal
+fn inputs<const N: usize>(ctx: &mut PrimitiveContext) -> [Handle<Value>; N] {
+    // SAFETY: this requires a bounds check befor, but I am the boundcer
+    unsafe { *(ctx.inputs.as_ptr() as *const [Handle<Value>; N]) }
 }
 
-/// x --
-pub fn drop(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 1 {
-        return ExecutionResult::Panic("Datastack underflow");
+fn outputs<const N: usize>(ctx: &mut PrimitiveContext, values: [Handle<Value>; N]) {
+    // SAFETY: this requires a bounds check before, but I am the boundcer
+    unsafe {
+        std::ptr::copy_nonoverlapping(values.as_ptr(), ctx.outputs.as_mut_ptr(), N);
     }
-
-    // Safety: depth check
-    let _x = unsafe { s.pop_unchecked() };
-
-    ExecutionResult::Normal
 }
 
-/// x y --
-pub fn drop2(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
+macro_rules! shuffle {
+    (
+        $(
+            $(#[$doc:meta])* $name:ident : $($in:ident)* -- $($out:ident)*
+        );* $(;)?
+    ) => {
+        $(
+            $(#[$doc])*
+            pub fn $name(ctx: &mut PrimitiveContext) -> ExecutionResult {
+                const N: usize = [$(stringify!($in)),*].len();
 
-    if s.depth() < 2 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
+                #[allow(unused)]
+                let [$($in),*] = inputs::<N>(ctx);
+                outputs(ctx, [$($out),*]);
 
-    // Safety: depth check
-    let _x = unsafe { s.pop_unchecked() };
-    let _y = unsafe { s.pop_unchecked() };
-
-    ExecutionResult::Normal
+                ExecutionResult::Normal
+            }
+        )*
+    };
 }
 
-/// x y z --
-pub fn drop3(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
+shuffle! { 
+    dup: x -- x x ;
 
-    if s.depth() < 3 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
+    drop: x -- ;
 
-    // Safety: depth check
-    let _z = unsafe { s.pop_unchecked() };
-    let _y = unsafe { s.pop_unchecked() };
-    let _x = unsafe { s.pop_unchecked() };
+    drop2: x y -- ;
 
-    ExecutionResult::Normal
+    drop3: x y z -- ;
+
+    swap: x y -- y x ;
+
+    over: x y -- x y x ;
+
+    /// rotates top three elements backwards
+    rot: x y z -- y z x ;
+
+    /// rotates top three elements forwards
+    neg_rot: x y z -- z x y ;
+
+    spin: x y z -- z y x;
+
+    dupd: x y -- x x y ;
+
+    dropd: x y -- y ;
+
+    dropd2: x y z -- z ;
+
+    swapd: x y z -- y x z ;
 }
 
-/// x y -- y x
-pub fn swap(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 2 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let y = unsafe { s.pop_unchecked() };
-    let x = unsafe { s.pop_unchecked() };
-    s.push(y);
-    s.push(x);
-    ExecutionResult::Normal
-}
-
-/// a b -- a b a
-pub fn over(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 2 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let x = unsafe { s.stack_get_nth_unchecked(1) };
-    s.push(x);
-
-    ExecutionResult::Normal
-}
-
-/// x y z -- y z x
-pub fn rot(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 3 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let x = unsafe { s.stack_get_nth_unchecked(2) };
-    let y = unsafe { s.stack_get_nth_unchecked(1) };
-    let z = unsafe { s.stack_get_nth_unchecked(0) };
-    unsafe { s.stack_set_nth_unchecked(2, y) };
-    unsafe { s.stack_set_nth_unchecked(1, z) };
-    unsafe { s.stack_set_nth_unchecked(0, x) };
-
-    ExecutionResult::Normal
-}
-
-/// x y z -- z x y
-pub fn neg_rot(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 3 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let x = unsafe { s.stack_get_nth_unchecked(2) };
-    let y = unsafe { s.stack_get_nth_unchecked(1) };
-    let z = unsafe { s.stack_get_nth_unchecked(0) };
-    unsafe { s.stack_set_nth_unchecked(2, z) };
-    unsafe { s.stack_set_nth_unchecked(1, x) };
-    unsafe { s.stack_set_nth_unchecked(0, y) };
-
-    ExecutionResult::Normal
-}
-
-/// x y z -- z y x
-pub fn spin(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 3 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let x = unsafe { s.stack_get_nth_unchecked(2) };
-    let z = unsafe { s.stack_get_nth_unchecked(0) };
-    unsafe { s.stack_set_nth_unchecked(2, z) };
-    unsafe { s.stack_set_nth_unchecked(0, x) };
-
-    ExecutionResult::Normal
-}
-
-/// x y -- x x y
-pub fn dupd(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 2 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let y = unsafe { s.pop_unchecked() };
-    let x = unsafe { s.stack_get_nth_unchecked(0) };
-
-    s.push(x);
-    s.push(y);
-
-    ExecutionResult::Normal
-}
-
-/// x y -- y
-pub fn dropd(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 2 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let y = unsafe { s.pop_unchecked() };
-    let _x = unsafe { s.pop_unchecked() };
-
-    s.push(y);
-
-    ExecutionResult::Normal
-}
-
-/// x y z -- z
-pub fn dropd2(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 3 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let z = unsafe { s.pop_unchecked() };
-    let _y = unsafe { s.pop_unchecked() };
-    let _x = unsafe { s.pop_unchecked() };
-
-    s.push(z);
-
-    ExecutionResult::Normal
-}
-
-/// x y z -- y x z
-pub fn swapd(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
-
-    if s.depth() < 3 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
-    // Safety: depth check
-    let y = unsafe { s.stack_get_nth_unchecked(1) };
-    let x = unsafe { s.stack_get_nth_unchecked(2) };
-    unsafe { s.stack_set_nth_unchecked(1, x) };
-    unsafe { s.stack_set_nth_unchecked(2, y) };
-    ExecutionResult::Normal
-}
 
 /// removes x, calls q, puts x again
 /// x q -- x
 pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let s = &mut ctx.state;
+    let [x, q] = inputs(ctx);
 
-    if s.depth() < 2 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
 
     // TODO: do executable map check and execute.
     // TODO: add callstack once added
-    // Safety: depth check
-    let _q = unsafe { s.pop_unchecked() };
-    unsafe { s.stack_to_return_unchecked() };
-    println!("CALL NOT IMPLEMENTED");
-    unsafe { s.return_to_stack_unchecked() };
+    ctx.state.push_return(x.into());
+    println!("TRYING TO CALL {q:?}, BUT CALL NOT IMPLEMENTED");
+    let _ = ctx.state.pop_return();
     ExecutionResult::Normal
 }

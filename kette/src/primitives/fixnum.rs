@@ -12,9 +12,9 @@ type Fixnum2Op = fn(
 
 fn fixnum_binop(ctx: &mut PrimitiveContext<'_, '_>, op: Fixnum2Op) -> ExecutionResult {
     let a = unsafe { ctx.receiver.as_tagged::<i64>() };
-    let b = unsafe { ctx.arguments[0].as_tagged::<i64>() };
+    let b = unsafe { ctx.inputs[0].as_tagged::<i64>() };
     match op(ctx, a, b) {
-        Ok(res) => ctx.result[0] = res.into(),
+        Ok(res) => ctx.outputs[0] = res.into(),
         Err(err) => return ExecutionResult::IntegerError(err),
     }
     ExecutionResult::Normal
@@ -24,9 +24,9 @@ type Fixnum2LogicOp =
     fn(ctx: &mut PrimitiveContext, a: Tagged<i64>, b: Tagged<i64>) -> Result<bool, IntegerError>;
 fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> ExecutionResult {
     let a = unsafe { ctx.receiver.as_tagged::<i64>() };
-    let b = unsafe { ctx.arguments[0].as_tagged::<i64>() };
+    let b = unsafe { ctx.inputs[0].as_tagged::<i64>() };
     match op(ctx, a, b) {
-        Ok(res) => ctx.result[0] = bool_object(ctx, res),
+        Ok(res) => ctx.outputs[0] = bool_object(ctx, res),
         Err(err) => return ExecutionResult::IntegerError(err),
     }
     ExecutionResult::Normal
@@ -86,7 +86,7 @@ pub fn fixnum_neg(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
     let neg = value.neg();
     let res = Tagged::<i64>::new_value(neg);
-    ctx.result[0] = res.into();
+    ctx.outputs[0] = res.into();
     ExecutionResult::Normal
 }
 
@@ -158,14 +158,14 @@ pub fn fixnum_geq(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 pub fn is_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
-    ctx.result[0] = bool_object(ctx, is_a);
+    ctx.outputs[0] = bool_object(ctx, is_a);
     ExecutionResult::Normal
 }
 
 pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let is_a = ctx.receiver.inner().is_fixnum();
-    let is_b = ctx.arguments[0].inner().is_fixnum();
-    ctx.result[0] = bool_object(ctx, is_a && is_b);
+    let is_b = ctx.inputs[0].inner().is_fixnum();
+    ctx.outputs[0] = bool_object(ctx, is_a && is_b);
     ExecutionResult::Normal
 }
 

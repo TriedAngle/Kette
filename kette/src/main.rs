@@ -11,6 +11,11 @@ fn demo_compiled() -> Block {
     Block {
         instructions: vec![
             Instruction::PushFixnum { value: 10 },
+            Instruction::PushFixnum { value: 60 },
+            Instruction::PushFixnum { value: 0 }, // TODO: implement stack object, this is a dummy
+            Instruction::SendPrimitive {
+                id: primitive_index("swap"),
+            },
             Instruction::PushFixnum { value: 20 },
             Instruction::SendPrimitive {
                 id: primitive_index("fixnum+"),
@@ -34,6 +39,7 @@ fn main() {
         },
     });
 
+    // TODO: use consistent naming
     let main_proxy = vm.new_proxy();
     let heap = main_proxy.shared.heap.create_proxy();
 
@@ -42,6 +48,7 @@ fn main() {
         return_stack_size: 128,
     });
 
+    // TODO: make create function for this.
     let main_thread = VMThread::new_main();
     let thread_proxy = ThreadProxy(main_thread.inner);
 
