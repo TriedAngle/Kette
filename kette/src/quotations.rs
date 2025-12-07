@@ -30,6 +30,8 @@ impl QuotationMap {
         unimplemented!("TODO")
     }
 
+    /// # Safety
+    /// must be correctly allocated
     pub unsafe fn init(&mut self, body: Tagged<Array>) {
         self.body = body;
     }
@@ -44,10 +46,12 @@ impl HeapObject for QuotationMap {
 
 impl Visitable for QuotationMap {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
+        // SAFETY: safe if correctly allocated
         let body = unsafe { self.body.as_ref() };
         body.visit_edges(visitor);
     }
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
+        // SAFETY: safe if correctly allocated
         let body = unsafe { self.body.as_mut() };
         body.visit_edges_mut(visitor);
     }
@@ -70,6 +74,7 @@ impl HeapObject for Quotation {
 
 impl Visitable for Quotation {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
+        // SAFETY: safe if correctly allocated
         let map = unsafe { self.map.as_ref() };
         map.visit_edges(visitor);
     }

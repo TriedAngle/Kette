@@ -25,13 +25,7 @@ impl PrimitiveMessageIndex {
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone)]
-pub struct PrimitiveParserIndex(usize);
-
 pub type PrimitiveFunction = fn(&mut PrimitiveContext) -> ExecutionResult;
-pub type PrimitiveParserFunction =
-    fn(&mut PrimitiveParserContext) -> ExecutionResult;
 
 // self does not count as input
 // e.g. `+` => `3 5 +` has inputs: 1
@@ -59,14 +53,18 @@ impl<'a> PrimitiveMessage<'a> {
     }
 }
 
+// TODO: remove this unused
+#[allow(unused)]
 #[derive(Debug, Copy, Clone)]
 pub struct PrimitiveParser<'a> {
     pub name: &'a str,
-    pub ptr: PrimitiveParserFunction,
+    pub ptr: PrimitiveFunction,
 }
 
 impl<'a> PrimitiveParser<'a> {
-    pub const fn new(name: &'a str, ptr: PrimitiveParserFunction) -> Self {
+    // TODO: remove this unused
+    #[allow(unused)]
+    pub const fn new(name: &'a str, ptr: PrimitiveFunction) -> Self {
         Self { name, ptr }
     }
 }
@@ -195,8 +193,8 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum-gt", 1, 1, fixnum::fixnum_gt),
     PrimitiveMessage::new("fixnum-leq", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum-geq", 1, 1, fixnum::fixnum_geq),
-    // Bytearrays
     PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
+    // Bytearrays
     PrimitiveMessage::new("bytearray-print", 0, 0, bytearray::bytearray_print),
     PrimitiveMessage::new("bytearray-println", 0, 0, bytearray::bytearray_println),
     // Threads
@@ -208,9 +206,6 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("park-until", 2, 0, threads::park_until),
     PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
 ];
-
-// TODO: merge this
-pub const PRIMITIVE_PARSERS: &[PrimitiveParser] = &[];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
     debug_assert!(id.0 < PRIMITIVES.len());

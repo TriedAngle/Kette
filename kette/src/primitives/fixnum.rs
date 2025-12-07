@@ -94,6 +94,7 @@ pub fn fixnum_mod(ctx: &mut PrimitiveContext) -> ExecutionResult {
 }
 
 pub fn fixnum_neg(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: receiver must be valid fixnum
     let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
     let neg = value.neg();
     let res = Tagged::<i64>::new_value(neg);

@@ -1,3 +1,6 @@
+// TODO: remove this unused
+#![allow(unused)]
+
 use crate::{ExecutionResult, PrimitiveContext};
 
 pub fn create_native(ctx: &mut PrimitiveContext) -> ExecutionResult {

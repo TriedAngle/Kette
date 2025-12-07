@@ -1,3 +1,6 @@
+// TODO: remove this unused
+#![allow(unused)]
+
 use crate::{
     ByteArray, ExecutionResult, ObjectType, ParsedToken,
     PrimitiveParserContext, Value,
@@ -38,10 +41,11 @@ pub fn parse_until(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
     }
 
     let mut accum = Vec::new();
-    // Safety: depth check
+    // SAFETY: depth check
     let end = unsafe { ctx.state.pop_unchecked() };
-    // Safety: heap deletion will be paused while parsing and requires ByteArray
+    // SAFETY: heap deletion will be paused while parsing and requires ByteArray
     let end = unsafe { end.as_handle_unchecked().cast::<ByteArray>() };
+    // SAFETY: source must be utf8 encoded
     let end = unsafe { str::from_utf8_unchecked(end.as_bytes()) };
 
     let res = parse_until_inner(ctx, end, &mut accum);
@@ -55,8 +59,8 @@ pub fn parse_until(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
 
 fn parse_until_inner(
     ctx: &mut PrimitiveParserContext,
-    end: &str,
-    accum: &mut Vec<Value>,
+    _end: &str,
+    _accum: &mut [Value],
 ) -> ExecutionResult {
     let state = &mut ctx.state;
     if state.depth() < 2 {
@@ -67,7 +71,7 @@ fn parse_until_inner(
         let state = &mut ctx.state;
         let vm = &ctx.vm;
 
-        // Safety: parse_next must return
+        // SAFETY: parse_next must return
         let next = unsafe { state.pop_unchecked() };
         if next == vm.shared.specials.false_object.as_value() {
             return ExecutionResult::Panic(
@@ -80,10 +84,10 @@ fn parse_until_inner(
             continue;
         }
 
-        // Safety: heap deletion will be paused while parsing;
+        // SAFETY: heap deletion will be paused while parsing;
         let handle = unsafe { next.as_heap_handle_unchecked() };
 
-        // Safety: checked
+        // SAFETY: checked
         if unsafe { handle.header.object_type().unwrap_unchecked() }
             != ObjectType::ByteArray
         {
@@ -91,10 +95,10 @@ fn parse_until_inner(
             continue;
         }
 
-        // Safety: checked
+        // SAFETY: checked
         let ba = unsafe { handle.cast::<ByteArray>() };
         let bytes = ba.as_bytes();
-        // Safety: when parsing we can be sure this is valid utf8
+        // SAFETY: when parsing we can be sure this is valid utf8
         let name = unsafe { str::from_utf8_unchecked(bytes) };
 
         if let Some(_parser) = ctx.parsers.get(name) {

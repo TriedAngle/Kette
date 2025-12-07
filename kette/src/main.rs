@@ -4,7 +4,7 @@ use kette::{
     primitive_index,
 };
 
-const CODE: &str = r#"
+const _CODE: &str = r#"
 5 77 fixnum+ fixnum>utf8-bytes bytearray-println
 "#;
 

@@ -1,7 +1,7 @@
 use crate::{
-    ActivationStack, ByteArray, ExecutionState, Handle, HeapProxy, Instruction,
-    LookupResult, Object, PrimitiveContext, PrimitiveMessageIndex, Selector,
-    ThreadProxy, VMProxy, Value, get_primitive, object, slots::SlotTags,
+    ActivationStack, ExecutionState, Handle, HeapProxy, Instruction,
+    LookupResult, PrimitiveMessageIndex, Selector, ThreadProxy, VMProxy, Value,
+    get_primitive, slots::SlotTags,
 };
 
 pub struct Interpreter {
@@ -59,6 +59,7 @@ impl Interpreter {
                 // SAFETY: map must be valid here
                 let map_ref = unsafe { map.as_ref() };
                 let slot_count = map_ref.assignable_slots_count();
+                // SAFETY: not safe yet, TODO: depth check
                 let slots =
                     unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
                 let obj = self.heap.allocate_slot_object(map, slots);
@@ -101,23 +102,31 @@ impl Interpreter {
     ) -> ExecutionResult {
         let message = get_primitive(id);
         println!("primitive call: {:?}", message.name);
+        // SAFETY: not safe yet, TOOD: depth check
         let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
+        // the initialization is guaranted after the call
         let mut outputs = Vec::with_capacity(message.outputs);
-        unsafe { outputs.set_len(message.outputs) };
+        // SAFETY: allocated with this size
+        #[allow(clippy::uninit_vec)]
+        unsafe {
+            outputs.set_len(message.outputs)
+        };
         let res = message.call(
             self,
             receiver,
-            unsafe { std::mem::transmute(inputs.as_slice()) },
+            // SAFETY: same memory layout, same type, no gc here
+            unsafe {
+                std::mem::transmute::<&[Value], &[Handle<Value>]>(
+                    inputs.as_slice(),
+                )
+            },
             &mut outputs,
         );
 
-        match res {
-            ExecutionResult::Normal => {
-                outputs
-                    .into_iter()
-                    .for_each(|out| self.state.push(out.into()));
-            }
-            _ => (),
+        if res == ExecutionResult::Normal {
+            outputs
+                .into_iter()
+                .for_each(|out| self.state.push(out.into()));
         }
 
         res
@@ -134,7 +143,7 @@ impl Interpreter {
                 .expect("valid utf8 message")
         );
 
-        let res = receiver.inner().lookup(selector, None);
+        let res = selector.lookup_object(&receiver.inner());
 
         let slot = match res {
             LookupResult::Found { slot, .. } => slot,

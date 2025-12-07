@@ -118,6 +118,12 @@ pub struct ParserRegistry {
     inner: RwLock<HashMap<String, Handle<ParserObject>, ahash::RandomState>>,
 }
 
+impl Default for ParserRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParserRegistry {
     pub fn new() -> Self {
         Self {

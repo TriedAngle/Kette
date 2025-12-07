@@ -21,6 +21,9 @@ mod unix {
 
     pub const MAP_FAILED: isize = -1;
 
+    /// posix mmap and munmap
+    /// # Safety
+    /// see valid mmap and munmap usage online
     unsafe extern "C" {
         pub fn mmap(
             addr: *mut c_void,
@@ -34,8 +37,12 @@ mod unix {
         pub fn munmap(addr: *mut c_void, length: usize) -> i32;
     }
 
+    /// posix memory allocation using mmap
+    /// # Safety
+    /// null must be checked
     #[inline]
     pub unsafe fn anonymous_mmap(len: usize) -> *mut u8 {
+        // SAFETY: safe if contract holds
         let p = unsafe {
             mmap(
                 core::ptr::null_mut(),
@@ -53,8 +60,12 @@ mod unix {
         }
     }
 
+    /// posix memory deallocation using munmap
+    /// # Safety
+    /// must be allocated by mmmap
     #[inline]
     pub unsafe fn anonymous_munmap(ptr: *mut u8, len: usize) {
+        // SAFETY: safe if contract holds
         let _ = unsafe { munmap(ptr.cast(), len) };
     }
 }
@@ -62,11 +73,13 @@ mod unix {
 pub const PAGE_SIZE: usize = 4096;
 
 pub fn map_memory(size: usize) -> Option<NonNull<u8>> {
+    // SAFETY: this is safe
     let ptr = unsafe { unix::anonymous_mmap(size) };
     NonNull::new(ptr)
 }
 
 pub fn unmap_memory(ptr: NonNull<u8>, size: usize) {
+    // SAFETY: ptr must be from mmap allocation
     unsafe { unix::anonymous_munmap(ptr.as_ptr(), size) };
 }
 

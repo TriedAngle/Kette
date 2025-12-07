@@ -1,8 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Message,
-    SlotHelper, SlotTags, Strings, Value,
+    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, SlotHelper,
+    SlotTags, Strings, Value,
 };
 
 #[derive(Debug)]
@@ -212,7 +212,7 @@ impl VMProxy {
         self.shared.strings.get(s, heap)
     }
 
-    pub fn specials<'a>(&'a self) -> &'a SpecialObjects {
+    pub fn specials(&self) -> &SpecialObjects {
         &self.shared.specials
     }
 }
@@ -222,27 +222,18 @@ impl SpecialObjects {
     /// # Safety:
     /// must be initialized before usage
     pub unsafe fn null() -> Self {
-        Self {
-            // SAFETY: we initialize later, this is for simplicity
-            bytearray_traits: unsafe {
-                Value::zero().as_heap_handle_unchecked()
-            },
-            // SAFETY: we initialize later, this is for simplicity
-            array_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
-            // SAFETY: we initialize later, this is for simplicity
-            fixnum_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
-            // SAFETY: we initialize later, this is for simplicity
-            float_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
-            // SAFETY: we initialize later, this is for simplicity
-            true_object: unsafe { Value::zero().as_heap_handle_unchecked() },
-            // SAFETY: we initialize later, this is for simplicity
-            false_object: unsafe { Value::zero().as_heap_handle_unchecked() },
-            // SAFETY: we initialize later, this is for simplicity
-            stack_object: unsafe { Value::zero().as_heap_handle_unchecked() },
-            // SAFETY: we initialize later, this is for simplicity
-            message_self: unsafe {
-                Value::zero().as_heap_handle_unchecked().cast()
-            },
+        // SAFETY: we initialize later, this is for simplicity
+        unsafe {
+            Self {
+                bytearray_traits: Value::zero().as_heap_handle_unchecked(),
+                array_traits: Value::zero().as_heap_handle_unchecked(),
+                fixnum_traits: Value::zero().as_heap_handle_unchecked(),
+                float_traits: Value::zero().as_heap_handle_unchecked(),
+                true_object: Value::zero().as_heap_handle_unchecked(),
+                false_object: Value::zero().as_heap_handle_unchecked(),
+                stack_object: Value::zero().as_heap_handle_unchecked(),
+                message_self: Value::zero().as_heap_handle_unchecked().cast(),
+            }
         }
     }
 }

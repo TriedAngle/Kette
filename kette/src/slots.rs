@@ -4,8 +4,8 @@ use bitflags::bitflags;
 
 use crate::{
     ByteArray, Header, HeaderFlags, HeapObject, LookupResult, Map, MapType,
-    Object, ObjectType, PrimitiveMessageIndex, Selector, Tagged, Value,
-    Visitable, VisitedLink, Visitor, get_primitive, primitive_index,
+    Object, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink,
+    Visitor, primitive_index,
 };
 
 bitflags! {
@@ -81,7 +81,9 @@ impl SlotDescriptor {
 }
 
 impl SlotMap {
-    // will go through the slots
+    /// initialize slot map with data
+    /// # Safety
+    /// must be allocated with correct size
     pub unsafe fn init_with_data(&mut self, slots: &[SlotDescriptor]) {
         let mut slots = slots.to_vec();
         // a > b => b, a
@@ -104,6 +106,7 @@ impl SlotMap {
 
         let total_slots = slots.len();
 
+        // SAFETY: safe if allocation is correctly sized
         unsafe {
             ptr::copy_nonoverlapping(
                 slots.as_ptr(),
@@ -124,6 +127,7 @@ impl SlotMap {
     pub unsafe fn init(&mut self, assignable_slots: usize, total_slots: usize) {
         self.assignable_slots = assignable_slots.into();
         self.total_slots = total_slots.into();
+        // SAFETY: safe if contract holds
         unsafe { self.map.init(MapType::Slot) };
     }
 
@@ -168,6 +172,10 @@ impl SlotMap {
 }
 
 impl SlotObject {
+    /// # Safety
+    /// object must be allocated with correct size
+    /// # Panics
+    /// data length must match assignable slot count of map
     pub unsafe fn init_with_data(
         &mut self,
         map: Tagged<SlotMap>,
@@ -231,6 +239,7 @@ impl SlotObject {
     #[inline]
     pub fn get_slot(&self, index: usize) -> Option<Value> {
         if index < self.assignable_slots() {
+            // SAFETY: checked
             Some(unsafe { self.slots_ptr().add(index).read() })
         } else {
             None
@@ -240,6 +249,7 @@ impl SlotObject {
     #[inline]
     pub fn set_slot(&mut self, index: usize, value: Value) -> bool {
         if index < self.assignable_slots() {
+            // SAFETY: checked
             unsafe { self.slots_mut_ptr().add(index).write(value) };
             true
         } else {
@@ -252,6 +262,7 @@ impl SlotObject {
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
     pub unsafe fn get_slot_unchecked(&self, index: usize) -> Value {
+        // SAFETY: safe if contract holds
         unsafe { self.slots_ptr().add(index).read() }
     }
 
@@ -260,6 +271,7 @@ impl SlotObject {
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
     pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {
+        // SAFETY: safe if contract holds
         unsafe { self.slots_mut_ptr().add(index).write(value) };
     }
 

@@ -1,3 +1,4 @@
+use core::str;
 use std::{mem, ptr};
 
 use crate::{
@@ -72,8 +73,9 @@ impl ByteArray {
         unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), len) }
     }
 
-    pub fn as_utf8(&self) -> Result<&str, ()> {
-        str::from_utf8(self.as_bytes()).map_err(|_| ())
+    /// convert bytearray to utf8
+    pub fn as_utf8(&self) -> Result<&str, str::Utf8Error> {
+        str::from_utf8(self.as_bytes())
     }
 }
 

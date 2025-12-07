@@ -26,6 +26,10 @@ pub struct ActivationObject {
 pub struct ActivationStack(Vec<Activation>);
 
 impl ActivationObject {
+    /// # Safety
+    /// must all be valid ojects and correctly sized allocated
+    /// # Panics
+    /// arguments must have same length as map requires
     pub unsafe fn init(
         &mut self,
         receiver: Value,
@@ -61,12 +65,12 @@ impl ActivationObject {
     }
 
     #[inline]
-    fn slots_ptr(&self) -> *const Value {
+    pub fn slots_ptr(&self) -> *const Value {
         self.slots.as_ptr()
     }
 
     #[inline]
-    fn slots_mut_ptr(&mut self) -> *mut Value {
+    pub fn slots_mut_ptr(&mut self) -> *mut Value {
         self.slots.as_mut_ptr()
     }
 
@@ -98,11 +102,11 @@ impl ActivationStack {
         self.0.pop().expect("popping activation")
     }
 
-    pub fn current<'a>(&'a self) -> &'a Activation {
+    pub fn current(&self) -> &Activation {
         self.0.last().expect("top most exists")
     }
 
-    pub fn current_mut<'a>(&'a mut self) -> &'a mut Activation {
+    pub fn current_mut(&mut self) -> &mut Activation {
         self.0.last_mut().expect("top most exists")
     }
 
@@ -122,6 +126,12 @@ impl ActivationStack {
     }
 }
 
+impl Default for ActivationStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Visitable for ActivationObject {}
 
 impl Object for ActivationObject {
@@ -137,6 +147,7 @@ impl Object for ActivationObject {
 
 impl HeapObject for ActivationObject {
     fn heap_size(&self) -> usize {
+        // SAFETY: map must exist
         let map = unsafe { self.map.as_ref() };
         let slot_count = map.map.assignable_slots_count();
         mem::size_of::<Self>() + slot_count * mem::size_of::<Value>()

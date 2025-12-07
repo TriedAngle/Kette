@@ -73,18 +73,21 @@ impl Array {
     #[inline]
     pub fn fields(&self) -> &[Value] {
         let len = self.size();
+        // SAFETY: safe
         unsafe { std::slice::from_raw_parts(self.fields_ptr(), len) }
     }
 
     #[inline]
     pub fn fields_mut(&mut self) -> &mut [Value] {
         let len = self.size();
+        // SAFETY: safe
         unsafe { std::slice::from_raw_parts_mut(self.fields_mut_ptr(), len) }
     }
 
     #[inline]
     pub fn get(&self, index: usize) -> Option<Value> {
         if index < self.size() {
+            // SAFETY: checked
             Some(unsafe { self.fields_ptr().add(index).read() })
         } else {
             None
@@ -94,6 +97,7 @@ impl Array {
     #[inline]
     pub fn set(&mut self, index: usize, value: Value) -> bool {
         if index < self.size() {
+            // SAFETY: checked
             unsafe { self.fields_mut_ptr().add(index).write(value) };
             true
         } else {
@@ -105,6 +109,7 @@ impl Array {
     /// Caller must ensure `index < len()`.
     #[inline]
     pub unsafe fn get_unchecked(&self, index: usize) -> Value {
+        // SAFETY: safe if contract holds
         unsafe { self.fields_ptr().add(index).read() }
     }
 
@@ -112,6 +117,7 @@ impl Array {
     /// Caller must ensure `index < len()`.
     #[inline]
     pub unsafe fn set_unchecked(&mut self, index: usize, value: Value) {
+        // SAFETY: safe if contract holds
         unsafe { self.fields_mut_ptr().add(index).write(value) };
     }
 }

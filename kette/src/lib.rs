@@ -41,8 +41,7 @@ pub use parker::NativeParker;
 pub use parser::{ParsedToken, Parser, ParserRegistry, Token};
 pub use primitives::{
     PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex,
-    PrimitiveParserContext, PrimitiveParserFunction, get_primitive,
-    primitive_index,
+    PrimitiveParserContext, get_primitive, primitive_index,
 };
 pub use quotations::{Quotation, QuotationMap};
 pub use slots::{SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags};

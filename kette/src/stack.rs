@@ -20,7 +20,9 @@ impl ExecutionState {
     pub fn new(info: &ExecutionStateInfo) -> Self {
         let mut stack = Vec::with_capacity(info.stack_size);
         let mut return_stack = Vec::with_capacity(info.return_stack_size);
+        // SAFETY: same value as capacity
         unsafe { stack.set_len(info.stack_size) };
+        // SAFETY: same value as capacity
         unsafe { return_stack.set_len(info.return_stack_size) };
         Self {
             stack,
@@ -86,7 +88,7 @@ impl ExecutionState {
     /// caller must make sure that at least one element is in the stack
     pub unsafe fn pop_unchecked(&mut self) -> Value {
         self.depth -= 1;
-        // Safety: depth check
+        // SAFETY: depth check
         unsafe { self.stack.as_ptr().add(self.depth).read() }
     }
 
@@ -96,7 +98,7 @@ impl ExecutionState {
     pub unsafe fn stack_get_nth_unchecked(&self, n: usize) -> Value {
         let top_idx = self.depth;
         let idx = top_idx - n;
-        // Safety: depth check
+        // SAFETY: depth check
         unsafe { self.stack.as_ptr().add(idx).read() }
     }
 
@@ -106,6 +108,7 @@ impl ExecutionState {
     pub unsafe fn stack_set_nth_unchecked(&mut self, n: usize, value: Value) {
         let top_idx = self.stack.len() - 1;
         let idx = top_idx - n;
+        // SAFETY: safe if contract holds
         unsafe { self.stack.as_mut_ptr().add(idx).write(value) }
     }
 
@@ -113,7 +116,9 @@ impl ExecutionState {
     /// caller must make sure that at least one element is in the return stack
     pub unsafe fn pop_return_unchecked(&mut self) -> Value {
         let new_len = self.return_stack.len() - 1;
+        // SAFETY: safe if contract holds
         unsafe { self.return_stack.set_len(new_len) };
+        // SAFETY: safe if contract holds
         unsafe { self.return_stack.as_ptr().add(new_len).read() }
     }
 
@@ -121,7 +126,7 @@ impl ExecutionState {
     /// # Safety
     /// caller must make sure that at least 1 element is in the stack
     pub unsafe fn stack_to_return_unchecked(&mut self) {
-        // Safety: depth check
+        // SAFETY: depth check
         let value = unsafe { self.pop_unchecked() };
         self.push_return(value);
     }
@@ -130,7 +135,7 @@ impl ExecutionState {
     /// # Safety
     /// caller must make sure that at least 1 element is in the return stack
     pub unsafe fn return_to_stack_unchecked(&mut self) {
-        // Safety: depth check
+        // SAFETY: depth check
         let value = unsafe { self.pop_return_unchecked() };
         self.push(value);
     }
@@ -173,16 +178,19 @@ impl ExecutionState {
     /// Caller must ensure that self.depth >= n.
     pub unsafe fn stack_peek_slice_unchecked(&self, n: usize) -> &[Value] {
         let start = self.depth - n;
+        // SAFETY: safe if contract holds
         unsafe { self.stack.get_unchecked(start..self.depth) }
     }
 
     /// Returns a slice of the top n elements and decrements the depth
     /// # Safety
-    /// Caller must ensure that self.depth >= n.
+    /// - Caller must ensure that self.depth >= n.
+    /// - The values may get overriden on pushing to the stack
     pub unsafe fn stack_pop_slice_unchecked(&mut self, n: usize) -> &[Value] {
         let start = self.depth - n;
         let depth = self.depth;
         self.depth -= n;
+        // SAFETY: safe if contract holds
         unsafe { self.stack.get_unchecked(start..depth) }
     }
 
@@ -193,6 +201,7 @@ impl ExecutionState {
         let start = self.depth - n;
         let end = self.depth;
 
+        // SAFETY: safe if contract holds
         let result = unsafe { self.stack.get_unchecked(start..end).to_vec() };
 
         self.depth -= n;

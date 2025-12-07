@@ -151,17 +151,23 @@ pub struct HeapProxy {
     handle_set: Box<HandleSet>,
 }
 
+// SAFETY: this is safe
 unsafe impl Send for HeapProxy {}
+// SAFETY: this is safe
 unsafe impl Sync for HeapProxy {}
 
+// SAFETY: this is safe
 unsafe impl Send for HeapShared {}
+// SAFETY: this is safe
 unsafe impl Sync for HeapShared {}
 
 impl Heap {
     pub fn new(info: HeapCreateInfo) -> Self {
         let size = info.size;
         let start = map_memory(size).unwrap();
+        // SAFETY: just allocted
         let end_ptr = unsafe { start.as_ptr().add(size) };
+        // SAFETY: just allocted
         let end = unsafe { NonNull::new_unchecked(end_ptr) };
 
         let mut settings = HeapSettings::default();
@@ -188,6 +194,7 @@ impl Heap {
         let epoch = self.inner.epoch.load(Ordering::Relaxed);
 
         let mut handle_set = Box::new(HandleSet::new());
+        // SAFETY: just allocated
         let nonnull = unsafe { NonNull::new_unchecked(handle_set.as_mut()) };
         {
             let mut handles = heap.handles.write();
@@ -290,6 +297,8 @@ impl HeapShared {
                 remaining_size -= self.settings.page_size;
                 // I am not sure if this can ever fall below 0
             }
+
+            // SAFETY: correctly allocated
             start_ptr = unsafe {
                 self.start
                     .as_ptr()
@@ -303,6 +312,7 @@ impl HeapShared {
                 page.bytes_used += total_size as u16;
                 page.flags = flags;
                 page.generation = search.generation;
+                // SAFETY: correctly allocated
                 start_ptr = unsafe {
                     self.start
                         .as_ptr()
@@ -319,6 +329,7 @@ impl HeapShared {
                 split_page.flags = flags;
                 split_page.generation = search.generation;
                 split_page.offset_first = first_page_fit as u16;
+                // SAFETY: correctly allocated
                 start_ptr = unsafe {
                     self.start
                         .as_ptr()
@@ -327,6 +338,7 @@ impl HeapShared {
             }
         }
 
+        // SAFETY: correctly allocated
         let start = unsafe { NonNull::new_unchecked(start_ptr) };
 
         AllocationInfo {
@@ -465,7 +477,9 @@ impl HeapProxy {
         let res = self.heap.allocate(search);
         let start = res.start;
         let size = res.size;
+        // SAFETY: correctly allocated
         let end_ptr = unsafe { start.as_ptr().add(size) };
+        // SAFETY: correctly allocated
         let end = unsafe { NonNull::new_unchecked(end_ptr) };
         let tlab = Tlab {
             start,
@@ -548,6 +562,9 @@ impl HeapProxy {
         self.allocate_raw(layout.size(), layout.align(), PageType::Unboxed)
     }
 
+    /// allocate unitialized bytearray
+    /// # Safety
+    /// must be initialized afterwards, either zeroed or with data
     pub unsafe fn allocate_bytearray_raw(
         &mut self,
         size: usize,
@@ -563,11 +580,10 @@ impl HeapProxy {
         self.allocate_unboxed_raw(layout).cast::<ByteArray>()
     }
 
-    // allocate_bytearray and allocate_bytearray_data remain mostly the same,
-    // relying on the updated allocate_bytearray_raw
     pub fn allocate_bytearray(&mut self, size: usize) -> Tagged<ByteArray> {
         // SAFETY: we ensure correct size
         let mut raw = unsafe { self.allocate_bytearray_raw(size) };
+        // SAFETY: just allocated and not null, must exist
         let ba = unsafe { raw.as_mut() };
         // SAFETY: this is safe
         unsafe { (*ba).init_zeroed(size) };
@@ -685,6 +701,7 @@ impl Tlab {
         align: usize,
     ) -> Option<NonNull<u8>> {
         let start_ptr = self.start.as_ptr();
+        // SAFETY: check afterwards
         let current_ptr = unsafe { start_ptr.add(self.bump) };
 
         let offset = current_ptr.align_offset(align);
@@ -696,10 +713,11 @@ impl Tlab {
         let padded_size = size + offset;
 
         if self.bump + padded_size <= self.size {
+            // SAFETY: checked
             let ptr = unsafe { current_ptr.add(offset) };
 
             self.bump += padded_size;
-
+            // SAFETY: just created, must be valid
             return Some(unsafe { NonNull::new_unchecked(ptr) });
         }
         None
@@ -789,6 +807,7 @@ impl Drop for HeapProxy {
     fn drop(&mut self) {
         assert!(self.handle_set.next.is_none(), "sanity check");
         let mut handles = self.heap.handles.write();
+        // SAFETY: must exist
         let nonnull =
             unsafe { NonNull::new_unchecked(self.handle_set.as_mut()) };
         handles.remove(&nonnull);

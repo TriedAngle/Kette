@@ -21,7 +21,9 @@ pub struct NativeParker {
     blocker: Cell<Option<Handle<Value>>>,
 }
 
+// SAFETY: this is safe
 unsafe impl Send for NativeParker {}
+// SAFETY: this is safe
 unsafe impl Sync for NativeParker {}
 
 impl NativeParker {

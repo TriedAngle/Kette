@@ -1,7 +1,5 @@
 use crate::{ExecutionResult, Handle, PrimitiveContext, Value};
 
-/// TODO: change this all into input + output format
-
 fn inputs<const N: usize>(ctx: &mut PrimitiveContext) -> [Handle<Value>; N] {
     // SAFETY: this requires a bounds check befor, but I am the boundcer
     unsafe { *(ctx.inputs.as_ptr() as *const [Handle<Value>; N]) }

@@ -1,8 +1,7 @@
 use std::{ptr::NonNull, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, HeapValue, Message, Object, SlotDescriptor, Tagged,
-    VMShared, Value, Visitable,
+    ByteArray, Handle, Message, Object, SlotDescriptor, Tagged, VMShared, Value,
 };
 
 #[derive(Debug, Clone)]
@@ -37,11 +36,11 @@ impl Selector {
         Self { name, vm }
     }
 
-    fn lookup_object(self, object: &impl Object) -> LookupResult {
+    pub fn lookup_object(self, object: &impl Object) -> LookupResult {
         self.lookup_object_chained(object, None)
     }
 
-    fn lookup_object_chained(
+    pub fn lookup_object_chained(
         self,
         object: &impl Object,
         chain: Option<&VisitedLink>,

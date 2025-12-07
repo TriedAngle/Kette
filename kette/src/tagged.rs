@@ -10,10 +10,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use crate::{
-    HeapObject, HeapValue, LookupResult, Object, PtrSizedObject, Selector,
-    Visitable, VisitedLink,
-};
+use crate::{HeapObject, HeapValue, Object, PtrSizedObject, Visitable};
 
 #[allow(unused)]
 #[repr(u8)]
@@ -51,13 +48,19 @@ pub struct Handle<T: Object> {
     _marker: PhantomData<*mut T>,
 }
 
+// SAFETY: safe as long as not abused in VM, needs extra locking there potentially
 unsafe impl Send for Value {}
+// SAFETY: safe as long as not abused in VM, needs extra locking there potentially
 unsafe impl Sync for Value {}
 
+// SAFETY: safe as long as not abused in VM, needs extra locking there potentially
 unsafe impl<T: Object> Send for Tagged<T> {}
+// SAFETY: safe as long as not abused in VM, needs extra locking there potentially
 unsafe impl<T: Object> Sync for Tagged<T> {}
 
+// SAFETY: safe as long as not abused in VM, needs extra locking there potentially
 unsafe impl<T: Object> Send for Handle<T> {}
+// SAFETY: safe as long as not abused in VM, needs extra locking there potentially
 unsafe impl<T: Object> Sync for Handle<T> {}
 
 // we need custom clone implementation as default considers "owning" T
@@ -158,6 +161,9 @@ impl Value {
 
 impl<T: Object> Tagged<T> {
     #[inline]
+    /// Create a new Tagged from the value
+    /// # Safety
+    /// the raw value must be correctly tagged and either a fixnum or a reference to a heap object
     const unsafe fn new_raw(value: u64) -> Self {
         Self {
             data: value,
@@ -183,6 +189,7 @@ impl<T: PtrSizedObject> Tagged<T> {
     pub fn new_value(value: T) -> Self {
         let value = value.to_ptr_sized();
         let tagged = value << 1;
+        // SAFETY: this is safe, this is guaranted to be correctly tagged
         unsafe { Self::new_raw(tagged) }
     }
 
@@ -213,6 +220,7 @@ impl<T: HeapObject> Tagged<T> {
             "pointer must be aligned so low 2 bits are free"
         );
         let tagged = value | (ValueTag::Reference as u64);
+        // SAFETY: this is safe, we check before
         unsafe { Self::new_raw(tagged) }
     }
 
@@ -322,10 +330,11 @@ impl<T: Object> Handle<T> {
 
     /// Convert to a Tagged<T>.
     ///
-    /// This is safe because Handle guarantees the object exists.
-    /// However, the resulting Tagged<T> does not prevent GC.
+    /// This is safe as long as T and U are "the same".
+    /// Handle is also stricter than Tagged
     #[inline]
     pub fn as_tagged<U: Object>(self) -> Tagged<U> {
+        // SAFETY: this is safe as long as the contract described holds
         unsafe { Tagged::new_raw(self.data) }
     }
 
@@ -345,6 +354,7 @@ impl<T: Object> PartialEq for Handle<T> {
 impl<T: HeapObject> Handle<T> {
     #[inline]
     pub fn as_object(self) -> Tagged<T> {
+        // SAFETY: this is safe, Handle is stricter than Tagged
         unsafe { Tagged::new_raw(self.data) }
     }
 
@@ -386,7 +396,7 @@ impl<T: HeapObject> Handle<T> {
     /// must make sure to not dereference this
     pub unsafe fn null() -> Handle<T> {
         // We tag it as a reference, so it looks like a valid (but null) tagged pointer
-        let null_tagged = (0u64) | (ValueTag::Reference as u64);
+        let null_tagged = ValueTag::Reference as u64;
         Self {
             data: null_tagged,
             _marker: PhantomData,
@@ -396,7 +406,7 @@ impl<T: HeapObject> Handle<T> {
 
 impl<T: PtrSizedObject> Handle<T> {
     pub fn as_fixnum(self) -> Tagged<T> {
-        // Handle is already tagged.
+        // SAFETY: Handle is already tagged.
         unsafe { Tagged::new_raw(self.data) }
     }
 }
@@ -407,6 +417,7 @@ impl Handle<Value> {
     /// Value is already tagged,
     /// but Tagged<T> does not protect against GC invocations
     pub unsafe fn into_tagged<T: Object>(self) -> Tagged<T> {
+        // SAFETY: safe if adhering to the safety contract of this function
         unsafe { Tagged::new_raw(self.data) }
     }
 
@@ -415,6 +426,7 @@ impl Handle<Value> {
     /// caller must make sure that the Value is representing a T: PtrSizedObject
     /// and not for example a pointer or header
     pub unsafe fn as_fixnum<T: PtrSizedObject + From<Tagged<T>>>(self) -> T {
+        // SAFETY: safe if adhering to the safety contract of this function
         let tagged = unsafe { Tagged::new_raw(self.data) };
         T::from(tagged)
     }

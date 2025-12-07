@@ -73,7 +73,9 @@ pub struct NativeThread {
     done: (Mutex<bool>, Condvar),
 }
 
+// SAFETY: this is safe
 unsafe impl Send for NativeThread {}
+// SAFETY: this is safe
 unsafe impl Sync for NativeThread {}
 
 impl ThreadShared {
@@ -101,6 +103,7 @@ impl VMThread {
         // SAFETY: we will not dereference this
         let thread_obj = unsafe { Handle::null() };
         let shared = ThreadShared::new(thread_obj, false);
+        // thread_id is guaranteed to be nonzero, thus we use 0 for main
         shared.info.lock().thread_id = 0;
 
         Self {
@@ -121,6 +124,8 @@ impl VMThread {
             {
                 let mut info = proxy.info.lock();
                 let thread_id = thread::current().id();
+                // SAFETY: this is safe, the layout is the same, thread_id is nonzero
+                // furthermore, this allows us to model main as 0
                 let id: u64 = unsafe { std::mem::transmute(thread_id) };
                 info.thread_id = id;
             }
@@ -169,6 +174,8 @@ impl NativeThread {
             *mx.lock() = true;
             cv.notify_all();
         });
+
+        // SAFETY: directly at initialization, it is owned
         unsafe { jt.handle.get().as_mut().unwrap().replace(h) };
         jt
     }
@@ -186,6 +193,7 @@ impl NativeThread {
     }
 
     pub fn join(&self) {
+        // SAFETY: thread alive => exists
         if let Some(h) = unsafe { self.handle.get().as_mut().unwrap().take() } {
             let _ = h.join();
             let (ref mx, ref cv) = self.done;
@@ -202,6 +210,8 @@ impl NativeThread {
     }
 
     pub fn thread(&self) -> Option<thread::Thread> {
+        // SAFETY: this is safe as long as thread is alive
+        // and if it is not alive, it is also not accessible
         unsafe { self.handle.get().as_mut().unwrap() }
             .as_ref()
             .map(|handle| handle.thread().clone())

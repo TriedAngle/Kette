@@ -10,7 +10,9 @@ impl BytecodeCompiler {
         vm: &VMShared,
         quotation: Handle<Quotation>,
     ) -> Block {
+        // SAFETY: map must exist
         let map = unsafe { quotation.map.as_mut() };
+        // SAFETY: might not be safe, probably is, but maybe requires false check
         let body = unsafe { map.body.as_ref() };
 
         let mut instructions = Vec::new();
@@ -22,6 +24,7 @@ impl BytecodeCompiler {
                 continue;
             }
 
+            // SAFETY: no gc here
             let obj = unsafe { word.as_heap_handle_unchecked() };
 
             let message =
@@ -37,6 +40,7 @@ impl BytecodeCompiler {
                     }
                     ObjectType::Quotation => {
                         // TODO: potentially inline
+                        // SAFETY: safe
                         let quot = unsafe {
                             word.as_heap_handle_unchecked().cast::<Quotation>()
                         };
@@ -44,6 +48,7 @@ impl BytecodeCompiler {
                             .push(Instruction::PushQuotaton { value: quot });
                         continue;
                     }
+                    // SAFETY: checked
                     ObjectType::Message => unsafe { obj.cast::<Message>() },
                     ObjectType::Max | ObjectType::Activation => unreachable!(),
                 };
