@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, num::IntErrorKind};
 
 use parking_lot::RwLock;
 
@@ -80,12 +80,12 @@ impl<'code> Parser<'code> {
     }
 
     #[inline]
-    pub fn fixnum_token(&self, token: &str) -> Option<u64> {
+    pub fn fixnum_token(&self, token: &str) -> Result<u64, IntErrorKind> {
         // disable + and - prefixes
         if !token.starts_with(|c: char| c.is_numeric()) {
-            return None;
+            return Err(IntErrorKind::InvalidDigit);
         }
-        token.parse::<u64>().ok()
+        token.parse::<u64>().map_err(|e| *e.kind())
     }
 
     #[inline]
@@ -102,7 +102,8 @@ impl<'code> Parser<'code> {
 
         let string = self.get_token_string(token);
 
-        let parsed = if let Some(fixnum) = self.fixnum_token(string) {
+        // TODO: handle bignum promotion
+        let parsed = if let Ok(fixnum) = self.fixnum_token(string) {
             ParsedToken::Fixnum(fixnum as i64)
         } else if let Some(float) = self.float_token(string) {
             ParsedToken::Float(float)

@@ -8,6 +8,10 @@ essentially which tests already work
 not full in order of requirements but mostly.
 a standard library getting build step by step is also necessary for most of these tests
 
+**not much reason this is not there yet, Parser -> Bytecode compilation missing**
+- [ ] repl
+- [ ] tracing, a nice tracing library is needed, mostly stack based, should handle parallel stuff
+
 **these would already work**, *but comment parsing is missing*
 - [x] raw integers
 - [x] raw printing
