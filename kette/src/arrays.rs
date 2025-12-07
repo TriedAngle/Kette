@@ -1,8 +1,8 @@
 use std::mem;
 
 use crate::{
-    Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Value,
-    Visitable, Visitor,
+    Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
+    Selector, Tagged, Value, Visitable, VisitedLink, Visitor,
 };
 
 // TODO: find a way to implement specific functions for arrays of some specific n
@@ -116,7 +116,17 @@ impl Array {
     }
 }
 
-impl Object for Array {}
+impl Object for Array {
+    fn lookup(
+        &self,
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        let traits = selector.vm.specials.array_traits;
+        traits.lookup(selector, link)
+    }
+}
+
 impl HeapObject for Array {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>() + self.size() * mem::size_of::<Value>()

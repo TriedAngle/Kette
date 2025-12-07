@@ -3,7 +3,6 @@ use crate::{ByteArray, ExecutionResult, PrimitiveContext};
 pub fn fixnum_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
     let string = value.to_string();
-    println!("s: {:?}", string);
     let ba = ctx.heap.allocate_bytearray_data(string.as_bytes());
     ctx.outputs[0] = unsafe { ba.promote_to_handle().cast() };
     ExecutionResult::Normal

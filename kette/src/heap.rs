@@ -1,5 +1,6 @@
 #![allow(unused)]
 use std::{
+    alloc::Layout,
     cell::{RefCell, UnsafeCell},
     collections::HashSet,
     marker::PhantomData,
@@ -15,7 +16,8 @@ use bitflags::bitflags;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    ByteArray, Handle, HeapObject, Tagged, Value, Visitable, map_memory,
+    ByteArray, Handle, HeapObject, SlotDescriptor, SlotHelper, SlotMap,
+    SlotObject, Strings, Tagged, Value, Visitable, map_memory, slots::SlotTags,
 };
 
 pub const HANDLE_SET_SIZE: usize = 20;
@@ -542,13 +544,8 @@ impl HeapProxy {
     }
 
     /// Allocates unboxed raw memory.
-    pub fn allocate_unboxed_raw(
-        &mut self,
-        size: usize,
-        align: usize,
-    ) -> NonNull<u8> {
-        let align = if align == 0 { 1 } else { align };
-        self.allocate_raw(size, align, PageType::Unboxed)
+    pub fn allocate_unboxed_raw(&mut self, layout: Layout) -> NonNull<u8> {
+        self.allocate_raw(layout.size(), layout.align(), PageType::Unboxed)
     }
 
     pub unsafe fn allocate_bytearray_raw(
@@ -559,20 +556,22 @@ impl HeapProxy {
         let total_size = mem::size_of::<ByteArray>() + size;
 
         // Ensure the ByteArray struct itself is aligned correctly.
-        // The data payload (u8) has alignment 1, so the struct alignment is the constraint.
         let align = mem::align_of::<ByteArray>();
+        let layout = Layout::from_size_align(total_size, align)
+            .expect("create valid layout");
 
-        self.allocate_unboxed_raw(total_size, align)
-            .cast::<ByteArray>()
+        self.allocate_unboxed_raw(layout).cast::<ByteArray>()
     }
 
     // allocate_bytearray and allocate_bytearray_data remain mostly the same,
     // relying on the updated allocate_bytearray_raw
     pub fn allocate_bytearray(&mut self, size: usize) -> Tagged<ByteArray> {
+        // SAFETY: we ensure correct size
         let mut raw = unsafe { self.allocate_bytearray_raw(size) };
         let ba = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
         unsafe { (*ba).init_zeroed(size) };
-        Tagged::new_ptr(raw.as_ptr())
+        Tagged::new_ptr(ba)
     }
 
     pub fn allocate_bytearray_data(
@@ -580,12 +579,68 @@ impl HeapProxy {
         data: &[u8],
     ) -> Tagged<ByteArray> {
         let size = data.len();
+        // SAFETY: we ensure correct size
         let mut raw = unsafe { self.allocate_bytearray_raw(size) };
+        // SAFETY: just created, safe to convert to mutable reference
         let ba = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
         unsafe { (*ba).init_data(data) };
-        // Debug print
-        // println!("ba: {:?}, {:?}", ba as *const ByteArray, std::str::from_utf8(ba.as_bytes()));
-        Tagged::new_ptr(raw.as_ptr())
+        Tagged::new_ptr(ba)
+    }
+
+    pub fn allocate_slot_map(
+        &mut self,
+        slots: &[SlotDescriptor],
+    ) -> Tagged<SlotMap> {
+        let layout = SlotMap::required_layout(slots.len());
+        let mut raw = self.allocate_unboxed_raw(layout).cast::<SlotMap>();
+        // SAFETY: just created, safe to convert to mutable reference
+        let map = unsafe { raw.as_mut() };
+
+        // SAFETY: this is safe
+        unsafe { map.init_with_data(slots) };
+
+        Tagged::new_ptr(map)
+    }
+
+    pub fn allocate_slot_map_helper(
+        &mut self,
+        strings: &Strings,
+        slots: &[SlotHelper],
+    ) -> Tagged<SlotMap> {
+        let slots = slots
+            .iter()
+            .map(|slot| {
+                let interned = strings.get(slot.name, self);
+                SlotDescriptor::new(interned.into(), slot.tags, slot.value)
+            })
+            .collect::<Vec<_>>();
+
+        self.allocate_slot_map(&slots)
+    }
+
+    pub fn allocate_slot_object(
+        &mut self,
+        map: Tagged<SlotMap>,
+        data: &[Value],
+    ) -> Tagged<SlotObject> {
+        // SAFETY: map must be valid here
+        let map_ref = unsafe { map.as_ref() };
+        let layout =
+            SlotObject::required_layout(map_ref.assignable_slots_count());
+        debug_assert!(layout.align() == 8);
+        let mut raw =
+            self.allocate_boxed_raw(layout.size()).cast::<SlotObject>();
+
+        // SAFETY: just created, safe to convert to mutable reference
+        let obj = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { obj.init_with_data(map, data) };
+        Tagged::new_ptr(obj)
+    }
+
+    pub fn allocate_empty_map(&mut self) -> Tagged<SlotMap> {
+        self.allocate_slot_map(&[])
     }
 
     pub fn create_proxy(&self) -> HeapProxy {
@@ -828,7 +883,8 @@ mod tests {
             );
         }
 
-        let _b = p.allocate_unboxed_raw(24, 8);
+        let _b =
+            p.allocate_unboxed_raw(Layout::from_size_align(24, 8).unwrap());
 
         {
             let pages = p.heap.pages.borrow();
@@ -963,10 +1019,12 @@ mod tests {
         }
 
         // Do the same for unboxed to ensure independent TLABs
-        let _u1 = p.allocate_unboxed_raw(32, 0);
+        let _u1 =
+            p.allocate_unboxed_raw(Layout::from_size_align(32, 1).unwrap());
         assert_eq!(p.unboxed_tlab.bump, 32);
         // skip tlab allocation as this is bigger than the tlab, tlab stays the same
-        let _u2 = p.allocate_unboxed_raw(200, 0);
+        let _u2 =
+            p.allocate_unboxed_raw(Layout::from_size_align(200, 1).unwrap());
         assert_eq!(p.unboxed_tlab.bump, 32);
 
         // Ensure the unboxed page is marked unboxed
@@ -1016,7 +1074,7 @@ mod tests {
                     let ptr = if (t + i) % 2 == 0 {
                         proxy.allocate_boxed_raw(size)
                     } else {
-                        proxy.allocate_unboxed_raw(size, 8)
+                        proxy.allocate_unboxed_raw(Layout::from_size_align(size, 1).unwrap())
                     };
                     let addr = ptr.as_ptr() as usize;
                     let mut set = seen_clone.lock().unwrap();

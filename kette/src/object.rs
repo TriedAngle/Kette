@@ -67,11 +67,13 @@ pub struct Header(u64);
 pub trait Object: Sized + Visitable {
     fn lookup(
         &self,
-        selector: Selector<'_>,
+        selector: Selector,
         link: Option<&VisitedLink>,
     ) -> LookupResult {
+        // SAFETY: must be valid here
+        let s = unsafe { str::from_utf8_unchecked(selector.name.as_bytes()) };
         unimplemented!(
-            "lookup with:{selector:?} and {link:?} on type that is not lookupable"
+            "lookup with: {s} and {link:?} on type that is not lookupable"
         );
     }
 }
@@ -111,19 +113,6 @@ pub struct Map {
 pub struct FreeLocation {
     pub header: Header,
     pub next: Option<*mut FreeLocation>,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub enum SlotKind {
-    Data,
-    Method,
-    Const,
-}
-
-#[repr(C)]
-pub struct MapCreateInfo<'a> {
-    pub slots: &'a [(&'a str, SlotKind, Value)],
 }
 
 impl Header {
@@ -489,6 +478,24 @@ impl HeapObject for HeapValue {
             }
             ObjectType::Max => unreachable!(),
         }
+    }
+}
+
+impl Visitable for Value {}
+impl Object for Value {
+    fn lookup(
+        &self,
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        if let Some(_num) = self.as_tagged_fixnum::<i64>() {
+            let traits = selector.vm.specials.fixnum_traits;
+            return traits.lookup(selector, link);
+        }
+
+        // Safety: if its not a fixnum it must be a heap object
+        let object = unsafe { self.as_heap_handle_unchecked() };
+        object.lookup(selector, link)
     }
 }
 

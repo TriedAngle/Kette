@@ -1,11 +1,11 @@
-use std::{mem, ptr};
+use std::{alloc::Layout, mem, ptr};
 
-use bitflags::{Flags, bitflags};
-use rand::seq::IndexedRandom;
+use bitflags::bitflags;
 
 use crate::{
-    ByteArray, Header, HeaderFlags, HeapObject, Map, MapType, Object,
-    ObjectType, Tagged, Value, Visitable, Visitor,
+    ByteArray, Header, HeaderFlags, HeapObject, LookupResult, Map, MapType,
+    Object, ObjectType, PrimitiveMessageIndex, Selector, Tagged, Value,
+    Visitable, VisitedLink, Visitor, get_primitive, primitive_index,
 };
 
 bitflags! {
@@ -13,9 +13,12 @@ bitflags! {
     /// parent 01
     /// assignable 10
     /// assignable parent 11
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     pub struct SlotTags: u8 {
         const PARENT = 1 << 0;
         const ASSIGNABLE = 1 << 1;
+        const PRIMITIVE = 1 << 2;
+        const EXECUTABLE = 1 << 3;
     }
 }
 
@@ -25,10 +28,18 @@ bitflags! {
 /// Assignable Parent slot: normal data slot that is also parent
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct SlotInfo {
+pub struct SlotDescriptor {
     /// guaranteed to be interned
     pub name: Tagged<ByteArray>,
     pub metadata: Tagged<usize>,
+    pub value: Value,
+}
+
+// Helper for Rust side slot creation
+#[derive(Debug, Clone, Copy)]
+pub struct SlotHelper<'a> {
+    pub name: &'a str,
+    pub tags: SlotTags,
     pub value: Value,
 }
 
@@ -40,7 +51,7 @@ pub struct SlotMap {
     pub map: Map,
     pub assignable_slots: Tagged<usize>,
     pub total_slots: Tagged<usize>,
-    pub slots: [SlotInfo; 0],
+    pub slots: [SlotDescriptor; 0],
 }
 
 #[repr(C)]
@@ -51,9 +62,15 @@ pub struct SlotObject {
     pub slots: [Value; 0],
 }
 
-impl SlotInfo {
-    pub fn new() -> Self {
-        unimplemented!()
+impl SlotDescriptor {
+    pub fn new(name: Tagged<ByteArray>, tags: SlotTags, value: Value) -> Self {
+        let tags_raw = tags.bits();
+        let metadata = Tagged::new_value(tags_raw as usize);
+        Self {
+            name,
+            metadata,
+            value,
+        }
     }
 
     pub fn tags(&self) -> SlotTags {
@@ -65,7 +82,7 @@ impl SlotInfo {
 
 impl SlotMap {
     // will go through the slots
-    pub unsafe fn init_with_data(&mut self, slots: &[SlotInfo]) {
+    pub unsafe fn init_with_data(&mut self, slots: &[SlotDescriptor]) {
         let mut slots = slots.to_vec();
         // a > b => b, a
         slots.sort_by(|a, b| {
@@ -114,9 +131,62 @@ impl SlotMap {
     pub fn assignable_slots_count(&self) -> usize {
         self.assignable_slots.into()
     }
+
+    #[inline]
+    pub fn slot_count(&self) -> usize {
+        self.total_slots.into()
+    }
+
+    /// calculate the layout of a map with n slots
+    pub fn required_layout(slots: usize) -> Layout {
+        let head = Layout::new::<Self>();
+        let slots_layout = Layout::array::<SlotDescriptor>(slots)
+            .expect("create valid layout");
+        let (layout, _) =
+            head.extend(slots_layout).expect("create valid layout");
+        layout
+    }
+
+    /// Returns a slice containing all slot descriptors
+    #[inline]
+    pub fn slots(&self) -> &[SlotDescriptor] {
+        let count = self.slot_count();
+        // SAFETY: this is safe
+        unsafe { std::slice::from_raw_parts(self.slots.as_ptr(), count) }
+    }
+
+    /// Returns a slice containing only the assignable slot descriptors
+    /// Relies on the invariant that slots are sorted such that assignable
+    /// slots always appear at the start of the array (indices `0..assignable_count`).
+    #[inline]
+    pub fn assignable_slots(&self) -> &[SlotDescriptor] {
+        let count = self.assignable_slots_count();
+        // SAFETY: this is safe
+        // 2. The sorting invariant ensures the first `n` slots are the assignable ones.
+        unsafe { std::slice::from_raw_parts(self.slots.as_ptr(), count) }
+    }
 }
 
 impl SlotObject {
+    pub unsafe fn init_with_data(
+        &mut self,
+        map: Tagged<SlotMap>,
+        data: &[Value],
+    ) {
+        // SAFETY: map must be valid here
+        let map_slot_count = unsafe { map.as_ref().assignable_slots_count() };
+        assert_eq!(map_slot_count, data.len());
+        // SAFETY: length checked and slot object correctly sized
+        unsafe {
+            ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.slots_mut_ptr(),
+                map_slot_count,
+            )
+        };
+        // SAFETY: this is safe
+        unsafe { self.init(map) };
+    }
     /// Initialize a slot object
     /// # Safety
     /// the reference must be valid and assignable slots < total slots
@@ -192,9 +262,48 @@ impl SlotObject {
     pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {
         unsafe { self.slots_mut_ptr().add(index).write(value) };
     }
+
+    /// calculate the layout of an object with n assignable slots
+    pub fn required_layout(assignable_slots: usize) -> Layout {
+        let head = Layout::new::<Self>();
+        let slots_layout = Layout::array::<Value>(assignable_slots)
+            .expect("create valid layout");
+        let (layout, _) =
+            head.extend(slots_layout).expect("create valid layout");
+        layout
+    }
 }
 
-impl Object for SlotObject {}
+impl Object for SlotObject {
+    fn lookup(
+        &self,
+        selector: Selector,
+        _link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        let self_ptr = self as *const Self as *mut Self;
+        // SAFETY: map must be valid
+        let map = unsafe { self.map.as_ref() };
+        let slots = map.slots();
+        // interning guarantees same string == same pointer
+        let res = slots
+            .iter()
+            .enumerate()
+            .find(|(_idx, slot)| {
+                slot.name.as_ptr()
+                    == selector.name.as_tagged::<ByteArray>().as_ptr()
+            })
+            .map(|(idx, slot)| (idx, *slot));
+        if let Some((idx, slot)) = res {
+            return LookupResult::Found {
+                object: Tagged::new_ptr(self_ptr).as_tagged_value(),
+                slot,
+                slot_index: idx,
+            };
+        }
+        // TODO: implement parent lookup and cycle detection using Link
+        LookupResult::None
+    }
+}
 impl HeapObject for SlotObject {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
@@ -205,7 +314,7 @@ impl HeapObject for SlotObject {
 impl Object for SlotMap {}
 impl HeapObject for SlotMap {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() // TODO: add slots  
+        mem::size_of::<Self>() + self.slot_count()
     }
 }
 
@@ -232,5 +341,26 @@ impl Visitable for SlotObject {
     fn visit_edges(&self, visitor: &impl Visitor) {
         visitor.visit(self.map.into());
         self.slots().iter().for_each(|&obj| visitor.visit(obj));
+    }
+}
+
+impl<'a> SlotHelper<'a> {
+    #[inline]
+    pub fn new(name: &'a str, value: Value, tags: SlotTags) -> Self {
+        Self { name, value, tags }
+    }
+
+    #[inline]
+    pub fn primitive(name: &'a str, value: Value, tags: SlotTags) -> Self {
+        let tags = tags | SlotTags::PRIMITIVE;
+        Self::new(name, value, tags)
+    }
+
+    #[inline]
+    pub fn primitive_message(name: &'a str, tags: SlotTags) -> Self {
+        let tags = tags | SlotTags::PRIMITIVE | SlotTags::EXECUTABLE;
+        let index = primitive_index(name);
+        let value = index.as_raw();
+        Self::new(name, value.into(), tags)
     }
 }

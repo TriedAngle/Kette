@@ -34,7 +34,7 @@ pub use executable::{ExecutableMap, MethodMap};
 pub use heap::{Heap, HeapCreateInfo, HeapProxy, HeapSettings};
 pub use interning::Strings;
 pub use interpreter::{ExecutionResult, IntegerError, Interpreter};
-pub use lookup::{Lookup, LookupResult, Selector, VisitedLink};
+pub use lookup::{LookupResult, Selector, VisitedLink};
 pub use message::Message;
 pub use object::*;
 pub use parker::NativeParker;
@@ -45,7 +45,7 @@ pub use primitives::{
     primitive_index,
 };
 pub use quotations::{Quotation, QuotationMap};
-pub use slots::{SlotInfo, SlotMap, SlotObject};
+pub use slots::{SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags};
 pub use stack::{ExecutionState, ExecutionStateInfo};
 pub use stack_effect::StackEffect;
 pub use system::{PAGE_SIZE, map_memory, unmap_memory};

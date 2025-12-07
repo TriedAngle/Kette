@@ -33,7 +33,7 @@ pub struct Value(u64);
 
 /// A tagged value
 /// same memory layout as Value but Typed
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Tagged<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
@@ -168,6 +168,13 @@ impl<T: Object> Tagged<T> {
     #[inline]
     pub fn as_value(&self) -> Value {
         Value(self.data)
+    }
+
+    pub fn as_tagged_value(self) -> Tagged<Value> {
+        Tagged {
+            data: self.data,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -425,6 +432,15 @@ impl Handle<Value> {
     }
 }
 
+impl<T: Object> From<Handle<T>> for Tagged<T> {
+    fn from(value: Handle<T>) -> Self {
+        Self {
+            data: value.data,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T: HeapObject> From<Handle<T>> for Handle<Value> {
     fn from(value: Handle<T>) -> Self {
         value.as_value_handle()
@@ -526,24 +542,6 @@ impl<T: PtrSizedObject> From<Tagged<T>> for Handle<Value> {
             data,
             _marker: PhantomData,
         }
-    }
-}
-
-impl Visitable for Value {}
-impl Object for Value {
-    fn lookup(
-        &self,
-        selector: Selector<'_>,
-        link: Option<&VisitedLink>,
-    ) -> LookupResult {
-        if let Some(_num) = self.as_tagged_fixnum::<i64>() {
-            let traits = selector.vm.specials.fixnum_traits;
-            return traits.lookup(selector, link);
-        }
-
-        // Safety: if its not a fixnum it must be a heap object
-        let object = unsafe { self.as_heap_handle_unchecked() };
-        object.lookup(selector, link)
     }
 }
 

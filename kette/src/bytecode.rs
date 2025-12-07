@@ -1,4 +1,6 @@
-use crate::{Handle, Message, PrimitiveMessageIndex, Quotation, Tagged, Value};
+use crate::{
+    Handle, Message, PrimitiveMessageIndex, Quotation, SlotMap, Tagged, Value,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
@@ -22,6 +24,8 @@ pub enum Instruction {
     SendNamed { message: &'static str },
     SuperSendNamed { message: &'static str },
     DelegatSendeNamed { message: &'static str },
+
+    AllocateSlotObject { map: Tagged<SlotMap> },
 }
 
 // TODO: replace instructions to actual byte instructions

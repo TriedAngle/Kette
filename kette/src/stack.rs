@@ -176,10 +176,20 @@ impl ExecutionState {
         unsafe { self.stack.get_unchecked(start..self.depth) }
     }
 
+    /// Returns a slice of the top n elements and decrements the depth
+    /// # Safety
+    /// Caller must ensure that self.depth >= n.
+    pub unsafe fn stack_pop_slice_unchecked(&mut self, n: usize) -> &[Value] {
+        let start = self.depth - n;
+        let depth = self.depth;
+        self.depth -= n;
+        unsafe { self.stack.get_unchecked(start..depth) }
+    }
+
     /// Removes the top n elements and returns them as a new Vec.
     /// # Safety
     /// Caller must ensure that self.depth >= n.
-    pub unsafe fn stack_pop_slice_unchecked(&mut self, n: usize) -> Vec<Value> {
+    pub unsafe fn stack_pop_unchecked(&mut self, n: usize) -> Vec<Value> {
         let start = self.depth - n;
         let end = self.depth;
 

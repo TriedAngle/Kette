@@ -1,8 +1,8 @@
 use std::{mem, ptr};
 
 use crate::{
-    Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Visitable,
-    Visitor,
+    Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
+    Selector, Tagged, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]
@@ -77,7 +77,16 @@ impl ByteArray {
     }
 }
 
-impl Object for ByteArray {}
+impl Object for ByteArray {
+    fn lookup(
+        &self,
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        let traits = selector.vm.specials.bytearray_traits;
+        traits.lookup(selector, link)
+    }
+}
 impl HeapObject for ByteArray {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>() + self.size()

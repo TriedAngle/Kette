@@ -13,6 +13,18 @@ mod threads;
 #[derive(Debug, Copy, Clone)]
 pub struct PrimitiveMessageIndex(usize);
 
+impl PrimitiveMessageIndex {
+    /// # Safety
+    /// id must be a valid primitive id
+    pub unsafe fn from_usize(id: usize) -> Self {
+        Self(id)
+    }
+
+    pub fn as_raw(self) -> usize {
+        self.0
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone)]
 pub struct PrimitiveParserIndex(usize);
@@ -149,6 +161,7 @@ impl<'ex, 'code> PrimitiveParserContext<'ex, 'code> {
     }
 }
 
+#[rustfmt::skip]
 pub const PRIMITIVES: &[PrimitiveMessage] = &[
     // Stack
     PrimitiveMessage::new("dup", 1, 2, stack::dup),
@@ -173,9 +186,9 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum*", 1, 1, fixnum::fixnum_mul),
     PrimitiveMessage::new("fixnum/", 1, 1, fixnum::fixnum_div),
     PrimitiveMessage::new("fixnum%", 1, 1, fixnum::fixnum_mod),
-    PrimitiveMessage::new("fixnum-neg", 1, 1, fixnum::fixnum_neg),
-    PrimitiveMessage::new("fixnum-and", 1, 1, fixnum::fixnum_and),
-    PrimitiveMessage::new("fixnum-or", 1, 1, fixnum::fixnum_or),
+    PrimitiveMessage::new("fixnum-bitneg", 1, 1, fixnum::fixnum_neg),
+    PrimitiveMessage::new("fixnum-bitand", 1, 1, fixnum::fixnum_and),
+    PrimitiveMessage::new("fixnum-bitor", 1, 1, fixnum::fixnum_or),
     PrimitiveMessage::new("fixnum-eq", 1, 1, fixnum::fixnum_eq),
     PrimitiveMessage::new("fixnum-neq", 1, 1, fixnum::fixnum_neq),
     PrimitiveMessage::new("fixnum-lt", 1, 1, fixnum::fixnum_lt),
@@ -183,19 +196,9 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum-leq", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum-geq", 1, 1, fixnum::fixnum_geq),
     // Bytearrays
-    PrimitiveMessage::new(
-        "fixnum>utf8-bytes",
-        0,
-        1,
-        bytearray::fixnum_to_utf8_bytes,
-    ),
+    PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
     PrimitiveMessage::new("bytearray-print", 0, 0, bytearray::bytearray_print),
-    PrimitiveMessage::new(
-        "bytearray-println",
-        0,
-        0,
-        bytearray::bytearray_println,
-    ),
+    PrimitiveMessage::new("bytearray-println", 0, 0, bytearray::bytearray_println),
     // Threads
     PrimitiveMessage::new("<thread-native>", 0, 0, threads::create_native),
     PrimitiveMessage::new("thread-join", 0, 0, threads::join),

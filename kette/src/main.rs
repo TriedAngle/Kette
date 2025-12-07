@@ -1,32 +1,27 @@
 use kette::{
-    Block, ExecutionState, ExecutionStateInfo, HeapCreateInfo, Instruction,
-    Interpreter, Parser, ThreadProxy, ThreadShared, ThreadState, VM,
-    VMCreateInfo, VMThread, primitive_index,
+    Block, ExecutionState, ExecutionStateInfo, HeapCreateInfo, HeapProxy,
+    Instruction, Interpreter, ThreadProxy, VM, VMCreateInfo, VMProxy, VMThread,
+    primitive_index,
 };
 
 const CODE: &str = r#"
 5 77 fixnum+ fixnum>utf8-bytes bytearray-println
 "#;
 
-fn demo_compiled() -> Block {
+fn demo_compiled(vm: &VMProxy, _heap: &mut HeapProxy) -> Block {
     Block {
+        #[rustfmt::skip]
         instructions: vec![
             Instruction::PushFixnum { value: 10 },
             Instruction::PushFixnum { value: 60 },
-            Instruction::PushFixnum { value: 0 }, // TODO: implement stack object, this is a dummy
-            Instruction::SendPrimitive {
-                id: primitive_index("swap"),
+            Instruction::PushValue {
+                value: vm.specials().stack_object.as_value(),
             },
+            Instruction::SendNamed { message: "swap" },
             Instruction::PushFixnum { value: 20 },
-            Instruction::SendPrimitive {
-                id: primitive_index("fixnum+"),
-            },
-            Instruction::SendPrimitive {
-                id: primitive_index("fixnum>utf8-bytes"),
-            },
-            Instruction::SendPrimitive {
-                id: primitive_index("bytearray-println"),
-            },
+            Instruction::SendNamed { message: "fixnum+" },
+            Instruction::SendNamed { message: "fixnum>utf8-bytes" },
+            Instruction::SendNamed { message: "bytearray-println" },
             Instruction::SendPrimitive {
                 id: primitive_index("fixnum>utf8-bytes"),
             },
@@ -48,7 +43,7 @@ fn main() {
 
     // TODO: use consistent naming
     let main_proxy = vm.new_proxy();
-    let heap = main_proxy.shared.heap.create_proxy();
+    let mut heap = main_proxy.shared.heap.create_proxy();
 
     let state = ExecutionState::new(&ExecutionStateInfo {
         stack_size: 128,
@@ -61,9 +56,11 @@ fn main() {
 
     let proxy = vm.new_proxy();
 
+    let compiled = demo_compiled(&main_proxy, &mut heap);
+
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
 
-    for instruction in demo_compiled().instructions {
+    for instruction in compiled.instructions {
         interpreter.execute_bytecode(instruction);
     }
 }

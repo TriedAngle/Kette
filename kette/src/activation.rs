@@ -127,8 +127,8 @@ impl Visitable for ActivationObject {}
 impl Object for ActivationObject {
     fn lookup(
         &self,
-        selector: Selector<'_>,
-        link: Option<&VisitedLink>,
+        _selector: Selector,
+        _link: Option<&VisitedLink>,
     ) -> crate::LookupResult {
         // let slots = self.
         unimplemented!()

@@ -1,12 +1,14 @@
-use std::ptr::NonNull;
+use std::{ptr::NonNull, sync::Arc};
 
-use crate::{ByteArray, Handle, Object, SlotInfo, Tagged, VMShared, Value};
+use crate::{
+    ByteArray, Handle, HeapValue, Message, Object, SlotDescriptor, Tagged,
+    VMShared, Value, Visitable,
+};
 
-#[derive(Debug, Copy, Clone)]
-pub struct Selector<'vm> {
+#[derive(Debug, Clone)]
+pub struct Selector {
     pub name: Handle<ByteArray>,
-    pub hash: u64,
-    pub vm: &'vm VMShared,
+    pub vm: Arc<VMShared>,
 }
 
 /// used to find and break cycles
@@ -16,18 +18,25 @@ pub struct VisitedLink {
     pub value: Value,
 }
 
-pub struct Lookup {
-    pub object: Tagged<Value>,
-    pub slot: SlotInfo,
-    pub slot_index: usize,
-}
-
 pub enum LookupResult {
     None,
-    Found(Lookup),
+    Found {
+        object: Tagged<Value>,
+        slot: SlotDescriptor,
+        slot_index: usize,
+    },
 }
 
-impl<'vm> Selector<'vm> {
+impl Selector {
+    pub fn new(name: Handle<ByteArray>, vm: Arc<VMShared>) -> Self {
+        Self { name, vm }
+    }
+    pub fn new_message(message: Handle<Message>, vm: Arc<VMShared>) -> Self {
+        // SAFETY: must be safe here
+        let name = unsafe { message.value.promote_to_handle() };
+        Self { name, vm }
+    }
+
     fn lookup_object(self, object: &impl Object) -> LookupResult {
         self.lookup_object_chained(object, None)
     }
