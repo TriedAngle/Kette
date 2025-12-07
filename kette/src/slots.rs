@@ -1,25 +1,39 @@
-use std::{marker::PhantomData, mem};
+use std::{mem, ptr};
+
+use bitflags::{Flags, bitflags};
+use rand::seq::IndexedRandom;
 
 use crate::{
-    ByteArray, Header, HeaderFlags, HeapObject, Map, MapType, Object, ObjectType, Tagged, Value,
-    Visitable, Visitor,
+    ByteArray, Header, HeaderFlags, HeapObject, Map, MapType, Object,
+    ObjectType, Tagged, Value, Visitable, Visitor,
 };
-///
-/// Data slot: offset to value in object
+
+bitflags! {
+    /// constant 00
+    /// parent 01
+    /// assignable 10
+    /// assignable parent 11
+    pub struct SlotTags: u8 {
+        const PARENT = 1 << 0;
+        const ASSIGNABLE = 1 << 1;
+    }
+}
+
+/// assignable slot: offset to value in object
 /// Const slot: value
 /// Parent slot: constant lookup (static?)
 /// Assignable Parent slot: normal data slot that is also parent
-/// Method slot: method
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct SlotInfo {
     /// guaranteed to be interned
     pub name: Tagged<ByteArray>,
     pub metadata: Tagged<usize>,
-    pub userdata: Tagged<usize>,
     pub value: Value,
 }
 
+/// slot ordering:
+/// assignable parent > assignable > parent > constant
 #[repr(C)]
 #[derive(Debug)]
 pub struct SlotMap {
@@ -37,8 +51,53 @@ pub struct SlotObject {
     pub slots: [Value; 0],
 }
 
+impl SlotInfo {
+    pub fn new() -> Self {
+        unimplemented!()
+    }
+
+    pub fn tags(&self) -> SlotTags {
+        let value: u64 = self.metadata.into();
+        let raw: u8 = (value & 0xFF) as u8; // cutting off
+        SlotTags::from_bits(raw).expect("must have valid tags")
+    }
+}
+
 impl SlotMap {
-    pub unsafe fn init_with_data(&mut self, slots: &[SlotInfo]) {}
+    // will go through the slots
+    pub unsafe fn init_with_data(&mut self, slots: &[SlotInfo]) {
+        let mut slots = slots.to_vec();
+        // a > b => b, a
+        slots.sort_by(|a, b| {
+            let tags_a = a.tags();
+            let tags_b = b.tags();
+            let raw_a = tags_a.bits();
+            let raw_b = tags_b.bits();
+
+            let order_a = raw_a & 0b11;
+            let order_b = raw_b & 0b11;
+
+            order_a.cmp(&order_b)
+        });
+
+        let assignable_slots = slots
+            .iter()
+            .filter(|s| s.tags().contains(SlotTags::ASSIGNABLE))
+            .count();
+
+        let total_slots = slots.len();
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                slots.as_ptr(),
+                self.slots.as_mut_ptr(),
+                total_slots,
+            )
+        };
+
+        // SAFETY: we calculate correctly
+        unsafe { self.init(assignable_slots, total_slots) };
+    }
 
     /// Initialize a slot map
     /// this is unsafe as this is intended to be a mostly internal api
@@ -63,7 +122,8 @@ impl SlotObject {
     /// the reference must be valid and assignable slots < total slots
     pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
         self.map = map;
-        self.header = Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+        self.header =
+            Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
     }
 
     #[inline]
@@ -137,7 +197,8 @@ impl SlotObject {
 impl Object for SlotObject {}
 impl HeapObject for SlotObject {
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.assignable_slots() * mem::size_of::<Value>()
+        mem::size_of::<Self>()
+            + self.assignable_slots() * mem::size_of::<Value>()
     }
 }
 

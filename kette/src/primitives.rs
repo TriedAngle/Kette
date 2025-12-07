@@ -1,6 +1,6 @@
 use crate::{
-    ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter, Parser, ParserRegistry,
-    ThreadProxy, VMProxy, Value,
+    ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter, Parser,
+    ParserRegistry, ThreadProxy, VMProxy, Value,
 };
 
 mod bytearray;
@@ -18,7 +18,8 @@ pub struct PrimitiveMessageIndex(usize);
 pub struct PrimitiveParserIndex(usize);
 
 pub type PrimitiveFunction = fn(&mut PrimitiveContext) -> ExecutionResult;
-pub type PrimitiveParserFunction = fn(&mut PrimitiveParserContext) -> ExecutionResult;
+pub type PrimitiveParserFunction =
+    fn(&mut PrimitiveParserContext) -> ExecutionResult;
 
 // self does not count as input
 // e.g. `+` => `3 5 +` has inputs: 1
@@ -31,7 +32,12 @@ pub struct PrimitiveMessage<'a> {
 }
 
 impl<'a> PrimitiveMessage<'a> {
-    pub const fn new(name: &'a str, inputs: usize, outputs: usize, ptr: PrimitiveFunction) -> Self {
+    pub const fn new(
+        name: &'a str,
+        inputs: usize,
+        outputs: usize,
+        ptr: PrimitiveFunction,
+    ) -> Self {
         Self {
             name,
             inputs,
@@ -106,7 +112,8 @@ impl<'m> PrimitiveMessage<'m> {
         inputs: &'arg [Handle<Value>],
         outputs: &'arg mut [Handle<Value>],
     ) -> ExecutionResult {
-        let mut ctx = PrimitiveContext::new(interpreter, receiver, inputs, outputs);
+        let mut ctx =
+            PrimitiveContext::new(interpreter, receiver, inputs, outputs);
 
         (self.ptr)(&mut ctx)
     }
@@ -176,9 +183,19 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum-leq", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum-geq", 1, 1, fixnum::fixnum_geq),
     // Bytearrays
-    PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
+    PrimitiveMessage::new(
+        "fixnum>utf8-bytes",
+        0,
+        1,
+        bytearray::fixnum_to_utf8_bytes,
+    ),
     PrimitiveMessage::new("bytearray-print", 0, 0, bytearray::bytearray_print),
-    PrimitiveMessage::new("bytearray-println", 0, 0, bytearray::bytearray_println),
+    PrimitiveMessage::new(
+        "bytearray-println",
+        0,
+        0,
+        bytearray::bytearray_println,
+    ),
     // Threads
     PrimitiveMessage::new("<thread-native>", 0, 0, threads::create_native),
     PrimitiveMessage::new("thread-join", 0, 0, threads::join),

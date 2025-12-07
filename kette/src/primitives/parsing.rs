@@ -1,4 +1,7 @@
-use crate::{ByteArray, ExecutionResult, ObjectType, ParsedToken, PrimitiveParserContext, Value};
+use crate::{
+    ByteArray, ExecutionResult, ObjectType, ParsedToken,
+    PrimitiveParserContext, Value,
+};
 
 pub fn parse_next(ctx: &mut PrimitiveParserContext) -> ExecutionResult {
     let p = &mut ctx.parser;
@@ -81,7 +84,9 @@ fn parse_until_inner(
         let handle = unsafe { next.as_heap_handle_unchecked() };
 
         // Safety: checked
-        if unsafe { handle.header.object_type().unwrap_unchecked() } != ObjectType::ByteArray {
+        if unsafe { handle.header.object_type().unwrap_unchecked() }
+            != ObjectType::ByteArray
+        {
             state.push(next);
             continue;
         }

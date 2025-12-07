@@ -1,6 +1,8 @@
 use std::ops::Neg;
 
-use crate::{ExecutionResult, Handle, IntegerError, PrimitiveContext, Tagged, Value};
+use crate::{
+    ExecutionResult, Handle, IntegerError, PrimitiveContext, Tagged, Value,
+};
 
 // TODO: handle overflows and/or promotion
 
@@ -10,7 +12,10 @@ type Fixnum2Op = fn(
     b: Tagged<i64>,
 ) -> Result<Tagged<i64>, IntegerError>;
 
-fn fixnum_binop(ctx: &mut PrimitiveContext<'_, '_>, op: Fixnum2Op) -> ExecutionResult {
+fn fixnum_binop(
+    ctx: &mut PrimitiveContext<'_, '_>,
+    op: Fixnum2Op,
+) -> ExecutionResult {
     let a = ctx.receiver.as_tagged::<i64>();
     let b = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
@@ -20,9 +25,15 @@ fn fixnum_binop(ctx: &mut PrimitiveContext<'_, '_>, op: Fixnum2Op) -> ExecutionR
     ExecutionResult::Normal
 }
 
-type Fixnum2LogicOp =
-    fn(ctx: &mut PrimitiveContext, a: Tagged<i64>, b: Tagged<i64>) -> Result<bool, IntegerError>;
-fn fixnum_logic_binop(ctx: &mut PrimitiveContext, op: Fixnum2LogicOp) -> ExecutionResult {
+type Fixnum2LogicOp = fn(
+    ctx: &mut PrimitiveContext,
+    a: Tagged<i64>,
+    b: Tagged<i64>,
+) -> Result<bool, IntegerError>;
+fn fixnum_logic_binop(
+    ctx: &mut PrimitiveContext,
+    op: Fixnum2LogicOp,
+) -> ExecutionResult {
     let a = ctx.receiver.as_tagged::<i64>();
     let b = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {

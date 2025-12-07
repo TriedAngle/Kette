@@ -1,6 +1,7 @@
 use kette::{
-    Block, ExecutionState, ExecutionStateInfo, HeapCreateInfo, Instruction, Interpreter, Parser,
-    ThreadProxy, ThreadShared, ThreadState, VM, VMCreateInfo, VMThread, primitive_index,
+    Block, ExecutionState, ExecutionStateInfo, HeapCreateInfo, Instruction,
+    Interpreter, Parser, ThreadProxy, ThreadShared, ThreadState, VM,
+    VMCreateInfo, VMThread, primitive_index,
 };
 
 const CODE: &str = r#"

@@ -1,6 +1,8 @@
 use std::mem;
 
-use crate::{Array, ExecutableMap, Header, HeapObject, Object, Tagged, Visitable};
+use crate::{
+    Array, ExecutableMap, Header, HeapObject, Object, Tagged, Visitable,
+};
 
 #[repr(C)]
 #[derive(Debug)]

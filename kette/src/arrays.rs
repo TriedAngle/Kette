@@ -1,7 +1,8 @@
 use std::mem;
 
 use crate::{
-    Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Value, Visitable, Visitor,
+    Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Value,
+    Visitable, Visitor,
 };
 
 // TODO: find a way to implement specific functions for arrays of some specific n
@@ -40,7 +41,12 @@ impl Array {
     /// # Safety
     /// internal api, shouldn't be called
     pub unsafe fn init(&mut self, size: usize) {
-        self.header = Header::encode_object(ObjectType::Array, 0, HeaderFlags::empty(), 0);
+        self.header = Header::encode_object(
+            ObjectType::Array,
+            0,
+            HeaderFlags::empty(),
+            0,
+        );
         self.size = size.into();
     }
 

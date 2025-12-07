@@ -14,7 +14,9 @@ use std::{
 use bitflags::bitflags;
 use parking_lot::{Mutex, RwLock};
 
-use crate::{ByteArray, Handle, HeapObject, Tagged, Value, Visitable, map_memory};
+use crate::{
+    ByteArray, Handle, HeapObject, Tagged, Value, Visitable, map_memory,
+};
 
 pub const HANDLE_SET_SIZE: usize = 20;
 
@@ -211,7 +213,8 @@ impl HeapShared {
         let pages: Box<[PageMeta]> = Box::from(pages);
         let pages = RefCell::new(pages);
 
-        let dirty_count = settings.page_size * page_count / settings.dirty_line_size;
+        let dirty_count =
+            settings.page_size * page_count / settings.dirty_line_size;
         let dirty = vec![0; dirty_count];
         let dirty: Box<[u8]> = Box::from(dirty);
         let dirty = UnsafeCell::new(dirty);
@@ -304,8 +307,8 @@ impl HeapShared {
                         .add(start_index * self.settings.page_size + old_used)
                 };
             } else {
-                let first_page_fit =
-                    self.settings.page_size - pages[start_index].bytes_used as usize;
+                let first_page_fit = self.settings.page_size
+                    - pages[start_index].bytes_used as usize;
                 let remaining = total_size - first_page_fit;
                 pages[start_index].bytes_used = self.settings.page_size as u16;
 
@@ -336,7 +339,10 @@ impl HeapShared {
     // TODO: Right now we don't allow to allocate on large pages
     // this is because right now I feel lazy to get it to work
     // this should be changed
-    fn next_fit_find_pages(&self, search: AllocSearchInfo) -> Option<AllocationSelection> {
+    fn next_fit_find_pages(
+        &self,
+        search: AllocSearchInfo,
+    ) -> Option<AllocationSelection> {
         // big allocations
         if search.size > self.settings.page_size - self.settings.max_slack {
             return self.find_free_pages(search);
@@ -358,7 +364,9 @@ impl HeapShared {
                 && page.generation == search.generation
             {
                 // Case 1
-                if self.settings.page_size - page.bytes_used as usize >= search.size {
+                if self.settings.page_size - page.bytes_used as usize
+                    >= search.size
+                {
                     page_idx = Some(idx);
                     break;
                 }
@@ -387,7 +395,10 @@ impl HeapShared {
         })
     }
 
-    fn find_free_pages(&self, search: AllocSearchInfo) -> Option<AllocationSelection> {
+    fn find_free_pages(
+        &self,
+        search: AllocSearchInfo,
+    ) -> Option<AllocationSelection> {
         // TODO: we don't need size and count, they are bijective here
         let pages = self.pages.borrow();
         let mut size = 0;
@@ -429,7 +440,12 @@ impl HeapShared {
 }
 
 impl HeapProxy {
-    fn tlab_alloc(&mut self, size: usize, align: usize, ptype: PageType) -> Option<NonNull<u8>> {
+    fn tlab_alloc(
+        &mut self,
+        size: usize,
+        align: usize,
+        ptype: PageType,
+    ) -> Option<NonNull<u8>> {
         match ptype {
             PageType::Boxed => self.boxed_tlab.allocate(size, align),
             PageType::Unboxed => self.unboxed_tlab.allocate(size, align),
@@ -476,7 +492,12 @@ impl HeapProxy {
         true
     }
 
-    pub fn allocate_raw(&mut self, size: usize, align: usize, ptype: PageType) -> NonNull<u8> {
+    pub fn allocate_raw(
+        &mut self,
+        size: usize,
+        align: usize,
+        ptype: PageType,
+    ) -> NonNull<u8> {
         if self.maybe_wait_epoch() {
             self.exchange_tlab(ptype);
         }
@@ -521,12 +542,19 @@ impl HeapProxy {
     }
 
     /// Allocates unboxed raw memory.
-    pub fn allocate_unboxed_raw(&mut self, size: usize, align: usize) -> NonNull<u8> {
+    pub fn allocate_unboxed_raw(
+        &mut self,
+        size: usize,
+        align: usize,
+    ) -> NonNull<u8> {
         let align = if align == 0 { 1 } else { align };
         self.allocate_raw(size, align, PageType::Unboxed)
     }
 
-    pub unsafe fn allocate_bytearray_raw(&mut self, size: usize) -> NonNull<ByteArray> {
+    pub unsafe fn allocate_bytearray_raw(
+        &mut self,
+        size: usize,
+    ) -> NonNull<ByteArray> {
         // We allocate enough space for the struct header + the data payload
         let total_size = mem::size_of::<ByteArray>() + size;
 
@@ -547,7 +575,10 @@ impl HeapProxy {
         Tagged::new_ptr(raw.as_ptr())
     }
 
-    pub fn allocate_bytearray_data(&mut self, data: &[u8]) -> Tagged<ByteArray> {
+    pub fn allocate_bytearray_data(
+        &mut self,
+        data: &[u8],
+    ) -> Tagged<ByteArray> {
         let size = data.len();
         let mut raw = unsafe { self.allocate_bytearray_raw(size) };
         let ba = unsafe { raw.as_mut() };
@@ -593,7 +624,11 @@ impl Tlab {
         }
     }
 
-    pub fn allocate(&mut self, size: usize, align: usize) -> Option<NonNull<u8>> {
+    pub fn allocate(
+        &mut self,
+        size: usize,
+        align: usize,
+    ) -> Option<NonNull<u8>> {
         let start_ptr = self.start.as_ptr();
         let current_ptr = unsafe { start_ptr.add(self.bump) };
 
@@ -628,7 +663,8 @@ impl PageMeta {
 
     #[inline]
     fn is_free(&self) -> bool {
-        !self.flags.contains(PageFlags::Used) && !self.flags.contains(PageFlags::Large)
+        !self.flags.contains(PageFlags::Used)
+            && !self.flags.contains(PageFlags::Large)
     }
 
     #[inline]
@@ -698,7 +734,8 @@ impl Drop for HeapProxy {
     fn drop(&mut self) {
         assert!(self.handle_set.next.is_none(), "sanity check");
         let mut handles = self.heap.handles.write();
-        let nonnull = unsafe { NonNull::new_unchecked(self.handle_set.as_mut()) };
+        let nonnull =
+            unsafe { NonNull::new_unchecked(self.handle_set.as_mut()) };
         handles.remove(&nonnull);
     }
 }
@@ -751,8 +788,13 @@ mod tests {
         Heap::new(info)
     }
 
-    fn page_flags_contains(flags: PageFlags, has: &[PageFlags], not: &[PageFlags]) -> bool {
-        has.iter().all(|f| flags.contains(*f)) && not.iter().all(|f| !flags.contains(*f))
+    fn page_flags_contains(
+        flags: PageFlags,
+        has: &[PageFlags],
+        not: &[PageFlags],
+    ) -> bool {
+        has.iter().all(|f| flags.contains(*f))
+            && not.iter().all(|f| !flags.contains(*f))
     }
 
     #[test]
@@ -933,7 +975,11 @@ mod tests {
             .iter()
             .enumerate()
             .find(|(_, pg)| {
-                page_flags_contains(pg.flags, &[PageFlags::Used, PageFlags::Unboxed], &[])
+                page_flags_contains(
+                    pg.flags,
+                    &[PageFlags::Used, PageFlags::Unboxed],
+                    &[],
+                )
             })
             .expect("expected an unboxed page after unboxed TLAB usage");
         assert!(
@@ -955,7 +1001,8 @@ mod tests {
 
         use std::collections::HashSet;
         use std::sync::{Arc as SyncArc, Mutex as SyncMutex};
-        let seen: SyncArc<SyncMutex<HashSet<usize>>> = SyncArc::new(SyncMutex::new(HashSet::new()));
+        let seen: SyncArc<SyncMutex<HashSet<usize>>> =
+            SyncArc::new(SyncMutex::new(HashSet::new()));
 
         let mut handles = Vec::new();
         for t in 0..threads {
@@ -1083,7 +1130,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Handle Set cannot be dropped while other depends on it")]
+    #[should_panic(
+        expected = "Handle Set cannot be dropped while other depends on it"
+    )]
     fn dropping_set_with_next_panics() {
         let mut first = HandleSet::new();
         let mut second = HandleSet::new();

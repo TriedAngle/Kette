@@ -1,6 +1,9 @@
 use std::mem;
 
-use crate::{ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged, Visitable};
+use crate::{
+    ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged,
+    Visitable,
+};
 
 // TODO: these maps should probably become slot maps,
 // this way we can make methods "real" objects

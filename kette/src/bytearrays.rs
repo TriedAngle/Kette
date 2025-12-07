@@ -1,6 +1,9 @@
 use std::{mem, ptr};
 
-use crate::{Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Visitable, Visitor};
+use crate::{
+    Header, HeaderFlags, HeapObject, Object, ObjectType, Tagged, Visitable,
+    Visitor,
+};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -16,7 +19,12 @@ impl ByteArray {
     /// this sets metadata, should only be called internally
     /// memory allocation must be at least size
     pub unsafe fn init(&mut self, size: usize) {
-        self.header = Header::encode_object(ObjectType::ByteArray, 0, HeaderFlags::empty(), 0);
+        self.header = Header::encode_object(
+            ObjectType::ByteArray,
+            0,
+            HeaderFlags::empty(),
+            0,
+        );
         self.size = size.into();
     }
 

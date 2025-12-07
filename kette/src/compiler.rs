@@ -1,9 +1,15 @@
-use crate::{Block, Handle, Instruction, Message, ObjectType, Quotation, VMShared};
+use crate::{
+    Block, Handle, Instruction, Message, ObjectType, Quotation, VMShared,
+};
 
 pub struct BytecodeCompiler {}
 
 impl BytecodeCompiler {
-    pub fn compile_quotation(&self, vm: &VMShared, quotation: Handle<Quotation>) -> Block {
+    pub fn compile_quotation(
+        &self,
+        vm: &VMShared,
+        quotation: Handle<Quotation>,
+    ) -> Block {
         let map = unsafe { quotation.map.as_mut() };
         let body = unsafe { map.body.as_ref() };
 
@@ -18,25 +24,29 @@ impl BytecodeCompiler {
 
             let obj = unsafe { word.as_heap_handle_unchecked() };
 
-            let message = match obj.header.object_type().expect("must be object") {
-                ObjectType::Slot
-                | ObjectType::Array
-                | ObjectType::ByteArray
-                | ObjectType::Method => {
-                    instructions.push(Instruction::PushValue {
-                        value: obj.as_value(),
-                    });
-                    continue;
-                }
-                ObjectType::Quotation => {
-                    // TODO: potentially inline
-                    let quot = unsafe { word.as_heap_handle_unchecked().cast::<Quotation>() };
-                    instructions.push(Instruction::PushQuotaton { value: quot });
-                    continue;
-                }
-                ObjectType::Message => unsafe { obj.cast::<Message>() },
-                ObjectType::Max | ObjectType::Activation => unreachable!(),
-            };
+            let message =
+                match obj.header.object_type().expect("must be object") {
+                    ObjectType::Slot
+                    | ObjectType::Array
+                    | ObjectType::ByteArray
+                    | ObjectType::Method => {
+                        instructions.push(Instruction::PushValue {
+                            value: obj.as_value(),
+                        });
+                        continue;
+                    }
+                    ObjectType::Quotation => {
+                        // TODO: potentially inline
+                        let quot = unsafe {
+                            word.as_heap_handle_unchecked().cast::<Quotation>()
+                        };
+                        instructions
+                            .push(Instruction::PushQuotaton { value: quot });
+                        continue;
+                    }
+                    ObjectType::Message => unsafe { obj.cast::<Message>() },
+                    ObjectType::Max | ObjectType::Activation => unreachable!(),
+                };
 
             // TODO: implement the resend and delegate
             let ba = message.bytearray_handle();

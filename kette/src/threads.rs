@@ -9,8 +9,8 @@ use std::{
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
-    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter, NativeParker, Object,
-    Tagged, VMProxy, Visitable,
+    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter,
+    NativeParker, Object, Tagged, VMProxy, Visitable,
 };
 
 #[derive(Debug)]
@@ -77,7 +77,10 @@ unsafe impl Send for NativeThread {}
 unsafe impl Sync for NativeThread {}
 
 impl ThreadShared {
-    pub fn new(user_thread: Handle<ThreadObject>, is_virtual: bool) -> Arc<Self> {
+    pub fn new(
+        user_thread: Handle<ThreadObject>,
+        is_virtual: bool,
+    ) -> Arc<Self> {
         let info = ThreadInfo {
             state: ThreadState::Created,
             is_vm: true,
@@ -132,7 +135,10 @@ impl VMThread {
     }
 
     // a virtual spawns without a native nor a carrier, the carrier is set when running.
-    pub fn new_virtual(user_thread: Handle<ThreadObject>, _executor: ExecutionState) -> Self {
+    pub fn new_virtual(
+        user_thread: Handle<ThreadObject>,
+        _executor: ExecutionState,
+    ) -> Self {
         let shared = ThreadShared::new(user_thread, true);
         Self {
             inner: shared,

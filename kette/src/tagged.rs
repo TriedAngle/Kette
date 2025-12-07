@@ -11,7 +11,8 @@ use std::{
 };
 
 use crate::{
-    HeapObject, HeapValue, LookupResult, Object, PtrSizedObject, Selector, Visitable, VisitedLink,
+    HeapObject, HeapValue, LookupResult, Object, PtrSizedObject, Selector,
+    Visitable, VisitedLink,
 };
 
 #[allow(unused)]
@@ -530,7 +531,11 @@ impl<T: PtrSizedObject> From<Tagged<T>> for Handle<Value> {
 
 impl Visitable for Value {}
 impl Object for Value {
-    fn lookup(&self, selector: Selector<'_>, link: Option<&VisitedLink>) -> LookupResult {
+    fn lookup(
+        &self,
+        selector: Selector<'_>,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
         if let Some(_num) = self.as_tagged_fixnum::<i64>() {
             let traits = selector.vm.specials.fixnum_traits;
             return traits.lookup(selector, link);
@@ -670,7 +675,10 @@ mod value_tests {
         let raw: *mut TestObj = &mut *obj;
 
         let tagged_ptr: Tagged<TestObj> = Tagged::new_ptr(raw);
-        assert_eq!(tagged_ptr.data & OBECT_TAG_MASK, ValueTag::Reference as u64);
+        assert_eq!(
+            tagged_ptr.data & OBECT_TAG_MASK,
+            ValueTag::Reference as u64
+        );
 
         assert_eq!(tagged_ptr.as_ptr(), raw);
 

@@ -23,7 +23,9 @@ mod threads;
 mod visitor;
 mod vm;
 
-pub use activation::{Activation, ActivationObject, ActivationStack, ActivationType};
+pub use activation::{
+    Activation, ActivationObject, ActivationStack, ActivationType,
+};
 pub use arrays::Array;
 pub use bytearrays::ByteArray;
 pub use bytecode::{Block, Instruction};
@@ -38,8 +40,9 @@ pub use object::*;
 pub use parker::NativeParker;
 pub use parser::{ParsedToken, Parser, ParserRegistry, Token};
 pub use primitives::{
-    PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, PrimitiveParserContext,
-    PrimitiveParserFunction, get_primitive, primitive_index,
+    PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex,
+    PrimitiveParserContext, PrimitiveParserFunction, get_primitive,
+    primitive_index,
 };
 pub use quotations::{Quotation, QuotationMap};
 pub use slots::{SlotInfo, SlotMap, SlotObject};
@@ -48,7 +51,8 @@ pub use stack_effect::StackEffect;
 pub use system::{PAGE_SIZE, map_memory, unmap_memory};
 pub use tagged::{Handle, OBECT_TAG_MASK, Tagged, Value, ValueTag};
 pub use threads::{
-    NativeThread, ThreadInfo, ThreadObject, ThreadProxy, ThreadShared, ThreadState, VMThread,
+    NativeThread, ThreadInfo, ThreadObject, ThreadProxy, ThreadShared,
+    ThreadState, VMThread,
 };
 pub use visitor::{Visitable, Visitor};
 pub use vm::{VM, VMCreateInfo, VMProxy, VMShared};

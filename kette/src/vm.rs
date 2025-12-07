@@ -1,7 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Message, Strings, Value,
+    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Message,
+    Strings, Value,
 };
 
 #[derive(Debug)]
@@ -93,7 +94,11 @@ impl VMProxy {
         }
     }
 
-    pub fn intern_string(&self, s: &str, heap: &mut HeapProxy) -> Handle<ByteArray> {
+    pub fn intern_string(
+        &self,
+        s: &str,
+        heap: &mut HeapProxy,
+    ) -> Handle<ByteArray> {
         self.shared.strings.get(s, heap)
     }
 }
@@ -101,13 +106,17 @@ impl VMProxy {
 impl SpecialObjects {
     pub unsafe fn null() -> Self {
         Self {
-            bytearray_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
+            bytearray_traits: unsafe {
+                Value::zero().as_heap_handle_unchecked()
+            },
             array_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
             fixnum_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
             float_traits: unsafe { Value::zero().as_heap_handle_unchecked() },
             true_object: unsafe { Value::zero().as_heap_handle_unchecked() },
             false_object: unsafe { Value::zero().as_heap_handle_unchecked() },
-            message_self: unsafe { Value::zero().as_heap_handle_unchecked().cast() },
+            message_self: unsafe {
+                Value::zero().as_heap_handle_unchecked().cast()
+            },
         }
     }
 }

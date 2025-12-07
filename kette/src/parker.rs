@@ -69,10 +69,12 @@ impl NativeParker {
     fn try_consume_token(&self) -> bool {
         let mut s = self.state.load(Acquire);
         while s & TOKEN != 0 {
-            match self
-                .state
-                .compare_exchange_weak(s, s & !TOKEN, AcqRel, Relaxed)
-            {
+            match self.state.compare_exchange_weak(
+                s,
+                s & !TOKEN,
+                AcqRel,
+                Relaxed,
+            ) {
                 Ok(_) => return true,
                 Err(cur) => s = cur,
             }
@@ -149,7 +151,8 @@ mod tests {
 
         let waiter = thread::spawn(move || {
             let g = p2.lock.lock().expect("lock poisoned");
-            let (_g, timeout_res) = p2.cv.wait_timeout(g, Duration::from_millis(500)).unwrap();
+            let (_g, timeout_res) =
+                p2.cv.wait_timeout(g, Duration::from_millis(500)).unwrap();
             if !timeout_res.timed_out() {
                 woke2.store(true, SeqCst);
             }
@@ -291,7 +294,8 @@ mod tests {
         parker.unpark();
 
         let start = Instant::now();
-        while !returned.load(SeqCst) && start.elapsed() < Duration::from_secs(1) {
+        while !returned.load(SeqCst) && start.elapsed() < Duration::from_secs(1)
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
@@ -329,7 +333,8 @@ mod tests {
         tx.send((parker.clone(), dummy_view().into())).unwrap();
 
         let start = Instant::now();
-        while !returned.load(SeqCst) && start.elapsed() < Duration::from_secs(1) {
+        while !returned.load(SeqCst) && start.elapsed() < Duration::from_secs(1)
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
@@ -364,7 +369,9 @@ mod tests {
         parker.unpark();
 
         let start = Instant::now();
-        while !phase1_done.load(SeqCst) && start.elapsed() < Duration::from_secs(1) {
+        while !phase1_done.load(SeqCst)
+            && start.elapsed() < Duration::from_secs(1)
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
@@ -409,7 +416,9 @@ mod tests {
         parker.unpark();
 
         let start = Instant::now();
-        while !phase1_done.load(SeqCst) && start.elapsed() < Duration::from_secs(1) {
+        while !phase1_done.load(SeqCst)
+            && start.elapsed() < Duration::from_secs(1)
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
@@ -420,7 +429,9 @@ mod tests {
         parker.unpark();
 
         let start2 = Instant::now();
-        while !phase2_returned.load(SeqCst) && start2.elapsed() < Duration::from_secs(1) {
+        while !phase2_returned.load(SeqCst)
+            && start2.elapsed() < Duration::from_secs(1)
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(

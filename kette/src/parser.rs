@@ -188,19 +188,27 @@ mod tests {
         let (p, v) = parse_all("-42  +9  -3.5  +1.2");
 
         match v[0] {
-            ParsedToken::Identifier(t) => assert_eq!(p.get_token_string(t), "-42"),
+            ParsedToken::Identifier(t) => {
+                assert_eq!(p.get_token_string(t), "-42")
+            }
             _ => panic!("Expected identifier"),
         }
         match v[1] {
-            ParsedToken::Identifier(t) => assert_eq!(p.get_token_string(t), "+9"),
+            ParsedToken::Identifier(t) => {
+                assert_eq!(p.get_token_string(t), "+9")
+            }
             _ => panic!("Expected identifier"),
         }
         match v[2] {
-            ParsedToken::Identifier(t) => assert_eq!(p.get_token_string(t), "-3.5"),
+            ParsedToken::Identifier(t) => {
+                assert_eq!(p.get_token_string(t), "-3.5")
+            }
             _ => panic!("Expected identifier"),
         }
         match v[3] {
-            ParsedToken::Identifier(t) => assert_eq!(p.get_token_string(t), "+1.2"),
+            ParsedToken::Identifier(t) => {
+                assert_eq!(p.get_token_string(t), "+1.2")
+            }
             _ => panic!("Expected identifier"),
         }
     }
@@ -210,7 +218,9 @@ mod tests {
         let (p, v) = parse_all("foo 123 bar 7.5");
 
         match v[0] {
-            ParsedToken::Identifier(t) => assert_eq!(p.get_token_string(t), "foo"),
+            ParsedToken::Identifier(t) => {
+                assert_eq!(p.get_token_string(t), "foo")
+            }
             _ => panic!("Expected identifier"),
         }
         match v[1] {
@@ -218,7 +228,9 @@ mod tests {
             _ => panic!("Expected Fixnum"),
         }
         match v[2] {
-            ParsedToken::Identifier(t) => assert_eq!(p.get_token_string(t), "bar"),
+            ParsedToken::Identifier(t) => {
+                assert_eq!(p.get_token_string(t), "bar")
+            }
             _ => panic!("Expected identifier"),
         }
         match v[3] {

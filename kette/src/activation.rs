@@ -1,8 +1,8 @@
 use std::mem;
 
 use crate::{
-    ExecutableMap, Header, HeaderFlags, HeapObject, Object, Selector, Tagged, Value, Visitable,
-    VisitedLink,
+    ExecutableMap, Header, HeaderFlags, HeapObject, Object, Selector, Tagged,
+    Value, Visitable, VisitedLink,
 };
 
 pub enum ActivationType {
@@ -32,8 +32,12 @@ impl ActivationObject {
         map: Tagged<ExecutableMap>,
         arguments: &[Value],
     ) {
-        self.header =
-            Header::encode_object(crate::ObjectType::Activation, 0, HeaderFlags::empty(), 0);
+        self.header = Header::encode_object(
+            crate::ObjectType::Activation,
+            0,
+            HeaderFlags::empty(),
+            0,
+        );
         self.map = map;
         self.receiver = receiver;
 
@@ -48,7 +52,11 @@ impl ActivationObject {
         let ptr = self.slots.as_mut_ptr();
         // Safety: assumption activation object is allocated with correct size
         unsafe {
-            std::ptr::copy_nonoverlapping(arguments.as_ptr(), ptr, arguments.len());
+            std::ptr::copy_nonoverlapping(
+                arguments.as_ptr(),
+                ptr,
+                arguments.len(),
+            );
         };
     }
 
@@ -117,7 +125,11 @@ impl ActivationStack {
 impl Visitable for ActivationObject {}
 
 impl Object for ActivationObject {
-    fn lookup(&self, selector: Selector<'_>, link: Option<&VisitedLink>) -> crate::LookupResult {
+    fn lookup(
+        &self,
+        selector: Selector<'_>,
+        link: Option<&VisitedLink>,
+    ) -> crate::LookupResult {
         // let slots = self.
         unimplemented!()
     }

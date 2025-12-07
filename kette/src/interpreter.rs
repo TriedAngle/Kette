@@ -1,6 +1,6 @@
 use crate::{
-    ActivationStack, ExecutionState, HeapProxy, Instruction, PrimitiveContext, ThreadProxy,
-    VMProxy, get_primitive, object,
+    ActivationStack, ExecutionState, HeapProxy, Instruction, PrimitiveContext,
+    ThreadProxy, VMProxy, get_primitive, object,
 };
 
 pub struct Interpreter {
@@ -26,7 +26,12 @@ pub enum ExecutionResult {
 }
 
 impl Interpreter {
-    pub fn new(vm: VMProxy, thread: ThreadProxy, heap: HeapProxy, state: ExecutionState) -> Self {
+    pub fn new(
+        vm: VMProxy,
+        thread: ThreadProxy,
+        heap: HeapProxy,
+        state: ExecutionState,
+    ) -> Self {
         Self {
             vm,
             thread,
@@ -36,9 +41,6 @@ impl Interpreter {
         }
     }
 
-    // pub fn run(code)
-    //
-
     pub fn execute_bytecode(&mut self, instruction: Instruction) {
         match instruction {
             Instruction::PushFixnum { value } => self.state.push(value.into()),
@@ -47,7 +49,9 @@ impl Interpreter {
                 println!("call: {:?}", message.name);
                 let receiver = self.state.pop().expect("must have item");
                 let receiver = unsafe { receiver.as_handle_unchecked() };
-                let inputs = unsafe { self.state.stack_pop_slice_unchecked(message.inputs) };
+                let inputs = unsafe {
+                    self.state.stack_pop_slice_unchecked(message.inputs)
+                };
                 let mut outputs = Vec::with_capacity(message.outputs);
                 unsafe { outputs.set_len(message.outputs) };
                 let res = message.call(

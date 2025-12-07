@@ -7,10 +7,17 @@ fn inputs<const N: usize>(ctx: &mut PrimitiveContext) -> [Handle<Value>; N] {
     unsafe { *(ctx.inputs.as_ptr() as *const [Handle<Value>; N]) }
 }
 
-fn outputs<const N: usize>(ctx: &mut PrimitiveContext, values: [Handle<Value>; N]) {
+fn outputs<const N: usize>(
+    ctx: &mut PrimitiveContext,
+    values: [Handle<Value>; N],
+) {
     // SAFETY: this requires a bounds check before, but I am the boundcer
     unsafe {
-        std::ptr::copy_nonoverlapping(values.as_ptr(), ctx.outputs.as_mut_ptr(), N);
+        std::ptr::copy_nonoverlapping(
+            values.as_ptr(),
+            ctx.outputs.as_mut_ptr(),
+            N,
+        );
     }
 }
 
