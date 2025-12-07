@@ -6,17 +6,17 @@ currently still in very early construction of the VM
 ## Roadmap
 essentially which tests already work
 not full in order of requirements but mostly.
+a standard library getting build step by step is also necessary for most of these tests
 
 **these would already work**, *but comment parsing is missing*
 - [x] raw integers
 - [x] raw printing
 
 **requires nicer names**
-
-**requires callstack**
-
 - [ ] printing
 - [ ] integers
+
+**requires callstack**
 - [ ] floats, float implementation is also not fully implemented yet, TODO: test missing
 - [ ] big integers, not implemented yet, TODO: test missing,
 
@@ -24,6 +24,7 @@ not full in order of requirements but mostly.
 - [ ] printing
 - [ ] assignables 
 - [ ] constants
+- [ ] custom parsers, TODO: test missing
 
 **requires quotations**
 - [ ] fizzbuzz
@@ -43,3 +44,4 @@ not full in order of requirements but mostly.
 
 **not fully implemented yet, object monitor and header missing**
 - [ ] synchronized, TODO: test missing
+
