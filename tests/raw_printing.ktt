@@ -1,0 +1,10 @@
+// unimplemented
+// expect:
+// hello world!
+// this is
+// newline
+// ok nice
+
+"hello world!" bytearray-println
+"this is\nnewline" bytearray-println
+"ok" bytearray-print " nice" bytearray-println

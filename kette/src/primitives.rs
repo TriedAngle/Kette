@@ -184,7 +184,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum*", 1, 1, fixnum::fixnum_mul),
     PrimitiveMessage::new("fixnum/", 1, 1, fixnum::fixnum_div),
     PrimitiveMessage::new("fixnum%", 1, 1, fixnum::fixnum_mod),
-    PrimitiveMessage::new("fixnum-bitneg", 1, 1, fixnum::fixnum_neg),
+    PrimitiveMessage::new("fixnum-neg", 1, 1, fixnum::fixnum_neg),
     PrimitiveMessage::new("fixnum-bitand", 1, 1, fixnum::fixnum_and),
     PrimitiveMessage::new("fixnum-bitor", 1, 1, fixnum::fixnum_or),
     PrimitiveMessage::new("fixnum-eq", 1, 1, fixnum::fixnum_eq),

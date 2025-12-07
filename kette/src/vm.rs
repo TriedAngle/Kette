@@ -124,7 +124,7 @@ impl VM {
             SlotHelper::primitive_message("fixnum*", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum/", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum%", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-bitneg", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum-neg", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum-bitand", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum-bitor", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum-eq", SlotTags::empty()),
