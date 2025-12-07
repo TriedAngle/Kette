@@ -12,26 +12,34 @@ not full in order of requirements but mostly.
 - [x] raw printing
 
 **requires nicer names**
+
 **requires callstack**
+
 - [ ] printing
 - [ ] integers
 - [ ] floats, float implementation is also not fully implemented yet, TODO: test missing
 - [ ] big integers, not implemented yet, TODO: test missing,
+
 **requires object parsing**
 - [ ] printing
 - [ ] assignables 
 - [ ] constants
+
 **requires quotations**
 - [ ] fizzbuzz
 - [ ] flow
+
 **requires parent mechanism**
 - [ ] parent lookup, TODO: test missing
 - [ ] assignable parent, TODO: test missing
 - [ ] inheritance, TODO: test missing
+
 **requires named parameters**
 - [ ] named parameters
+
 **mostly implemented, std and api missing**
 - [ ] locking, TODO: test missing
 - [ ] multithreading, TODO: test missing
+
 **not fully implemented yet, object monitor and header missing**
 - [ ] synchronized, TODO: test missing
