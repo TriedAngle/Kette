@@ -683,7 +683,7 @@ pub mod transmute {
     ///
     /// # Safety
     /// The caller must ensure that each `Value` in the slice is safe to be treated
-    /// as a handle:
+    /// as a handle
     ///
     /// This is equivalent to calling `Value::as_handle_unchecked` on each element.
     #[inline]
