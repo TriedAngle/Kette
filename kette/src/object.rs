@@ -19,10 +19,10 @@ pub enum ObjectType {
     Slot = 0b00000,
     Array = 0b00010,
     ByteArray = 0b00011,
-    Activation = 0b0100,
-    Method = 0b0101,
-    Quotation = 0b0111,
-    Message = 0b1000,
+    Activation = 0b00100,
+    Method = 0b00101,
+    Quotation = 0b00111,
+    Message = 0b01000,
     Max = 0b11111,
 }
 
@@ -71,7 +71,7 @@ pub trait Object: Sized + Visitable {
         link: Option<&VisitedLink>,
     ) -> LookupResult {
         // SAFETY: must be valid here
-        let s = unsafe { str::from_utf8_unchecked(selector.name.as_bytes()) };
+        let s = selector.name.as_utf8().expect("get string");
         unimplemented!(
             "lookup with: {s} and {link:?} on type that is not lookupable"
         );
@@ -210,8 +210,12 @@ impl Header {
             0b00000 => ObjectType::Slot,
             0b00010 => ObjectType::Array,
             0b00011 => ObjectType::ByteArray,
+            0b00100 => ObjectType::Activation,
+            0b00101 => ObjectType::Method,
+            0b00111 => ObjectType::Quotation,
+            0b01000 => ObjectType::Message,
             0b11111 => ObjectType::Max,
-            _ => ObjectType::Max,
+            _ => unreachable!("object type doesn't exist"),
         })
     }
 

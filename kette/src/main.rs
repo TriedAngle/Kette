@@ -1,35 +1,22 @@
 use kette::{
-    Block, ExecutionState, ExecutionStateInfo, HeapCreateInfo, HeapProxy,
-    Instruction, Interpreter, ThreadProxy, VM, VMCreateInfo, VMProxy, VMThread,
-    primitive_index,
+    Array, Block, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
+    HeapCreateInfo, Instruction, Interpreter, Parser, Tagged, ThreadProxy, VM,
+    VMCreateInfo, VMThread, Value,
 };
 
-const _CODE: &str = r#"
+const CODE: &str = r#"
 5 77 fixnum+ fixnum>utf8-bytes bytearray-println
 "#;
 
-fn demo_compiled(vm: &VMProxy, _heap: &mut HeapProxy) -> Block {
-    Block {
-        #[rustfmt::skip]
-        instructions: vec![
-            Instruction::PushFixnum { value: 10 },
-            Instruction::PushFixnum { value: 60 },
-            Instruction::PushValue {
-                value: vm.specials().stack_object.as_value(),
-            },
-            Instruction::SendNamed { message: "swap" },
-            Instruction::PushFixnum { value: 20 },
-            Instruction::SendNamed { message: "fixnum+" },
-            Instruction::SendNamed { message: "fixnum>utf8-bytes" },
-            Instruction::SendNamed { message: "bytearray-println" },
-            Instruction::SendPrimitive {
-                id: primitive_index("fixnum>utf8-bytes"),
-            },
-            Instruction::SendPrimitive {
-                id: primitive_index("bytearray-println"),
-            },
-        ],
-    }
+fn execute_parser_code(value: Value) -> Block {
+    let instructions = vec![
+        Instruction::PushValue { value },
+        Instruction::SendNamed {
+            message: "parse-full",
+        },
+    ];
+
+    Block { instructions }
 }
 
 fn main() {
@@ -56,9 +43,31 @@ fn main() {
 
     let proxy = vm.new_proxy();
 
-    let compiled = demo_compiled(&main_proxy, &mut heap);
+    let mut parser =
+        Box::new(Parser::new_object(&proxy, &mut heap, CODE.as_bytes()));
+
+    let parser_obj = Tagged::new_ptr(parser.as_mut());
+
+    let parser_code = execute_parser_code(parser_obj.into());
 
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
+
+    for instruction in parser_code.instructions {
+        interpreter.execute_bytecode(instruction);
+    }
+
+    // SAFETY: this is guaranteed by the contract
+    let array = unsafe {
+        interpreter
+            .state
+            .pop()
+            .expect("exists")
+            .as_handle_unchecked()
+            .cast::<Array>()
+    };
+
+    println!("array: {:?}", array.fields());
+    let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, array);
 
     for instruction in compiled.instructions {
         interpreter.execute_bytecode(instruction);

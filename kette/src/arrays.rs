@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, ptr};
 
 use crate::{
     Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
@@ -23,23 +23,25 @@ pub struct Array {
     pub fields: [Value; 0],
 }
 
-// impl ArrayMap {
-//     #[inline]
-//     pub unsafe fn init(&mut self /* size: usize */) {
-//         // self.size = size.into();
-//         unsafe { self.map.init(MapType::Array) };
-//     }
-//
-//     // #[inline]
-//     // pub fn size(&self) -> usize {
-//     //     usize::from(self.size)
-//     // }
-// }
-
 impl Array {
+    /// initialize array with data
+    /// # Safety
+    /// must be allocated with correct size
+    pub unsafe fn init_with_data(&mut self, data: &[Value]) {
+        // SAFETY: safe if contract ok
+        unsafe { self.init(data.len()) };
+        // SAFETY: safe if contract ok
+        unsafe {
+            ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.fields.as_mut_ptr(),
+                data.len(),
+            )
+        };
+    }
     /// Initialize a slot object
     /// # Safety
-    /// internal api, shouldn't be called
+    /// must get initialized and allocated with correct size
     pub unsafe fn init(&mut self, size: usize) {
         self.header = Header::encode_object(
             ObjectType::Array,

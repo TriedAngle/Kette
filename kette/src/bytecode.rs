@@ -1,3 +1,5 @@
+use parking_lot::RwLock;
+
 use crate::{
     Handle, Message, PrimitiveMessageIndex, Quotation, SlotMap, Tagged, Value,
 };
@@ -33,7 +35,34 @@ pub enum Instruction {
 // we can also do it like riscV and add additional compressed instructions
 // but at least for high level "parsing", we should keep something like the current instructions
 // we can also optimize this further and inline the instructions into the Block itself
-#[allow(unused)]
+#[derive(Debug)]
 pub struct Block {
     pub instructions: Vec<Instruction>,
+}
+
+// TODO: make this faster and more cache friendly
+// the Block -> Vec is also bad, it should be inlined
+// TODO: current thing will break on resize
+#[derive(Debug, Default)]
+pub struct CodeHeap {
+    blocks: RwLock<Vec<Block>>,
+}
+
+impl CodeHeap {
+    pub fn new() -> Self {
+        Self {
+            blocks: RwLock::new(Vec::with_capacity(1024)),
+        }
+    }
+
+    pub fn push(&self, block: Block) -> &Block {
+        let mut blocks = self.blocks.write();
+        blocks.push(block);
+        // SAFETY: this is mostly safe
+        unsafe {
+            (blocks.last().unwrap() as *const Block)
+                .as_ref()
+                .unwrap_unchecked()
+        }
+    }
 }

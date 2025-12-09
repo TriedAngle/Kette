@@ -1,7 +1,7 @@
 use crate::{
-    ActivationStack, ExecutionState, Handle, HeapProxy, Instruction,
-    LookupResult, PrimitiveMessageIndex, Selector, ThreadProxy, VMProxy, Value,
-    get_primitive, slots::SlotTags,
+    ActivationStack, ExecutionState, Handle, HeapProxy, HeapValue, Instruction,
+    LookupResult, Parser, PrimitiveMessageIndex, Selector, ThreadProxy,
+    VMProxy, Value, get_primitive, slots::SlotTags,
 };
 
 pub struct Interpreter {
@@ -45,7 +45,10 @@ impl Interpreter {
     pub fn execute_bytecode(&mut self, instruction: Instruction) {
         match instruction {
             Instruction::PushFixnum { value } => self.state.push(value.into()),
-            Instruction::PushValue { value } => self.state.push(value),
+            Instruction::PushValue { value } => {
+                println!("push value: {:?}", value);
+                self.state.push(value)
+            }
             Instruction::SendPrimitive { id } => {
                 // SAFETY: after depth check, this is safe
                 let receiver =
@@ -83,6 +86,7 @@ impl Interpreter {
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
+
                 match self.send(receiver, selector) {
                     ExecutionResult::Normal => (),
                     _ => unimplemented!("TODO: implemented"),
@@ -137,11 +141,7 @@ impl Interpreter {
         receiver: Handle<Value>,
         selector: Selector,
     ) -> ExecutionResult {
-        println!(
-            "call: {:?}",
-            str::from_utf8(selector.name.as_bytes())
-                .expect("valid utf8 message")
-        );
+        println!("call: {:?}", selector.name.as_utf8().unwrap());
 
         let res = selector.lookup_object(&receiver.inner());
 

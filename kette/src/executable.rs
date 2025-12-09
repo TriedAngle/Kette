@@ -1,7 +1,7 @@
 use std::mem;
 
 use crate::{
-    ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged,
+    Block, ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged,
     Visitable,
 };
 
@@ -12,7 +12,7 @@ use crate::{
 #[derive(Debug)]
 pub struct ExecutableMap {
     pub map: SlotMap,
-    // TODO: we could directly use Tagged<*mut Code> here probably
+    // secretely a *const Block
     pub code: Tagged<usize>,
 }
 

@@ -1,28 +1,23 @@
 use crate::{
-    Block, Handle, Instruction, Message, ObjectType, Quotation, VMShared,
+    Array, Block, Handle, Instruction, Message, ObjectType, Quotation, VMShared,
 };
 
 pub struct BytecodeCompiler {}
 
 impl BytecodeCompiler {
-    pub fn compile_quotation(
-        &self,
-        vm: &VMShared,
-        quotation: Handle<Quotation>,
-    ) -> Block {
-        // SAFETY: map must exist
-        let map = unsafe { quotation.map.as_mut() };
-        // SAFETY: might not be safe, probably is, but maybe requires false check
-        let body = unsafe { map.body.as_ref() };
-
+    pub fn compile(vm: &VMShared, body: Handle<Array>) -> Block {
         let mut instructions = Vec::new();
         for word in body.fields() {
+            println!("obj1");
+
             if let Some(value) = word.as_tagged_fixnum::<i64>() {
                 instructions.push(Instruction::PushFixnum {
                     value: value.as_i64(),
                 });
                 continue;
             }
+
+            println!("obj2");
 
             // SAFETY: no gc here
             let obj = unsafe { word.as_heap_handle_unchecked() };
@@ -50,9 +45,12 @@ impl BytecodeCompiler {
                     }
                     // SAFETY: checked
                     ObjectType::Message => unsafe { obj.cast::<Message>() },
-                    ObjectType::Max | ObjectType::Activation => unreachable!(),
+                    ObjectType::Max | ObjectType::Activation => {
+                        unreachable!("obj {:?} invalid", word)
+                    }
                 };
 
+            println!("test");
             // TODO: implement the resend and delegate
             let ba = message.bytearray_handle();
             if ba == vm.specials.message_self {

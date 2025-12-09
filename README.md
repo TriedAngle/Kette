@@ -3,6 +3,9 @@ Concatenative Language with extreme Late binding and actor concurrency.
 
 currently still in very early construction of the VM
 
+## Examples
+see `tests/` for small snippets
+
 ## Roadmap
 essentially which tests already work
 not full in order of requirements but mostly.

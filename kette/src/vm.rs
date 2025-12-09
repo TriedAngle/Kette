@@ -1,8 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, SlotHelper,
-    SlotTags, Strings, Value,
+    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Message,
+    SlotHelper, SlotTags, Strings, Value, bytecode::CodeHeap,
+    interning::Messages,
 };
 
 #[derive(Debug)]
@@ -11,6 +12,7 @@ pub struct SpecialObjects {
     pub array_traits: Handle<HeapValue>,
     pub fixnum_traits: Handle<HeapValue>,
     pub float_traits: Handle<HeapValue>,
+    pub quotation_traits: Handle<HeapValue>,
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
     pub stack_object: Handle<HeapValue>,
@@ -23,6 +25,8 @@ pub struct VMShared {
     pub specials: SpecialObjects,
     pub heap: Heap,
     pub strings: Strings,
+    pub messages: Messages,
+    pub code_heap: CodeHeap,
 }
 
 // Safety: VMProxy is never mutably shared / has internal locking
@@ -62,6 +66,8 @@ impl VM {
             specials: unsafe { SpecialObjects::null() },
             heap,
             strings: Strings::new(),
+            messages: Messages::new(),
+            code_heap: CodeHeap::new(),
         };
 
         let mut new = Self {
@@ -142,6 +148,11 @@ impl VM {
             SlotHelper::primitive_message("bytearray-println", SlotTags::empty()),
         ]);
 
+        #[rustfmt::skip]
+        let array_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("array>quotation", SlotTags::empty()),
+        ]);
+
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
         unsafe {
             let stack_object = heap
@@ -155,7 +166,7 @@ impl VM {
                 .cast();
 
             let array_traits = heap
-                .allocate_slot_object(empty_map, &[])
+                .allocate_slot_object(array_map, &[])
                 .promote_to_handle()
                 .cast();
 
@@ -165,6 +176,11 @@ impl VM {
                 .cast();
 
             let float_traits = heap
+                .allocate_slot_object(empty_map, &[])
+                .promote_to_handle()
+                .cast();
+
+            let quotation_traits = heap
                 .allocate_slot_object(empty_map, &[])
                 .promote_to_handle()
                 .cast();
@@ -184,6 +200,7 @@ impl VM {
                 array_traits,
                 fixnum_traits,
                 float_traits,
+                quotation_traits,
                 true_object,
                 false_object,
                 stack_object,
@@ -212,6 +229,23 @@ impl VMProxy {
         self.shared.strings.get(s, heap)
     }
 
+    pub fn intern_message(
+        &self,
+        interned_bytearray: Handle<ByteArray>,
+        heap: &mut HeapProxy,
+    ) -> Handle<Message> {
+        self.shared.messages.get(interned_bytearray, heap)
+    }
+
+    pub fn intern_string_message(
+        &self,
+        s: &str,
+        heap: &mut HeapProxy,
+    ) -> Handle<Message> {
+        let bytearray = self.intern_string(s, heap);
+        self.intern_message(bytearray, heap)
+    }
+
     pub fn specials(&self) -> &SpecialObjects {
         &self.shared.specials
     }
@@ -229,6 +263,7 @@ impl SpecialObjects {
                 array_traits: Value::zero().as_heap_handle_unchecked(),
                 fixnum_traits: Value::zero().as_heap_handle_unchecked(),
                 float_traits: Value::zero().as_heap_handle_unchecked(),
+                quotation_traits: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),

@@ -1,6 +1,9 @@
 use std::mem;
 
-use crate::{ByteArray, Handle, Header, HeapObject, Object, Tagged, Visitable};
+use crate::{
+    ByteArray, Handle, Header, HeaderFlags, HeapObject, Object, ObjectType,
+    Tagged, Visitable,
+};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -10,8 +13,22 @@ pub struct Message {
 }
 
 impl Message {
+    /// initialize message
+    /// # Safety
+    /// value must be interned, later code assumes this
+    pub unsafe fn init(&mut self, value: Tagged<ByteArray>) {
+        self.header = Header::encode_object(
+            ObjectType::Message,
+            0,
+            HeaderFlags::empty(),
+            0,
+        );
+        println!("header:: {:?}", self.header.object_type());
+        self.value = value;
+    }
+
     pub fn bytearray_handle(&self) -> Handle<ByteArray> {
-        // Safety: messages exist safely
+        // SAFETY: messages exist safely
         unsafe { self.value.promote_to_handle() }
     }
 }

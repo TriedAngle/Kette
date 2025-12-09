@@ -1,8 +1,9 @@
 use crate::{
-    ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter, Parser,
-    ParserRegistry, ThreadProxy, VMProxy, Value,
+    ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter,
+    ThreadProxy, VMProxy, Value,
 };
 
+mod array;
 mod bytearray;
 mod fixnum;
 mod parsing;
@@ -129,36 +130,6 @@ impl<'m> PrimitiveMessage<'m> {
     }
 }
 
-pub struct PrimitiveParserContext<'ex, 'code> {
-    pub state: &'ex mut ExecutionState,
-    pub vm: &'ex VMProxy,
-    pub thread: &'ex ThreadProxy,
-    pub heap: &'ex mut HeapProxy,
-    pub parser: &'ex mut Parser<'code>,
-    pub parsers: &'ex ParserRegistry,
-}
-
-impl<'ex, 'code> PrimitiveParserContext<'ex, 'code> {
-    pub fn new(
-        interpreter: &'ex mut Interpreter,
-        parser: &'ex mut Parser<'code>,
-        parsers: &'ex ParserRegistry,
-    ) -> Self {
-        let state = &mut interpreter.state;
-        let thread = &interpreter.thread;
-        let heap = &mut interpreter.heap;
-        let vm = &interpreter.vm;
-        Self {
-            state,
-            vm,
-            thread,
-            heap,
-            parser,
-            parsers,
-        }
-    }
-}
-
 #[rustfmt::skip]
 pub const PRIMITIVES: &[PrimitiveMessage] = &[
     // Stack
@@ -205,6 +176,15 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("park-nanos", 2, 0, threads::park_nanos),
     PrimitiveMessage::new("park-until", 2, 0, threads::park_until),
     PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
+    
+    PrimitiveMessage::new("array>quotation", 0, 1, array::array_to_quotation),
+    // call quotation
+    // PrimitiveMessage::new("(call)", 0, 0, threads::unpark),
+
+    // parsing
+    PrimitiveMessage::new("parse-next", 0, 1, parsing::parse_next),
+    PrimitiveMessage::new("parse-until", 2, 1, parsing::parse_until),
+    PrimitiveMessage::new("parse-full", 0, 1, parsing::parse_complete),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {

@@ -16,8 +16,9 @@ use bitflags::bitflags;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    ByteArray, Handle, HeapObject, SlotDescriptor, SlotHelper, SlotMap,
-    SlotObject, Strings, Tagged, Value, Visitable, map_memory, slots::SlotTags,
+    Array, Block, ByteArray, Handle, HeapObject, Message, Quotation,
+    QuotationMap, SlotDescriptor, SlotHelper, SlotMap, SlotObject, Strings,
+    Tagged, Value, Visitable, map_memory, slots::SlotTags,
 };
 
 pub const HANDLE_SET_SIZE: usize = 20;
@@ -655,8 +656,73 @@ impl HeapProxy {
         Tagged::new_ptr(obj)
     }
 
+    pub fn allocate_message(
+        &mut self,
+        interned: Tagged<ByteArray>,
+    ) -> Tagged<Message> {
+        // SAFETY: this is safe
+        let mut raw = unsafe {
+            self.allocate_boxed_raw(mem::size_of::<Message>())
+                .cast::<Message>()
+        };
+
+        // SAFETY: just created, safe to convert to mutable reference
+        let message = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { message.init(interned.into()) };
+
+        Tagged::new_ptr(message)
+    }
+
     pub fn allocate_empty_map(&mut self) -> Tagged<SlotMap> {
         self.allocate_slot_map(&[])
+    }
+
+    pub fn allocate_array(&mut self, data: &[Value]) -> Tagged<Array> {
+        let mut raw = self.allocate_boxed_raw(data.len()).cast::<Array>();
+
+        // SAFETY: we just create this here
+        let array = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { array.init_with_data(data) };
+
+        Tagged::new_ptr(array)
+    }
+
+    /// # Safety
+    /// this is safe but should only be used in conjunction with a quotation object
+    pub unsafe fn allocate_quotation_map(
+        &mut self,
+        code: &Block,
+        effect: Tagged<u64>,
+    ) -> Tagged<QuotationMap> {
+        let layout = QuotationMap::required_layout();
+        let mut raw = self.allocate_unboxed_raw(layout).cast::<QuotationMap>();
+        // SAFETY: just created, safe to convert to mutable reference
+        let map = unsafe { raw.as_mut() };
+
+        // SAFETY: this is safe
+        unsafe { map.init(code, effect) };
+
+        Tagged::new_ptr(map)
+    }
+
+    pub fn allocate_quotation(
+        &mut self,
+        body: Handle<Array>,
+        bytecode: &Block,
+        effect: Tagged<u64>,
+    ) -> Tagged<Quotation> {
+        // SAFETY: this is safe
+        let map = unsafe { self.allocate_quotation_map(bytecode, effect) };
+        let mut raw = self
+            .allocate_boxed_raw(mem::size_of::<Quotation>())
+            .cast::<Quotation>();
+        // SAFETY: we just create this here
+        let quot = unsafe { raw.as_mut() };
+        // SAFETY: we just create this here
+        unsafe { quot.init(body.as_tagged(), map) };
+        Tagged::new_ptr(quot)
     }
 
     pub fn create_proxy(&self) -> HeapProxy {

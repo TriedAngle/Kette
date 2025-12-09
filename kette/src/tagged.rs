@@ -6,6 +6,7 @@
 //! Handle<T>: untagged value, small integer or reference, is safe to use, GC does not clear/move this
 //! also implements Deref and DerefMut
 use std::{
+    hash,
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
@@ -351,6 +352,14 @@ impl<T: Object> PartialEq for Handle<T> {
     }
 }
 
+impl<T: Object> Eq for Handle<T> {}
+
+impl<T: Object> hash::Hash for Handle<T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.data);
+    }
+}
+
 impl<T: HeapObject> Handle<T> {
     #[inline]
     pub fn as_object(self) -> Tagged<T> {
@@ -441,6 +450,17 @@ impl Handle<Value> {
 
     pub fn is_object(&self) -> bool {
         self.data & OBECT_TAG_MASK == ValueTag::Reference as u64
+    }
+
+    /// Get a generic HeapValue from a Value
+    /// # Safety
+    /// user must make sure this is a heap value
+    #[inline]
+    pub unsafe fn as_heap_value_handle(self) -> Handle<HeapValue> {
+        Handle::<HeapValue> {
+            data: self.data,
+            _marker: PhantomData,
+        }
     }
 }
 

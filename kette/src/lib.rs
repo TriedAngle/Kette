@@ -12,7 +12,7 @@ mod message;
 mod object;
 mod parker;
 mod parser;
-mod primitives;
+pub mod primitives;
 mod quotations;
 mod slots;
 mod stack;
@@ -38,10 +38,10 @@ pub use lookup::{LookupResult, Selector, VisitedLink};
 pub use message::Message;
 pub use object::*;
 pub use parker::NativeParker;
-pub use parser::{ParsedToken, Parser, ParserRegistry, Token};
+pub use parser::{ParsedToken, Parser, Token};
 pub use primitives::{
-    PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex,
-    PrimitiveParserContext, get_primitive, primitive_index,
+    PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive,
+    primitive_index,
 };
 pub use quotations::{Quotation, QuotationMap};
 pub use slots::{SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags};

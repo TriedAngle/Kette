@@ -1,12 +1,17 @@
-use std::{collections::HashMap, num::IntErrorKind};
+use std::{mem, num::IntErrorKind, sync::Arc};
 
-use parking_lot::RwLock;
+use crate::{
+    Handle, Header, HeaderFlags, HeapObject, HeapProxy, LookupResult, Object,
+    ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy,
+    Visitable, VisitedLink, executable::ParserObject,
+};
 
-use crate::{Handle, executable::ParserObject};
-
+#[repr(C)]
 #[derive(Debug)]
-pub struct Parser<'code> {
-    pub code: &'code [u8],
+pub struct Parser {
+    pub header: Header,
+    pub map: Tagged<SlotMap>,
+    pub code: Arc<[u8]>,
     pub end: usize,
     pub offset: usize,
 }
@@ -20,16 +25,47 @@ pub struct Token {
 #[derive(Debug, Copy, Clone)]
 pub enum ParsedToken {
     Identifier(Token),
+    String(Token),
     Fixnum(i64),
     Float(f64),
 }
 
-impl<'code> Parser<'code> {
+impl Parser {
     #[inline]
-    pub fn new(code: &'code [u8]) -> Self {
+    pub fn new(code: &[u8]) -> Self {
         let end = code.len();
+        let header =
+            Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+        let map = Tagged::new_ptr(std::ptr::null_mut());
+
         Self {
-            code,
+            header,
+            map,
+            code: Arc::from(code),
+            end,
+            offset: 0,
+        }
+    }
+
+    #[inline]
+    pub fn new_object(vm: &VMProxy, heap: &mut HeapProxy, code: &[u8]) -> Self {
+        let end = code.len();
+        let header =
+            Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+
+        let map = heap.allocate_slot_map_helper(
+            &vm.shared.strings,
+            &[
+                SlotHelper::primitive_message("parse-next", SlotTags::empty()),
+                SlotHelper::primitive_message("parse-until", SlotTags::empty()),
+                SlotHelper::primitive_message("parse-full", SlotTags::empty()),
+            ],
+        );
+
+        Self {
+            header,
+            map,
+            code: Arc::from(code),
             end,
             offset: 0,
         }
@@ -43,6 +79,11 @@ impl<'code> Parser<'code> {
     #[inline]
     pub fn is_at_whitespace(&self) -> bool {
         self.code[self.offset].is_ascii_whitespace()
+    }
+
+    #[inline]
+    pub fn is_at_quotes(&self) -> bool {
+        self.code[self.offset] == b'"'
     }
 
     #[inline]
@@ -60,6 +101,20 @@ impl<'code> Parser<'code> {
         }
 
         let start = self.offset;
+
+        if self.is_at_quotes() {
+            self.offset += 1;
+            while !self.is_done() && !self.is_at_quotes() {
+                self.offset += 1;
+            }
+            self.offset += 1;
+
+            let len = self.offset - start;
+
+            let token = Token { start, len };
+
+            return Some(token);
+        }
 
         while !self.is_done() && !self.is_at_whitespace() {
             self.offset += 1;
@@ -102,6 +157,14 @@ impl<'code> Parser<'code> {
 
         let string = self.get_token_string(token);
 
+        if string.starts_with('"') && string.ends_with('"') {
+            let token = Token {
+                start: token.start + 1,
+                len: token.len - 2,
+            };
+            return Some(ParsedToken::String(token));
+        }
+
         // TODO: handle bignum promotion
         let parsed = if let Ok(fixnum) = self.fixnum_token(string) {
             ParsedToken::Fixnum(fixnum as i64)
@@ -115,26 +178,22 @@ impl<'code> Parser<'code> {
     }
 }
 
-pub struct ParserRegistry {
-    inner: RwLock<HashMap<String, Handle<ParserObject>, ahash::RandomState>>,
-}
-
-impl Default for ParserRegistry {
-    fn default() -> Self {
-        Self::new()
+impl Visitable for Parser {}
+impl Object for Parser {
+    fn lookup(
+        &self,
+        _selector: Selector,
+        _link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        // SAFETY: we assume this is safe
+        panic!("should be slot map");
+        // let map = unsafe { self.map.promote_to_handle() };
+        // map.lookup(selector, link)
     }
 }
-
-impl ParserRegistry {
-    pub fn new() -> Self {
-        Self {
-            inner: RwLock::new(HashMap::default()),
-        }
-    }
-
-    pub fn get(&self, message: &str) -> Option<Handle<ParserObject>> {
-        let inner = self.inner.read();
-        inner.get(message).copied()
+impl HeapObject for Parser {
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
     }
 }
 
@@ -142,7 +201,7 @@ impl ParserRegistry {
 mod tests {
     use super::*;
 
-    fn parse_all<'code>(code: &'code str) -> (Parser<'code>, Vec<ParsedToken>) {
+    fn parse_all<'code>(code: &'code str) -> (Parser, Vec<ParsedToken>) {
         let mut p = Parser::new(code.as_bytes());
         let mut out = Vec::new();
         while let Some(t) = p.parse_next() {
@@ -191,6 +250,17 @@ mod tests {
     }
 
     #[test]
+    fn test_string_token() {
+        let (p, v) = parse_all("\"Hello World!\nWow\"");
+        match v[0] {
+            ParsedToken::String(t) => {
+                assert_eq!(p.get_token_string(t), "Hello World!\nWow")
+            }
+            _ => panic!("Expected identifier"),
+        }
+    }
+
+    #[test]
     fn test_no_sign_prefix_parsing() {
         let (p, v) = parse_all("-42  +9  -3.5  +1.2");
 
@@ -222,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_multiple_tokens() {
-        let (p, v) = parse_all("foo 123 bar 7.5");
+        let (p, v) = parse_all("foo 123 \"wow\" bar 7.5");
 
         match v[0] {
             ParsedToken::Identifier(t) => {
@@ -235,12 +305,18 @@ mod tests {
             _ => panic!("Expected Fixnum"),
         }
         match v[2] {
+            ParsedToken::String(t) => {
+                assert_eq!(p.get_token_string(t), "wow")
+            }
+            _ => panic!("Expected identifier"),
+        }
+        match v[3] {
             ParsedToken::Identifier(t) => {
                 assert_eq!(p.get_token_string(t), "bar")
             }
             _ => panic!("Expected identifier"),
         }
-        match v[3] {
+        match v[4] {
             ParsedToken::Float(f) => assert!((f - 7.5).abs() < 1e-12),
             _ => panic!("Expected Float"),
         }
