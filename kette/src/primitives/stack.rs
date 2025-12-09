@@ -1,24 +1,5 @@
-use crate::{ExecutionResult, Handle, PrimitiveContext, Value};
-
-fn inputs<const N: usize>(ctx: &mut PrimitiveContext) -> [Handle<Value>; N] {
-    // SAFETY: this requires a bounds check befor, but I am the boundcer
-    unsafe { *(ctx.inputs.as_ptr() as *const [Handle<Value>; N]) }
-}
-
-fn outputs<const N: usize>(
-    ctx: &mut PrimitiveContext,
-    values: [Handle<Value>; N],
-) {
-    // SAFETY: this requires a bounds check before, but I am the boundcer
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            values.as_ptr(),
-            ctx.outputs.as_mut_ptr(),
-            N,
-        );
-    }
-}
-
+use super::{inputs, outputs};
+use crate::{ExecutionResult, PrimitiveContext};
 macro_rules! shuffle {
     (
         $(
@@ -68,17 +49,4 @@ shuffle! {
     dropd2: x y z -- z ;
 
     swapd: x y z -- y x z ;
-}
-
-/// removes x, calls q, puts x again
-/// x q -- x
-pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let [x, q] = inputs(ctx);
-
-    // TODO: do executable map check and execute.
-    // TODO: add callstack once added
-    ctx.state.push_return(x.into());
-    tracing::error!("TRYING TO CALL {q:?}, BUT CALL NOT IMPLEMENTED");
-    let _ = ctx.state.pop_return();
-    ExecutionResult::Normal
 }

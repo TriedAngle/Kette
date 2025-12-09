@@ -1,7 +1,7 @@
 use crate::{
     ActivationStack, ExecutionState, Handle, HeapProxy, Instruction,
-    LookupResult, PrimitiveMessageIndex, Selector, ThreadProxy, VMProxy, Value,
-    get_primitive, slots::SlotTags,
+    LookupResult, PrimitiveMessageIndex, Selector, SlotTags, ThreadProxy,
+    VMProxy, Value, get_primitive, transmute,
 };
 
 pub struct Interpreter {
@@ -42,7 +42,7 @@ impl Interpreter {
         }
     }
 
-    pub fn execute_bytecode(&mut self, instruction: Instruction) {
+    pub fn execute_single_bytecode(&mut self, instruction: Instruction) {
         match instruction {
             Instruction::PushFixnum { value } => {
                 tracing::trace!("push_fixnum: {:?}", value);
@@ -58,7 +58,7 @@ impl Interpreter {
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
                 match self.primitive_send(receiver, id) {
                     ExecutionResult::Normal => (),
-                    _ => unimplemented!("TODO: implementend"),
+                    _ => unimplemented!("TODO: implement"),
                 }
             }
             Instruction::AllocateSlotObject { map } => {
@@ -81,7 +81,7 @@ impl Interpreter {
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
                 match self.send(receiver, selector) {
                     ExecutionResult::Normal => (),
-                    _ => unimplemented!("TODO: implementend"),
+                    _ => unimplemented!("TODO: implement"),
                 }
             }
             Instruction::SendNamed { message } => {
@@ -93,14 +93,13 @@ impl Interpreter {
 
                 match self.send(receiver, selector) {
                     ExecutionResult::Normal => (),
-                    _ => unimplemented!("TODO: implemented"),
+                    _ => unimplemented!("TODO: implement"),
                 }
             }
-            // Instruction::Send { message } => self.state.push(value.into()),
-            _ => unimplemented!(),
+            _ => unimplemented!("TODO: implement"),
         }
 
-        tracing::info!("stack: depth: {:?}", self.state.depth);
+        tracing::info!(target: "interpreter", "stack {}", self.state.depth);
     }
 
     pub fn primitive_send(
@@ -114,24 +113,29 @@ impl Interpreter {
         let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
         // the initialization is guaranted after the call
         let mut outputs = Vec::with_capacity(message.outputs);
+
+        // SAFETY: gc not running
+        let inputs = unsafe { transmute::values_as_handles(inputs.as_slice()) };
         // SAFETY: allocated with this size
         #[allow(clippy::uninit_vec)]
         unsafe {
             outputs.set_len(message.outputs)
         };
-        let res = message.call(
-            self,
-            receiver,
-            // SAFETY: same memory layout, same type, no gc here
-            unsafe {
-                std::mem::transmute::<&[Value], &[Handle<Value>]>(
-                    inputs.as_slice(),
-                )
-            },
-            &mut outputs,
-        );
 
-        if res == ExecutionResult::Normal {
+        let res = message.call(self, receiver, inputs, &mut outputs);
+
+        match res {
+            ExecutionResult::Normal => {
+                let outputs = transmute::handles_as_values(outputs.as_slice());
+
+                // SAFETY: not safe in general yet, TODO: size check
+                unsafe { self.state.stack_push_slice_unchecked(outputs) };
+            }
+            _ => unimplemented!(
+                "TODO: implement the different ExecutionResult handling"
+            ),
+        }
+        if res != ExecutionResult::Normal {
             outputs
                 .into_iter()
                 .for_each(|out| self.state.push(out.into()));

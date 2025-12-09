@@ -4,9 +4,12 @@ use crate::{
 };
 
 mod array;
+mod bignum;
 mod bytearray;
 mod fixnum;
+mod float;
 mod parsing;
+mod quotation;
 mod stack;
 mod threads;
 
@@ -142,11 +145,10 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("rot", 3, 3, stack::rot),
     PrimitiveMessage::new("-rot", 3, 3, stack::neg_rot),
     PrimitiveMessage::new("spin", 3, 3, stack::spin),
-    PrimitiveMessage::new("dupd", 3, 3, stack::dupd),
-    PrimitiveMessage::new("dropd", 2, 2, stack::dropd),
-    PrimitiveMessage::new("2dropd", 3, 3, stack::dropd2),
+    PrimitiveMessage::new("dupd", 2, 3, stack::dupd),
+    PrimitiveMessage::new("dropd", 2, 1, stack::dropd),
+    PrimitiveMessage::new("2dropd", 3, 1, stack::dropd2),
     PrimitiveMessage::new("swapd", 3, 3, stack::swapd),
-    PrimitiveMessage::new("dip", 2, 1, stack::dip),
     // Fixnum
     PrimitiveMessage::new("fixnum?", 0, 1, fixnum::is_fixnum),
     PrimitiveMessage::new("2fixnum?", 1, 1, fixnum::is_2fixnum),
@@ -155,36 +157,37 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum*", 1, 1, fixnum::fixnum_mul),
     PrimitiveMessage::new("fixnum/", 1, 1, fixnum::fixnum_div),
     PrimitiveMessage::new("fixnum%", 1, 1, fixnum::fixnum_mod),
-    PrimitiveMessage::new("fixnum-neg", 1, 1, fixnum::fixnum_neg),
-    PrimitiveMessage::new("fixnum-bitand", 1, 1, fixnum::fixnum_and),
-    PrimitiveMessage::new("fixnum-bitor", 1, 1, fixnum::fixnum_or),
-    PrimitiveMessage::new("fixnum-eq", 1, 1, fixnum::fixnum_eq),
-    PrimitiveMessage::new("fixnum-neq", 1, 1, fixnum::fixnum_neq),
-    PrimitiveMessage::new("fixnum-lt", 1, 1, fixnum::fixnum_lt),
-    PrimitiveMessage::new("fixnum-gt", 1, 1, fixnum::fixnum_gt),
-    PrimitiveMessage::new("fixnum-leq", 1, 1, fixnum::fixnum_leq),
-    PrimitiveMessage::new("fixnum-geq", 1, 1, fixnum::fixnum_geq),
-    PrimitiveMessage::new("fixnum>utf8-bytes", 0, 1, bytearray::fixnum_to_utf8_bytes),
+    PrimitiveMessage::new("fixnumNeg", 1, 1, fixnum::fixnum_neg),
+    PrimitiveMessage::new("fixnumBitAnd", 1, 1, fixnum::fixnum_and),
+    PrimitiveMessage::new("fixnumBitOr", 1, 1, fixnum::fixnum_or),
+    PrimitiveMessage::new("fixnumEq", 1, 1, fixnum::fixnum_eq),
+    PrimitiveMessage::new("fixnumNeq", 1, 1, fixnum::fixnum_neq),
+    PrimitiveMessage::new("fixnumLt", 1, 1, fixnum::fixnum_lt),
+    PrimitiveMessage::new("fixnumGt", 1, 1, fixnum::fixnum_gt),
+    PrimitiveMessage::new("fixnumLeq", 1, 1, fixnum::fixnum_leq),
+    PrimitiveMessage::new("fixnumGeq", 1, 1, fixnum::fixnum_geq),
+    PrimitiveMessage::new("fixnum>utf8Bytes", 0, 1, fixnum::fixnum_to_utf8_bytes),
     // Bytearrays
-    PrimitiveMessage::new("bytearray-print", 0, 0, bytearray::bytearray_print),
-    PrimitiveMessage::new("bytearray-println", 0, 0, bytearray::bytearray_println),
-    // Threads
-    PrimitiveMessage::new("<thread-native>", 0, 0, threads::create_native),
-    PrimitiveMessage::new("thread-join", 0, 0, threads::join),
-    PrimitiveMessage::new("thread-join-timeout", 1, 0, threads::join_timeout),
-    PrimitiveMessage::new("park", 1, 0, threads::park),
-    PrimitiveMessage::new("park-nanos", 2, 0, threads::park_nanos),
-    PrimitiveMessage::new("park-until", 2, 0, threads::park_until),
-    PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
-    
+    PrimitiveMessage::new("bytearrayPrint", 0, 0, bytearray::bytearray_print),
+    PrimitiveMessage::new("bytearrayPrintln", 0, 0, bytearray::bytearray_println),
+    // Arrays
     PrimitiveMessage::new("array>quotation", 0, 1, array::array_to_quotation),
-    // call quotation
-    // PrimitiveMessage::new("(call)", 0, 0, threads::unpark),
-
+    // Quotation
+    PrimitiveMessage::new("(call)", 0, 0, quotation::call),
+    PrimitiveMessage::new("(dip)", 1, 1, quotation::dip),
+    PrimitiveMessage::new("if", 2, 0, quotation::conditional_branch),
+    // Threads
+    PrimitiveMessage::new("<threadNative>", 0, 0, threads::create_native),
+    PrimitiveMessage::new("threadJoin", 0, 0, threads::join),
+    PrimitiveMessage::new("threadJoinTimeout", 1, 0, threads::join_timeout),
+    PrimitiveMessage::new("park", 1, 0, threads::park),
+    PrimitiveMessage::new("parkNanos", 2, 0, threads::park_nanos),
+    PrimitiveMessage::new("parkUntil", 2, 0, threads::park_until),
+    PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
     // parsing
-    PrimitiveMessage::new("parse-next", 0, 1, parsing::parse_next),
-    PrimitiveMessage::new("parse-until", 2, 1, parsing::parse_until),
-    PrimitiveMessage::new("parse-full", 0, 1, parsing::parse_complete),
+    PrimitiveMessage::new("parseNext", 0, 1, parsing::parse_next),
+    PrimitiveMessage::new("parseUntil", 2, 1, parsing::parse_until),
+    PrimitiveMessage::new("parse", 0, 1, parsing::parse_complete),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
@@ -197,5 +200,33 @@ pub fn primitive_index(name: &str) -> PrimitiveMessageIndex {
         .iter()
         .position(|prim| prim.name == name)
         .map(PrimitiveMessageIndex)
-        .expect("Primitive Exists")
+        .unwrap_or_else(|| panic!("Primitive \"{}\" must exists", name))
+}
+
+pub fn inputs<const N: usize>(
+    ctx: &mut PrimitiveContext,
+) -> [Handle<Value>; N] {
+    // SAFETY: this requires a bounds check befor, but I am the boundcer
+    unsafe { *(ctx.inputs.as_ptr() as *const [Handle<Value>; N]) }
+}
+
+pub fn outputs<const N: usize>(
+    ctx: &mut PrimitiveContext,
+    values: [Handle<Value>; N],
+) {
+    // SAFETY: this requires a bounds check before, but I am the boundcer
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            values.as_ptr(),
+            ctx.outputs.as_mut_ptr(),
+            N,
+        );
+    }
+}
+
+pub fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
+    match cond {
+        true => ctx.vm.shared.specials.true_object.into(),
+        false => ctx.vm.shared.specials.false_object.into(),
+    }
 }

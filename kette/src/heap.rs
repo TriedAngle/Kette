@@ -17,8 +17,8 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     Array, Block, ByteArray, Handle, HeapObject, Message, Quotation,
-    QuotationMap, SlotDescriptor, SlotHelper, SlotMap, SlotObject, Strings,
-    Tagged, Value, Visitable, map_memory, slots::SlotTags,
+    QuotationMap, SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags,
+    Strings, Tagged, Value, Visitable, map_memory,
 };
 
 pub const HANDLE_SET_SIZE: usize = 20;
@@ -165,7 +165,7 @@ unsafe impl Sync for HeapShared {}
 impl Heap {
     pub fn new(info: HeapCreateInfo) -> Self {
         let size = info.size;
-        let start = map_memory(size).unwrap();
+        let start = map_memory(size).expect("Allocate Memory for heap");
         // SAFETY: just allocted
         let end_ptr = unsafe { start.as_ptr().add(size) };
         // SAFETY: just allocted

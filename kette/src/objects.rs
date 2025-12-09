@@ -1,9 +1,19 @@
 use std::mem;
 
+pub mod activation;
+pub mod arrays;
+pub mod bytearrays;
+pub mod executable;
+pub mod message;
+pub mod parser;
+pub mod quotations;
+pub mod slots;
+pub mod threads;
+
 use crate::{
-    ActivationObject, Array, ByteArray, LookupResult, Message, MethodMap,
-    Quotation, QuotationMap, Selector, SlotMap, SlotObject, Value, ValueTag,
-    Visitable, VisitedLink, Visitor, executable::Method,
+    ActivationObject, Array, ByteArray, LookupResult, Message, Method,
+    MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject, Value,
+    ValueTag, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(u8)]
@@ -108,13 +118,6 @@ pub struct HeapValue {
 #[derive(Debug)]
 pub struct Map {
     pub header: Header,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct FreeLocation {
-    pub header: Header,
-    pub next: Option<*mut FreeLocation>,
 }
 
 impl Header {
@@ -356,41 +359,47 @@ impl Map {
         self.header.map_type()
     }
 }
+// TODO: use this (maybe?) and maybe move this into heap
+// #[repr(C)]
+// #[derive(Debug, Copy, Clone)]
+// pub struct FreeLocation {
+//     pub header: Header,
+//     pub next: Option<*mut FreeLocation>,
+// }
+// impl FreeLocation {
+//     #[inline]
+//     pub fn new(size: u64, next: Option<*mut FreeLocation>) -> Self {
+//         Self {
+//             header: Header::new_free(size),
+//             next,
+//         }
+//     }
 
-impl FreeLocation {
-    #[inline]
-    pub fn new(size: u64, next: Option<*mut FreeLocation>) -> Self {
-        Self {
-            header: Header::new_free(size),
-            next,
-        }
-    }
+//     /// Set the next free location pointer
+//     #[inline]
+//     pub fn set_next(&mut self, next: Option<*mut FreeLocation>) {
+//         self.next = next;
+//     }
 
-    /// Set the next free location pointer
-    #[inline]
-    pub fn set_next(&mut self, next: Option<*mut FreeLocation>) {
-        self.next = next;
-    }
+//     /// Get the next free location pointer
+//     #[inline]
+//     pub fn get_next(&self) -> Option<*mut FreeLocation> {
+//         self.next
+//     }
 
-    /// Get the next free location pointer
-    #[inline]
-    pub fn get_next(&self) -> Option<*mut FreeLocation> {
-        self.next
-    }
+//     /// Get the size of this free memory block
+//     #[inline]
+//     pub fn size(&self) -> u64 {
+//         debug_assert!(self.header.is_free(), "Header must be a free object");
+//         self.header.0 >> 8
+//     }
 
-    /// Get the size of this free memory block
-    #[inline]
-    pub fn size(&self) -> u64 {
-        debug_assert!(self.header.is_free(), "Header must be a free object");
-        self.header.0 >> 8
-    }
-
-    /// Update the size of this free memory block
-    #[inline]
-    pub fn set_size(&mut self, size: u64) {
-        self.header = Header::new_free(size);
-    }
-}
+//     /// Update the size of this free memory block
+//     #[inline]
+//     pub fn set_size(&mut self, size: u64) {
+//         self.header = Header::new_free(size);
+//     }
+// }
 
 impl Object for HeapValue {
     fn lookup(
@@ -446,7 +455,8 @@ impl HeapObject for HeapValue {
             ObjectKind::Object => self,
         };
 
-        match obj.header.object_type().unwrap() {
+        // SAFETY: checked
+        match unsafe { obj.header.object_type().unwrap_unchecked() } {
             ObjectType::Slot => {
                 // SAFETY: checked
                 let slot_object = unsafe {
@@ -536,7 +546,8 @@ impl Visitable for HeapValue {
             ObjectKind::Object => (),
         };
 
-        match self.header.object_type().unwrap() {
+        // SAFETY: checked
+        match unsafe { self.header.object_type().unwrap_unchecked() } {
             ObjectType::Slot => {
                 // SAFETY: checked
                 let slot_object = unsafe {
@@ -599,7 +610,8 @@ impl Visitable for HeapValue {
             ObjectKind::Object => self,
         };
 
-        match obj.header.object_type().unwrap() {
+        // SAFETY: checked
+        match unsafe { obj.header.object_type().unwrap_unchecked() } {
             ObjectType::Slot => {
                 // SAFETY: checked
                 let slot_object = unsafe {
@@ -649,7 +661,8 @@ impl Visitable for HeapValue {
 impl Object for Map {}
 impl HeapObject for Map {
     fn heap_size(&self) -> usize {
-        match self.header.map_type().unwrap() {
+        // SAFETY: this is a map
+        match unsafe { self.header.map_type().unwrap_unchecked() } {
             MapType::Slot => {
                 // SAFETY: checked
                 let map =

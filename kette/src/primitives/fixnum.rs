@@ -1,7 +1,8 @@
 use std::ops::Neg;
 
 use crate::{
-    ExecutionResult, Handle, IntegerError, PrimitiveContext, Tagged, Value,
+    ExecutionResult, IntegerError, PrimitiveContext, Tagged,
+    primitives::bool_object,
 };
 
 // TODO: handle overflows and/or promotion
@@ -181,9 +182,12 @@ pub fn is_2fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
-    match cond {
-        true => ctx.vm.shared.specials.true_object.into(),
-        false => ctx.vm.shared.specials.false_object.into(),
-    }
+pub fn fixnum_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: receiver must be valid fixnum
+    let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
+    let string = value.to_string();
+    let ba = ctx.heap.allocate_bytearray_data(string.as_bytes());
+    // SAFETY: no gc here
+    ctx.outputs[0] = unsafe { ba.promote_to_handle().cast() };
+    ExecutionResult::Normal
 }

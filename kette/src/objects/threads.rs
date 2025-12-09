@@ -176,7 +176,7 @@ impl NativeThread {
         });
 
         // SAFETY: directly at initialization, it is owned
-        unsafe { jt.handle.get().as_mut().unwrap().replace(h) };
+        unsafe { jt.handle.get().as_mut().unwrap_unchecked().replace(h) };
         jt
     }
 
@@ -194,7 +194,9 @@ impl NativeThread {
 
     pub fn join(&self) {
         // SAFETY: thread alive => exists
-        if let Some(h) = unsafe { self.handle.get().as_mut().unwrap().take() } {
+        if let Some(h) =
+            unsafe { self.handle.get().as_mut().unwrap_unchecked().take() }
+        {
             let _ = h.join();
             let (ref mx, ref cv) = self.done;
             *mx.lock() = true;
@@ -212,7 +214,7 @@ impl NativeThread {
     pub fn thread(&self) -> Option<thread::Thread> {
         // SAFETY: this is safe as long as thread is alive
         // and if it is not alive, it is also not accessible
-        unsafe { self.handle.get().as_mut().unwrap() }
+        unsafe { self.handle.get().as_mut().unwrap_unchecked() }
             .as_ref()
             .map(|handle| handle.thread().clone())
     }

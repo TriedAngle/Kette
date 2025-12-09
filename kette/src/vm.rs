@@ -117,7 +117,6 @@ impl VM {
                 SlotHelper::primitive_message("dropd", SlotTags::empty()),
                 SlotHelper::primitive_message("2dropd", SlotTags::empty()),
                 SlotHelper::primitive_message("swapd", SlotTags::empty()),
-                SlotHelper::primitive_message("dip", SlotTags::empty()),
             ],
         );
 
@@ -130,27 +129,34 @@ impl VM {
             SlotHelper::primitive_message("fixnum*", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum/", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum%", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-neg", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-bitand", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-bitor", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-eq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-neq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-lt", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-gt", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-leq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum-geq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum>utf8-bytes", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumNeg", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumBitAnd", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumBitOr", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumEq", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumNeq", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumLt", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumGt", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumLeq", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumGeq", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>utf8Bytes", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let bytearray_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::primitive_message("bytearray-print", SlotTags::empty()),
-            SlotHelper::primitive_message("bytearray-println", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayPrint", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayPrintln", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let array_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("array>quotation", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let quotation_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("(call)", SlotTags::empty()),
+            SlotHelper::primitive_message("(dip)", SlotTags::empty()),
+            SlotHelper::primitive_message("if", SlotTags::empty()),
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
@@ -181,7 +187,7 @@ impl VM {
                 .cast();
 
             let quotation_traits = heap
-                .allocate_slot_object(empty_map, &[])
+                .allocate_slot_object(quotation_map, &[])
                 .promote_to_handle()
                 .cast();
 

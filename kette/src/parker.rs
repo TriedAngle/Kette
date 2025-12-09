@@ -53,9 +53,9 @@ impl NativeParker {
             return;
         }
 
-        let mut guard = self.lock.lock().unwrap();
+        let mut guard = self.lock.lock().expect("locking works");
         loop {
-            guard = self.cv.wait(guard).unwrap();
+            guard = self.cv.wait(guard).expect("waiting works");
 
             if self.try_consume_token() {
                 break;
@@ -88,7 +88,7 @@ impl NativeParker {
         let prev = self.state.fetch_or(TOKEN, Release);
 
         if prev & PARKED != 0 {
-            let _g = self.lock.lock().unwrap();
+            let _g = self.lock.lock().expect("locking works");
             self.cv.notify_one();
         }
     }

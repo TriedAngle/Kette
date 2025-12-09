@@ -169,10 +169,42 @@ impl ExecutionState {
         Some(result)
     }
 
-    // ------------------------------------------------------------------
-    // Unsafe / Fast Path
-    // ------------------------------------------------------------------
+    /// Pushes an entire slice onto the stack.
+    ///
+    /// Returns `None` if there isn't enough space.
+    pub fn stack_push_slice(&mut self, slice: &[Value]) -> Option<()> {
+        let n = slice.len();
+        if self.depth + n > self.stack.len() {
+            return None;
+        }
 
+        let start = self.depth;
+        let end = start + n;
+
+        self.stack[start..end].copy_from_slice(slice);
+        self.depth = end;
+
+        Some(())
+    }
+
+    /// Writes the slice at the top of the stack
+    ///
+    /// # Safety
+    /// Caller must ensure the stack has enough space:
+    /// `self.depth + slice.len() <= self.stack.len()`.
+    pub unsafe fn stack_push_slice_unchecked(&mut self, slice: &[Value]) {
+        let n = slice.len();
+        // SAFETY: safe if contract holds
+        let dst = unsafe { self.stack.as_mut_ptr().add(self.depth) };
+        let src = slice.as_ptr();
+
+        // SAFETY: safe if contract holds
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, dst, n);
+        }
+
+        self.depth += n;
+    }
     /// Returns a slice of the top n elements.
     /// # Safety
     /// Caller must ensure that self.depth >= n.

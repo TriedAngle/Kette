@@ -628,6 +628,127 @@ impl<T> PtrSizedObject for *mut T {
     }
 }
 
+impl<T: Object> Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Handle")
+            .field("type", &std::any::type_name::<T>())
+            .field("value", &format!("{:#x}", self.data))
+            .finish()
+    }
+}
+
+impl<T: Object> Debug for Tagged<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tagged")
+            .field("type", &std::any::type_name::<T>())
+            .field("value", &format!("{:#x}", self.data))
+            .finish()
+    }
+}
+
+pub mod transmute {
+    use crate::{Handle, Object, Tagged, Value};
+
+    const _: [(); std::mem::size_of::<Handle<Value>>()] =
+        [(); std::mem::size_of::<Value>()];
+    const _: [(); std::mem::align_of::<Handle<Value>>()] =
+        [(); std::mem::align_of::<Value>()];
+    const _: [(); std::mem::size_of::<Tagged<Value>>()] =
+        [(); std::mem::size_of::<Value>()];
+    const _: [(); std::mem::align_of::<Tagged<Value>>()] =
+        [(); std::mem::align_of::<Value>()];
+
+    /// Reinterpret a slice of `Handle<Value>` as a slice of `Value`.
+    ///
+    /// Safe because the memory layout is identical and a handle always contains
+    /// a well-formed tagged value.
+    #[inline]
+    pub fn handles_as_values<T: Object>(handles: &[Handle<T>]) -> &[Value] {
+        let ptr = handles.as_ptr() as *const Value;
+        // SAFETY: identical layout (see const assertions) and same length.
+        unsafe { std::slice::from_raw_parts(ptr, handles.len()) }
+    }
+
+    /// Reinterpret a mutable slice of `Handle<Value>` as a mutable slice of `Value`.
+    #[inline]
+    pub fn handles_as_values_mut<T: Object>(
+        handles: &mut [Handle<T>],
+    ) -> &mut [Value] {
+        let ptr = handles.as_mut_ptr() as *mut Value;
+        // SAFETY: identical layout (see const assertions) and same length.
+        unsafe { std::slice::from_raw_parts_mut(ptr, handles.len()) }
+    }
+
+    /// Reinterpret a slice of `Value` as a slice of `Handle<Value>`.
+    ///
+    /// # Safety
+    /// The caller must ensure that each `Value` in the slice is safe to be treated
+    /// as a handle:
+    ///
+    /// This is equivalent to calling `Value::as_handle_unchecked` on each element.
+    #[inline]
+    pub unsafe fn values_as_handles(values: &[Value]) -> &[Handle<Value>] {
+        let ptr = values.as_ptr() as *const Handle<Value>;
+        // SAFETY: caller upholds the contract above.
+        unsafe { std::slice::from_raw_parts(ptr, values.len()) }
+    }
+
+    /// Reinterpret a mutable slice of `Value` as a mutable slice of `Handle<Value>`.
+    ///
+    /// # Safety
+    /// Same contract as [`values_as_handles`].
+    #[inline]
+    pub unsafe fn values_as_handles_mut(
+        values: &mut [Value],
+    ) -> &mut [Handle<Value>] {
+        let ptr = values.as_mut_ptr() as *mut Handle<Value>;
+        // SAFETY: caller upholds the contract above.
+        unsafe { std::slice::from_raw_parts_mut(ptr, values.len()) }
+    }
+
+    /// Reinterpret a slice of `Tagged<T>` as a slice of `Value`.
+    ///
+    /// Always safe: `Tagged<Value>` is just a typed view of raw tagged bits.
+    #[inline]
+    pub fn tagged_values_as_values<T: Object>(
+        tagged: &[Tagged<T>],
+    ) -> &[Value] {
+        let ptr = tagged.as_ptr() as *const Value;
+        // SAFETY: identical layout (see const assertions) and same length.
+        unsafe { std::slice::from_raw_parts(ptr, tagged.len()) }
+    }
+
+    /// Reinterpret a mutable slice of `Tagged<T>` as a mutable slice of `Value`.
+    #[inline]
+    pub fn tagged_values_as_values_mut<T: Object>(
+        tagged: &mut [Tagged<T>],
+    ) -> &mut [Value] {
+        let ptr = tagged.as_mut_ptr() as *mut Value;
+        // SAFETY: identical layout (see const assertions) and same length.
+        unsafe { std::slice::from_raw_parts_mut(ptr, tagged.len()) }
+    }
+
+    /// Reinterpret a slice of `Value` as a slice of `Tagged<Value>`.
+    ///
+    /// Safe because `Tagged<Value>` does not add invariants over `Value`.
+    #[inline]
+    pub fn values_as_tagged_values(values: &[Value]) -> &[Tagged<Value>] {
+        let ptr = values.as_ptr() as *const Tagged<Value>;
+        // SAFETY: identical layout (see const assertions) and same length.
+        unsafe { std::slice::from_raw_parts(ptr, values.len()) }
+    }
+
+    /// Reinterpret a mutable slice of `Value` as a mutable slice of `Tagged<Value>`.
+    #[inline]
+    pub fn values_as_tagged_values_mut(
+        values: &mut [Value],
+    ) -> &mut [Tagged<Value>] {
+        let ptr = values.as_mut_ptr() as *mut Tagged<Value>;
+        // SAFETY: identical layout (see const assertions) and same length.
+        unsafe { std::slice::from_raw_parts_mut(ptr, values.len()) }
+    }
+}
+
 #[cfg(test)]
 mod value_tests {
     use super::*;
@@ -839,22 +960,57 @@ mod value_tests {
         assert!(!v.is_fixnum());
         assert!(!v.is_object());
     }
-}
 
-impl<T: Object> Debug for Handle<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Handle")
-            .field("type", &std::any::type_name::<T>())
-            .field("value", &format!("{:#x}", self.data))
-            .finish()
+    use super::transmute;
+
+    #[test]
+    fn slice_handle_value_view_roundtrip() {
+        let h1: Handle<i64> = Handle::from(1i64);
+        let h2: Handle<i64> = Handle::from(2i64);
+
+        let handles: [Handle<Value>; 2] = [h1.into(), h2.into()];
+
+        let values = transmute::handles_as_values(&handles);
+        assert!(values[0].is_fixnum());
+        assert_eq!(values[0].as_tagged_fixnum::<i64>().unwrap().as_i64(), 1);
+        assert_eq!(values[1].as_tagged_fixnum::<i64>().unwrap().as_i64(), 2);
+
+        let handles_back = unsafe { transmute::values_as_handles(values) };
+        let v0 = handles_back[0].inner();
+        let v1 = handles_back[1].inner();
+
+        assert_eq!(v0.as_tagged_fixnum::<i64>().unwrap().as_i64(), 1);
+        assert_eq!(v1.as_tagged_fixnum::<i64>().unwrap().as_i64(), 2);
     }
-}
 
-impl<T: Object> Debug for Tagged<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Tagged")
-            .field("type", &std::any::type_name::<T>())
-            .field("value", &format!("{:#x}", self.data))
-            .finish()
+    #[test]
+    fn slice_tagged_value_view_roundtrip() {
+        let t1: Tagged<i64> = Tagged::new_value(10);
+        let t2: Tagged<i64> = Tagged::new_value(11);
+
+        let tagged: [Tagged<Value>; 2] =
+            [t1.as_tagged_value(), t2.as_tagged_value()];
+
+        let values = transmute::tagged_values_as_values(&tagged);
+        assert!(values[0].is_fixnum());
+        assert!(values[1].is_fixnum());
+
+        let tagged_back = transmute::values_as_tagged_values(values);
+        assert_eq!(
+            tagged_back[0]
+                .as_value()
+                .as_tagged_fixnum::<i64>()
+                .unwrap()
+                .as_i64(),
+            10
+        );
+        assert_eq!(
+            tagged_back[1]
+                .as_value()
+                .as_tagged_fixnum::<i64>()
+                .unwrap()
+                .as_i64(),
+            11
+        );
     }
 }

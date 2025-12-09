@@ -5,15 +5,13 @@ use kette::{
 };
 
 const CODE: &str = r#"
-5 77 fixnum+ fixnum>utf8-bytes bytearray-println
+5 77 fixnum+ fixnum>utf8Bytes bytearrayPrintln
 "#;
 
 fn execute_parser_code(value: Value) -> Block {
     let instructions = vec![
         Instruction::PushValue { value },
-        Instruction::SendNamed {
-            message: "parse-full",
-        },
+        Instruction::SendNamed { message: "parse" },
     ];
 
     Block { instructions }
@@ -58,7 +56,7 @@ fn main() {
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
 
     for instruction in parser_code.instructions {
-        interpreter.execute_bytecode(instruction);
+        interpreter.execute_single_bytecode(instruction);
     }
 
     // SAFETY: this is guaranteed by the contract
@@ -74,6 +72,6 @@ fn main() {
     let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, array);
 
     for instruction in compiled.instructions {
-        interpreter.execute_bytecode(instruction);
+        interpreter.execute_single_bytecode(instruction);
     }
 }

@@ -58,9 +58,9 @@ impl CodeHeap {
     pub fn push(&self, block: Block) -> &Block {
         let mut blocks = self.blocks.write();
         blocks.push(block);
-        // SAFETY: this is mostly safe
+        // SAFETY: this is mostly safe, about the unwrap_unchecked, it must exist we just pushed it
         unsafe {
-            (blocks.last().unwrap() as *const Block)
+            (blocks.last().unwrap_unchecked() as *const Block)
                 .as_ref()
                 .unwrap_unchecked()
         }

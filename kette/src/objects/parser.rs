@@ -56,9 +56,9 @@ impl Parser {
         let map = heap.allocate_slot_map_helper(
             &vm.shared.strings,
             &[
-                SlotHelper::primitive_message("parse-next", SlotTags::empty()),
-                SlotHelper::primitive_message("parse-until", SlotTags::empty()),
-                SlotHelper::primitive_message("parse-full", SlotTags::empty()),
+                SlotHelper::primitive_message("parseNext", SlotTags::empty()),
+                SlotHelper::primitive_message("parseUntil", SlotTags::empty()),
+                SlotHelper::primitive_message("parse", SlotTags::empty()),
             ],
         );
 
