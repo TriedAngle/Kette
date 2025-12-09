@@ -1,7 +1,7 @@
 use crate::{
-    ActivationStack, ExecutionState, Handle, HeapProxy, HeapValue, Instruction,
-    LookupResult, Parser, PrimitiveMessageIndex, Selector, ThreadProxy,
-    VMProxy, Value, get_primitive, slots::SlotTags,
+    ActivationStack, ExecutionState, Handle, HeapProxy, Instruction,
+    LookupResult, PrimitiveMessageIndex, Selector, ThreadProxy, VMProxy, Value,
+    get_primitive, slots::SlotTags,
 };
 
 pub struct Interpreter {
@@ -44,9 +44,12 @@ impl Interpreter {
 
     pub fn execute_bytecode(&mut self, instruction: Instruction) {
         match instruction {
-            Instruction::PushFixnum { value } => self.state.push(value.into()),
+            Instruction::PushFixnum { value } => {
+                tracing::trace!("push_fixnum: {:?}", value);
+                self.state.push(value.into())
+            }
             Instruction::PushValue { value } => {
-                println!("push value: {:?}", value);
+                tracing::trace!("push_value: {:?}", value);
                 self.state.push(value)
             }
             Instruction::SendPrimitive { id } => {
@@ -59,6 +62,7 @@ impl Interpreter {
                 }
             }
             Instruction::AllocateSlotObject { map } => {
+                tracing::trace!("allocate_slot_object: {:?}", map);
                 // SAFETY: map must be valid here
                 let map_ref = unsafe { map.as_ref() };
                 let slot_count = map_ref.assignable_slots_count();
@@ -96,7 +100,7 @@ impl Interpreter {
             _ => unimplemented!(),
         }
 
-        println!("stack: {:?}", self.state.depth);
+        tracing::info!("stack: depth: {:?}", self.state.depth);
     }
 
     pub fn primitive_send(
@@ -105,7 +109,7 @@ impl Interpreter {
         id: PrimitiveMessageIndex,
     ) -> ExecutionResult {
         let message = get_primitive(id);
-        println!("primitive call: {:?}", message.name);
+        let _span = tracing::span!(tracing::Level::TRACE, "primitive send", receiver = ?receiver, message = ?message.name).entered();
         // SAFETY: not safe yet, TOOD: depth check
         let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
         // the initialization is guaranted after the call
@@ -141,7 +145,8 @@ impl Interpreter {
         receiver: Handle<Value>,
         selector: Selector,
     ) -> ExecutionResult {
-        println!("call: {:?}", selector.name.as_utf8().unwrap());
+        let selector_name = selector.name.as_utf8();
+        let _span = tracing::span!(tracing::Level::TRACE, "send message", receiver = ?receiver, selector = ?selector_name).entered();
 
         let res = selector.lookup_object(&receiver.inner());
 

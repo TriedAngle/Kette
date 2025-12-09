@@ -28,6 +28,11 @@ fn main() {
         },
     });
 
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::EXIT)
+        .init();
+
     // TODO: use consistent naming
     let main_proxy = vm.new_proxy();
     let mut heap = main_proxy.shared.heap.create_proxy();
@@ -66,7 +71,6 @@ fn main() {
             .cast::<Array>()
     };
 
-    println!("array: {:?}", array.fields());
     let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, array);
 
     for instruction in compiled.instructions {

@@ -78,7 +78,7 @@ pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // TODO: do executable map check and execute.
     // TODO: add callstack once added
     ctx.state.push_return(x.into());
-    println!("TRYING TO CALL {q:?}, BUT CALL NOT IMPLEMENTED");
+    tracing::error!("TRYING TO CALL {q:?}, BUT CALL NOT IMPLEMENTED");
     let _ = ctx.state.pop_return();
     ExecutionResult::Normal
 }

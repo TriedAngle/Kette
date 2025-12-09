@@ -6,18 +6,17 @@ pub struct BytecodeCompiler {}
 
 impl BytecodeCompiler {
     pub fn compile(vm: &VMShared, body: Handle<Array>) -> Block {
+        let _span =
+            tracing::span!(tracing::Level::DEBUG, "compile", body = ?body )
+                .entered();
         let mut instructions = Vec::new();
         for word in body.fields() {
-            println!("obj1");
-
             if let Some(value) = word.as_tagged_fixnum::<i64>() {
                 instructions.push(Instruction::PushFixnum {
                     value: value.as_i64(),
                 });
                 continue;
             }
-
-            println!("obj2");
 
             // SAFETY: no gc here
             let obj = unsafe { word.as_heap_handle_unchecked() };
@@ -46,11 +45,10 @@ impl BytecodeCompiler {
                     // SAFETY: checked
                     ObjectType::Message => unsafe { obj.cast::<Message>() },
                     ObjectType::Max | ObjectType::Activation => {
-                        unreachable!("obj {:?} invalid", word)
+                        unreachable!("object {:?} is invalid here", word)
                     }
                 };
 
-            println!("test");
             // TODO: implement the resend and delegate
             let ba = message.bytearray_handle();
             if ba == vm.specials.message_self {

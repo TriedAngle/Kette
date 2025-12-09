@@ -36,7 +36,6 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
             let s = parser.get_token_string(token);
             let ba = ctx.vm.intern_string(s, heap);
             let message = ctx.vm.intern_message(ba, heap);
-            println!("{:?}", message.header.object_type());
             state.push(message.as_value());
         }
     }
@@ -74,12 +73,10 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let mut accumulator = Vec::new();
 
     let res = parse_until_inner(ctx, None, &mut accumulator);
-    println!("res: {:?}", res);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
 
-    println!("accum: {:?}", accumulator);
     let accumulated = ctx.heap.allocate_array(&accumulator);
     // SAFETY: just created, will become handle there anyways
     ctx.outputs[0] = unsafe { accumulated.promote_to_handle().into() };

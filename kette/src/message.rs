@@ -23,7 +23,6 @@ impl Message {
             HeaderFlags::empty(),
             0,
         );
-        println!("header:: {:?}", self.header.object_type());
         self.value = value;
     }
 

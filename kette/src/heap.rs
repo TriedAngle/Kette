@@ -669,7 +669,7 @@ impl HeapProxy {
         // SAFETY: just created, safe to convert to mutable reference
         let message = unsafe { raw.as_mut() };
         // SAFETY: this is safe
-        unsafe { message.init(interned.into()) };
+        unsafe { message.init(interned) };
 
         Tagged::new_ptr(message)
     }

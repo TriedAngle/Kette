@@ -6,6 +6,7 @@
 //! Handle<T>: untagged value, small integer or reference, is safe to use, GC does not clear/move this
 //! also implements Deref and DerefMut
 use std::{
+    fmt::Debug,
     hash,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -31,7 +32,8 @@ pub struct Value(u64);
 
 /// A tagged value
 /// same memory layout as Value but Typed
-#[derive(Debug, PartialEq, Eq)]
+#[repr(C)]
+#[derive(PartialEq, Eq)]
 pub struct Tagged<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
@@ -43,7 +45,7 @@ pub struct Tagged<T: Object> {
 /// It guarantees that the underlying object is kept alive by the GC.
 ///
 /// Memory Layout: Identical to `Value` and `Tagged<T>`.
-#[derive(Debug)]
+#[repr(C)]
 pub struct Handle<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
@@ -836,5 +838,23 @@ mod value_tests {
         );
         assert!(!v.is_fixnum());
         assert!(!v.is_object());
+    }
+}
+
+impl<T: Object> Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Handle")
+            .field("type", &std::any::type_name::<T>())
+            .field("value", &format!("{:#x}", self.data))
+            .finish()
+    }
+}
+
+impl<T: Object> Debug for Tagged<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tagged")
+            .field("type", &std::any::type_name::<T>())
+            .field("value", &format!("{:#x}", self.data))
+            .finish()
     }
 }

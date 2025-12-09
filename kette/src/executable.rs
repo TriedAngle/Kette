@@ -1,7 +1,7 @@
 use std::mem;
 
 use crate::{
-    Block, ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged,
+    ByteArray, Header, HeapObject, Object, SlotMap, StackEffect, Tagged,
     Visitable,
 };
 
@@ -23,18 +23,6 @@ pub struct MethodMap {
     // this effefct must be declared
     pub effect: Tagged<StackEffect>,
     pub name: Tagged<ByteArray>,
-}
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct ParserMap {
-    pub map: ExecutableMap,
-}
-
-#[repr(C)]
-pub struct ParserObject {
-    pub header: Header,
-    pub map: Tagged<ParserMap>,
 }
 
 #[repr(C)]
@@ -69,25 +57,3 @@ impl Visitable for MethodMap {
 impl Object for Method {}
 impl HeapObject for Method {}
 impl Visitable for Method {}
-
-impl Object for ParserMap {}
-impl HeapObject for ParserMap {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-impl Visitable for ParserMap {
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
-}
-
-impl Object for ParserObject {}
-impl HeapObject for ParserObject {
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-impl Visitable for ParserObject {
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
-}

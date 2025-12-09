@@ -1,8 +1,7 @@
 use std::{ptr::NonNull, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, HeapValue, Message, Object, SlotDescriptor, Tagged,
-    VMShared, Value,
+    ByteArray, Handle, Message, Object, SlotDescriptor, Tagged, VMShared, Value,
 };
 
 #[derive(Debug, Clone)]
@@ -46,6 +45,8 @@ impl Selector {
         object: &impl Object,
         chain: Option<&VisitedLink>,
     ) -> LookupResult {
+        let span = tracing::span!(tracing::Level::TRACE, "lookup");
+        let _guard = span.enter();
         object.lookup(self, chain)
     }
 }
