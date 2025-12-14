@@ -1,29 +1,50 @@
-use std::mem;
+use std::{alloc::Layout, mem};
 
 use crate::{
-    ExecutableMap, Header, HeaderFlags, HeapObject, Object, Selector, Tagged,
-    Value, Visitable, VisitedLink,
+    Block, ExecutableMap, Handle, Header, HeaderFlags, HeapObject,
+    LookupResult, MethodMap, Object, Selector, Tagged, Value, Visitable,
+    VisitedLink,
 };
 
+#[repr(C)]
+#[derive(Debug)]
 pub enum ActivationType {
     Method,
     Quotation,
 }
 
+#[repr(C)]
+#[derive(Debug)]
 pub struct Activation {
-    pub object: ActivationObject,
+    pub object: Handle<ActivationObject>,
     pub ty: ActivationType,
-    pub stack_ptr: usize,
+    /// instruction index, combined with the code in ExecutableMap
+    pub index: usize,
 }
 
+// TODO: add scope
+#[repr(C)]
+#[derive(Debug)]
 pub struct ActivationObject {
     pub header: Header,
-    pub map: Tagged<ExecutableMap>,
-    pub receiver: Value,
-    pub slots: [Value; 0],
+    pub map: Handle<ExecutableMap>,
+    pub receiver: Handle<Value>,
+    // either the parent or false. implement this with scope
+    // lambdas must probably be handled special, because they can escape their creation scope
+    // pub parent: Tagged<ActivationObject>,
+    // currently: inputs, later locals too
+    pub slots: [Handle<Value>; 0],
 }
 
 pub struct ActivationStack(Vec<Activation>);
+
+impl Activation {
+    #[inline]
+    pub fn code(&self) -> *const Block {
+        let object = self.object;
+        object.code()
+    }
+}
 
 impl ActivationObject {
     /// # Safety
@@ -32,9 +53,9 @@ impl ActivationObject {
     /// arguments must have same length as map requires
     pub unsafe fn init(
         &mut self,
-        receiver: Value,
-        map: Tagged<ExecutableMap>,
-        arguments: &[Value],
+        receiver: Handle<Value>,
+        map: Handle<ExecutableMap>,
+        arguments: &[Handle<Value>],
     ) {
         self.header = Header::encode_object(
             crate::ObjectType::Activation,
@@ -46,9 +67,8 @@ impl ActivationObject {
         self.receiver = receiver;
 
         // Safety: map is valid here
-        let map = unsafe { map.as_ref() };
         assert_eq!(
-            map.map.assignable_slots_count(),
+            map.slot_count(),
             arguments.len(),
             "map and arguments must be same length"
         );
@@ -65,27 +85,43 @@ impl ActivationObject {
     }
 
     #[inline]
-    pub fn slots_ptr(&self) -> *const Value {
+    pub fn slots_ptr(&self) -> *const Handle<Value> {
         self.slots.as_ptr()
     }
 
     #[inline]
-    pub fn slots_mut_ptr(&mut self) -> *mut Value {
+    pub fn slots_mut_ptr(&mut self) -> *mut Handle<Value> {
         self.slots.as_mut_ptr()
     }
 
     #[inline]
     pub fn assignable_slots(&self) -> usize {
         // SAFETY: every object MUST have a map object
-        let map = unsafe { self.map.as_ref() };
-        map.map.assignable_slots_count()
+        self.map.slot_count()
     }
 
     #[inline]
-    pub fn slots(&self) -> &[Value] {
+    pub fn slots(&self) -> &[Handle<Value>] {
         let len = self.assignable_slots();
         // SAFETY: pointer and length must be valid
         unsafe { std::slice::from_raw_parts(self.slots_ptr(), len) }
+    }
+
+    #[inline]
+    pub fn code(&self) -> *const Block {
+        // SAFETY: safe by contract
+        let code_value: usize = self.map.code.into();
+        code_value as *const Block
+    }
+
+    /// calculate the layout of an Activation with inputs amount slots
+    pub fn required_layout(inputs: usize) -> Layout {
+        let head = Layout::new::<Self>();
+        let slots_layout =
+            Layout::array::<Value>(inputs).expect("create valid layout");
+        let (layout, _) =
+            head.extend(slots_layout).expect("create valid layout");
+        layout
     }
 }
 
@@ -102,27 +138,36 @@ impl ActivationStack {
         self.0.pop().expect("popping activation")
     }
 
-    pub fn current(&self) -> &Activation {
-        self.0.last().expect("top most exists")
+    pub fn current(&self) -> Option<&Activation> {
+        self.0.last()
     }
 
-    pub fn current_mut(&mut self) -> &mut Activation {
-        self.0.last_mut().expect("top most exists")
+    pub fn current_mut(&mut self) -> Option<&mut Activation> {
+        self.0.last_mut()
+    }
+
+    pub fn depth(&self) -> usize {
+        self.0.len()
     }
 
     pub fn new_activation(
         &mut self,
+        object: Tagged<ActivationObject>,
         ty: ActivationType,
-        object: ActivationObject,
-        stack_ptr: usize,
     ) {
+        // SAFETY: part of gc scan
+        let object = unsafe { object.promote_to_handle() };
         let activation = Activation {
             object,
             ty,
-            stack_ptr,
+            index: 0,
         };
 
         self.0.push(activation);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -137,19 +182,27 @@ impl Visitable for ActivationObject {}
 impl Object for ActivationObject {
     fn lookup(
         &self,
-        _selector: Selector,
-        _link: Option<&VisitedLink>,
-    ) -> crate::LookupResult {
-        // let slots = self.
-        unimplemented!()
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        self.receiver.as_value().lookup(selector, link)
     }
 }
 
 impl HeapObject for ActivationObject {
     fn heap_size(&self) -> usize {
-        // SAFETY: map must exist
-        let map = unsafe { self.map.as_ref() };
-        let slot_count = map.map.assignable_slots_count();
-        mem::size_of::<Self>() + slot_count * mem::size_of::<Value>()
+        if let Some(method) = self.map.as_method_map() {
+            let slot_count = method.slot_count();
+            return mem::size_of::<MethodMap>()
+                + slot_count * mem::size_of::<Value>();
+        }
+
+        if let Some(_quotation) = self.map.as_quotation_map() {
+            unimplemented!("TODO: implement quotation fully")
+            // let slot_count = method.slot_count();
+            // return mem::size_of::<Self>() + slot_count * mem::size_of::<Value>()
+        }
+
+        unreachable!("all map types should be covered")
     }
 }

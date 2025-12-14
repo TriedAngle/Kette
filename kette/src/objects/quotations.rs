@@ -5,16 +5,12 @@ use crate::{
     Selector, Tagged, Visitable, VisitedLink,
 };
 
+/// TODO: once we have variables we want to store parent scope pointer
+/// we must also handle escaping qutoations then.
 #[repr(C)]
 #[derive(Debug)]
 pub struct QuotationMap {
     pub map: ExecutableMap,
-    // TDOO: for this we probably have to create bijective mapping: name <->  stack effect
-    // this effect must be inferred at the creation of the map/quotation
-    // 0..15 16 byte input count
-    // 15..31 16 byte output count
-    // 31..39 initialized
-    pub effect: Tagged<u64>,
 }
 
 impl QuotationMap {
@@ -33,9 +29,14 @@ impl QuotationMap {
 
     /// # Safety
     /// must be correctly allocated
-    pub unsafe fn init(&mut self, code: *const Block, effect: Tagged<u64>) {
-        self.map.code = (code as usize).into();
-        self.effect = effect;
+    pub unsafe fn init(
+        &mut self,
+        code: *const Block,
+        input: usize,
+        output: usize,
+    ) {
+        // SAFETY: safe if contract holds
+        unsafe { self.map.init_quotation(code as _, input, output) };
     }
 
     pub fn required_layout() -> Layout {

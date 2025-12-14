@@ -229,9 +229,10 @@ impl Header {
             return None;
         }
         Some(match self.type_bits() {
-            0 => MapType::Slot,
-            // 1 => MapType::Array,
-            _ => return None,
+            0b000 => MapType::Slot,
+            0b100 => MapType::Method,
+            0b101 => MapType::Quotation,
+            _ => unreachable!("map type doesn't exist"),
         })
     }
 

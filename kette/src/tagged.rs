@@ -185,6 +185,16 @@ impl<T: Object> Tagged<T> {
             _marker: PhantomData,
         }
     }
+
+    /// cast Tagged<T> to Tagged<U>
+    /// # Safety
+    /// T and U must have same layout, or T represents U (in case of Value)
+    pub unsafe fn cast<U: Object>(self) -> Tagged<U> {
+        Tagged {
+            data: self.data,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<T: PtrSizedObject> Tagged<T> {
@@ -346,6 +356,10 @@ impl<T: Object> Handle<T> {
     pub fn raw_tagged_u64(self) -> u64 {
         self.data
     }
+
+    pub fn as_value(self) -> Value {
+        Value(self.data)
+    }
 }
 
 impl<T: Object> PartialEq for Handle<T> {
@@ -367,11 +381,6 @@ impl<T: HeapObject> Handle<T> {
     pub fn as_object(self) -> Tagged<T> {
         // SAFETY: this is safe, Handle is stricter than Tagged
         unsafe { Tagged::new_raw(self.data) }
-    }
-
-    #[inline]
-    pub fn as_value(self) -> Value {
-        Value(self.data)
     }
 
     #[inline]

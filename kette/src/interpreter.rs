@@ -1,7 +1,8 @@
 use crate::{
-    ActivationStack, ExecutionState, Handle, HeapProxy, Instruction,
-    LookupResult, PrimitiveMessageIndex, Selector, SlotTags, ThreadProxy,
-    VMProxy, Value, get_primitive, transmute,
+    Activation, ActivationStack, ActivationType, ExecutionState, Handle,
+    HeapProxy, Instruction, LookupResult, Method, PrimitiveMessageIndex,
+    Quotation, Selector, SlotTags, ThreadProxy, VMProxy, Value, get_primitive,
+    transmute,
 };
 
 pub struct Interpreter {
@@ -42,24 +43,70 @@ impl Interpreter {
         }
     }
 
-    pub fn execute_single_bytecode(&mut self, instruction: Instruction) {
+    #[inline(always)]
+    pub fn current_activation(&self) -> Option<&Activation> {
+        self.activations.current()
+    }
+
+    #[inline(always)]
+    pub fn current_activation_mut(&mut self) -> Option<&mut Activation> {
+        self.activations.current_mut()
+    }
+
+    #[inline(always)]
+    pub fn increment_instruction(&mut self) {
+        if let Some(activation) = self.current_activation_mut() {
+            activation.index += 1
+        };
+    }
+
+    #[inline(always)]
+    pub fn current_instruction(&mut self) -> Option<Instruction> {
+        if let Some(activation) = self.current_activation() {
+            let index = activation.index;
+            let code = activation.code();
+            // SAFETY: this is safe
+            let instructions = unsafe { &(*code).instructions };
+            return Some(instructions[index]);
+        }
+        None
+    }
+
+    pub fn setup(&mut self, quotation: Handle<Quotation>) {
+        let new = self.heap.allocate_quotation_activation(quotation, &[]);
+        self.activations
+            .new_activation(new, ActivationType::Quotation);
+    }
+
+    pub fn execute(&mut self) -> ExecutionResult {
+        while let Some(instruction) = self.current_instruction() {
+            let res = self.execute_single_bytecode(instruction);
+            match res {
+                ExecutionResult::Normal => (),
+                _ => unimplemented!("TODO"),
+            }
+            self.increment_instruction();
+        }
+
+        ExecutionResult::Normal
+    }
+
+    pub fn execute_single_bytecode(
+        &mut self,
+        instruction: Instruction,
+    ) -> ExecutionResult {
         match instruction {
             Instruction::PushFixnum { value } => {
                 tracing::trace!("push_fixnum: {:?}", value);
-                self.state.push(value.into())
+                self.state.push(value.into());
+                self.record_depth();
+                ExecutionResult::Normal
             }
             Instruction::PushValue { value } => {
                 tracing::trace!("push_value: {:?}", value);
-                self.state.push(value)
-            }
-            Instruction::SendPrimitive { id } => {
-                // SAFETY: after depth check, this is safe
-                let receiver =
-                    unsafe { self.state.pop_unchecked().as_handle_unchecked() };
-                match self.primitive_send(receiver, id) {
-                    ExecutionResult::Normal => (),
-                    _ => unimplemented!("TODO: implement"),
-                }
+                self.state.push(value);
+                self.record_depth();
+                ExecutionResult::Normal
             }
             Instruction::AllocateSlotObject { map } => {
                 tracing::trace!("allocate_slot_object: {:?}", map);
@@ -71,6 +118,16 @@ impl Interpreter {
                     unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
                 let obj = self.heap.allocate_slot_object(map, slots);
                 self.state.push(obj.into());
+                self.record_depth();
+                ExecutionResult::Normal
+            }
+            Instruction::SendPrimitive { id } => {
+                // SAFETY: after depth check, this is safe
+                let receiver =
+                    unsafe { self.state.pop_unchecked().as_handle_unchecked() };
+                let res = self.primitive_send(receiver, id);
+                self.record_depth();
+                res
             }
             Instruction::Send { message } => {
                 let selector =
@@ -79,10 +136,9 @@ impl Interpreter {
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
-                match self.send(receiver, selector) {
-                    ExecutionResult::Normal => (),
-                    _ => unimplemented!("TODO: implement"),
-                }
+                let res = self.send(receiver, selector);
+                self.record_depth();
+                res
             }
             Instruction::SendNamed { message } => {
                 let message = self.vm.intern_string(message, &mut self.heap);
@@ -90,15 +146,20 @@ impl Interpreter {
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
-
-                match self.send(receiver, selector) {
-                    ExecutionResult::Normal => (),
-                    _ => unimplemented!("TODO: implement"),
-                }
+                let res = self.send(receiver, selector);
+                self.record_depth();
+                res
+            }
+            Instruction::Return => {
+                tracing::trace!(target: "interpreter", "callstack depth {}", self.activations.depth());
+                let _last = self.activations.pop();
+                ExecutionResult::Normal
             }
             _ => unimplemented!("TODO: implement"),
         }
+    }
 
+    fn record_depth(&self) {
         tracing::info!(target: "interpreter", "stack {}", self.state.depth);
     }
 
@@ -173,13 +234,45 @@ impl Interpreter {
             let message_idx =
                 unsafe { PrimitiveMessageIndex::from_usize(id.into()) };
             // directly execute primitive
-            self.primitive_send(receiver, message_idx)
-        } else if slot.tags().contains(SlotTags::EXECUTABLE) {
-            unimplemented!("TODO: append to execution stack");
-        } else {
-            // Value constant, push it
-            self.state.push(slot.value);
-            ExecutionResult::Normal
+            return self.primitive_send(receiver, message_idx);
         }
+
+        if slot.tags().contains(!SlotTags::EXECUTABLE) {
+            self.state.push(slot.value);
+            return ExecutionResult::Normal;
+        }
+
+        // SAFETY: must by protocol
+        let method =
+            unsafe { slot.value.as_handle_unchecked().cast::<Method>() };
+        // SAFETY: safe by protocol
+        let map = unsafe { method.map.promote_to_handle() };
+
+        let slot_count = map.slot_count();
+
+        // idea: peek here, this saves the inputs,
+        // now just continue with normal stack
+        // TODO: we should probably also store depth?
+        // could be important to reset state
+        // SAFETY: TODO: depth check
+        let slots =
+            unsafe { self.state.stack_peek_slice_unchecked(slot_count) };
+        // SAFETY: TODO: actually put them into handle set
+        let slots = unsafe { crate::transmute::values_as_handles(slots) };
+
+        let activation_object =
+            self.heap.allocate_method_activation(receiver, map, slots);
+
+        self.activations
+            .new_activation(activation_object, ActivationType::Method);
+
+        // SAFETY: not safe yet, TOOD: depth check
+        // let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
+        // the initialization is guaranted after the call
+        // let mut outputs = Vec::with_capacity(message.outputs);
+
+        // SAFETY: gc not running
+        // let inputs = unsafe { transmute::values_as_handles(inputs.as_slice()) };
+        unimplemented!()
     }
 }

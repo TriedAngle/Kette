@@ -61,9 +61,8 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let code_block = BytecodeCompiler::compile(&ctx.vm.shared, accumulator);
     let code = ctx.vm.shared.code_heap.push(code_block);
 
-    let quot =
-        ctx.heap
-            .allocate_quotation(accumulator, code, Tagged::new_value(0));
+    // TODO: implement correct sizes here
+    let quot = ctx.heap.allocate_quotation(accumulator, code, 0, 0);
     ctx.state.push(quot.into());
     ExecutionResult::Normal
 }

@@ -18,6 +18,8 @@ pub enum Instruction {
     //     value: f64,
     // },
     Return,
+    // TODO: implement non-local returns (ways to exit quotations)
+    // NonLocalReturn
 
     // Optimization / Testing / Friendly User interface
     SendPrimitive { id: PrimitiveMessageIndex },

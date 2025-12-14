@@ -16,9 +16,10 @@ use bitflags::bitflags;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    Array, Block, ByteArray, Handle, HeapObject, Message, Quotation,
-    QuotationMap, SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags,
-    Strings, Tagged, Value, Visitable, map_memory,
+    Activation, ActivationObject, Array, Block, ByteArray, ExecutableMap,
+    Handle, HeapObject, Message, Method, MethodMap, Quotation, QuotationMap,
+    SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags, Strings, Tagged,
+    Value, Visitable, map_memory, objects::executable::StackEffect,
 };
 
 pub const HANDLE_SET_SIZE: usize = 20;
@@ -524,6 +525,12 @@ impl HeapProxy {
             return allocation;
         }
 
+        debug_assert!(if ptype == PageType::Boxed {
+            align.is_multiple_of(8)
+        } else {
+            true
+        });
+
         // Slow path: Large object or TLAB refresh needed
 
         // Check if object is too large for TLAB
@@ -656,6 +663,44 @@ impl HeapProxy {
         Tagged::new_ptr(obj)
     }
 
+    /// name must be interned !
+    pub fn allocate_method_map(
+        &mut self,
+        name: Tagged<ByteArray>,
+        code: &Block,
+        slots: &[SlotDescriptor],
+        effect: Tagged<StackEffect>,
+    ) -> Tagged<MethodMap> {
+        let layout = MethodMap::required_layout(slots.len());
+        let mut raw = self.allocate_unboxed_raw(layout).cast::<MethodMap>();
+        // SAFETY: just created, safe to convert to mutable reference
+        let map = unsafe { raw.as_mut() };
+
+        // SAFETY: this is safe
+        unsafe {
+            map.init_with_data(name, effect, code as *const _ as _, slots)
+        };
+
+        Tagged::new_ptr(map)
+    }
+
+    pub fn allocate_method_object(
+        &mut self,
+        map: Tagged<MethodMap>,
+    ) -> Tagged<Method> {
+        // SAFETY: map must be valid here
+        let map_ref = unsafe { map.as_ref() };
+        let layout = Layout::new::<Method>();
+        debug_assert!(layout.align() == 8);
+        let mut raw = self.allocate_boxed_raw(layout.size()).cast::<Method>();
+
+        // SAFETY: just created, safe to convert to mutable reference
+        let obj = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { obj.init(map) };
+        Tagged::new_ptr(obj)
+    }
+
     pub fn allocate_message(
         &mut self,
         interned: Tagged<ByteArray>,
@@ -694,7 +739,8 @@ impl HeapProxy {
     pub unsafe fn allocate_quotation_map(
         &mut self,
         code: &Block,
-        effect: Tagged<u64>,
+        input: usize,
+        output: usize,
     ) -> Tagged<QuotationMap> {
         let layout = QuotationMap::required_layout();
         let mut raw = self.allocate_unboxed_raw(layout).cast::<QuotationMap>();
@@ -702,7 +748,7 @@ impl HeapProxy {
         let map = unsafe { raw.as_mut() };
 
         // SAFETY: this is safe
-        unsafe { map.init(code, effect) };
+        unsafe { map.init(code, input, output) };
 
         Tagged::new_ptr(map)
     }
@@ -711,10 +757,12 @@ impl HeapProxy {
         &mut self,
         body: Handle<Array>,
         bytecode: &Block,
-        effect: Tagged<u64>,
+        input: usize,
+        output: usize,
     ) -> Tagged<Quotation> {
         // SAFETY: this is safe
-        let map = unsafe { self.allocate_quotation_map(bytecode, effect) };
+        let map =
+            unsafe { self.allocate_quotation_map(bytecode, input, output) };
         let mut raw = self
             .allocate_boxed_raw(mem::size_of::<Quotation>())
             .cast::<Quotation>();
@@ -723,6 +771,53 @@ impl HeapProxy {
         // SAFETY: we just create this here
         unsafe { quot.init(body.as_tagged(), map) };
         Tagged::new_ptr(quot)
+    }
+
+    /// # Safety
+    /// internal function, usage discouraged
+    pub unsafe fn allocate_activation_raw(
+        &mut self,
+        receiver: Handle<Value>,
+        map: Handle<ExecutableMap>,
+        slots: &[Handle<Value>],
+    ) -> Tagged<ActivationObject> {
+        let layout = ActivationObject::required_layout(slots.len());
+        // SAFETY: is safe
+        let mut raw = unsafe {
+            self.allocate_raw(layout.size(), layout.align(), PageType::Boxed)
+        };
+        // SAFETY: just allocated
+        let activation = unsafe { raw.cast::<ActivationObject>().as_mut() };
+        // SAFETY: allocated with correct size
+        unsafe { activation.init(receiver, map, slots) };
+        Tagged::new_ptr(activation)
+    }
+
+    pub fn allocate_method_activation(
+        &mut self,
+        receiver: Handle<Value>,
+        map: Handle<MethodMap>,
+        slots: &[Handle<Value>],
+    ) -> Tagged<ActivationObject> {
+        // SAFETY: every method map is an executable map
+        let map = unsafe { map.cast::<ExecutableMap>() };
+        // SAFETY: handles safe, slots must be same size as map wants
+        unsafe { self.allocate_activation_raw(receiver, map, slots) }
+    }
+
+    pub fn allocate_quotation_activation(
+        &mut self,
+        quotation: Handle<Quotation>,
+        slots: &[Handle<Value>],
+    ) -> Tagged<ActivationObject> {
+        // SAFETY: every method map is an executable map
+        let map = unsafe {
+            quotation.map.cast::<ExecutableMap>().promote_to_handle()
+        };
+        // SAFETY: handles safe, slots must be same size as map wants
+        unsafe {
+            self.allocate_activation_raw(quotation.as_value_handle(), map, &[])
+        }
     }
 
     pub fn create_proxy(&self) -> HeapProxy {

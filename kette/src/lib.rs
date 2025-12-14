@@ -10,7 +10,6 @@ mod parker;
 mod primitives;
 
 mod stack;
-mod stack_effect;
 mod system;
 mod tagged;
 mod visitor;
@@ -50,7 +49,6 @@ pub use primitives::{
 };
 
 pub use stack::{ExecutionState, ExecutionStateInfo};
-pub use stack_effect::StackEffect;
 pub use system::{PAGE_SIZE, map_memory, unmap_memory};
 pub use tagged::{Handle, OBECT_TAG_MASK, Tagged, Value, ValueTag, transmute};
 

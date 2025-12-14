@@ -193,9 +193,11 @@ impl NativeThread {
     }
 
     pub fn join(&self) {
-        // SAFETY: thread alive => exists
         if let Some(h) =
-            unsafe { self.handle.get().as_mut().unwrap_unchecked().take() }
+            // SAFETY: thread alive => exists
+            unsafe {
+                self.handle.get().as_mut().unwrap_unchecked().take()
+            }
         {
             let _ = h.join();
             let (ref mx, ref cv) = self.done;

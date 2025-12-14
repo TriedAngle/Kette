@@ -59,6 +59,8 @@ impl BytecodeCompiler {
             instructions.push(Instruction::Send { message })
         }
 
+        instructions.push(Instruction::Return);
+
         Block { instructions }
     }
 }

@@ -60,7 +60,7 @@ fn main() {
     }
 
     // SAFETY: this is guaranteed by the contract
-    let array = unsafe {
+    let body = unsafe {
         interpreter
             .state
             .pop()
@@ -69,9 +69,17 @@ fn main() {
             .cast::<Array>()
     };
 
-    let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, array);
+    let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, body);
 
-    for instruction in compiled.instructions {
-        interpreter.execute_single_bytecode(instruction);
-    }
+    let quotation = interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
+    // SAFETY: this is safe
+    let quotation = unsafe { quotation.promote_to_handle() };
+
+    interpreter.setup(quotation);
+    
+    interpreter.execute();
+
+    // for instruction in compiled.instructions {
+    //     interpreter.execute_single_bytecode(instruction);
+    // }
 }
