@@ -5,7 +5,7 @@ use kette::{
 };
 
 const CODE: &str = r#"
-5 77 fixnum+ fixnum>utf8Bytes bytearrayPrintln
+    5 77 fixnum+ fixnum>utf8Bytes bytearrayPrintln
 "#;
 
 fn execute_parser_code(value: Value) -> Block {
@@ -76,7 +76,7 @@ fn main() {
     let quotation = unsafe { quotation.promote_to_handle() };
 
     interpreter.setup(quotation);
-    
+
     interpreter.execute();
 
     // for instruction in compiled.instructions {

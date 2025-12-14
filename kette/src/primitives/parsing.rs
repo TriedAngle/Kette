@@ -45,25 +45,25 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 // TODO: this is not correct, use parse_complete as correct example
 pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let end = ctx.vm.intern_string_message("]", ctx.heap);
-    ctx.state.push(end.as_value());
-    let res = parse_until(ctx);
+    let mut accumulator = Vec::new();
 
+    let end = ctx.vm.intern_string_message("]", ctx.heap);
+
+    let res = parse_until_inner(ctx, Some(end), &mut accumulator);
     if res != ExecutionResult::Normal {
-        unimplemented!("TODO: error handling");
+        return ExecutionResult::Panic("Parsing failed!");
     }
 
-    // SAFETY: must exist
-    let accumulator_value = unsafe { ctx.state.pop_unchecked() };
-    // SAFETY: this is safe
-    let accumulator =
-        unsafe { accumulator_value.as_handle_unchecked().cast::<Array>() };
-    let code_block = BytecodeCompiler::compile(&ctx.vm.shared, accumulator);
-    let code = ctx.vm.shared.code_heap.push(code_block);
+    // SAFETY: TODO: must be added to handleset
+    let body =
+        unsafe { ctx.heap.allocate_array(&accumulator).promote_to_handle() };
+    let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
+    let code = ctx.vm.shared.code_heap.push(block);
+    // TODO: this must be updated
+    let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
+    // SAFETY: just created, will become handle there anyways
+    ctx.outputs[0] = unsafe { quotation.promote_to_handle().into() };
 
-    // TODO: implement correct sizes here
-    let quot = ctx.heap.allocate_quotation(accumulator, code, 0, 0);
-    ctx.state.push(quot.into());
     ExecutionResult::Normal
 }
 
@@ -84,16 +84,13 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
 }
 
 // TODO: this is not correct, use parse_complete as correct example
-// end -- array | called on parser
+// end -- array
 pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    if ctx.state.depth() < 1 {
-        return ExecutionResult::Panic("Datastack underflow");
-    }
-
     let mut accumulator = Vec::new();
-    // SAFETY: depth check
+
+    // SAFETY: must exist
     let end = unsafe { ctx.state.pop_unchecked() };
-    // SAFETY: heap deletion will be paused while parsing and requires Message
+    // SAFETY: TODO: maybe check in future but input expects this
     let end = unsafe { end.as_handle_unchecked().cast::<Message>() };
 
     let res = parse_until_inner(ctx, Some(end), &mut accumulator);
@@ -102,7 +99,8 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     let accumulated = ctx.heap.allocate_array(&accumulator);
-    ctx.state.push(accumulated.into());
+    // SAFETY: just created, will become handle there anyways
+    ctx.outputs[0] = unsafe { accumulated.promote_to_handle().into() };
 
     ExecutionResult::Normal
 }

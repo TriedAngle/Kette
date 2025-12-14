@@ -188,6 +188,8 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("parseNext", 0, 1, parsing::parse_next),
     PrimitiveMessage::new("parseUntil", 2, 1, parsing::parse_until),
     PrimitiveMessage::new("parse", 0, 1, parsing::parse_complete),
+    // Parse Time
+    PrimitiveMessage::new("[", 0, 1, parsing::parse_quotation),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
