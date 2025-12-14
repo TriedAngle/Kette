@@ -440,6 +440,13 @@ impl Object for HeapValue {
                 };
                 activation.lookup(selector, link)
             }
+            ObjectType::Quotation => {
+                // SAFETY: checked
+                let quotation = unsafe {
+                    std::mem::transmute::<&HeapValue, &Quotation>(self)
+                };
+                quotation.lookup(selector, link)
+            }
             _ => unimplemented!("object type not implemented"),
         }
     }

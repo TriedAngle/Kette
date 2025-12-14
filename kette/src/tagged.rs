@@ -362,6 +362,21 @@ impl<T: Object> Handle<T> {
     }
 }
 
+impl Handle<Value> {
+    /// Create a zero value handle
+    /// # Safety
+    /// only for initialization or super special cases
+    /// must make sure to not dereference this
+    pub fn zero() -> Handle<Value> {
+        // We tag it as a reference, so it looks like a valid (but null) tagged pointer
+        let null_tagged = ValueTag::Fixnum as u64;
+        Self {
+            data: null_tagged,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T: Object> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
         self.data == other.data

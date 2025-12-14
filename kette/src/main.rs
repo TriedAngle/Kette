@@ -6,6 +6,8 @@ use kette::{
 
 const CODE: &str = r#"
     5 77 fixnum+ fixnum>utf8Bytes bytearrayPrintln
+    20 20 fixnum= [ "equal" ] [ "not equal" ] if bytearrayPrintln
+    100 20 fixnum= [ "equal" ] [ "not equal" ] if bytearrayPrintln
 "#;
 
 fn execute_parser_code(value: Value) -> Block {

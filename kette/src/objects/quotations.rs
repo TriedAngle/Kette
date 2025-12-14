@@ -1,8 +1,8 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Array, Block, ExecutableMap, Header, HeapObject, LookupResult, Object,
-    Selector, Tagged, Visitable, VisitedLink,
+    Array, Block, ExecutableMap, Header, HeaderFlags, HeapObject, LookupResult,
+    Object, ObjectType, Selector, Tagged, Visitable, VisitedLink,
 };
 
 /// TODO: once we have variables we want to store parent scope pointer
@@ -69,6 +69,12 @@ impl Quotation {
         body: Tagged<Array>,
         map: Tagged<QuotationMap>,
     ) {
+        self.header = Header::encode_object(
+            ObjectType::Quotation,
+            0,
+            HeaderFlags::empty(),
+            0,
+        );
         self.map = map;
         self.body = body;
     }
@@ -80,7 +86,7 @@ impl Object for Quotation {
         selector: Selector,
         link: Option<&VisitedLink>,
     ) -> LookupResult {
-        let traits = selector.vm.specials.bytearray_traits;
+        let traits = selector.vm.specials.quotation_traits;
         traits.lookup(selector, link)
     }
 }

@@ -22,6 +22,7 @@ pub enum IntegerError {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ExecutionResult {
     Normal,
+    ActivationChanged,
     IntegerError(IntegerError),
     Yield,
     Panic(&'static str),
@@ -82,10 +83,10 @@ impl Interpreter {
         while let Some(instruction) = self.current_instruction() {
             let res = self.execute_single_bytecode(instruction);
             match res {
-                ExecutionResult::Normal => (),
+                ExecutionResult::Normal => self.increment_instruction(),
+                ExecutionResult::ActivationChanged => (),
                 _ => unimplemented!("TODO"),
             }
-            self.increment_instruction();
         }
 
         ExecutionResult::Normal
@@ -105,6 +106,12 @@ impl Interpreter {
             Instruction::PushValue { value } => {
                 tracing::trace!("push_value: {:?}", value);
                 self.state.push(value);
+                self.record_depth();
+                ExecutionResult::Normal
+            }
+            Instruction::PushQuotaton { value } => {
+                tracing::trace!("push_value: {:?}", value);
+                self.state.push(value.as_value());
                 self.record_depth();
                 ExecutionResult::Normal
             }
@@ -151,8 +158,8 @@ impl Interpreter {
                 res
             }
             Instruction::Return => {
-                tracing::trace!(target: "interpreter", "callstack depth {}", self.activations.depth());
                 let _last = self.activations.pop();
+                tracing::trace!(target: "interpreter", "callstack depth {}", self.activations.depth());
                 ExecutionResult::Normal
             }
             _ => unimplemented!("TODO: implement"),
@@ -192,6 +199,7 @@ impl Interpreter {
                 // SAFETY: not safe in general yet, TODO: size check
                 unsafe { self.state.stack_push_slice_unchecked(outputs) };
             }
+            ExecutionResult::ActivationChanged => (),
             _ => unimplemented!(
                 "TODO: implement the different ExecutionResult handling"
             ),
@@ -266,13 +274,6 @@ impl Interpreter {
         self.activations
             .new_activation(activation_object, ActivationType::Method);
 
-        // SAFETY: not safe yet, TOOD: depth check
-        // let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
-        // the initialization is guaranted after the call
-        // let mut outputs = Vec::with_capacity(message.outputs);
-
-        // SAFETY: gc not running
-        // let inputs = unsafe { transmute::values_as_handles(inputs.as_slice()) };
-        unimplemented!()
+        ExecutionResult::ActivationChanged
     }
 }

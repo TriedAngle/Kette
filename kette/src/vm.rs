@@ -132,12 +132,12 @@ impl VM {
             SlotHelper::primitive_message("fixnumNeg", SlotTags::empty()),
             SlotHelper::primitive_message("fixnumBitAnd", SlotTags::empty()),
             SlotHelper::primitive_message("fixnumBitOr", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnumEq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnumNeq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnumLt", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnumGt", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnumLeq", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnumGeq", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum=", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum!=", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum<", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum<=", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>utf8Bytes", SlotTags::empty()),
         ]);
 

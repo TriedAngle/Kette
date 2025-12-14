@@ -3,7 +3,8 @@
 
 use crate::{
     Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle, Message,
-    ObjectType, ParsedToken, Parser, PrimitiveContext, Tagged, Value,
+    ObjectType, ParsedToken, Parser, PrimitiveContext, Quotation, Tagged,
+    Value, get_primitive, primitive_index,
 };
 
 // TODO: this function should become fully stateless
@@ -61,8 +62,11 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let code = ctx.vm.shared.code_heap.push(block);
     // TODO: this must be updated
     let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
+    // SAFETY: just allocated
+    let quotation = unsafe { quotation.promote_to_handle() };
+    println!("quot: {:?}", quotation);
     // SAFETY: just created, will become handle there anyways
-    ctx.outputs[0] = unsafe { quotation.promote_to_handle().into() };
+    ctx.outputs[0] = quotation.as_value_handle();
 
     ExecutionResult::Normal
 }
@@ -106,8 +110,8 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
 }
 
 // parser --
-fn parse_until_inner(
-    ctx: &mut PrimitiveContext,
+fn parse_until_inner<'m, 'ex, 'arg>(
+    ctx: &'m mut PrimitiveContext<'ex, 'arg>,
     end: Option<Handle<Message>>,
     accum: &mut Vec<Value>,
 ) -> ExecutionResult {
@@ -119,13 +123,11 @@ fn parse_until_inner(
         if res != ExecutionResult::Normal {
             break;
         }
-        let state = &mut ctx.state;
-        let vm = &ctx.vm;
 
         // SAFETY: parse_next must return
-        let next = unsafe { state.pop_unchecked() };
+        let next = unsafe { ctx.state.pop_unchecked() };
 
-        if next == vm.shared.specials.false_object.as_value() {
+        if next == ctx.vm.shared.specials.false_object.as_value() {
             break;
         }
 
@@ -155,6 +157,18 @@ fn parse_until_inner(
         // SAFETY: when parsing we can be sure this is valid utf8
         let name = unsafe { message.value.as_ref().as_utf8().expect("utf8") };
 
+        // TODO: this should invoke a new call
+        if name == "[" {
+            let message = get_primitive(primitive_index("["));
+            let mut inputs = &[];
+            let mut outputs = [Handle::zero(); 1];
+            let mut ctx2 = ctx.new_invoke(parser.into(), inputs, &mut outputs);
+            // let res = message.call_with_context(&mut ctx2);
+            let res = parse_quotation(&mut ctx2);
+            println!("outputs: {:?}", outputs[0]);
+            accum.push(outputs[0].into());
+            continue;
+        }
         // if let Some(_parser) = ctx.parsers.get(name) {
         //     unimplemented!("parses not implemented yet");
         // }

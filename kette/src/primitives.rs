@@ -74,6 +74,7 @@ impl<'a> PrimitiveParser<'a> {
 }
 
 pub struct PrimitiveContext<'ex, 'arg> {
+    pub interpreter: &'ex mut Interpreter,
     pub state: &'ex mut ExecutionState,
     pub vm: &'ex VMProxy,
     pub thread: &'ex ThreadProxy,
@@ -90,11 +91,18 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
         inputs: &'arg [Handle<Value>],
         outputs: &'arg mut [Handle<Value>],
     ) -> Self {
+        // SAFETY: this is very dangerous, but we got motion
+        let ereased = unsafe {
+            std::mem::transmute::<&mut Interpreter, &'ex mut Interpreter>(
+                interpreter,
+            )
+        };
         let state = &mut interpreter.state;
         let vm = &interpreter.vm;
         let thread = &interpreter.thread;
         let heap = &mut interpreter.heap;
         Self {
+            interpreter: ereased,
             state,
             vm,
             thread,
@@ -116,6 +124,24 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
 
         (message.ptr)(&mut ctx)
     }
+
+    pub fn new_invoke<'arg2>(
+        &mut self,
+        receiver: Handle<Value>,
+        inputs: &'arg2 [Handle<Value>],
+        outputs: &'arg2 mut [Handle<Value>],
+    ) -> PrimitiveContext<'_, 'arg2> {
+        PrimitiveContext {
+            interpreter: self.interpreter,
+            vm: self.vm,
+            heap: self.heap,
+            state: self.state,
+            thread: self.thread,
+            receiver,
+            inputs,
+            outputs,
+        }
+    }
 }
 
 impl<'m> PrimitiveMessage<'m> {
@@ -130,6 +156,13 @@ impl<'m> PrimitiveMessage<'m> {
             PrimitiveContext::new(interpreter, receiver, inputs, outputs);
 
         (self.ptr)(&mut ctx)
+    }
+
+    pub fn call_with_context(
+        &'m self,
+        ctx: &mut PrimitiveContext,
+    ) -> ExecutionResult {
+        (self.ptr)(ctx)
     }
 }
 
@@ -160,12 +193,12 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnumNeg", 1, 1, fixnum::fixnum_neg),
     PrimitiveMessage::new("fixnumBitAnd", 1, 1, fixnum::fixnum_and),
     PrimitiveMessage::new("fixnumBitOr", 1, 1, fixnum::fixnum_or),
-    PrimitiveMessage::new("fixnumEq", 1, 1, fixnum::fixnum_eq),
-    PrimitiveMessage::new("fixnumNeq", 1, 1, fixnum::fixnum_neq),
-    PrimitiveMessage::new("fixnumLt", 1, 1, fixnum::fixnum_lt),
-    PrimitiveMessage::new("fixnumGt", 1, 1, fixnum::fixnum_gt),
-    PrimitiveMessage::new("fixnumLeq", 1, 1, fixnum::fixnum_leq),
-    PrimitiveMessage::new("fixnumGeq", 1, 1, fixnum::fixnum_geq),
+    PrimitiveMessage::new("fixnum=", 1, 1, fixnum::fixnum_eq),
+    PrimitiveMessage::new("fixnum!=", 1, 1, fixnum::fixnum_neq),
+    PrimitiveMessage::new("fixnum<", 1, 1, fixnum::fixnum_lt),
+    PrimitiveMessage::new("fixnum>", 1, 1, fixnum::fixnum_gt),
+    PrimitiveMessage::new("fixnum<=", 1, 1, fixnum::fixnum_leq),
+    PrimitiveMessage::new("fixnum>=", 1, 1, fixnum::fixnum_geq),
     PrimitiveMessage::new("fixnum>utf8Bytes", 0, 1, fixnum::fixnum_to_utf8_bytes),
     // Bytearrays
     PrimitiveMessage::new("bytearrayPrint", 0, 0, bytearray::bytearray_print),
