@@ -13,6 +13,8 @@ pub enum Instruction {
     PushValue { value: Value },
     PushFixnum { value: i64 },
     PushQuotaton { value: Handle<Quotation> },
+    StackToReturn,
+    ReturnToStack,
     // TODO implement this
     // PushFloat {
     //     value: f64,

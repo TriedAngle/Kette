@@ -110,9 +110,23 @@ impl Interpreter {
                 ExecutionResult::Normal
             }
             Instruction::PushQuotaton { value } => {
-                tracing::trace!("push_value: {:?}", value);
+                tracing::trace!("push_quot: {:?}", value);
                 self.state.push(value.as_value());
                 self.record_depth();
+                ExecutionResult::Normal
+            }
+            Instruction::StackToReturn => {
+                tracing::trace!("stack>return");
+                // SAFETY: compiler ensures safety
+                let value = unsafe { self.state.pop_unchecked() };
+                self.state.push_return(value);
+                ExecutionResult::Normal
+            }
+            Instruction::ReturnToStack => {
+                tracing::trace!("return>stack");
+                // SAFETY: compiler ensures safety
+                let value = unsafe { self.state.pop_return_unchecked() };
+                self.state.push(value);
                 ExecutionResult::Normal
             }
             Instruction::AllocateSlotObject { map } => {

@@ -21,17 +21,18 @@ pub fn call(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [x] = inputs(ctx);
 
-    let quote = ctx.receiver;
-
-    // TODO: do executable map check and execute.
-    // TODO: add callstack once added
-    ctx.state.push_return(x.into());
-    tracing::error!("TRYING TO CALL {quote:?}, BUT CALL NOT IMPLEMENTED");
+    let q = ctx.receiver;
+    ctx.state.push(q.into());
     outputs(ctx, [x]);
-    ExecutionResult::Normal
+    let quot = ctx.vm.shared.specials.dip_quotation;
+
+    let activation_object = ctx.heap.allocate_quotation_activation(quot, &[]);
+    ctx.interpreter
+        .activations
+        .new_activation(activation_object, ActivationType::Quotation);
+    ExecutionResult::ActivationChanged
 }
 
-// TODO: implement this
 /// ? p q -- calls if true, otherwise call
 pub fn conditional_branch(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let false_branch = ctx.receiver;

@@ -199,15 +199,15 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum>", 1, 1, fixnum::fixnum_gt),
     PrimitiveMessage::new("fixnum<=", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum>=", 1, 1, fixnum::fixnum_geq),
-    PrimitiveMessage::new("fixnum>utf8Bytes", 0, 1, fixnum::fixnum_to_utf8_bytes),
+    PrimitiveMessage::new("(>string)", 0, 1, fixnum::fixnum_to_utf8_bytes),
     // Bytearrays
-    PrimitiveMessage::new("bytearrayPrint", 0, 0, bytearray::bytearray_print),
-    PrimitiveMessage::new("bytearrayPrintln", 0, 0, bytearray::bytearray_println),
+    PrimitiveMessage::new("(print)", 0, 0, bytearray::bytearray_print),
+    PrimitiveMessage::new("(println)", 0, 0, bytearray::bytearray_println),
     // Arrays
-    PrimitiveMessage::new("array>quotation", 0, 1, array::array_to_quotation),
+    PrimitiveMessage::new("(>quotation)", 0, 1, array::array_to_quotation),
     // Quotation
     PrimitiveMessage::new("(call)", 0, 0, quotation::call),
-    PrimitiveMessage::new("(dip)", 1, 1, quotation::dip),
+    PrimitiveMessage::new("dip", 1, 1, quotation::dip),
     PrimitiveMessage::new("if", 2, 0, quotation::conditional_branch),
     // Threads
     PrimitiveMessage::new("<threadNative>", 0, 0, threads::create_native),

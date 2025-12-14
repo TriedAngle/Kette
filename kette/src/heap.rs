@@ -684,6 +684,27 @@ impl HeapProxy {
         Tagged::new_ptr(map)
     }
 
+    pub fn allocate_method_map_helper(
+        &mut self,
+        name: &str,
+        code: &Block,
+        slots: &[SlotHelper],
+        effect: Tagged<StackEffect>,
+        strings: &Strings,
+    ) -> Tagged<MethodMap> {
+        let name = strings.get(name, self);
+
+        let slots = slots
+            .iter()
+            .map(|slot| {
+                let interned = strings.get(slot.name, self);
+                SlotDescriptor::new(interned.into(), slot.tags, slot.value)
+            })
+            .collect::<Vec<_>>();
+
+        self.allocate_method_map(name.as_tagged(), code, &slots, effect)
+    }
+
     pub fn allocate_method_object(
         &mut self,
         map: Tagged<MethodMap>,

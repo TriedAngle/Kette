@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue, Message,
-    SlotHelper, SlotTags, Strings, Value, bytecode::CodeHeap,
-    interning::Messages,
+    Block, ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue,
+    Instruction, Message, Quotation, SlotHelper, SlotTags, Strings, Value,
+    bytecode::CodeHeap, interning::Messages, primitive_index,
 };
 
 #[derive(Debug)]
@@ -16,6 +16,8 @@ pub struct SpecialObjects {
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
     pub stack_object: Handle<HeapValue>,
+
+    pub dip_quotation: Handle<Quotation>,
 
     pub message_self: Handle<ByteArray>,
 }
@@ -138,24 +140,24 @@ impl VM {
             SlotHelper::primitive_message("fixnum>", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum<=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
-            SlotHelper::primitive_message("fixnum>utf8Bytes", SlotTags::empty()),
+            SlotHelper::primitive_message("(>string)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let bytearray_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::primitive_message("bytearrayPrint", SlotTags::empty()),
-            SlotHelper::primitive_message("bytearrayPrintln", SlotTags::empty()),
+            SlotHelper::primitive_message("(print)", SlotTags::empty()),
+            SlotHelper::primitive_message("(println)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let array_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::primitive_message("array>quotation", SlotTags::empty()),
+            SlotHelper::primitive_message("(>quotation)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let quotation_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(call)", SlotTags::empty()),
-            SlotHelper::primitive_message("(dip)", SlotTags::empty()),
+            SlotHelper::primitive_message("dip", SlotTags::empty()),
             SlotHelper::primitive_message("if", SlotTags::empty()),
         ]);
 
@@ -201,6 +203,25 @@ impl VM {
                 .promote_to_handle()
                 .cast();
 
+            let dip_code = self.inner.code_heap.push(Block {
+                instructions: [
+                    Instruction::StackToReturn,
+                    Instruction::SendPrimitive {
+                        id: primitive_index("(call)"),
+                    },
+                    Instruction::ReturnToStack,
+                    Instruction::Return,
+                ]
+                .into(),
+            });
+
+            // SAFETY: just allocated
+            let dip_body = heap.allocate_array(&[]).promote_to_handle();
+
+            let dip_quotation = heap
+                .allocate_quotation(dip_body, dip_code, 2, 1)
+                .promote_to_handle();
+
             let specials = SpecialObjects {
                 bytearray_traits,
                 array_traits,
@@ -210,6 +231,7 @@ impl VM {
                 true_object,
                 false_object,
                 stack_object,
+                dip_quotation,
                 // TODO: this MUST be implemented
                 message_self: Value::zero().as_heap_handle_unchecked().cast(),
             };
@@ -273,6 +295,7 @@ impl SpecialObjects {
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),
+                dip_quotation: Value::zero().as_heap_handle_unchecked().cast(),
                 message_self: Value::zero().as_heap_handle_unchecked().cast(),
             }
         }

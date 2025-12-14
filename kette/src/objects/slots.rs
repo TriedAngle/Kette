@@ -3,9 +3,9 @@ use std::{alloc::Layout, mem, ptr};
 use bitflags::bitflags;
 
 use crate::{
-    ByteArray, Header, HeaderFlags, HeapObject, LookupResult, Map, MapType,
-    Object, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink,
-    Visitor, primitive_index,
+    ByteArray, Handle, Header, HeaderFlags, HeapObject, LookupResult, Map,
+    MapType, Method, Object, ObjectType, Selector, Tagged, Value, Visitable,
+    VisitedLink, Visitor, primitive_index,
 };
 
 bitflags! {
@@ -374,5 +374,16 @@ impl<'a> SlotHelper<'a> {
         let index = primitive_index(name);
         let value = index.as_raw();
         Self::new(name, value.into(), tags)
+    }
+
+    #[inline]
+    pub fn message(
+        name: &'a str,
+        method: Handle<Method>,
+        tags: SlotTags,
+    ) -> Self {
+        let tags = tags | SlotTags::EXECUTABLE;
+        let value = method.as_value();
+        Self::new(name, value, tags)
     }
 }
