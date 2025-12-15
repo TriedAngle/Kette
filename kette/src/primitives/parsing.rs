@@ -64,9 +64,21 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
     // SAFETY: just allocated
     let quotation = unsafe { quotation.promote_to_handle() };
-    println!("quot: {:?}", quotation);
     // SAFETY: just created, will become handle there anyways
     ctx.outputs[0] = quotation.as_value_handle();
+
+    ExecutionResult::Normal
+}
+
+pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let mut accumulator = Vec::new();
+
+    let end = ctx.vm.intern_string_message("|)", ctx.heap);
+
+    let res = parse_until_inner(ctx, Some(end), &mut accumulator);
+    if res != ExecutionResult::Normal {
+        return ExecutionResult::Panic("Parsing failed!");
+    }
 
     ExecutionResult::Normal
 }
@@ -165,7 +177,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
             let mut ctx2 = ctx.new_invoke(parser.into(), inputs, &mut outputs);
             // let res = message.call_with_context(&mut ctx2);
             let res = parse_quotation(&mut ctx2);
-            println!("outputs: {:?}", outputs[0]);
+            // println!("outputs: {:?}", outputs[0]);
             accum.push(outputs[0].into());
             continue;
         }

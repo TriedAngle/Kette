@@ -176,6 +176,33 @@ impl Parser {
 
         Some(parsed)
     }
+
+    pub fn read_until(&mut self, end: &str) -> Option<Token> {
+        let start = self.offset;
+
+        if self.is_done() {
+            return None;
+        }
+
+        let remaining_bytes = &self.code[start..];
+        let remaining_str = std::str::from_utf8(remaining_bytes).ok()?;
+
+        match remaining_str.find(end) {
+            Some(relative_index) => {
+                let token = Token {
+                    start,
+                    len: relative_index,
+                };
+
+                self.offset += relative_index + end.len();
+
+                Some(token)
+            }
+            None => {
+                None
+            }
+        }
+    }
 }
 
 impl Visitable for Parser {}
@@ -320,5 +347,45 @@ mod tests {
             ParsedToken::Float(f) => assert!((f - 7.5).abs() < 1e-12),
             _ => panic!("Expected Float"),
         }
+    }
+
+    #[test]
+    fn test_read_until_found() {
+        let mut p = Parser::new(b"content to read|END| remaining");
+
+        let token = p.read_until("|END|").expect("Should find marker");
+        assert_eq!(p.get_token_string(token), "content to read");
+
+        assert_eq!(p.offset, 20);
+
+        let next = p.next_token().unwrap();
+        assert_eq!(p.get_token_string(next), "remaining");
+    }
+
+    #[test]
+    fn test_read_until_not_found_resets_offset() {
+        let code = b"some code without the marker";
+        let mut p = Parser::new(code);
+
+        p.offset = 5;
+        let original_offset = p.offset;
+
+        let result = p.read_until("MISSING");
+
+        assert!(result.is_none());
+
+        assert_eq!(p.offset, original_offset);
+    }
+
+    #[test]
+    fn test_read_until_immediate_match() {
+        let mut p = Parser::new(b"STOP now");
+
+        let token = p.read_until("STOP").unwrap();
+
+        assert_eq!(token.len, 0);
+        assert_eq!(p.get_token_string(token), "");
+
+        assert_eq!(p.offset, 4);
     }
 }
