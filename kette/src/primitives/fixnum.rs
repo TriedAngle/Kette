@@ -1,7 +1,7 @@
 use std::ops::Neg;
 
 use crate::{
-    ExecutionResult, IntegerError, PrimitiveContext, Tagged,
+    ExecutionResult, NumberError, PrimitiveContext, Tagged,
     primitives::bool_object,
 };
 
@@ -11,7 +11,7 @@ type Fixnum2Op = fn(
     ctx: &mut PrimitiveContext,
     a: Tagged<i64>,
     b: Tagged<i64>,
-) -> Result<Tagged<i64>, IntegerError>;
+) -> Result<Tagged<i64>, NumberError>;
 
 fn fixnum_binop(
     ctx: &mut PrimitiveContext<'_, '_>,
@@ -21,7 +21,7 @@ fn fixnum_binop(
     let b = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = res.into(),
-        Err(err) => return ExecutionResult::IntegerError(err),
+        Err(err) => return ExecutionResult::NumberError(err),
     }
     ExecutionResult::Normal
 }
@@ -30,7 +30,7 @@ type Fixnum2LogicOp = fn(
     ctx: &mut PrimitiveContext,
     a: Tagged<i64>,
     b: Tagged<i64>,
-) -> Result<bool, IntegerError>;
+) -> Result<bool, NumberError>;
 fn fixnum_logic_binop(
     ctx: &mut PrimitiveContext,
     op: Fixnum2LogicOp,
@@ -39,7 +39,7 @@ fn fixnum_logic_binop(
     let b = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = bool_object(ctx, res),
-        Err(err) => return ExecutionResult::IntegerError(err),
+        Err(err) => return ExecutionResult::NumberError(err),
     }
     ExecutionResult::Normal
 }
@@ -68,7 +68,7 @@ pub fn fixnum_mul(ctx: &mut PrimitiveContext) -> ExecutionResult {
     fixnum_binop(ctx, |_, a, b| {
         let (a, b) = (a.as_i64(), b.as_i64());
         let res = a * b;
-        let res = Tagged::from_raw(res);
+        let res = Tagged::new_value(res);
         Ok(res)
     })
 }
@@ -76,7 +76,7 @@ pub fn fixnum_mul(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn fixnum_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
     fixnum_binop(ctx, |_, a, b| {
         if b.raw() == 0 {
-            return Err(IntegerError::DivisionByZero);
+            return Err(NumberError::DivisionByZero);
         }
         let (a, b) = (a.raw_i64(), b.raw_i64());
         let res = a / b;
@@ -90,6 +90,15 @@ pub fn fixnum_mod(ctx: &mut PrimitiveContext) -> ExecutionResult {
         let (a, b) = (a.raw_i64(), b.raw_i64());
         let res = a % b;
         let res = Tagged::from_raw(res);
+        Ok(res)
+    })
+}
+
+pub fn fixnum_pow(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    fixnum_binop(ctx, |_, a, b| {
+        let (a, b) = (a.as_i64(), b.as_i64());
+        let res = a.pow(b as u32);
+        let res = Tagged::new_value(res);
         Ok(res)
     })
 }

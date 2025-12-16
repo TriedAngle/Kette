@@ -362,6 +362,11 @@ impl<'a> SlotHelper<'a> {
         Self { name, value, tags }
     }
 
+    pub fn assignable(name: &'a str, value: Value, tags: SlotTags) -> Self {
+        let tags = tags | SlotTags::ASSIGNABLE;
+        Self { name, value, tags }
+    }
+
     #[inline]
     pub fn primitive(name: &'a str, value: Value, tags: SlotTags) -> Self {
         let tags = tags | SlotTags::PRIMITIVE;

@@ -26,7 +26,10 @@ impl BytecodeCompiler {
                     ObjectType::Slot
                     | ObjectType::Array
                     | ObjectType::ByteArray
-                    | ObjectType::Method => {
+                    | ObjectType::Method
+                    | ObjectType::Effect
+                    | ObjectType::Float
+                    | ObjectType::BigNum => {
                         instructions.push(Instruction::PushValue {
                             value: obj.as_value(),
                         });

@@ -9,10 +9,8 @@ macro_rules! shuffle {
         $(
             $(#[$doc])*
             pub fn $name(ctx: &mut PrimitiveContext) -> ExecutionResult {
-                const N: usize = [$(stringify!($in)),*].len();
-
                 #[allow(unused)]
-                let [$($in),*] = inputs::<N>(ctx);
+                let [$($in),*] = inputs(ctx);
                 outputs(ctx, [$($out),*]);
 
                 ExecutionResult::Normal

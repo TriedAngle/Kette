@@ -4,6 +4,7 @@ pub mod activation;
 pub mod arrays;
 pub mod bytearrays;
 pub mod executable;
+pub mod floats;
 pub mod message;
 pub mod parser;
 pub mod quotations;
@@ -11,9 +12,10 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, LookupResult, Message, Method,
+    ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method,
     MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject, Value,
     ValueTag, Visitable, VisitedLink, Visitor,
+    objects::executable::StackEffect,
 };
 
 #[repr(u8)]
@@ -23,17 +25,21 @@ pub enum ObjectKind {
     Map = 1,
 }
 
+#[rustfmt::skip]
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ObjectType {
-    Slot = 0b00000,
-    Array = 0b00010,
-    ByteArray = 0b00011,
-    Activation = 0b00100,
-    Method = 0b00101,
-    Quotation = 0b00111,
-    Message = 0b01000,
-    Max = 0b11111,
+    Slot        = 0b00000,
+    Array       = 0b00010,
+    ByteArray   = 0b00011,
+    Activation  = 0b00100,
+    Method      = 0b00101,
+    Effect      = 0b00110,
+    Quotation   = 0b00111,
+    Message     = 0b01000,
+    Float       = 0b01001,
+    BigNum      = 0b01010,
+    Max         = 0b11111,
 }
 
 /// What kind of map this is. Lives in the unified 5-bit TYPE field
@@ -215,8 +221,11 @@ impl Header {
             0b00011 => ObjectType::ByteArray,
             0b00100 => ObjectType::Activation,
             0b00101 => ObjectType::Method,
+            0b00110 => ObjectType::Effect,
             0b00111 => ObjectType::Quotation,
             0b01000 => ObjectType::Message,
+            0b01001 => ObjectType::Float,
+            0b01010 => ObjectType::BigNum,
             0b11111 => ObjectType::Max,
             _ => unreachable!("object type doesn't exist"),
         })
@@ -433,6 +442,19 @@ impl Object for HeapValue {
                 };
                 byte_array.lookup(selector, link)
             }
+            ObjectType::Method => {
+                // SAFETY: checked
+                let slot_object =
+                    unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
+                slot_object.lookup(selector, link)
+            }
+            ObjectType::Effect => {
+                // SAFETY: checked
+                let slot_object = unsafe {
+                    std::mem::transmute::<&HeapValue, &StackEffect>(self)
+                };
+                slot_object.lookup(selector, link)
+            }
             ObjectType::Activation => {
                 // SAFETY: checked
                 let activation = unsafe {
@@ -447,7 +469,19 @@ impl Object for HeapValue {
                 };
                 quotation.lookup(selector, link)
             }
-            _ => unimplemented!("object type not implemented"),
+            ObjectType::Float => {
+                // SAFETY: checked
+                let float =
+                    unsafe { std::mem::transmute::<&HeapValue, &Float>(self) };
+                float.lookup(selector, link)
+            }
+            ObjectType::BigNum => {
+                // SAFETY: checked
+                unimplemented!()
+            }
+            ObjectType::Message | ObjectType::Max => {
+                unreachable!("illegal object type for lookup")
+            }
         }
     }
 }
@@ -498,6 +532,13 @@ impl HeapObject for HeapValue {
                     unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
                 method.heap_size()
             }
+            ObjectType::Effect => {
+                // SAFETY: checked
+                let effect = unsafe {
+                    std::mem::transmute::<&HeapValue, &StackEffect>(self)
+                };
+                effect.heap_size()
+            }
             ObjectType::Message => {
                 // SAFETY: checked
                 let message = unsafe {
@@ -511,6 +552,15 @@ impl HeapObject for HeapValue {
                     std::mem::transmute::<&HeapValue, &ByteArray>(self)
                 };
                 message.heap_size()
+            }
+            ObjectType::Float => {
+                // SAFETY: checked
+                let message =
+                    unsafe { std::mem::transmute::<&HeapValue, &Float>(self) };
+                message.heap_size()
+            }
+            ObjectType::BigNum => {
+                unimplemented!()
             }
             ObjectType::Max => unreachable!(),
         }
@@ -593,6 +643,15 @@ impl Visitable for HeapValue {
                 };
                 method.visit_edges_mut(visitor);
             }
+            ObjectType::Effect => {
+                // SAFETY: checked
+                let effect = unsafe {
+                    std::mem::transmute::<&mut HeapValue, &mut StackEffect>(
+                        self,
+                    )
+                };
+                effect.visit_edges_mut(visitor)
+            }
             ObjectType::Message => {
                 // SAFETY: checked
                 let message = unsafe {
@@ -600,7 +659,7 @@ impl Visitable for HeapValue {
                 };
                 message.visit_edges_mut(visitor);
             }
-            ObjectType::ByteArray => (),
+            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
             ObjectType::Max => unreachable!(),
         };
     }
@@ -653,6 +712,13 @@ impl Visitable for HeapValue {
                     unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
                 method.visit_edges(visitor);
             }
+            ObjectType::Effect => {
+                // SAFETY: checked
+                let effect = unsafe {
+                    std::mem::transmute::<&HeapValue, &StackEffect>(self)
+                };
+                effect.visit_edges(visitor)
+            }
             ObjectType::Message => {
                 // SAFETY: checked
                 let message = unsafe {
@@ -660,7 +726,7 @@ impl Visitable for HeapValue {
                 };
                 message.visit_edges(visitor);
             }
-            ObjectType::ByteArray => (),
+            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
             ObjectType::Max => unreachable!(),
         };
     }

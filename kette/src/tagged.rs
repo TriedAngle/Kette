@@ -360,6 +360,13 @@ impl<T: Object> Handle<T> {
     pub fn as_value(self) -> Value {
         Value(self.data)
     }
+
+    pub fn as_value_handle(self) -> Handle<Value> {
+        Handle {
+            data: self.data,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl Handle<Value> {
@@ -396,14 +403,6 @@ impl<T: HeapObject> Handle<T> {
     pub fn as_object(self) -> Tagged<T> {
         // SAFETY: this is safe, Handle is stricter than Tagged
         unsafe { Tagged::new_raw(self.data) }
-    }
-
-    #[inline]
-    pub fn as_value_handle(self) -> Handle<Value> {
-        Handle::<Value> {
-            data: self.data,
-            _marker: PhantomData,
-        }
     }
 
     #[inline]

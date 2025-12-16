@@ -5,10 +5,11 @@ use kette::{
 };
 
 const CODE: &str = r#"
-    5 77 fixnum+ (>string) (println)
+    5 77 fixnum+ fixnum>string (println)
+    5.3 0.8 float+ float>string (println)
     20 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
     100 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
-    5 "hello" [ 5 fixnum+ (>string) (println) ] dip (println)
+    5 "hello" [ 5 fixnum+ fixnum>string (println) ] dip (println)  
 "#;
 
 fn execute_parser_code(value: Value) -> Block {

@@ -1,0 +1,14 @@
+(|  parent* :: traits clonable .
+    x := 0 . y := 0 .
+    : + ( other -- new ) 
+        self [ [ x>> ] bi@ + ] [ [ y>> ] bi@ + ] 2bi self copyBoa ; inline .
+
+    : - ( other -- new ) 
+        self [ [ x>> ] bi@ - ] [ [ y>> ] bi@ - ] 2bi self copyBoa ; inline .
+
+    : toString ( -- string ) 
+        "vec2[" self [ x>> ] [ y>> ] bi [ toString ] bi@ ", " swap "]" + + + + ; .
+|) "vec2" universe add
+
+10 50 vec2 copyBoa 30 70 vec2 copyBoa + toString println
+

@@ -41,8 +41,8 @@ pub struct Method {
 pub struct StackEffect {
     pub header: Header,
     pub map: Tagged<SlotMap>,
-    pub input: Tagged<Array>,
-    pub output: Tagged<Array>,
+    pub inputs: Tagged<Array>,
+    pub outputs: Tagged<Array>,
 }
 
 impl ExecutableMap {
@@ -151,9 +151,9 @@ impl MethodMap {
         // SAFETY: safe by contract
         let effect_ref = unsafe { effect.as_ref() };
         // SAFETY: safe by contract
-        let input = unsafe { effect_ref.input.as_ref().size() };
+        let input = unsafe { effect_ref.inputs.as_ref().size() };
         // SAFETY: safe by contract
-        let output = unsafe { effect_ref.output.as_ref().size() };
+        let output = unsafe { effect_ref.outputs.as_ref().size() };
 
         // SAFETY: safe by contract
         unsafe { self.map.init_method(code_ptr, input, output) };
@@ -201,7 +201,36 @@ impl Method {
     }
 }
 
-impl Object for StackEffect {}
+impl StackEffect {
+    /// # Safety
+    /// internal function do not use pls
+    pub unsafe fn init(
+        &mut self,
+        inputs: Tagged<Array>,
+        outputs: Tagged<Array>,
+    ) {
+        self.header = Header::encode_object(
+            ObjectType::Effect,
+            0,
+            HeaderFlags::empty(),
+            0,
+        );
+        self.inputs = inputs;
+        self.outputs = outputs;
+    }
+}
+
+impl Object for StackEffect {
+    fn lookup(
+        &self,
+        selector: crate::Selector,
+        link: Option<&crate::VisitedLink>,
+    ) -> crate::LookupResult {
+        let traits = selector.vm.specials.effect_traits;
+        traits.lookup(selector, link)
+        // TODO: maybe add map lookup
+    }
+}
 impl HeapObject for StackEffect {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
@@ -210,16 +239,15 @@ impl HeapObject for StackEffect {
 
 impl Visitable for StackEffect {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        visitor.visit(self.map.into());
-        visitor.visit(self.input.into());
-        visitor.visit(self.output.into());
-        unimplemented!()
+        // visitor.visit(self.map.into());
+        visitor.visit(self.inputs.into());
+        visitor.visit(self.outputs.into());
     }
 
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
-        visitor.visit(self.map.into());
-        visitor.visit(self.input.into());
-        visitor.visit(self.output.into());
+        // visitor.visit(self.map.into());
+        visitor.visit(self.inputs.into());
+        visitor.visit(self.outputs.into());
     }
 }
 
@@ -234,6 +262,7 @@ impl Visitable for ExecutableMap {
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
 }
 
+// TODO: implment this
 impl Object for MethodMap {}
 impl HeapObject for MethodMap {
     fn heap_size(&self) -> usize {
@@ -245,6 +274,7 @@ impl Visitable for MethodMap {
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
 }
 
+// TODO: implment this
 impl Object for Method {}
 impl HeapObject for Method {}
 impl Visitable for Method {}

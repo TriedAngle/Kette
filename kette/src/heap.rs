@@ -17,9 +17,10 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     Activation, ActivationObject, Array, Block, ByteArray, ExecutableMap,
-    Handle, HeapObject, Message, Method, MethodMap, Quotation, QuotationMap,
-    SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags, Strings, Tagged,
-    Value, Visitable, map_memory, objects::executable::StackEffect,
+    Float, Handle, HeapObject, Message, Method, MethodMap, Quotation,
+    QuotationMap, SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags,
+    Strings, Tagged, Value, Visitable, map_memory,
+    objects::executable::StackEffect,
 };
 
 pub const HANDLE_SET_SIZE: usize = 20;
@@ -663,6 +664,26 @@ impl HeapProxy {
         Tagged::new_ptr(obj)
     }
 
+    pub fn allocate_effect_object(
+        &mut self,
+        inputs: Tagged<Array>,
+        outputs: Tagged<Array>,
+    ) -> Tagged<StackEffect> {
+        // SAFETY: map must be valid here
+        let layout = Layout::new::<StackEffect>();
+        debug_assert!(layout.align() == 8);
+        let mut raw = self
+            .allocate_boxed_raw(layout.size())
+            .cast::<SlotObject>()
+            .cast();
+
+        // SAFETY: just created, safe to convert to mutable reference
+        let obj: &mut StackEffect = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { obj.init(inputs, outputs) };
+        Tagged::new_ptr(obj)
+    }
+
     /// name must be interned !
     pub fn allocate_method_map(
         &mut self,
@@ -682,6 +703,16 @@ impl HeapProxy {
         };
 
         Tagged::new_ptr(map)
+    }
+
+    pub fn allocate_float(&mut self, value: f64) -> Tagged<Float> {
+        let layout = Layout::new::<Float>();
+        let mut raw = self.allocate_unboxed_raw(layout).cast::<Float>();
+        // SAFETY: just created, safe to convert
+        let float = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { float.init(value) }
+        Tagged::new_ptr(float)
     }
 
     pub fn allocate_method_map_helper(

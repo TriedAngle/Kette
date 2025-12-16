@@ -21,6 +21,7 @@ pub use objects::activation::{
 pub use objects::arrays::Array;
 pub use objects::bytearrays::ByteArray;
 pub use objects::executable::{ExecutableMap, Method, MethodMap};
+pub use objects::floats::Float;
 pub use objects::message::Message;
 pub use objects::parser::{ParsedToken, Parser, Token};
 pub use objects::quotations::{Quotation, QuotationMap};
@@ -40,7 +41,7 @@ pub use bytecode::{Block, Instruction};
 pub use compiler::BytecodeCompiler;
 pub use heap::{Heap, HeapCreateInfo, HeapProxy, HeapSettings};
 pub use interning::Strings;
-pub use interpreter::{ExecutionResult, IntegerError, Interpreter};
+pub use interpreter::{ExecutionResult, Interpreter, NumberError};
 pub use lookup::{LookupResult, Selector, VisitedLink};
 pub use parker::NativeParker;
 pub use primitives::{

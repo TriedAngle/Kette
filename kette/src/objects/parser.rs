@@ -198,9 +198,7 @@ impl Parser {
 
                 Some(token)
             }
-            None => {
-                None
-            }
+            None => None,
         }
     }
 }

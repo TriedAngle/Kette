@@ -12,7 +12,9 @@ pub struct SpecialObjects {
     pub array_traits: Handle<HeapValue>,
     pub fixnum_traits: Handle<HeapValue>,
     pub float_traits: Handle<HeapValue>,
+    pub bignum_traits: Handle<HeapValue>,
     pub quotation_traits: Handle<HeapValue>,
+    pub effect_traits: Handle<HeapValue>,
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
     pub stack_object: Handle<HeapValue>,
@@ -22,6 +24,8 @@ pub struct SpecialObjects {
     pub message_self: Handle<ByteArray>,
 }
 
+// TODO: the code heap should be removed.
+// why am I not using my normal heap for this? lol ?
 #[derive(Debug)]
 pub struct VMShared {
     pub specials: SpecialObjects,
@@ -140,7 +144,35 @@ impl VM {
             SlotHelper::primitive_message("fixnum>", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum<=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
-            SlotHelper::primitive_message("(>string)", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>string", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let float_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("float?", SlotTags::empty()),
+            SlotHelper::primitive_message("2float?", SlotTags::empty()),
+            SlotHelper::primitive_message("float+", SlotTags::empty()),
+            SlotHelper::primitive_message("float-", SlotTags::empty()),
+            SlotHelper::primitive_message("float*", SlotTags::empty()),
+            SlotHelper::primitive_message("float/", SlotTags::empty()),
+            SlotHelper::primitive_message("float%", SlotTags::empty()),
+            SlotHelper::primitive_message("floatNeg", SlotTags::empty()),
+            SlotHelper::primitive_message("float^", SlotTags::empty()),
+            SlotHelper::primitive_message("floate^", SlotTags::empty()),
+            SlotHelper::primitive_message("float2^", SlotTags::empty()),
+            SlotHelper::primitive_message("floatSin", SlotTags::empty()),
+            SlotHelper::primitive_message("floatCos", SlotTags::empty()),
+            SlotHelper::primitive_message("floatTan", SlotTags::empty()),
+            SlotHelper::primitive_message("floatAsin", SlotTags::empty()),
+            SlotHelper::primitive_message("floatAcos", SlotTags::empty()),
+            SlotHelper::primitive_message("floatAtan", SlotTags::empty()),
+            SlotHelper::primitive_message("float=", SlotTags::empty()),
+            SlotHelper::primitive_message("float!=", SlotTags::empty()),
+            SlotHelper::primitive_message("float<", SlotTags::empty()),
+            SlotHelper::primitive_message("float>", SlotTags::empty()),
+            SlotHelper::primitive_message("float<=", SlotTags::empty()),
+            SlotHelper::primitive_message("float>=", SlotTags::empty()),
+            SlotHelper::primitive_message("float>string", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -159,6 +191,12 @@ impl VM {
             SlotHelper::primitive_message("(call)", SlotTags::empty()),
             SlotHelper::primitive_message("dip", SlotTags::empty()),
             SlotHelper::primitive_message("if", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let effect_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::assignable("inputs", Value::from_u64(0), SlotTags::empty()),
+            SlotHelper::assignable("outputs", Value::from_u64(1), SlotTags::empty()),
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
@@ -184,6 +222,11 @@ impl VM {
                 .cast();
 
             let float_traits = heap
+                .allocate_slot_object(float_map, &[])
+                .promote_to_handle()
+                .cast();
+
+            let bignum_traits = heap
                 .allocate_slot_object(empty_map, &[])
                 .promote_to_handle()
                 .cast();
@@ -200,6 +243,14 @@ impl VM {
 
             let false_object = heap
                 .allocate_slot_object(empty_map, &[])
+                .promote_to_handle()
+                .cast::<HeapValue>();
+
+            let effect_traits = heap
+                .allocate_slot_object(
+                    effect_map,
+                    &[false_object.as_value(), false_object.as_value()],
+                )
                 .promote_to_handle()
                 .cast();
 
@@ -227,7 +278,9 @@ impl VM {
                 array_traits,
                 fixnum_traits,
                 float_traits,
+                bignum_traits,
                 quotation_traits,
+                effect_traits,
                 true_object,
                 false_object,
                 stack_object,
@@ -291,7 +344,9 @@ impl SpecialObjects {
                 array_traits: Value::zero().as_heap_handle_unchecked(),
                 fixnum_traits: Value::zero().as_heap_handle_unchecked(),
                 float_traits: Value::zero().as_heap_handle_unchecked(),
+                bignum_traits: Value::zero().as_heap_handle_unchecked(),
                 quotation_traits: Value::zero().as_heap_handle_unchecked(),
+                effect_traits: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),

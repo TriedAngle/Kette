@@ -7,7 +7,6 @@ use crate::{
     Value, get_primitive, primitive_index,
 };
 
-// TODO: this function should become fully stateless
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let heap = &mut ctx.heap;
     let state = &mut ctx.state;
@@ -22,8 +21,9 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
     };
 
     match token {
-        ParsedToken::Float(_float) => {
-            unimplemented!("Floats not implemented yet");
+        ParsedToken::Float(float) => {
+            let float = heap.allocate_float(float);
+            state.push(float.into());
         }
         ParsedToken::Fixnum(num) => {
             state.push(Value::from_fixnum(num));
@@ -79,6 +79,153 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
+
+    // TODO: implement this
+
+    ExecutionResult::Normal
+}
+
+fn parse_effect_inner(
+    ctx: &mut PrimitiveContext,
+) -> Result<(Vec<Value>, Vec<Value>), &'static str> {
+    // SAFETY: must be parser, can't be called otherwise
+    let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
+
+    // Expect "("
+    let open = parser.parse_next().ok_or("Parsing Effect: Missing '('")?;
+    match open {
+        ParsedToken::Identifier(t) if parser.get_token_string(t) == "(" => {}
+        _ => return Err("Parsing Effect: Expected '('"),
+    }
+
+    let mut inputs: Vec<Value> = Vec::new();
+    let mut outputs: Vec<Value> = Vec::new();
+
+    let mut reading_inputs = true;
+    let mut saw_separator = false;
+
+    loop {
+        let tok = parser
+            .parse_next()
+            .ok_or("Parsing Effect: Unterminated effect (missing ')')")?;
+
+        match tok {
+            ParsedToken::Identifier(t) => {
+                let s = parser.get_token_string(t);
+
+                if s == "--" {
+                    if !reading_inputs {
+                        return Err("Parsing Effect: Duplicate '--'");
+                    }
+                    reading_inputs = false;
+                    saw_separator = true;
+                    continue;
+                }
+
+                if s == ")" {
+                    if !saw_separator {
+                        return Err("Parsing Effect: Missing '--'");
+                    }
+                    break;
+                }
+
+                // Treat every other identifier as a stack-name; store as Message.
+                let msg = ctx.vm.intern_string_message(s, ctx.heap);
+                if reading_inputs {
+                    inputs.push(msg.as_value());
+                } else {
+                    outputs.push(msg.as_value());
+                }
+            }
+
+            ParsedToken::String(_) => {
+                return Err(
+                    "Parsing Effect: Strings are not allowed inside effect",
+                );
+            }
+            ParsedToken::Fixnum(_) => {
+                return Err(
+                    "Parsing Effect: Numbers are not allowed inside effect",
+                );
+            }
+            ParsedToken::Float(_) => {
+                return Err(
+                    "Parsing Effect: Floats are not allowed inside effect",
+                );
+            }
+        }
+    }
+
+    Ok((inputs, outputs))
+}
+
+/// should parse: `: <name> <effect> <body> ;`
+/// ( `:` is ignored, its already "parsed" when this function is called)
+pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: must be parser, can't be called otherwise
+    let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
+
+    // Parse name
+    let name_tok = match parser.parse_next() {
+        Some(t) => t,
+        None => return ExecutionResult::Panic("Parsing Method: Missing Name"),
+    };
+
+    let name_str = match name_tok {
+        ParsedToken::Identifier(t) => parser.get_token_string(t),
+        _ => {
+            return ExecutionResult::Panic(
+                "Parsing Method: Name must be an identifier",
+            );
+        }
+    };
+
+    let name = ctx.vm.intern_string(name_str, ctx.heap);
+
+    // Parse effect (and keep the name lists for returning/debugging)
+    let (in_names, out_names) = match parse_effect_inner(ctx) {
+        Ok(v) => v,
+        Err(e) => return ExecutionResult::Panic(e),
+    };
+
+    let in_count = in_names.len();
+    let out_count = out_names.len();
+
+    let inputs_arr =
+        // SAFETY: this is safe
+        unsafe { ctx.heap.allocate_array(&in_names).promote_to_handle() };
+    let outputs_arr =
+        // SAFETY: this is safe
+        unsafe { ctx.heap.allocate_array(&out_names).promote_to_handle() };
+
+    // Parse body until ';'
+    let mut body_accum = Vec::new();
+    let end = ctx.vm.intern_string_message(";", ctx.heap);
+
+    let res = parse_until_inner(ctx, Some(end), &mut body_accum);
+    if res != ExecutionResult::Normal {
+        return ExecutionResult::Panic("Parsing Method: Parsing body failed!");
+    }
+
+    // Compile into a quotation (with effect counts)
+    let body_arr =
+        // SAFETY: this is safe
+        unsafe { ctx.heap.allocate_array(&body_accum).promote_to_handle() };
+    let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
+    let code = ctx.vm.shared.code_heap.push(block);
+
+    let quotation = ctx
+        .heap
+        .allocate_quotation(body_arr, code, in_count, out_count);
+    // SAFETY: this is safe
+    let quotation = unsafe { quotation.promote_to_handle() };
+
+    // let effect = ctx.heap.allocate_slot_object(map, data)
+    // ctx.heap.allocate_method_map(name, code, &[], effect)
+    // ctx.heap.allocate_method_object(map)
+
+    // SAFETY: just created, will become handle there anyways
+    // ctx.outputs[0] = unsafe { def.promote_to_handle().into() };
 
     ExecutionResult::Normal
 }

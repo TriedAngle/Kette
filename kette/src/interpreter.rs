@@ -14,7 +14,7 @@ pub struct Interpreter {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum IntegerError {
+pub enum NumberError {
     Overflow,
     DivisionByZero,
 }
@@ -23,7 +23,7 @@ pub enum IntegerError {
 pub enum ExecutionResult {
     Normal,
     ActivationChanged,
-    IntegerError(IntegerError),
+    NumberError(NumberError),
     Yield,
     Panic(&'static str),
 }
