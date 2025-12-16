@@ -22,6 +22,14 @@ bitflags! {
     }
 }
 
+// Helper for Rust side slot creation
+#[derive(Debug, Clone, Copy)]
+pub struct SlotHelper<'a> {
+    pub name: &'a str,
+    pub tags: SlotTags,
+    pub value: Value,
+}
+
 /// assignable slot: offset to value in object
 /// Const slot: value
 /// Parent slot: constant lookup (static?)
@@ -35,16 +43,9 @@ pub struct SlotDescriptor {
     pub value: Value,
 }
 
-// Helper for Rust side slot creation
-#[derive(Debug, Clone, Copy)]
-pub struct SlotHelper<'a> {
-    pub name: &'a str,
-    pub tags: SlotTags,
-    pub value: Value,
-}
-
 /// slot ordering:
 /// assignable parent > assignable > parent > constant
+/// for objects, its in assiginable in order of definition
 #[repr(C)]
 #[derive(Debug)]
 pub struct SlotMap {
@@ -290,14 +291,24 @@ impl Object for SlotObject {
     fn lookup(
         &self,
         selector: Selector,
-        _link: Option<&VisitedLink>,
+        link: Option<&VisitedLink>,
     ) -> LookupResult {
         let self_ptr = self as *const Self as *mut Self;
+        let self_value = Tagged::new_ptr(self_ptr).as_tagged_value();
+
+        // 1. Cycle Detection
+        if let Some(history) = link
+            && history.contains(self_value.into())
+        {
+            return LookupResult::None;
+        }
+
         // SAFETY: map must be valid
         let map = unsafe { self.map.as_ref() };
         let slots = map.slots();
-        // interning guarantees same string == same pointer
-        let res = slots
+
+        // Local Lookup
+        let local_match = slots
             .iter()
             .enumerate()
             .find(|(_idx, slot)| {
@@ -305,14 +316,37 @@ impl Object for SlotObject {
                     == selector.name.as_tagged::<ByteArray>().as_ptr()
             })
             .map(|(idx, slot)| (idx, *slot));
-        if let Some((idx, slot)) = res {
+
+        if let Some((idx, slot)) = local_match {
             return LookupResult::Found {
-                object: Tagged::new_ptr(self_ptr).as_tagged_value(),
+                object: self_value,
                 slot,
                 slot_index: idx,
             };
         }
-        // TODO: implement parent lookup and cycle detection using Link
+
+        // Parent Lookup
+        let current_link = VisitedLink::new(self_value.into(), link);
+
+        for (idx, slot) in slots.iter().enumerate() {
+            let tags = slot.tags();
+
+            if tags.contains(SlotTags::PARENT) {
+                let parent = if tags.contains(SlotTags::ASSIGNABLE) {
+                    // SAFETY: idx is valid, map and object sizes are synchronized
+                    // TODO: read guard
+                    unsafe { self.get_slot_unchecked(idx) }
+                } else {
+                    slot.value
+                };
+
+                match parent.lookup(selector.clone(), Some(&current_link)) {
+                    LookupResult::None => continue,
+                    found => return found,
+                }
+            }
+        }
+
         LookupResult::None
     }
 }
@@ -368,7 +402,6 @@ impl<'a> SlotHelper<'a> {
     }
 
     pub fn constant(name: &'a str, value: Value, tags: SlotTags) -> Self {
-        let tags = tags;
         Self { name, value, tags }
     }
 

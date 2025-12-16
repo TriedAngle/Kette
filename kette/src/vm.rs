@@ -8,6 +8,10 @@ use crate::{
 
 #[derive(Debug)]
 pub struct SpecialObjects {
+    pub universe: Handle<HeapValue>,
+    pub parsers: Handle<HeapValue>,
+    pub globals: Handle<HeapValue>,
+
     pub bytearray_traits: Handle<HeapValue>,
     pub array_traits: Handle<HeapValue>,
     pub fixnum_traits: Handle<HeapValue>,
@@ -16,8 +20,7 @@ pub struct SpecialObjects {
     pub quotation_traits: Handle<HeapValue>,
     pub effect_traits: Handle<HeapValue>,
     pub method_traits: Handle<HeapValue>,
-    pub universe: Handle<HeapValue>,
-    pub parsers: Handle<HeapValue>,
+
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
     pub stack_object: Handle<HeapValue>,
@@ -129,6 +132,8 @@ impl VM {
             ],
         );
 
+        let stack_object = heap.allocate_slot_object(stack_map, &[]);
+
         #[rustfmt::skip]
         let fixnum_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("fixnum?", SlotTags::empty()),
@@ -221,21 +226,23 @@ impl VM {
             SlotHelper::primitive_message("(|", SlotTags::empty()),
         ]);
 
+        #[rustfmt::skip]
+        let globals_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::constant("stack*", stack_object.into(), SlotTags::PARENT),
+        ]);
+
         let parsers = heap.allocate_slot_object(parsers_map, &[]);
+        let globals = heap.allocate_slot_object(globals_map, &[]);
 
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("universe", SlotTags::empty()),
-            SlotHelper::constant("parsers*", parsers.into(), SlotTags::PARENT)
+            SlotHelper::constant("parsers", parsers.into(), SlotTags::PARENT),
+            SlotHelper::constant("globals", globals.into(), SlotTags::PARENT),
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
         unsafe {
-            let stack_object = heap
-                .allocate_slot_object(stack_map, &[])
-                .promote_to_handle()
-                .cast();
-
             let bytearray_traits = heap
                 .allocate_slot_object(bytearray_map, &[])
                 .promote_to_handle()
@@ -316,6 +323,10 @@ impl VM {
             let message_self = self.intern_string_message("self", &mut heap);
 
             let specials = SpecialObjects {
+                universe,
+                parsers: parsers.promote_to_handle().cast(),
+                globals: globals.promote_to_handle().cast(),
+                stack_object: stack_object.promote_to_handle().cast(),
                 bytearray_traits,
                 array_traits,
                 fixnum_traits,
@@ -324,11 +335,8 @@ impl VM {
                 quotation_traits,
                 effect_traits,
                 method_traits,
-                universe,
-                parsers: parsers.promote_to_handle().cast(),
                 true_object,
                 false_object,
-                stack_object,
                 dip_quotation,
                 message_self,
             };
@@ -409,6 +417,9 @@ impl SpecialObjects {
         // SAFETY: we initialize later, this is for simplicity
         unsafe {
             Self {
+                universe: Value::zero().as_heap_handle_unchecked(),
+                parsers: Value::zero().as_heap_handle_unchecked(),
+                globals: Value::zero().as_heap_handle_unchecked(),
                 bytearray_traits: Value::zero().as_heap_handle_unchecked(),
                 array_traits: Value::zero().as_heap_handle_unchecked(),
                 fixnum_traits: Value::zero().as_heap_handle_unchecked(),
@@ -417,8 +428,6 @@ impl SpecialObjects {
                 quotation_traits: Value::zero().as_heap_handle_unchecked(),
                 effect_traits: Value::zero().as_heap_handle_unchecked(),
                 method_traits: Value::zero().as_heap_handle_unchecked(),
-                universe: Value::zero().as_heap_handle_unchecked(),
-                parsers: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),

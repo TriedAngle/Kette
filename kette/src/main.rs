@@ -4,24 +4,17 @@ use kette::{
     VMCreateInfo, VMThread, Value,
 };
 
-// const CODE: &str = r#"
-//     5 77 fixnum+ fixnum>string (println)
-//     5.3 0.8 float+ float>string (println)
-//     20 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
-//     100 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
-//     5 "hello" [ 5 fixnum+ fixnum>string (println) ] dip (println)
-// "#;
 const CODE: &str = r#"
     5.3 0.8 float+ float>string (println)
-    10 
+    9 10 over
     : +1 ( -- x+1 ) self 1 fixnum+ ; 
     (call-method) 
-    fixnum>string (println)
+    fixnum>string (println) drop drop
 "#;
 
-fn execute_parser_code(value: Value) -> Block {
+fn execute_parser_code(parser: Value) -> Block {
     let instructions = vec![
-        Instruction::PushValue { value },
+        Instruction::PushValue { value: parser },
         Instruction::SendNamed { message: "parse" },
     ];
 

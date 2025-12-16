@@ -50,3 +50,32 @@ impl Selector {
         object.lookup(self, chain)
     }
 }
+
+impl VisitedLink {
+    pub fn contains(&self, target: Value) -> bool {
+        if self.value == target {
+            return true;
+        }
+
+        let mut cursor = self.prev;
+        while let Some(ptr) = cursor {
+            // SAFETY: VisitedLinks are stack-allocated in the recursion chain
+            // and remain valid for the duration of the lookup.
+            let node = unsafe { ptr.as_ref() };
+            if node.value == target {
+                return true;
+            }
+            cursor = node.prev;
+        }
+
+        false
+    }
+
+    #[inline]
+    pub fn new(value: Value, prev: Option<&Self>) -> Self {
+        Self {
+            prev: prev.map(NonNull::from),
+            value,
+        }
+    }
+}

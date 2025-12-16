@@ -84,6 +84,7 @@ impl Interpreter {
         receiver: Handle<Value>,
         method: Handle<Method>,
     ) {
+        // SAFETY: this is safe, method must exist
         let map = unsafe { method.map.promote_to_handle() };
 
         let slot_count = map.slot_count();
@@ -207,9 +208,22 @@ impl Interpreter {
                 let selector =
                     Selector::new_message(message, self.vm.shared.clone());
 
-                // SAFETY: after depth check, this is safe
+                let globals = self.vm.specials().globals;
+
                 let receiver =
-                    unsafe { self.state.pop_unchecked().as_handle_unchecked() };
+                    match selector.clone().lookup_object(&globals.as_value()) {
+                        LookupResult::Found { object, .. } => {
+                            // SAFETY: this is safe
+                            unsafe { object.as_value().as_handle_unchecked() }
+                        }
+                        LookupResult::None => {
+                            // SAFETY: this is safe
+                            unsafe {
+                                self.state.pop_unchecked().as_handle_unchecked()
+                            }
+                        }
+                    };
+
                 let res = self.send(receiver, selector);
                 self.record_depth();
                 res

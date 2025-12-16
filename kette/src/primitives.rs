@@ -307,6 +307,6 @@ pub fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
 
 fn universe(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let universe = ctx.receiver;
-    ctx.outputs[0] = universe.into();
+    ctx.outputs[0] = universe;
     ExecutionResult::Normal
 }
