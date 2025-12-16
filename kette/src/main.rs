@@ -19,8 +19,6 @@ const CODE: &str = r#"
     fixnum>string (println)
 "#;
 
-// : +1 ( x -- x+1 ) 1 + ;
-
 fn execute_parser_code(value: Value) -> Block {
     let instructions = vec![
         Instruction::PushValue { value },
