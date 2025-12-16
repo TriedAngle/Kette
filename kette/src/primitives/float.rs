@@ -138,6 +138,15 @@ pub fn float_exp(ctx: &mut PrimitiveContext) -> ExecutionResult {
     })
 }
 
+pub fn float_sqrt(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    float_op(ctx, |ctx, a| {
+        let a = a.value;
+        let res = a.sqrt();
+        let res = ctx.heap.allocate_float(res);
+        Ok(res)
+    })
+}
+
 pub fn float_exp2(ctx: &mut PrimitiveContext) -> ExecutionResult {
     float_op(ctx, |ctx, a| {
         let a = a.value;

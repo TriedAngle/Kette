@@ -158,6 +158,7 @@ impl VM {
             SlotHelper::primitive_message("float%", SlotTags::empty()),
             SlotHelper::primitive_message("floatNeg", SlotTags::empty()),
             SlotHelper::primitive_message("float^", SlotTags::empty()),
+            SlotHelper::primitive_message("floatSqrt", SlotTags::empty()),
             SlotHelper::primitive_message("floate^", SlotTags::empty()),
             SlotHelper::primitive_message("float2^", SlotTags::empty()),
             SlotHelper::primitive_message("floatSin", SlotTags::empty()),
