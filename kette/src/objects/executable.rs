@@ -1,8 +1,9 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Array, ByteArray, Header, HeaderFlags, HeapObject, Map, MapType, Object,
-    ObjectType, QuotationMap, SlotDescriptor, SlotMap, Tagged, Visitable,
+    Array, ByteArray, Header, HeaderFlags, HeapObject, LookupResult, Map,
+    MapType, Object, ObjectType, QuotationMap, Selector, SlotDescriptor,
+    SlotMap, Tagged, Visitable, VisitedLink,
 };
 
 // TODO: I wish there was an easy way to share SlotMap here
@@ -275,6 +276,19 @@ impl Visitable for MethodMap {
 }
 
 // TODO: implment this
-impl Object for Method {}
+impl Object for Method {
+    fn lookup(
+        &self,
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        let traits = selector.vm.specials.method_traits;
+        traits.lookup(selector, link)
+    }
+}
+
 impl HeapObject for Method {}
-impl Visitable for Method {}
+impl Visitable for Method {
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+}

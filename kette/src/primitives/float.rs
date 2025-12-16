@@ -301,3 +301,9 @@ pub fn float_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ctx.outputs[0] = unsafe { ba.promote_to_handle().cast() };
     ExecutionResult::Normal
 }
+
+pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let p = ctx.vm.specials().float_traits;
+    ctx.outputs[0] = p.into();
+    ExecutionResult::Normal
+}

@@ -17,3 +17,9 @@ pub fn bytearray_println(ctx: &mut PrimitiveContext) -> ExecutionResult {
     println!("{}", value);
     ExecutionResult::Normal
 }
+
+pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let p = ctx.vm.specials().bytearray_traits;
+    ctx.outputs[0] = p.into();
+    ExecutionResult::Normal
+}

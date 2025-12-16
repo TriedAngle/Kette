@@ -12,3 +12,9 @@ pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ctx.outputs[0] = unsafe { quotation.promote_to_handle().into() };
     ExecutionResult::Normal
 }
+
+pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let p = ctx.vm.specials().array_traits;
+    ctx.outputs[0] = p.into();
+    ExecutionResult::Normal
+}

@@ -73,10 +73,33 @@ impl Interpreter {
         None
     }
 
-    pub fn setup(&mut self, quotation: Handle<Quotation>) {
+    pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
         let new = self.heap.allocate_quotation_activation(quotation, &[]);
         self.activations
             .new_activation(new, ActivationType::Quotation);
+    }
+
+    pub fn add_method(
+        &mut self,
+        receiver: Handle<Value>,
+        method: Handle<Method>,
+    ) {
+        let map = unsafe { method.map.promote_to_handle() };
+
+        let slot_count = map.slot_count();
+
+        // idea: peek here, this saves the inputs,
+        // now just continue with normal stack
+        // SAFETY: TODO: stack depth check
+        let slots =
+            unsafe { self.state.stack_peek_slice_unchecked(slot_count) };
+        // SAFETY: TODO: actually put them into handle set
+        let slots = unsafe { crate::transmute::values_as_handles(slots) };
+
+        let new = self
+            .heap
+            .allocate_method_activation(receiver, method, slots);
+        self.activations.new_activation(new, ActivationType::Method);
     }
 
     pub fn execute(&mut self) -> ExecutionResult {
@@ -92,11 +115,41 @@ impl Interpreter {
         ExecutionResult::Normal
     }
 
+    pub fn execute_with_depth(&mut self) -> ExecutionResult {
+        let depth = self.activations.depth();
+        while let Some(instruction) = self.current_instruction() {
+            let res = self.execute_single_bytecode(instruction);
+            match res {
+                ExecutionResult::Normal => self.increment_instruction(),
+                ExecutionResult::ActivationChanged => {
+                    if self.activations.depth() == depth {
+                        break;
+                    }
+                }
+                _ => unimplemented!("TODO"),
+            }
+        }
+
+        ExecutionResult::Normal
+    }
+
     pub fn execute_single_bytecode(
         &mut self,
         instruction: Instruction,
     ) -> ExecutionResult {
         match instruction {
+            Instruction::PushSelf => {
+                tracing::trace!("push_self");
+                let value = self
+                    .activations
+                    .current()
+                    .expect("must exist")
+                    .object
+                    .receiver;
+                self.state.push(value.into());
+                self.record_depth();
+                ExecutionResult::Normal
+            }
             Instruction::PushFixnum { value } => {
                 tracing::trace!("push_fixnum: {:?}", value);
                 self.state.push(value.into());
@@ -213,7 +266,7 @@ impl Interpreter {
                 // SAFETY: not safe in general yet, TODO: size check
                 unsafe { self.state.stack_push_slice_unchecked(outputs) };
             }
-            ExecutionResult::ActivationChanged => (),
+            ExecutionResult::ActivationChanged => {}
             _ => unimplemented!(
                 "TODO: implement the different ExecutionResult handling"
             ),
@@ -267,26 +320,8 @@ impl Interpreter {
         // SAFETY: must by protocol
         let method =
             unsafe { slot.value.as_handle_unchecked().cast::<Method>() };
-        // SAFETY: safe by protocol
-        let map = unsafe { method.map.promote_to_handle() };
 
-        let slot_count = map.slot_count();
-
-        // idea: peek here, this saves the inputs,
-        // now just continue with normal stack
-        // TODO: we should probably also store depth?
-        // could be important to reset state
-        // SAFETY: TODO: depth check
-        let slots =
-            unsafe { self.state.stack_peek_slice_unchecked(slot_count) };
-        // SAFETY: TODO: actually put them into handle set
-        let slots = unsafe { crate::transmute::values_as_handles(slots) };
-
-        let activation_object =
-            self.heap.allocate_method_activation(receiver, map, slots);
-
-        self.activations
-            .new_activation(activation_object, ActivationType::Method);
+        self.add_method(receiver, method);
 
         ExecutionResult::ActivationChanged
     }

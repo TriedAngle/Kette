@@ -53,8 +53,7 @@ impl BytecodeCompiler {
                 };
 
             // TODO: implement the resend and delegate
-            let ba = message.bytearray_handle();
-            if ba == vm.specials.message_self {
+            if message == vm.specials.message_self {
                 instructions.push(Instruction::PushSelf);
                 continue;
             }

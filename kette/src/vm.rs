@@ -15,13 +15,16 @@ pub struct SpecialObjects {
     pub bignum_traits: Handle<HeapValue>,
     pub quotation_traits: Handle<HeapValue>,
     pub effect_traits: Handle<HeapValue>,
+    pub method_traits: Handle<HeapValue>,
+    pub universe: Handle<HeapValue>,
+    pub parsers: Handle<HeapValue>,
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
     pub stack_object: Handle<HeapValue>,
 
     pub dip_quotation: Handle<Quotation>,
 
-    pub message_self: Handle<ByteArray>,
+    pub message_self: Handle<Message>,
 }
 
 // TODO: the code heap should be removed.
@@ -145,6 +148,7 @@ impl VM {
             SlotHelper::primitive_message("fixnum<=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>string", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent", "fixnumParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -174,30 +178,55 @@ impl VM {
             SlotHelper::primitive_message("float<=", SlotTags::empty()),
             SlotHelper::primitive_message("float>=", SlotTags::empty()),
             SlotHelper::primitive_message("float>string", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent", "floatParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let bytearray_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(print)", SlotTags::empty()),
             SlotHelper::primitive_message("(println)", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent", "bytearrayParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let array_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(>quotation)", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent", "arrayParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let quotation_map = heap.allocate_slot_map_helper(strings, &[
+            // SlotHelper::constant("", value, tags)
             SlotHelper::primitive_message("(call)", SlotTags::empty()),
             SlotHelper::primitive_message("dip", SlotTags::empty()),
             SlotHelper::primitive_message("if", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent", "quotationParent", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let method_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("(call-method)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let effect_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::assignable("inputs", Value::from_u64(0), SlotTags::empty()),
             SlotHelper::assignable("outputs", Value::from_u64(1), SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let parsers_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("[", SlotTags::empty()),
+            SlotHelper::primitive_message(":", SlotTags::empty()),
+            SlotHelper::primitive_message("(|", SlotTags::empty()),
+        ]);
+
+        let parsers = heap.allocate_slot_object(parsers_map, &[]);
+
+        #[rustfmt::skip]
+        let universe_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("universe", SlotTags::empty()),
+            SlotHelper::constant("parsers*", parsers.into(), SlotTags::PARENT)
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
@@ -237,6 +266,11 @@ impl VM {
                 .promote_to_handle()
                 .cast();
 
+            let method_traits = heap
+                .allocate_slot_object(method_map, &[])
+                .promote_to_handle()
+                .cast();
+
             let true_object = heap
                 .allocate_slot_object(empty_map, &[])
                 .promote_to_handle()
@@ -252,6 +286,11 @@ impl VM {
                     effect_map,
                     &[false_object.as_value(), false_object.as_value()],
                 )
+                .promote_to_handle()
+                .cast();
+
+            let universe = heap
+                .allocate_slot_object(universe_map, &[])
                 .promote_to_handle()
                 .cast();
 
@@ -274,6 +313,8 @@ impl VM {
                 .allocate_quotation(dip_body, dip_code, 2, 1)
                 .promote_to_handle();
 
+            let message_self = self.intern_string_message("self", &mut heap);
+
             let specials = SpecialObjects {
                 bytearray_traits,
                 array_traits,
@@ -282,17 +323,44 @@ impl VM {
                 bignum_traits,
                 quotation_traits,
                 effect_traits,
+                method_traits,
+                universe,
+                parsers: parsers.promote_to_handle().cast(),
                 true_object,
                 false_object,
                 stack_object,
                 dip_quotation,
-                // TODO: this MUST be implemented
-                message_self: Value::zero().as_heap_handle_unchecked().cast(),
+                message_self,
             };
 
             let inner = Arc::get_mut(&mut self.inner).expect("get inner");
             inner.specials = specials;
         }
+    }
+
+    pub fn intern_string(
+        &self,
+        s: &str,
+        heap: &mut HeapProxy,
+    ) -> Handle<ByteArray> {
+        self.inner.strings.get(s, heap)
+    }
+
+    pub fn intern_message(
+        &self,
+        interned_bytearray: Handle<ByteArray>,
+        heap: &mut HeapProxy,
+    ) -> Handle<Message> {
+        self.inner.messages.get(interned_bytearray, heap)
+    }
+
+    pub fn intern_string_message(
+        &self,
+        s: &str,
+        heap: &mut HeapProxy,
+    ) -> Handle<Message> {
+        let bytearray = self.intern_string(s, heap);
+        self.intern_message(bytearray, heap)
     }
 }
 
@@ -348,6 +416,9 @@ impl SpecialObjects {
                 bignum_traits: Value::zero().as_heap_handle_unchecked(),
                 quotation_traits: Value::zero().as_heap_handle_unchecked(),
                 effect_traits: Value::zero().as_heap_handle_unchecked(),
+                method_traits: Value::zero().as_heap_handle_unchecked(),
+                universe: Value::zero().as_heap_handle_unchecked(),
+                parsers: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),

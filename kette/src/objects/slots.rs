@@ -367,16 +367,27 @@ impl<'a> SlotHelper<'a> {
         Self { name, value, tags }
     }
 
-    #[inline]
-    pub fn primitive(name: &'a str, value: Value, tags: SlotTags) -> Self {
-        let tags = tags | SlotTags::PRIMITIVE;
-        Self::new(name, value, tags)
+    pub fn constant(name: &'a str, value: Value, tags: SlotTags) -> Self {
+        let tags = tags;
+        Self { name, value, tags }
     }
 
     #[inline]
     pub fn primitive_message(name: &'a str, tags: SlotTags) -> Self {
         let tags = tags | SlotTags::PRIMITIVE | SlotTags::EXECUTABLE;
         let index = primitive_index(name);
+        let value = index.as_raw();
+        Self::new(name, value.into(), tags)
+    }
+
+    #[inline]
+    pub fn primitive_message2(
+        name: &'a str,
+        primitive: &'a str,
+        tags: SlotTags,
+    ) -> Self {
+        let tags = tags | SlotTags::PRIMITIVE | SlotTags::EXECUTABLE;
+        let index = primitive_index(primitive);
         let value = index.as_raw();
         Self::new(name, value.into(), tags)
     }

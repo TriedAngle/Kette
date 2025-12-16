@@ -848,9 +848,11 @@ impl HeapProxy {
     pub fn allocate_method_activation(
         &mut self,
         receiver: Handle<Value>,
-        map: Handle<MethodMap>,
+        method: Handle<Method>,
         slots: &[Handle<Value>],
     ) -> Tagged<ActivationObject> {
+        // SAFETY: this is safe
+        let map = unsafe { method.map.promote_to_handle() };
         // SAFETY: every method map is an executable map
         let map = unsafe { map.cast::<ExecutableMap>() };
         // SAFETY: handles safe, slots must be same size as map wants

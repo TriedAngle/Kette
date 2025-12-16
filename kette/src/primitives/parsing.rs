@@ -2,9 +2,10 @@
 #![allow(unused)]
 
 use crate::{
-    Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle, Message,
-    ObjectType, ParsedToken, Parser, PrimitiveContext, Quotation, Tagged,
-    Value, get_primitive, primitive_index,
+    Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
+    Message, Method, Object, ObjectType, ParsedToken, Parser, PrimitiveContext,
+    PrimitiveMessageIndex, Quotation, Selector, SlotTags, Tagged, Value,
+    get_primitive, primitive_index,
 };
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
@@ -214,18 +215,15 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
     let code = ctx.vm.shared.code_heap.push(block);
 
-    let quotation = ctx
+    let effect = ctx
         .heap
-        .allocate_quotation(body_arr, code, in_count, out_count);
-    // SAFETY: this is safe
-    let quotation = unsafe { quotation.promote_to_handle() };
-
-    // let effect = ctx.heap.allocate_slot_object(map, data)
-    // ctx.heap.allocate_method_map(name, code, &[], effect)
-    // ctx.heap.allocate_method_object(map)
+        .allocate_effect_object(inputs_arr.into(), outputs_arr.into());
+    let method_map =
+        ctx.heap.allocate_method_map(name.into(), code, &[], effect);
+    let method = ctx.heap.allocate_method_object(method_map);
 
     // SAFETY: just created, will become handle there anyways
-    // ctx.outputs[0] = unsafe { def.promote_to_handle().into() };
+    ctx.outputs[0] = unsafe { method.promote_to_handle().into() };
 
     ExecutionResult::Normal
 }
@@ -316,23 +314,67 @@ fn parse_until_inner<'m, 'ex, 'arg>(
         // SAFETY: when parsing we can be sure this is valid utf8
         let name = unsafe { message.value.as_ref().as_utf8().expect("utf8") };
 
-        // TODO: this should invoke a new call
-        if name == "[" {
-            let message = get_primitive(primitive_index("["));
-            let mut inputs = &[];
-            let mut outputs = [Handle::zero(); 1];
-            let mut ctx2 = ctx.new_invoke(parser.into(), inputs, &mut outputs);
-            // let res = message.call_with_context(&mut ctx2);
-            let res = parse_quotation(&mut ctx2);
-            // println!("outputs: {:?}", outputs[0]);
-            accum.push(outputs[0].into());
-            continue;
+        let parsers = ctx.vm.specials().parsers;
+        // SAFETY: must be valid
+        let name = unsafe { message.value.promote_to_handle() };
+        let selector = Selector::new(name, ctx.vm.shared.clone());
+        let lookup = selector.lookup_object(&parsers.as_value());
+        match lookup {
+            LookupResult::Found {
+                object,
+                slot,
+                slot_index,
+            } => {
+                // TODO: lookup
+                // println!("FOUND {:?}", name.as_utf8())
+                // SAFETY: this is safe
+                let tags = slot.tags();
+                if tags.contains(SlotTags::EXECUTABLE) {
+                    let res = if tags.contains(SlotTags::PRIMITIVE) {
+                        let id = slot
+                            .value
+                            .as_tagged_fixnum::<usize>()
+                            .expect("primitive must have fixnum");
+                        // SAFETY: must store valid primitive idx if primitive executable
+                        let message_idx = unsafe {
+                            PrimitiveMessageIndex::from_usize(id.into())
+                        };
+                        ctx.interpreter
+                            .primitive_send(ctx.receiver, message_idx)
+                    } else {
+                        // SAFETY: must be
+                        let method = unsafe {
+                            slot.value
+                                .as_heap_handle_unchecked()
+                                .cast::<Method>()
+                        };
+                        ctx.interpreter.add_method(ctx.receiver, method);
+                        ctx.interpreter.execute_with_depth()
+                    };
+
+                    let value = ctx.state.pop().expect("must exist");
+                    accum.push(value);
+                } else {
+                    accum.push(slot.value);
+                }
+            }
+            LookupResult::None => accum.push(next),
         }
+        // TODO: this should invoke a new call
+        // if name == "[" {
+        //     let message = get_primitive(primitive_index("["));
+        //     let mut inputs = &[];
+        //     let mut outputs = [Handle::zero(); 1];
+        //     let mut ctx2 = ctx.new_invoke(parser.into(), inputs, &mut outputs);
+        //     // let res = message.call_with_context(&mut ctx2);
+        //     let res = parse_quotation(&mut ctx2);
+        //     // println!("outputs: {:?}", outputs[0]);
+        //     accum.push(outputs[0].into());
+        //     continue;
+        // }
         // if let Some(_parser) = ctx.parsers.get(name) {
         //     unimplemented!("parses not implemented yet");
         // }
-
-        accum.push(next);
     }
 
     ExecutionResult::Normal

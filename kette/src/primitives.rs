@@ -8,6 +8,7 @@ mod bignum;
 mod bytearray;
 mod fixnum;
 mod float;
+mod method;
 mod parsing;
 mod quotation;
 mod stack;
@@ -201,6 +202,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum<=", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum>=", 1, 1, fixnum::fixnum_geq),
     PrimitiveMessage::new("fixnum>string", 0, 1, fixnum::fixnum_to_utf8_bytes),
+    PrimitiveMessage::new("fixnumParent", 0, 1, fixnum::parent),
     // Float 
     PrimitiveMessage::new("float?", 0, 1, float::is_float),
     PrimitiveMessage::new("2float?", 1, 1, float::is_2float),
@@ -227,16 +229,19 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("float<=", 1, 1, float::float_leq),
     PrimitiveMessage::new("float>=", 1, 1, float::float_geq),
     PrimitiveMessage::new("float>string", 0, 1, float::float_to_utf8_bytes),
- 
+    PrimitiveMessage::new("floatParent", 0, 1, float::parent),
     // Bytearrays
     PrimitiveMessage::new("(print)", 0, 0, bytearray::bytearray_print),
     PrimitiveMessage::new("(println)", 0, 0, bytearray::bytearray_println),
+    PrimitiveMessage::new("bytearrayParent", 0, 1, bytearray::parent),
     // Arrays
     PrimitiveMessage::new("(>quotation)", 0, 1, array::array_to_quotation),
+    PrimitiveMessage::new("arrayParent", 0, 1, array::parent),
     // Quotation
     PrimitiveMessage::new("(call)", 0, 0, quotation::call),
     PrimitiveMessage::new("dip", 1, 1, quotation::dip),
     PrimitiveMessage::new("if", 2, 0, quotation::conditional_branch),
+    PrimitiveMessage::new("quotationParent", 0, 1, quotation::parent),
     // Threads
     PrimitiveMessage::new("<threadNative>", 0, 0, threads::create_native),
     PrimitiveMessage::new("threadJoin", 0, 0, threads::join),
@@ -251,6 +256,12 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("parse", 0, 1, parsing::parse_complete),
     // Parse Time
     PrimitiveMessage::new("[", 0, 1, parsing::parse_quotation),
+    PrimitiveMessage::new(":", 0, 1, parsing::parse_method),
+    PrimitiveMessage::new("(|", 0, 1, parsing::parse_object),
+    // Universe
+    PrimitiveMessage::new("universe", 0, 1, universe),
+    // Method
+    PrimitiveMessage::new("(call-method)", 1, 0, method::call),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
@@ -292,4 +303,10 @@ pub fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
         true => ctx.vm.shared.specials.true_object.into(),
         false => ctx.vm.shared.specials.false_object.into(),
     }
+}
+
+fn universe(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let universe = ctx.receiver;
+    ctx.outputs[0] = universe.into();
+    ExecutionResult::Normal
 }

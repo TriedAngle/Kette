@@ -4,13 +4,22 @@ use kette::{
     VMCreateInfo, VMThread, Value,
 };
 
+// const CODE: &str = r#"
+//     5 77 fixnum+ fixnum>string (println)
+//     5.3 0.8 float+ float>string (println)
+//     20 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
+//     100 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
+//     5 "hello" [ 5 fixnum+ fixnum>string (println) ] dip (println)
+// "#;
 const CODE: &str = r#"
-    5 77 fixnum+ fixnum>string (println)
     5.3 0.8 float+ float>string (println)
-    20 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
-    100 20 fixnum= [ "equal" ] [ "not equal" ] if (println)
-    5 "hello" [ 5 fixnum+ fixnum>string (println) ] dip (println)  
+    10 
+    : +1 ( -- x+1 ) self 1 fixnum+ ; 
+    (call-method) 
+    fixnum>string (println)
 "#;
+
+// : +1 ( x -- x+1 ) 1 + ;
 
 fn execute_parser_code(value: Value) -> Block {
     let instructions = vec![
@@ -79,12 +88,8 @@ fn main() {
     // SAFETY: this is safe
     let quotation = unsafe { quotation.promote_to_handle() };
 
-    interpreter.setup(quotation);
+    interpreter.add_quotation(quotation);
 
     tracing::debug!("RUN");
     interpreter.execute();
-
-    // for instruction in compiled.instructions {
-    //     interpreter.execute_single_bytecode(instruction);
-    // }
 }

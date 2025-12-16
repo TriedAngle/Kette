@@ -3,7 +3,6 @@ use crate::{
     primitives::{bool_object, inputs, outputs},
 };
 
-// TODO: implement this
 pub fn call(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: this is safe
     let quotation = unsafe { ctx.receiver.cast::<Quotation>() };
@@ -49,4 +48,10 @@ pub fn conditional_branch(ctx: &mut PrimitiveContext) -> ExecutionResult {
         .activations
         .new_activation(activation_object, ActivationType::Quotation);
     ExecutionResult::ActivationChanged
+}
+
+pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let p = ctx.vm.specials().quotation_traits;
+    ctx.outputs[0] = p.into();
+    ExecutionResult::Normal
 }
