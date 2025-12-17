@@ -18,7 +18,7 @@ const CODE: &str = r#"
     10 20 fixnum+ fixnum>string (println)
     5.3 0.8 float+ float>string (println)
     // another comment
-    10 5 fixnum= [ "equal" ] [ "not equal" ] /* block comment */ if (println)
+    10 5 fixnum= [ "equal" ] [ "not equal" ] /* block /* */ comment */ if (println)
     55 : +1 ( -- x+1 ) self 1 fixnum+ ; (call-method) fixnum>string (println)
 "#;
 

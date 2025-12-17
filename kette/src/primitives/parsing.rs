@@ -429,17 +429,38 @@ pub fn parse_block_comment(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: must be parser, can't be called otherwise
     let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
     // SAFETY: must exist by contract
-    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+    let accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
 
-    // Try to read until the closing tag "*/"
-    // If returns None, the comment was never closed, which is a parsing error.
-    if parser.read_until("*/").is_none() {
-        return ExecutionResult::Panic(
-            "Parsing Error: Unterminated block comment (missing '*/')",
-        );
+    let mut depth: usize = 1;
+
+    while parser.offset + 1 < parser.end {
+        let a = parser.code[parser.offset];
+        let b = parser.code[parser.offset + 1];
+
+        // Nested open
+        if a == b'/' && b == b'*' {
+            depth += 1;
+            parser.offset += 2;
+            continue;
+        }
+
+        // Close
+        if a == b'*' && b == b'/' {
+            depth -= 1;
+            parser.offset += 2;
+
+            if depth == 0 {
+                ctx.outputs[0] = accumulator.into();
+                return ExecutionResult::Normal;
+            }
+
+            continue;
+        }
+
+        parser.offset += 1;
     }
 
-    ctx.outputs[0] = accumulator.into();
-
-    ExecutionResult::Normal
+    ExecutionResult::Panic(
+        "Parsing Error: Unterminated block comment (missing '*/')",
+    )
 }
