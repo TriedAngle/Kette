@@ -37,6 +37,8 @@ pub use objects::{
     Object, ObjectKind, ObjectType, PtrSizedObject,
 };
 
+pub use primitives::Vector;
+
 pub use bytecode::{Block, Instruction};
 pub use compiler::BytecodeCompiler;
 pub use heap::{Heap, HeapCreateInfo, HeapProxy, HeapSettings};

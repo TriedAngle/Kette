@@ -4,12 +4,22 @@ use kette::{
     VMCreateInfo, VMThread, Value,
 };
 
+// const CODE: &str = r#"
+//     5.3 0.8 float+ float>string (println)
+//     9 10 over
+//     : +1 ( -- x+1 ) self 1 fixnum+ ;
+//     (call-method)
+//     fixnum>string (println) drop drop
+//
+//
+// "#;
 const CODE: &str = r#"
+    // this is a comment
+    10 20 fixnum+ fixnum>string (println)
     5.3 0.8 float+ float>string (println)
-    9 10 over
-    : +1 ( -- x+1 ) self 1 fixnum+ ; 
-    (call-method) 
-    fixnum>string (println) drop drop
+    // another comment
+    10 5 fixnum= [ "equal" ] [ "not equal" ] /* block comment */ if (println)
+    55 : +1 ( -- x+1 ) self 1 fixnum+ ; (call-method) fixnum>string (println)
 "#;
 
 fn execute_parser_code(parser: Value) -> Block {

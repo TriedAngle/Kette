@@ -1,11 +1,13 @@
 // TODO: remove this unused
 #![allow(unused)]
 
+use std::ops::Deref;
+
 use crate::{
     Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
     Message, Method, Object, ObjectType, ParsedToken, Parser, PrimitiveContext,
     PrimitiveMessageIndex, Quotation, Selector, SlotTags, Tagged, Value,
-    get_primitive, primitive_index,
+    Vector, get_primitive, primitive_index,
 };
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
@@ -36,6 +38,7 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
         ParsedToken::Identifier(token) => {
             let s = parser.get_token_string(token);
+
             let ba = ctx.vm.intern_string(s, heap);
             let message = ctx.vm.intern_message(ba, heap);
             state.push(message.as_value());
@@ -47,36 +50,45 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 // TODO: this is not correct, use parse_complete as correct example
 pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let mut accumulator = Vec::new();
+    // SAFETY: must exist by contract
+    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+
+    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 100);
+    // SAFETY: just created
+    let mut body_accum = unsafe { vector.promote_to_handle() };
 
     let end = ctx.vm.intern_string_message("]", ctx.heap);
 
-    let res = parse_until_inner(ctx, Some(end), &mut accumulator);
+    let res = parse_until_inner(ctx, Some(end), body_accum);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
 
     // SAFETY: TODO: must be added to handleset
-    let body =
-        unsafe { ctx.heap.allocate_array(&accumulator).promote_to_handle() };
+    let body = unsafe {
+        ctx.heap
+            .allocate_array(body_accum.as_slice())
+            .promote_to_handle()
+    };
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
     let code = ctx.vm.shared.code_heap.push(block);
     // TODO: this must be updated
     let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
-    // SAFETY: just allocated
-    let quotation = unsafe { quotation.promote_to_handle() };
-    // SAFETY: just created, will become handle there anyways
-    ctx.outputs[0] = quotation.as_value_handle();
+    accumulator.push(quotation.into(), ctx.heap, &ctx.vm.shared);
+
+    ctx.outputs[0] = accumulator.into();
 
     ExecutionResult::Normal
 }
 
 pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let mut accumulator = Vec::new();
+    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 0);
+    // SAFETY: just created
+    let mut accumulator = unsafe { vector.promote_to_handle() };
 
     let end = ctx.vm.intern_string_message("|)", ctx.heap);
 
-    let res = parse_until_inner(ctx, Some(end), &mut accumulator);
+    let res = parse_until_inner(ctx, Some(end), accumulator);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
@@ -88,7 +100,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 fn parse_effect_inner(
     ctx: &mut PrimitiveContext,
-) -> Result<(Vec<Value>, Vec<Value>), &'static str> {
+) -> Result<(Handle<Vector>, Handle<Vector>), &'static str> {
     // SAFETY: must be parser, can't be called otherwise
     let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
 
@@ -99,8 +111,13 @@ fn parse_effect_inner(
         _ => return Err("Parsing Effect: Expected '('"),
     }
 
-    let mut inputs: Vec<Value> = Vec::new();
-    let mut outputs: Vec<Value> = Vec::new();
+    let in_vec = Vector::new(ctx.heap, &ctx.vm.shared, 0);
+    // SAFETY: just created
+    let mut inputs = unsafe { in_vec.promote_to_handle() };
+
+    let out_vec = Vector::new(ctx.heap, &ctx.vm.shared, 0);
+    // SAFETY: just created
+    let mut outputs = unsafe { out_vec.promote_to_handle() };
 
     let mut reading_inputs = true;
     let mut saw_separator = false;
@@ -133,9 +150,9 @@ fn parse_effect_inner(
                 // Treat every other identifier as a stack-name; store as Message.
                 let msg = ctx.vm.intern_string_message(s, ctx.heap);
                 if reading_inputs {
-                    inputs.push(msg.as_value());
+                    inputs.push(msg.as_value(), ctx.heap, &ctx.vm.shared);
                 } else {
-                    outputs.push(msg.as_value());
+                    outputs.push(msg.as_value(), ctx.heap, &ctx.vm.shared);
                 }
             }
 
@@ -165,6 +182,8 @@ fn parse_effect_inner(
 pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: must be parser, can't be called otherwise
     let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
+    // SAFETY: must exist by contract
+    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
 
     // Parse name
     let name_tok = match parser.parse_next() {
@@ -183,35 +202,45 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let name = ctx.vm.intern_string(name_str, ctx.heap);
 
-    // Parse effect (and keep the name lists for returning/debugging)
-    let (in_names, out_names) = match parse_effect_inner(ctx) {
+    // Parse effect
+    let (inputs_vec, outputs_vec) = match parse_effect_inner(ctx) {
         Ok(v) => v,
         Err(e) => return ExecutionResult::Panic(e),
     };
 
-    let in_count = in_names.len();
-    let out_count = out_names.len();
-
-    let inputs_arr =
-        // SAFETY: this is safe
-        unsafe { ctx.heap.allocate_array(&in_names).promote_to_handle() };
-    let outputs_arr =
-        // SAFETY: this is safe
-        unsafe { ctx.heap.allocate_array(&out_names).promote_to_handle() };
+    // Convert Vectors to Arrays for Method storage
+    // SAFETY: allocating this here
+    let inputs_arr = unsafe {
+        ctx.heap
+            .allocate_array(inputs_vec.as_slice())
+            .promote_to_handle()
+    };
+    // SAFETY: allocating this here
+    let outputs_arr = unsafe {
+        ctx.heap
+            .allocate_array(outputs_vec.as_slice())
+            .promote_to_handle()
+    };
 
     // Parse body until ';'
-    let mut body_accum = Vec::new();
+    let body_vec = Vector::new(ctx.heap, &ctx.vm.shared, 100);
+    // SAFETY: just created
+    let mut body_accum = unsafe { body_vec.promote_to_handle() };
+
     let end = ctx.vm.intern_string_message(";", ctx.heap);
 
-    let res = parse_until_inner(ctx, Some(end), &mut body_accum);
+    let res = parse_until_inner(ctx, Some(end), body_accum);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing Method: Parsing body failed!");
     }
 
     // Compile into a quotation (with effect counts)
-    let body_arr =
-        // SAFETY: this is safe
-        unsafe { ctx.heap.allocate_array(&body_accum).promote_to_handle() };
+    // SAFETY: allocating here
+    let body_arr = unsafe {
+        ctx.heap
+            .allocate_array(body_accum.as_slice())
+            .promote_to_handle()
+    };
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
     let code = ctx.vm.shared.code_heap.push(block);
 
@@ -222,24 +251,29 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
         ctx.heap.allocate_method_map(name.into(), code, &[], effect);
     let method = ctx.heap.allocate_method_object(method_map);
 
-    // SAFETY: just created, will become handle there anyways
-    ctx.outputs[0] = unsafe { method.promote_to_handle().into() };
+    accumulator.push(method.into(), ctx.heap, &ctx.vm.shared);
+
+    ctx.outputs[0] = accumulator.into();
 
     ExecutionResult::Normal
 }
 
 // -- array
 pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let mut accumulator = Vec::new();
+    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 100);
+    // SAFETY: just created
+    let mut accumulator = unsafe { vector.promote_to_handle() };
 
-    let res = parse_until_inner(ctx, None, &mut accumulator);
+    let res = parse_until_inner(ctx, None, accumulator);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
 
-    let accumulated = ctx.heap.allocate_array(&accumulator);
+    let accumulated = ctx.heap.allocate_array(accumulator.as_slice());
     // SAFETY: just created, will become handle there anyways
-    ctx.outputs[0] = unsafe { accumulated.promote_to_handle().into() };
+    let acummulated = unsafe { accumulated.promote_to_handle() };
+
+    ctx.outputs[0] = acummulated.as_value_handle();
 
     ExecutionResult::Normal
 }
@@ -247,19 +281,22 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
 // TODO: this is not correct, use parse_complete as correct example
 // end -- array
 pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let mut accumulator = Vec::new();
+    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 10);
+    // SAFETY: just created
+    let mut accumulator = unsafe { vector.promote_to_handle() };
 
     // SAFETY: must exist
     let end = unsafe { ctx.state.pop_unchecked() };
     // SAFETY: TODO: maybe check in future but input expects this
     let end = unsafe { end.as_handle_unchecked().cast::<Message>() };
 
-    let res = parse_until_inner(ctx, Some(end), &mut accumulator);
+    let res = parse_until_inner(ctx, Some(end), accumulator);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
 
-    let accumulated = ctx.heap.allocate_array(&accumulator);
+    // trimming
+    let accumulated = ctx.heap.allocate_array(accumulator.as_slice());
     // SAFETY: just created, will become handle there anyways
     ctx.outputs[0] = unsafe { accumulated.promote_to_handle().into() };
 
@@ -270,7 +307,7 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
 fn parse_until_inner<'m, 'ex, 'arg>(
     ctx: &'m mut PrimitiveContext<'ex, 'arg>,
     end: Option<Handle<Message>>,
-    accum: &mut Vec<Value>,
+    mut accum: Handle<Vector>,
 ) -> ExecutionResult {
     // SAFETY: must be parser, can't be called otherwise
     let parser = unsafe { ctx.receiver.cast::<Parser>() };
@@ -289,7 +326,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
         }
 
         if !next.is_object() {
-            accum.push(next);
+            accum.push(next, ctx.heap, &ctx.vm.shared);
             continue;
         }
 
@@ -300,7 +337,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
         if unsafe { handle.header.object_type().unwrap_unchecked() }
             != ObjectType::Message
         {
-            accum.push(next);
+            accum.push(next, ctx.heap, &ctx.vm.shared);
             continue;
         }
 
@@ -310,9 +347,6 @@ fn parse_until_inner<'m, 'ex, 'arg>(
         if Some(message) == end {
             break;
         }
-
-        // SAFETY: when parsing we can be sure this is valid utf8
-        let name = unsafe { message.value.as_ref().as_utf8().expect("utf8") };
 
         let parsers = ctx.vm.specials().parsers;
         // SAFETY: must be valid
@@ -325,9 +359,6 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                 slot,
                 slot_index,
             } => {
-                // TODO: lookup
-                // println!("FOUND {:?}", name.as_utf8())
-                // SAFETY: this is safe
                 let tags = slot.tags();
                 if tags.contains(SlotTags::EXECUTABLE) {
                     let res = if tags.contains(SlotTags::PRIMITIVE) {
@@ -339,6 +370,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         let message_idx = unsafe {
                             PrimitiveMessageIndex::from_usize(id.into())
                         };
+                        ctx.state.push(accum.as_value());
                         ctx.interpreter
                             .primitive_send(ctx.receiver, message_idx)
                     } else {
@@ -348,34 +380,66 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                                 .as_heap_handle_unchecked()
                                 .cast::<Method>()
                         };
+                        ctx.state.push(accum.as_value());
                         ctx.interpreter.add_method(ctx.receiver, method);
                         ctx.interpreter.execute_with_depth()
                     };
 
-                    let value = ctx.state.pop().expect("must exist");
-                    accum.push(value);
+                    // SAFETY: safe if adhere to protocol
+                    // all parsers do: self = parser ( accum -- accum )
+                    accum = unsafe {
+                        ctx.state
+                            .pop()
+                            .expect("must exist")
+                            .as_handle_unchecked()
+                            .cast()
+                    };
                 } else {
-                    accum.push(slot.value);
+                    accum.push(slot.value, ctx.heap, &ctx.vm.shared);
                 }
             }
-            LookupResult::None => accum.push(next),
+            LookupResult::None => accum.push(next, ctx.heap, &ctx.vm.shared),
         }
-        // TODO: this should invoke a new call
-        // if name == "[" {
-        //     let message = get_primitive(primitive_index("["));
-        //     let mut inputs = &[];
-        //     let mut outputs = [Handle::zero(); 1];
-        //     let mut ctx2 = ctx.new_invoke(parser.into(), inputs, &mut outputs);
-        //     // let res = message.call_with_context(&mut ctx2);
-        //     let res = parse_quotation(&mut ctx2);
-        //     // println!("outputs: {:?}", outputs[0]);
-        //     accum.push(outputs[0].into());
-        //     continue;
-        // }
-        // if let Some(_parser) = ctx.parsers.get(name) {
-        //     unimplemented!("parses not implemented yet");
-        // }
     }
+
+    ExecutionResult::Normal
+}
+
+// TODO: these should be moved into unserspace
+pub fn parse_line_comment(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: must be parser, can't be called otherwise
+    let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
+    // SAFETY: must exist by contract
+    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+
+    // Try to read until the next newline
+    if parser.read_until("\n").is_none() {
+        // If no newline is found, the comment extends to the end of the file.
+        // read_until returns None without advancing offset if not found,
+        // so we manually consume the rest of the code.
+        parser.offset = parser.end;
+    }
+
+    ctx.outputs[0] = accumulator.into();
+
+    ExecutionResult::Normal
+}
+
+pub fn parse_block_comment(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: must be parser, can't be called otherwise
+    let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
+    // SAFETY: must exist by contract
+    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+
+    // Try to read until the closing tag "*/"
+    // If returns None, the comment was never closed, which is a parsing error.
+    if parser.read_until("*/").is_none() {
+        return ExecutionResult::Panic(
+            "Parsing Error: Unterminated block comment (missing '*/')",
+        );
+    }
+
+    ctx.outputs[0] = accumulator.into();
 
     ExecutionResult::Normal
 }

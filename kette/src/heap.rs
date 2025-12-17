@@ -775,8 +775,21 @@ impl HeapProxy {
         self.allocate_slot_map(&[])
     }
 
+    pub fn allocate_array_raw(&mut self, size: usize) -> Tagged<Array> {
+        let layout = Array::required_layout(size);
+        let mut raw = self.allocate_boxed_raw(layout.size()).cast::<Array>();
+
+        // SAFETY: this is safe
+        let array = unsafe { raw.as_mut() };
+        // SAFETY: this is safe
+        unsafe { array.init(size) };
+
+        Tagged::new_ptr(array)
+    }
+
     pub fn allocate_array(&mut self, data: &[Value]) -> Tagged<Array> {
-        let mut raw = self.allocate_boxed_raw(data.len()).cast::<Array>();
+        let layout = Array::required_layout(data.len());
+        let mut raw = self.allocate_boxed_raw(layout.size()).cast::<Array>();
 
         // SAFETY: we just create this here
         let array = unsafe { raw.as_mut() };

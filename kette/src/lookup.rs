@@ -45,8 +45,6 @@ impl Selector {
         object: &impl Object,
         chain: Option<&VisitedLink>,
     ) -> LookupResult {
-        let span = tracing::span!(tracing::Level::TRACE, "lookup");
-        let _guard = span.enter();
         object.lookup(self, chain)
     }
 }

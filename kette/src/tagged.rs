@@ -436,6 +436,11 @@ impl<T: HeapObject> Handle<T> {
             _marker: PhantomData,
         }
     }
+
+    pub fn inner(&self) -> &T {
+        // SAFETY: safe for handle
+        unsafe { &*self.as_ptr() }
+    }
 }
 
 impl<T: PtrSizedObject> Handle<T> {

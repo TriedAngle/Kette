@@ -4,6 +4,7 @@ use crate::{
     Block, ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue,
     Instruction, Message, Quotation, SlotHelper, SlotTags, Strings, Value,
     bytecode::CodeHeap, interning::Messages, primitive_index,
+    primitives::Vector,
 };
 
 #[derive(Debug)]
@@ -24,6 +25,8 @@ pub struct SpecialObjects {
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
     pub stack_object: Handle<HeapValue>,
+
+    pub primitive_vector_map: Handle<HeapValue>,
 
     pub dip_quotation: Handle<Quotation>,
 
@@ -224,6 +227,8 @@ impl VM {
             SlotHelper::primitive_message("[", SlotTags::empty()),
             SlotHelper::primitive_message(":", SlotTags::empty()),
             SlotHelper::primitive_message("(|", SlotTags::empty()),
+            SlotHelper::primitive_message("//", SlotTags::empty()),
+            SlotHelper::primitive_message("/*", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -243,6 +248,10 @@ impl VM {
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
         unsafe {
+            let primitive_vector_map = Vector::new_map(&mut heap, strings)
+                .promote_to_handle()
+                .cast();
+
             let bytearray_traits = heap
                 .allocate_slot_object(bytearray_map, &[])
                 .promote_to_handle()
@@ -335,6 +344,7 @@ impl VM {
                 quotation_traits,
                 effect_traits,
                 method_traits,
+                primitive_vector_map,
                 true_object,
                 false_object,
                 dip_quotation,
@@ -426,6 +436,7 @@ impl SpecialObjects {
                 float_traits: Value::zero().as_heap_handle_unchecked(),
                 bignum_traits: Value::zero().as_heap_handle_unchecked(),
                 quotation_traits: Value::zero().as_heap_handle_unchecked(),
+                primitive_vector_map: Value::zero().as_heap_handle_unchecked(),
                 effect_traits: Value::zero().as_heap_handle_unchecked(),
                 method_traits: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),

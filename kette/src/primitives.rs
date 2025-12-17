@@ -13,6 +13,8 @@ mod parsing;
 mod quotation;
 mod stack;
 mod threads;
+mod vector;
+pub use vector::Vector;
 
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone)]
@@ -255,13 +257,18 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("parseUntil", 2, 1, parsing::parse_until),
     PrimitiveMessage::new("parse", 0, 1, parsing::parse_complete),
     // Parse Time
-    PrimitiveMessage::new("[", 0, 1, parsing::parse_quotation),
-    PrimitiveMessage::new(":", 0, 1, parsing::parse_method),
-    PrimitiveMessage::new("(|", 0, 1, parsing::parse_object),
+    PrimitiveMessage::new("[", 1, 1, parsing::parse_quotation),
+    PrimitiveMessage::new(":", 1, 1, parsing::parse_method),
+    PrimitiveMessage::new("(|", 1, 1, parsing::parse_object),
+    PrimitiveMessage::new("//", 1, 1, parsing::parse_line_comment),
+    PrimitiveMessage::new("/*", 1, 1, parsing::parse_block_comment),
     // Universe
     PrimitiveMessage::new("universe", 0, 1, universe),
     // Method
     PrimitiveMessage::new("(call-method)", 1, 0, method::call),
+
+    // Primitive Vector
+    PrimitiveMessage::new("vectorPush", 1, 0, vector::push),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {

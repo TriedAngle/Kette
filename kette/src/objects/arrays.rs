@@ -1,4 +1,4 @@
-use std::{mem, ptr};
+use std::{alloc::Layout, mem, ptr};
 
 use crate::{
     Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
@@ -121,6 +121,16 @@ impl Array {
     pub unsafe fn set_unchecked(&mut self, index: usize, value: Value) {
         // SAFETY: safe if contract holds
         unsafe { self.fields_mut_ptr().add(index).write(value) };
+    }
+
+    /// calculate the layout of an array with n fields
+    pub fn required_layout(size: usize) -> Layout {
+        let head = Layout::new::<Array>();
+        let slots_layout =
+            Layout::array::<Value>(size).expect("create valid layout");
+        let (layout, _) =
+            head.extend(slots_layout).expect("create valid layout");
+        layout
     }
 }
 
