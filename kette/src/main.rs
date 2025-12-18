@@ -4,44 +4,35 @@ use kette::{
     VMCreateInfo, VMThread, Value,
 };
 
-// const CODE: &str = r#"
-//     5.3 0.8 float+ float>string (println)
-//     9 10 over
-//     : +1 ( -- x+1 ) self 1 fixnum+ ;
-//     (call-method)
-//     fixnum>string (println) drop drop
-//
-//
-// "#;
 const CODE: &str = r#"
 (|
-    LanguageVersion :: "0.1.0" .
-    std :: (|
-        traits :: (| 
-            fixnum :: 0 parent .
-            float :: 0.0 parent .
-            bytearray :: "incredible" parent .
-            quotation :: [ ] parent .
+    LanguageVersion = "0.1.0" .
+    std = (|
+        traits = (| 
+            fixnum = 0 parent .
+            float = 0.0 parent .
+            bytearray = "incredible" parent .
+            quotation = [ ] parent .
         |)
     |) .
-    t :: 0 0 fixnum= . 
-    f :: 0 1 fixnum= .
+    t = 0 0 fixnum= . 
+    f = 0 1 fixnum= .
 |) globals (addTraitSlots)
 
-(| println :: : ( -- ) self (println) ; |) std traits bytearray (addTraitSlots)
+(| println = : ( -- ) self (println) ; |) std traits bytearray (addTraitSlots)
 
 (|
-    + :: : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
-    >string :: : ( -- str ) self fixnum>string ; .
-    println :: : ( -- ) self >string println ; .
+    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
+    >string = : ( -- str ) self fixnum>string ; .
+    println = : ( -- ) self >string println ; .
 |) std traits fixnum (addTraitSlots) 
 
 LanguageVersion println
 
 (| 
-    parent* :: (| x := 33 |) . 
-    y := 10 .
-    hello :: : ( -- value ) self x 10 + ;
+    parent* = (| x := 33 |) . 
+    y = 10 .
+    hello = : ( -- value ) self x 10 + ;
 |) hello println
 "#;
 

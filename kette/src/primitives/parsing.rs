@@ -381,10 +381,10 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         // Operator: "<-" or "="
         let is_assignable = match peek_str {
             ":=" => true,
-            "::" => false,
+            "=" => false,
             _ => {
                 return ExecutionResult::Panic(
-                    "Parsing Object: Expected '::', ':=', '.', or '|)' after slot name",
+                    "Parsing Object: Expected '=', ':=', '.', or '|)' after slot name",
                 );
             }
         };
