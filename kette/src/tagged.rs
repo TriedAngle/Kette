@@ -33,7 +33,6 @@ pub struct Value(u64);
 /// A tagged value
 /// same memory layout as Value but Typed
 #[repr(C)]
-#[derive(PartialEq, Eq)]
 pub struct Tagged<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
@@ -383,6 +382,13 @@ impl Handle<Value> {
         }
     }
 }
+impl<T: Object> PartialEq for Tagged<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
+    }
+}
+
+impl<T: Object> Eq for Tagged<T> {}
 
 impl<T: Object> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {

@@ -6,8 +6,16 @@ use crate::{
 pub fn call(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: this is safe
     let quotation = unsafe { ctx.receiver.cast::<Quotation>() };
+
+    let receiver = ctx
+        .interpreter
+        .current_activation()
+        .map(|a| a.object.receiver)
+        .unwrap_or(ctx.vm.specials().false_object.as_value_handle());
+
     let activation_object =
-        ctx.heap.allocate_quotation_activation(quotation, &[]);
+        ctx.heap
+            .allocate_quotation_activation(receiver, quotation, &[]);
     ctx.interpreter
         .activations
         .new_activation(activation_object, ActivationType::Quotation);
@@ -25,7 +33,14 @@ pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
     outputs(ctx, [x]);
     let quot = ctx.vm.shared.specials.dip_quotation;
 
-    let activation_object = ctx.heap.allocate_quotation_activation(quot, &[]);
+    let receiver = ctx
+        .interpreter
+        .current_activation()
+        .map(|a| a.object.receiver)
+        .unwrap_or(ctx.vm.specials().false_object.as_value_handle());
+
+    let activation_object =
+        ctx.heap.allocate_quotation_activation(receiver, quot, &[]);
     ctx.interpreter
         .activations
         .new_activation(activation_object, ActivationType::Quotation);
@@ -41,9 +56,17 @@ pub fn conditional_branch(ctx: &mut PrimitiveContext) -> ExecutionResult {
     } else {
         true_branch
     };
+    let receiver = ctx
+        .interpreter
+        .current_activation()
+        .map(|a| a.object.receiver)
+        .unwrap_or(ctx.vm.specials().false_object.as_value_handle());
+
     // SAFETY: safe
     let branch = unsafe { branch.cast::<Quotation>() };
-    let activation_object = ctx.heap.allocate_quotation_activation(branch, &[]);
+    let activation_object =
+        ctx.heap
+            .allocate_quotation_activation(receiver, branch, &[]);
     ctx.interpreter
         .activations
         .new_activation(activation_object, ActivationType::Quotation);

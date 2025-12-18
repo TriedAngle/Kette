@@ -6,8 +6,8 @@ use std::ops::Deref;
 use crate::{
     Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
     Message, Method, Object, ObjectType, ParsedToken, Parser, PrimitiveContext,
-    PrimitiveMessageIndex, Quotation, Selector, SlotTags, Tagged, Value,
-    Vector, get_primitive, primitive_index,
+    PrimitiveMessageIndex, Quotation, Selector, SlotDescriptor, SlotTags,
+    Tagged, Value, Vector, get_primitive, primitive_index,
 };
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
@@ -82,18 +82,378 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 }
 
 pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 0);
-    // SAFETY: just created
-    let mut accumulator = unsafe { vector.promote_to_handle() };
+    // SAFETY: must exist by contract (outer accumulator from parse_until_inner protocol)
+    let mut outer_accum = unsafe { ctx.inputs[0].cast::<Vector>() };
 
-    let end = ctx.vm.intern_string_message("|)", ctx.heap);
+    #[inline]
+    fn message_name<'a>(v: Value) -> Option<&'a str> {
+        if !v.is_object() {
+            return None;
+        }
+        // SAFETY: checked is_object
+        let h = unsafe { v.as_heap_handle_unchecked() };
+        // SAFETY: object_type exists for objects
+        let ty = unsafe { h.header.object_type().unwrap_unchecked() };
+        if ty != ObjectType::Message {
+            return None;
+        }
+        // SAFETY: ty checked
+        let msg = unsafe { h.cast::<Message>() };
+        // SAFETY: message.value is an interned ByteArray
+        let ba = unsafe { msg.value.promote_to_handle() };
 
-    let res = parse_until_inner(ctx, Some(end), accumulator);
-    if res != ExecutionResult::Normal {
-        return ExecutionResult::Panic("Parsing failed!");
+        // SAFETY: lifetime valid here
+        Some(unsafe {
+            std::mem::transmute::<&'_ str, &'a str>(
+                ba.as_utf8().expect("must exist"),
+            )
+        })
     }
 
-    // TODO: implement this
+    #[inline]
+    fn next_value(ctx: &mut PrimitiveContext) -> Value {
+        let _ = parse_next(ctx);
+        // SAFETY: parse_next always pushes something (token or false)
+        unsafe { ctx.state.pop_unchecked() }
+    }
+
+    #[inline]
+    fn as_method(v: Value) -> Option<Handle<Method>> {
+        if !v.is_object() {
+            return None;
+        }
+        // SAFETY: checked is_object
+        let h = unsafe { v.as_heap_handle_unchecked() };
+        // SAFETY: message.value is an interned ByteArray
+        let ty = unsafe { h.header.object_type().unwrap_unchecked() };
+        if ty != ObjectType::Method {
+            return None;
+        }
+        // SAFETY: ty checked
+        Some(unsafe { h.cast::<Method>() })
+    }
+
+    // NOTE: this assumes Method has a `map` field pointing to a map that has a `name: Tagged<ByteArray>`.
+    // Adjust field names here if your structs differ.
+    #[inline]
+    fn method_name_tagged(method: Handle<Method>) -> Tagged<ByteArray> {
+        // SAFETY: method/map must be valid by construction
+        let map = unsafe { method.map.as_ref() };
+        map.name
+    }
+
+    fn eval_expr(
+        ctx: &mut PrimitiveContext,
+        expr: &[Value],
+    ) -> Result<Value, &'static str> {
+        if expr.is_empty() {
+            return Err("Parsing Object: Empty slot initializer");
+        }
+
+        let arr = ctx.heap.allocate_array(expr);
+        // SAFETY: just allocated
+        let arr_h = unsafe { arr.promote_to_handle() };
+
+        let block = BytecodeCompiler::compile(&ctx.vm.shared, arr_h);
+        let code = ctx.vm.shared.code_heap.push(block);
+
+        let quot = ctx.heap.allocate_quotation(arr_h, code, 0, 0);
+        // SAFETY: just allocated
+        let quot_h = unsafe { quot.promote_to_handle() };
+
+        let before = ctx.state.depth;
+
+        ctx.interpreter.add_quotation(quot_h);
+        let exec_res = ctx.interpreter.execute_with_depth();
+        if exec_res != ExecutionResult::Normal {
+            return Err("Parsing Object: Slot initializer execution failed");
+        }
+
+        let after = ctx.state.depth;
+        if after != before + 1 {
+            return Err(
+                "Parsing Object: Slot initializer must leave exactly one value on stack",
+            );
+        }
+
+        // SAFETY: after == before + 1 implies at least one value exists
+        Ok(unsafe { ctx.state.pop_unchecked() })
+    }
+
+    enum InitEnd {
+        Dot,
+        ObjEnd,
+    }
+
+    // Parse initializer into `accum` until '.' OR '|)' ('.' optional at end).
+    fn parse_until_dot_or_end<'m, 'ex, 'arg>(
+        ctx: &'m mut PrimitiveContext<'ex, 'arg>,
+        dot: Handle<Message>,
+        obj_end: Handle<Message>,
+        mut accum: Handle<Vector>,
+    ) -> Result<(Handle<Vector>, InitEnd), &'static str> {
+        loop {
+            let res = parse_next(ctx);
+            if res != ExecutionResult::Normal {
+                return Err("Parsing Object: Parsing initializer failed");
+            }
+
+            // SAFETY: parse_next must return
+            let next = unsafe { ctx.state.pop_unchecked() };
+
+            if next == ctx.vm.shared.specials.false_object.as_value() {
+                return Err(
+                    "Parsing Object: Unterminated initializer (missing '.' or '|)')",
+                );
+            }
+
+            if !next.is_object() {
+                accum.push(next, ctx.heap, &ctx.vm.shared);
+                continue;
+            }
+
+            // SAFETY: heap deletion paused while parsing
+            let handle = unsafe { next.as_heap_handle_unchecked() };
+            // SAFETY: object has object_type
+            let ty = unsafe { handle.header.object_type().unwrap_unchecked() };
+
+            if ty != ObjectType::Message {
+                accum.push(next, ctx.heap, &ctx.vm.shared);
+                continue;
+            }
+
+            // SAFETY: ty checked
+            let message = unsafe { handle.cast::<Message>() };
+
+            if message == dot {
+                return Ok((accum, InitEnd::Dot));
+            }
+            if message == obj_end {
+                return Ok((accum, InitEnd::ObjEnd));
+            }
+
+            // Allow parser-words inside initializer
+            let parsers = ctx.vm.specials().parsers;
+            // SAFETY: no gc
+            let name = unsafe { message.value.promote_to_handle() };
+            let selector = Selector::new(name, ctx.vm.shared.clone());
+            let lookup = selector.lookup_object(&parsers.as_value());
+
+            match lookup {
+                LookupResult::Found { slot, .. } => {
+                    let tags = slot.tags();
+                    if tags.contains(SlotTags::EXECUTABLE) {
+                        let res = if tags.contains(SlotTags::PRIMITIVE) {
+                            let id = slot
+                                .value
+                                .as_tagged_fixnum::<usize>()
+                                .expect("primitive must have fixnum");
+                            // SAFETY: must store idx
+                            let msg_idx = unsafe {
+                                PrimitiveMessageIndex::from_usize(id.into())
+                            };
+                            ctx.state.push(accum.as_value());
+                            ctx.interpreter
+                                .primitive_send(ctx.receiver, msg_idx)
+                        } else {
+                            // SAFETY: must be method if not primitive
+                            let method = unsafe {
+                                slot.value
+                                    .as_heap_handle_unchecked()
+                                    .cast::<Method>()
+                            };
+                            ctx.state.push(accum.as_value());
+                            ctx.interpreter.add_method(ctx.receiver, method);
+                            ctx.interpreter.execute_with_depth()
+                        };
+
+                        if res != ExecutionResult::Normal {
+                            return Err(
+                                "Parsing Object: Parsing initializer failed",
+                            );
+                        }
+
+                        // SAFETY: parser protocol (accum -- accum)
+                        accum = unsafe {
+                            ctx.state
+                                .pop()
+                                .expect("must exist")
+                                .as_handle_unchecked()
+                                .cast()
+                        };
+                    } else {
+                        accum.push(slot.value, ctx.heap, &ctx.vm.shared);
+                    }
+                }
+                LookupResult::None => {
+                    accum.push(next, ctx.heap, &ctx.vm.shared)
+                }
+            }
+        }
+    }
+
+    let dot = ctx.vm.intern_string_message(".", ctx.heap);
+    let obj_end = ctx.vm.intern_string_message("|)", ctx.heap);
+
+    let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
+    let mut assignable_inits: Vec<Value> = Vec::new();
+    let mut assignable_offset: i64 = 0;
+
+    loop {
+        let v = next_value(ctx);
+        if v == ctx.vm.shared.specials.false_object.as_value() {
+            return ExecutionResult::Panic(
+                "Parsing Object: Unterminated object (missing '|)')",
+            );
+        }
+
+        let Some(head) = message_name(v) else {
+            return ExecutionResult::Panic(
+                "Parsing Object: Expected slot name, ':', or '|)'",
+            );
+        };
+
+        if head == "|)" {
+            break;
+        }
+
+        let mut tags = SlotTags::empty();
+        let (clean_name, is_parent) = match head.strip_suffix('*') {
+            Some(n) => (n, true),
+            None => (head, false),
+        };
+        if is_parent {
+            tags |= SlotTags::PARENT;
+        }
+
+        // Read the next token to decide what kind of descriptor this is.
+        let peek = next_value(ctx);
+        if peek == ctx.vm.shared.specials.false_object.as_value() {
+            return ExecutionResult::Panic(
+                "Parsing Object: Unterminated object (missing '|)')",
+            );
+        }
+
+        let Some(peek_str) = message_name(peek) else {
+            return ExecutionResult::Panic(
+                "Parsing Object: Expected '<-', '=', '.', or '|)' after slot name",
+            );
+        };
+
+        // Intern slot name now
+        let name_ba = ctx.vm.intern_string(clean_name, ctx.heap);
+        let name_tagged: Tagged<ByteArray> = name_ba.into();
+
+        // Shorthand: `<name> .` => assignable false
+        if peek_str == "." {
+            tags |= SlotTags::ASSIGNABLE;
+
+            let offset_value = Value::from_fixnum(assignable_offset);
+            assignable_offset += 1;
+
+            slot_descs.push(SlotDescriptor::new(
+                name_tagged,
+                tags,
+                offset_value,
+            ));
+            assignable_inits
+                .push(ctx.vm.shared.specials.false_object.as_value());
+            continue;
+        }
+
+        // Shorthand: `<name>` as last before `|)` => assignable false
+        if peek_str == "|)" {
+            tags |= SlotTags::ASSIGNABLE;
+
+            let offset_value = Value::from_fixnum(assignable_offset);
+            assignable_offset += 1;
+
+            slot_descs.push(SlotDescriptor::new(
+                name_tagged,
+                tags,
+                offset_value,
+            ));
+            assignable_inits
+                .push(ctx.vm.shared.specials.false_object.as_value());
+            break;
+        }
+
+        // Operator: "<-" or "="
+        let is_assignable = match peek_str {
+            ":=" => true,
+            "::" => false,
+            _ => {
+                return ExecutionResult::Panic(
+                    "Parsing Object: Expected '::', ':=', '.', or '|)' after slot name",
+                );
+            }
+        };
+
+        // Parse initializer until '.' OR '|)' (dot optional if ends at |))
+        let expr_vec = Vector::new(ctx.heap, &ctx.vm.shared, 8);
+        // SAFETY: just created
+        let expr_accum = unsafe { expr_vec.promote_to_handle() };
+
+        let (expr_accum, ended_by) =
+            match parse_until_dot_or_end(ctx, dot, obj_end, expr_accum) {
+                Ok(v) => v,
+                Err(e) => return ExecutionResult::Panic(e),
+            };
+
+        let init_value = match eval_expr(ctx, expr_accum.as_slice()) {
+            Ok(v) => v,
+            Err(e) => return ExecutionResult::Panic(e),
+        };
+
+        // If initializer evaluates to a Method, mark slot EXECUTABLE.
+        if as_method(init_value).is_some() {
+            tags |= SlotTags::EXECUTABLE;
+        }
+
+        if is_assignable {
+            tags |= SlotTags::ASSIGNABLE;
+
+            let offset_value = Value::from_fixnum(assignable_offset);
+            assignable_offset += 1;
+
+            slot_descs.push(SlotDescriptor::new(
+                name_tagged,
+                tags,
+                offset_value,
+            ));
+            assignable_inits.push(init_value);
+
+            let setter_name = {
+                let mut s = String::with_capacity(clean_name.len() + 2);
+                s.push_str(clean_name);
+                s.push_str("<<");
+                s
+            };
+            let setter_ba =
+                ctx.vm.intern_string(setter_name.as_str(), ctx.heap);
+            let setter_tagged: Tagged<ByteArray> = setter_ba.into();
+
+            slot_descs.push(SlotDescriptor::new(
+                setter_tagged,
+                SlotTags::ASSIGNMENT,
+                offset_value,
+            ));
+        } else {
+            slot_descs.push(SlotDescriptor::new(name_tagged, tags, init_value));
+        }
+
+        if matches!(ended_by, InitEnd::ObjEnd) {
+            break;
+        }
+    }
+
+    let map = ctx.heap.allocate_slot_map(&slot_descs);
+    let obj = ctx
+        .heap
+        .allocate_slot_object(map, assignable_inits.as_slice());
+
+    outer_accum.push(obj.into(), ctx.heap, &ctx.vm.shared);
+    ctx.outputs[0] = outer_accum.into();
 
     ExecutionResult::Normal
 }
@@ -185,24 +545,38 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: must exist by contract
     let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
 
-    // Parse name
-    let name_tok = match parser.parse_next() {
+    // --- Parse optional name, but ALWAYS require an effect "( ... )"
+    // Peek one token to decide if a name is present.
+    let saved_offset = parser.offset;
+    let next_tok = match parser.parse_next() {
         Some(t) => t,
-        None => return ExecutionResult::Panic("Parsing Method: Missing Name"),
-    };
-
-    let name_str = match name_tok {
-        ParsedToken::Identifier(t) => parser.get_token_string(t),
-        _ => {
+        None => {
             return ExecutionResult::Panic(
-                "Parsing Method: Name must be an identifier",
+                "Parsing Method: Missing effect '(...)'",
             );
         }
     };
 
-    let name = ctx.vm.intern_string(name_str, ctx.heap);
+    let name = match next_tok {
+        ParsedToken::Identifier(t) => {
+            let s = parser.get_token_string(t);
+            if s == "(" {
+                // Name omitted. Rewind so parse_effect_inner sees '('.
+                parser.offset = saved_offset;
+                ctx.vm.intern_string("", ctx.heap)
+            } else {
+                // Name present.
+                ctx.vm.intern_string(s, ctx.heap)
+            }
+        }
+        _ => {
+            return ExecutionResult::Panic(
+                "Parsing Method: Expected method name identifier or '(' to start effect",
+            );
+        }
+    };
 
-    // Parse effect
+    // --- Parse effect (always required)
     let (inputs_vec, outputs_vec) = match parse_effect_inner(ctx) {
         Ok(v) => v,
         Err(e) => return ExecutionResult::Panic(e),

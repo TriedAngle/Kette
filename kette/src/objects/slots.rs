@@ -19,6 +19,7 @@ bitflags! {
         const ASSIGNABLE = 1 << 1;
         const PRIMITIVE = 1 << 2;
         const EXECUTABLE = 1 << 3;
+        const ASSIGNMENT = 1 << 4;
     }
 }
 
@@ -87,17 +88,24 @@ impl SlotMap {
     /// must be allocated with correct size
     pub unsafe fn init_with_data(&mut self, slots: &[SlotDescriptor]) {
         let mut slots = slots.to_vec();
-        // a > b => b, a
+
+        #[inline(always)]
+        fn rank(tags: SlotTags) -> u8 {
+            // lowest rank = earliest in array
+            if tags.contains(SlotTags::ASSIGNABLE) {
+                0
+            } else if tags.contains(SlotTags::ASSIGNMENT) {
+                1
+            } else {
+                2
+            }
+        }
+
+        // stable: preserves definition order within equal ranks
         slots.sort_by(|a, b| {
-            let tags_a = a.tags();
-            let tags_b = b.tags();
-            let raw_a = tags_a.bits();
-            let raw_b = tags_b.bits();
-
-            let order_a = raw_a & 0b11;
-            let order_b = raw_b & 0b11;
-
-            order_a.cmp(&order_b)
+            let ra = rank(a.tags());
+            let rb = rank(b.tags());
+            ra.cmp(&rb)
         });
 
         let assignable_slots = slots
@@ -158,6 +166,17 @@ impl SlotMap {
         let count = self.slot_count();
         // SAFETY: this is safe
         unsafe { std::slice::from_raw_parts(self.slots.as_ptr(), count) }
+    }
+
+    /// # Safety
+    /// maps are expected to me immutable always, use this only if necessary!
+    #[inline]
+    pub unsafe fn slots_mut(&mut self) -> &mut [SlotDescriptor] {
+        let count = self.slot_count();
+        // SAFETY: this is safe
+        unsafe {
+            std::slice::from_raw_parts_mut(self.slots.as_mut_ptr(), count)
+        }
     }
 
     /// Returns a slice containing only the assignable slot descriptors
@@ -317,7 +336,17 @@ impl Object for SlotObject {
             })
             .map(|(idx, slot)| (idx, *slot));
 
-        if let Some((idx, slot)) = local_match {
+        if let Some((idx, mut slot)) = local_match {
+            // Normalize assignable: slot.value is offset -> return actual stored value
+            if slot.tags().contains(SlotTags::ASSIGNABLE) {
+                let offset = slot
+                    .value
+                    .as_tagged_fixnum::<usize>()
+                    .expect("assignable slot must store offset");
+                // SAFETY: offset must be valid by construction
+                slot.value = unsafe { self.get_slot_unchecked(offset.into()) };
+            }
+
             return LookupResult::Found {
                 object: self_value,
                 slot,
@@ -328,14 +357,18 @@ impl Object for SlotObject {
         // Parent Lookup
         let current_link = VisitedLink::new(self_value.into(), link);
 
-        for (idx, slot) in slots.iter().enumerate() {
+        for slot in slots {
             let tags = slot.tags();
 
             if tags.contains(SlotTags::PARENT) {
                 let parent = if tags.contains(SlotTags::ASSIGNABLE) {
-                    // SAFETY: idx is valid, map and object sizes are synchronized
-                    // TODO: read guard
-                    unsafe { self.get_slot_unchecked(idx) }
+                    // slot.value stores offset for assignable slots
+                    let offset = slot
+                        .value
+                        .as_tagged_fixnum::<usize>()
+                        .expect("assignable parent slot must store offset");
+                    // SAFETY: offset must be valid by construction
+                    unsafe { self.get_slot_unchecked(offset.into()) }
                 } else {
                     slot.value
                 };
@@ -350,6 +383,7 @@ impl Object for SlotObject {
         LookupResult::None
     }
 }
+
 impl HeapObject for SlotObject {
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()

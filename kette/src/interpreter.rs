@@ -1,8 +1,8 @@
 use crate::{
     Activation, ActivationStack, ActivationType, ExecutionState, Handle,
     HeapProxy, Instruction, LookupResult, Method, PrimitiveMessageIndex,
-    Quotation, Selector, SlotTags, ThreadProxy, VMProxy, Value, get_primitive,
-    transmute,
+    Quotation, Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value,
+    get_primitive, transmute,
 };
 
 pub struct Interpreter {
@@ -74,7 +74,14 @@ impl Interpreter {
     }
 
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
-        let new = self.heap.allocate_quotation_activation(quotation, &[]);
+        let receiver = self
+            .current_activation()
+            .map(|a| a.object.receiver)
+            .unwrap_or(self.vm.specials().false_object.as_value_handle());
+
+        let new =
+            self.heap
+                .allocate_quotation_activation(receiver, quotation, &[]);
         self.activations
             .new_activation(new, ActivationType::Quotation);
     }
@@ -311,6 +318,28 @@ impl Interpreter {
             }
         };
 
+        if slot.tags().contains(SlotTags::ASSIGNMENT) {
+            let offset = slot
+                .value
+                .as_tagged_fixnum::<usize>()
+                .expect("assignment slot must store offset");
+
+            // SAFETY: must be valid by protocol
+            // TODO: depth check maybe
+            let new_value = unsafe { self.state.pop_unchecked() };
+
+            let recv_val = receiver.inner();
+            // SAFETY: must be valid by protocol
+            let recv_obj = unsafe {
+                recv_val.as_heap_handle_unchecked().cast::<SlotObject>()
+            };
+            let recv_ptr = recv_obj.as_ptr();
+            // SAFETY: must be valid by protocol
+            // TODO: add write barrier
+            unsafe { (*recv_ptr).set_slot_unchecked(offset.into(), new_value) };
+            return ExecutionResult::Normal;
+        }
+
         if slot
             .tags()
             .contains(SlotTags::EXECUTABLE | SlotTags::PRIMITIVE)
@@ -326,7 +355,7 @@ impl Interpreter {
             return self.primitive_send(receiver, message_idx);
         }
 
-        if slot.tags().contains(!SlotTags::EXECUTABLE) {
+        if !slot.tags().contains(SlotTags::EXECUTABLE) {
             self.state.push(slot.value);
             return ExecutionResult::Normal;
         }

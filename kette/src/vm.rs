@@ -234,6 +234,10 @@ impl VM {
         #[rustfmt::skip]
         let globals_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::constant("stack*", stack_object.into(), SlotTags::PARENT),
+            SlotHelper::constant("universe", Value::zero(), SlotTags::empty()),
+            SlotHelper::primitive_message2("globals", "(identity)", SlotTags::empty()),
+            SlotHelper::primitive_message("(addTraitSlots)", SlotTags::empty()),
+            SlotHelper::primitive_message("(removeTraitSlots)", SlotTags::empty()),
         ]);
 
         let parsers = heap.allocate_slot_object(parsers_map, &[]);
@@ -241,7 +245,6 @@ impl VM {
 
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::primitive_message("universe", SlotTags::empty()),
             SlotHelper::constant("parsers", parsers.into(), SlotTags::PARENT),
             SlotHelper::constant("globals", globals.into(), SlotTags::PARENT),
         ]);
@@ -308,7 +311,17 @@ impl VM {
             let universe = heap
                 .allocate_slot_object(universe_map, &[])
                 .promote_to_handle()
-                .cast();
+                .cast::<HeapValue>();
+
+            // FIXUP
+            let glob_map = globals_map.as_mut();
+            for slot in glob_map.slots_mut() {
+                if slot.name
+                    == self.intern_string("universe", &mut heap).as_tagged()
+                {
+                    slot.value = universe.as_value();
+                }
+            }
 
             let dip_code = self.inner.code_heap.push(Block {
                 instructions: [

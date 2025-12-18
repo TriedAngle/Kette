@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use crate::{
-    ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter,
-    ThreadProxy, VMProxy, Value,
+    ByteArray, ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter,
+    SlotDescriptor, SlotObject, SlotTags, Tagged, ThreadProxy, VMProxy, Value,
 };
 
 mod array;
@@ -262,13 +264,14 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(|", 1, 1, parsing::parse_object),
     PrimitiveMessage::new("//", 1, 1, parsing::parse_line_comment),
     PrimitiveMessage::new("/*", 1, 1, parsing::parse_block_comment),
-    // Universe
-    PrimitiveMessage::new("universe", 0, 1, universe),
     // Method
     PrimitiveMessage::new("(call-method)", 1, 0, method::call),
-
     // Primitive Vector
     PrimitiveMessage::new("vectorPush", 1, 0, vector::push),
+    // General
+    PrimitiveMessage::new("(addTraitSlots)", 2, 0, add_trait_slots),
+    PrimitiveMessage::new("(removeTraitSlots)", 2, 0, remove_trait_slots),
+    PrimitiveMessage::new("(identity)", 0, 1, identity),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
@@ -312,8 +315,134 @@ pub fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
     }
 }
 
-fn universe(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let universe = ctx.receiver;
-    ctx.outputs[0] = universe;
+#[inline]
+fn is_constant_slot(tags: SlotTags) -> bool {
+    !tags.contains(SlotTags::ASSIGNABLE) && !tags.contains(SlotTags::ASSIGNMENT)
+}
+
+#[inline]
+fn name_key(name: Tagged<ByteArray>) -> usize {
+    name.as_ptr() as usize
+}
+
+/// ( target traits -- target )
+pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let [traits_v, target_v] = inputs(ctx);
+
+    // SAFETY: caller ensures these are slot objects
+    let target = unsafe { target_v.cast::<SlotObject>() };
+    // SAFETY: caller ensures these are slot objects
+    let traits = unsafe { traits_v.cast::<SlotObject>() };
+
+    // SAFETY: handles are valid
+    let target_ptr = target.as_ptr();
+    // SAFETY: handles are valid
+    let traits_ptr = traits.as_ptr();
+
+    // SAFETY: valid pointers
+    let target_map_tagged = unsafe { (*target_ptr).map };
+    // SAFETY: valid pointers
+    let traits_map_tagged = unsafe { (*traits_ptr).map };
+
+    // SAFETY: map pointers valid
+    let target_map = unsafe { target_map_tagged.as_ref() };
+    // SAFETY: map pointers valid
+    let traits_map = unsafe { traits_map_tagged.as_ref() };
+
+    // Start with all existing slots from target
+    let mut new_slots: Vec<SlotDescriptor> = target_map.slots().to_vec();
+
+    // Build set of existing names (to detect duplicates)
+    let mut existing: HashSet<usize> = HashSet::with_capacity(new_slots.len());
+    for sd in &new_slots {
+        existing.insert(name_key(sd.name));
+    }
+
+    // Add only constant slots from traits, rejecting duplicates
+    for sd in traits_map.slots().iter().copied() {
+        let tags = sd.tags();
+        if !is_constant_slot(tags) {
+            return ExecutionResult::Panic(
+                "addTraitSlots: only constant slots can be used",
+            );
+        }
+
+        let k = name_key(sd.name);
+        if existing.contains(&k) {
+            return ExecutionResult::Panic(
+                "addTraitSlots: Duplicate slot name",
+            );
+        }
+        existing.insert(k);
+        new_slots.push(sd);
+    }
+
+    // Allocate new map and patch ONLY this object
+    let new_map = ctx.heap.allocate_slot_map(&new_slots);
+
+    // SAFETY: we have exclusive access; patch map pointer
+    unsafe {
+        (*target_ptr).map = new_map;
+    }
+
+    ExecutionResult::Normal
+}
+
+/// ( target traits -- target )
+pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let [target_v, traits_v] = inputs(ctx);
+
+    // SAFETY: caller ensures these are slot objects
+    let target = unsafe { target_v.cast::<SlotObject>() };
+    // SAFETY: caller ensures these are slot objects
+    let traits = unsafe { traits_v.cast::<SlotObject>() };
+
+    // SAFETY: handles are valid
+    let target_ptr = target.as_ptr();
+    let traits_ptr = traits.as_ptr();
+
+    // SAFETY: valid pointers
+    let target_map_tagged = unsafe { (*target_ptr).map };
+    // SAFETY: valid pointers
+    let traits_map_tagged = unsafe { (*traits_ptr).map };
+
+    // SAFETY: map pointers valid
+    let target_map = unsafe { target_map_tagged.as_ref() };
+    // SAFETY: map pointers valid
+    let traits_map = unsafe { traits_map_tagged.as_ref() };
+
+    // Names to remove (only constant slots from traits)
+    let mut remove: HashSet<usize> = HashSet::new();
+    for sd in traits_map.slots().iter() {
+        let tags = sd.tags();
+        if is_constant_slot(tags) {
+            remove.insert(name_key(sd.name));
+        }
+    }
+
+    // Keep everything except constant slots whose names are in `remove`
+    let mut new_slots: Vec<SlotDescriptor> =
+        Vec::with_capacity(target_map.slot_count());
+    for sd in target_map.slots().iter().copied() {
+        let tags = sd.tags();
+        if is_constant_slot(tags) && remove.contains(&name_key(sd.name)) {
+            continue;
+        }
+        new_slots.push(sd);
+    }
+
+    // Allocate new map and patch ONLY this object
+    let new_map = ctx.heap.allocate_slot_map(&new_slots);
+
+    // SAFETY: we have exclusive access; patch map pointer
+    unsafe {
+        (*target_ptr).map = new_map;
+    }
+
+    ExecutionResult::Normal
+}
+
+pub fn identity(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    ctx.outputs[0] = ctx.receiver;
     ExecutionResult::Normal
 }

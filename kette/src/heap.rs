@@ -874,6 +874,7 @@ impl HeapProxy {
 
     pub fn allocate_quotation_activation(
         &mut self,
+        receiver: Handle<Value>,
         quotation: Handle<Quotation>,
         slots: &[Handle<Value>],
     ) -> Tagged<ActivationObject> {
@@ -883,7 +884,7 @@ impl HeapProxy {
         };
         // SAFETY: handles safe, slots must be same size as map wants
         unsafe {
-            self.allocate_activation_raw(quotation.as_value_handle(), map, &[])
+            self.allocate_activation_raw(receiver, map, &[])
         }
     }
 
