@@ -269,8 +269,8 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     // Primitive Vector
     PrimitiveMessage::new("vectorPush", 1, 0, vector::push),
     // General
-    PrimitiveMessage::new("(addTraitSlots)", 2, 0, add_trait_slots),
-    PrimitiveMessage::new("(removeTraitSlots)", 2, 0, remove_trait_slots),
+    PrimitiveMessage::new("addTraitSlots", 2, 0, add_trait_slots),
+    PrimitiveMessage::new("removeTraitSlots", 2, 0, remove_trait_slots),
     PrimitiveMessage::new("(identity)", 0, 1, identity),
 ];
 

@@ -156,7 +156,7 @@ impl VM {
             SlotHelper::primitive_message("fixnum<=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>string", SlotTags::empty()),
-            SlotHelper::primitive_message2("parent", "fixnumParent", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "fixnumParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -186,20 +186,20 @@ impl VM {
             SlotHelper::primitive_message("float<=", SlotTags::empty()),
             SlotHelper::primitive_message("float>=", SlotTags::empty()),
             SlotHelper::primitive_message("float>string", SlotTags::empty()),
-            SlotHelper::primitive_message2("parent", "floatParent", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "floatParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let bytearray_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(print)", SlotTags::empty()),
             SlotHelper::primitive_message("(println)", SlotTags::empty()),
-            SlotHelper::primitive_message2("parent", "bytearrayParent", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "bytearrayParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let array_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(>quotation)", SlotTags::empty()),
-            SlotHelper::primitive_message2("parent", "arrayParent", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "arrayParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -208,7 +208,7 @@ impl VM {
             SlotHelper::primitive_message("(call)", SlotTags::empty()),
             SlotHelper::primitive_message("dip", SlotTags::empty()),
             SlotHelper::primitive_message("if", SlotTags::empty()),
-            SlotHelper::primitive_message2("parent", "quotationParent", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "quotationParent", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -236,8 +236,8 @@ impl VM {
             SlotHelper::constant("stack*", stack_object.into(), SlotTags::PARENT),
             SlotHelper::constant("universe", Value::zero(), SlotTags::empty()),
             SlotHelper::primitive_message2("globals", "(identity)", SlotTags::empty()),
-            SlotHelper::primitive_message("(addTraitSlots)", SlotTags::empty()),
-            SlotHelper::primitive_message("(removeTraitSlots)", SlotTags::empty()),
+            SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
+            SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
         ]);
 
         let parsers = heap.allocate_slot_object(parsers_map, &[]);

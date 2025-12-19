@@ -883,9 +883,7 @@ impl HeapProxy {
             quotation.map.cast::<ExecutableMap>().promote_to_handle()
         };
         // SAFETY: handles safe, slots must be same size as map wants
-        unsafe {
-            self.allocate_activation_raw(receiver, map, &[])
-        }
+        unsafe { self.allocate_activation_raw(receiver, map, &[]) }
     }
 
     pub fn create_proxy(&self) -> HeapProxy {

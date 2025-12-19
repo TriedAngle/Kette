@@ -5,29 +5,33 @@ use kette::{
 };
 
 const CODE: &str = r#"
+// this is a comment
 (|
     LanguageVersion = "0.1.0" .
     std = (|
         traits = (| 
-            fixnum = 0 parent .
-            float = 0.0 parent .
-            bytearray = "incredible" parent .
-            quotation = [ ] parent .
+            fixnum = 0 parent* .
+            float = 0.0 parent* .
+            bytearray = "incredible" parent* .
+            quotation = [ ] parent* .
         |)
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
-|) globals (addTraitSlots)
+|) globals addTraitSlots
 
-(| println = : ( -- ) self (println) ; |) std traits bytearray (addTraitSlots)
+(| println = : ( -- ) self (println) ; |) std traits bytearray addTraitSlots
 
 (|
     + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
     >string = : ( -- str ) self fixnum>string ; .
     println = : ( -- ) self >string println ; .
-|) std traits fixnum (addTraitSlots) 
+    = = : ( lhs -- ? ) self fixnum= ; .
+|) std traits fixnum addTraitSlots
 
 LanguageVersion println
+
+10 34 + 44 = [ "true" ] [ "false" ] if println
 
 (| 
     parent* = (| x := 33 |) . 

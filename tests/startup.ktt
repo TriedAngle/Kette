@@ -1,0 +1,37 @@
+// this is a comment
+(|
+    LanguageVersion = "0.1.0" .
+    std = (|
+        traits = (| 
+            fixnum = 0 parent* .
+            float = 0.0 parent* .
+            bytearray = "incredible" parent* .
+            quotation = [ ] parent* .
+        |)
+    |) .
+    t = 0 0 fixnum= . 
+    f = 0 1 fixnum= .
+|) globals addTraitSlots
+
+(| println = : ( -- ) self (println) ; |) std traits bytearray addTraitSlots
+
+(|
+    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] 
+        [ drop /* TODO: handle this */ ] if ; .
+    >string = : ( -- str ) self fixnum>string ; .
+    println = : ( -- ) self >string println ; .
+    = = : ( lhs -- ? ) self fixnum= ; .
+|) std traits fixnum addTraitSlots
+
+LanguageVersion println
+
+10 34 + 44 = [ "true" ] [ "false" ] if println
+
+(| 
+    parent* = (| x := 33 |) . 
+    y = 10 .
+    hello = : ( -- value ) self x 10 + ;
+|) hello println
+
+
+
