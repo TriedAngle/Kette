@@ -1,5 +1,5 @@
-// this is a comment
-(|
+// quick hack to get it at compile time lol
+(| lol = (|
     LanguageVersion = "0.1.0" .
     std = (|
         traits = (| 
@@ -7,17 +7,30 @@
             float = 0.0 parent* .
             bytearray = "incredible" parent* .
             quotation = [ ] parent* .
-        |)
+            callable = (| |) .
+        |) .
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
-|) globals addTraitSlots
+|) dup globals addTraitSlots |) drop
+
+(| 
+    call = f . // TODO: throw unimplemented
+    keep = : ( x -- x ) dup [ self call ] dip ; .
+|) std traits callable addTraitSlots
+
+(|
+    callable* = std traits callable .
+    call = : ( -- ... ) self (call) ; .
+|) std traits quotation addTraitSlots
+
+"hello" [ println ] keep println
+
 
 (| println = : ( -- ) self (println) ; |) std traits bytearray addTraitSlots
 
 (|
-    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] 
-        [ drop /* TODO: handle this */ ] if ; .
+    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
     >string = : ( -- str ) self fixnum>string ; .
     println = : ( -- ) self >string println ; .
     = = : ( lhs -- ? ) self fixnum= ; .
@@ -32,6 +45,3 @@ LanguageVersion println
     y = 10 .
     hello = : ( -- value ) self x 10 + ;
 |) hello println
-
-
-

@@ -5,8 +5,8 @@ use kette::{
 };
 
 const CODE: &str = r#"
-// this is a comment
-(|
+// quick hack to get it at compile time
+(| ok = (|
     LanguageVersion = "0.1.0" .
     std = (|
         traits = (| 
@@ -14,11 +14,12 @@ const CODE: &str = r#"
             float = 0.0 parent* .
             bytearray = "incredible" parent* .
             quotation = [ ] parent* .
-        |)
+            callable = (| |) .
+        |) .
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
-|) globals addTraitSlots
+|) dup globals addTraitSlots |) drop
 
 (| println = : ( -- ) self (println) ; |) std traits bytearray addTraitSlots
 
@@ -28,6 +29,18 @@ const CODE: &str = r#"
     println = : ( -- ) self >string println ; .
     = = : ( lhs -- ? ) self fixnum= ; .
 |) std traits fixnum addTraitSlots
+
+
+(| 
+    keep = : ( x -- x ) dup [ self call ] dip ; .
+|) std traits callable addTraitSlots
+
+(|
+    callable* = std traits callable .
+    call = : ( -- ... ) self (call) ; .
+|) std traits quotation addTraitSlots
+
+"hello" [ println ] keep println
 
 LanguageVersion println
 
@@ -53,7 +66,7 @@ fn main() {
     let vm = VM::new(VMCreateInfo {
         image: None,
         heap: HeapCreateInfo {
-            size: 1024 * 32 * 2,
+            size: 1024 * 64 * 2,
             ..Default::default()
         },
     });
