@@ -1,40 +1,93 @@
 // quick hack to get it at compile time lol
-(| lol = (|
+(| comptime = (|
     LanguageVersion = "0.1.0" .
     std = (|
         traits = (| 
+            clonable = (| 
+                clone = : ( -- new ) self (clone) ; .
+                cloneBoa = : ( -- new ) self (cloneBoa) ; .
+                copy = : ( -- copy ) self clone ; .
+            |) .
+            oddball = (| 
+                copy = : ( -- self ) self ; .
+            |) .
             fixnum = 0 parent* .
             float = 0.0 parent* .
             bytearray = "incredible" parent* .
             quotation = [ ] parent* .
+            number = (| |) .
             callable = (| |) .
         |) .
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
-|) dup globals addTraitSlots |) drop
+|) dup universe addTraitSlots |) drop
+
+(|  parent* = std traits clonable .
+    number? = t .
+    + = : ( lhs -- new ) drop f /* TODO: throw */ ; .
+    - = : ( lhs -- new ) drop f /* TODO: throw */ ; .
+    * = : ( lhs -- new ) drop f /* TODO: throw */ ; .
+    / = : ( lhs -- new ) drop f /* TODO: throw */ ; .
+|) std traits number addTraitSlots
+
+(|
+    number* = std traits number .
+    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
+    - = : ( lhs -- new ) dup fixnum? [ self fixnum- ] [ drop /* TODO: handle this */ ] if ; .
+    * = : ( lhs -- new ) dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ; .
+    / = : ( lhs -- new ) dup fixnum? [ self fixnum/ ] [ drop /* TODO: handle this */ ] if ; .
+    >string = : ( -- str ) self fixnum>string ; .
+    = = : ( lhs -- ? ) self fixnum= ; .
+|) std traits fixnum addTraitSlots
 
 (| 
-    call = f . // TODO: throw unimplemented
-    keep = : ( x -- x ) dup [ self call ] dip ; .
-|) std traits callable addTraitSlots
+    print = : ( -- ) self (print) ; .
+    println = : ( -- ) self (println) ; . 
+|) std traits bytearray addTraitSlots
+
+(| comptime = (| 
+    call = f  .
+    if = // takes ? then execute either trueBranch or falseBranch (self) 
+        : ( ? trueBranch -- ... ) swap [ call ] [ drop self call ] if ; .
+    dip = // takes x, calls self, puts back x 
+        : ( x -- ... x ) [ self call ] dip ; .
+    keep = // calls self with x, then puts back x
+        : ( x -- ... x ) dup [ self call ] dip ; .
+    bi = // applies p to x, then self to x 
+        : ( x p -- ... ) keep self call ; .
+    bi* = // appplies p to x, then self to y
+        : ( x y p -- ... ) dip self call ; .
+    bi@ = // applies self to x, then y
+        : ( x y -- ... ) self dup bi* ; .
+|) dup std traits callable addTraitSlots |) drop
+
+(| comptime = 
+(| 
+    curried = (| 
+        parent* = std traits clonable .
+        callable* = std traits callable .
+        obj . callable .
+        call = : ( ... -- ... ) self obj self callable call ; .
+    |) . 
+    composed = (|
+        parent* = std traits clonable .
+        callable* = std traits callable .
+        callable1 . callable2 .
+        call = : ( ... -- ... ) self callable1 call self callable2 call ; .
+    |)
+|) dup std addTraitSlots |) drop
 
 (|
     callable* = std traits callable .
     call = : ( -- ... ) self (call) ; .
+    curry = : ( obj -- curried ) self std curried cloneBoa ; .
+    compose = : ( quot -- curried ) self std composed cloneBoa ; .
 |) std traits quotation addTraitSlots
 
-"hello" [ println ] keep println
+33 66 [ >string println ] bi@
+5 10 [ 2 * ] curry [ + ] compose call >string println
 
-
-(| println = : ( -- ) self (println) ; |) std traits bytearray addTraitSlots
-
-(|
-    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
-    >string = : ( -- str ) self fixnum>string ; .
-    println = : ( -- ) self >string println ; .
-    = = : ( lhs -- ? ) self fixnum= ; .
-|) std traits fixnum addTraitSlots
 
 LanguageVersion println
 
@@ -44,4 +97,6 @@ LanguageVersion println
     parent* = (| x := 33 |) . 
     y = 10 .
     hello = : ( -- value ) self x 10 + ;
-|) hello println
+|) hello >string println
+
+

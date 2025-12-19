@@ -3,56 +3,10 @@ use kette::{
     HeapCreateInfo, Instruction, Interpreter, Parser, Tagged, ThreadProxy, VM,
     VMCreateInfo, VMThread, Value,
 };
+use std::{env, fs, process};
 
-const CODE: &str = r#"
-// quick hack to get it at compile time
-(| ok = (|
-    LanguageVersion = "0.1.0" .
-    std = (|
-        traits = (| 
-            fixnum = 0 parent* .
-            float = 0.0 parent* .
-            bytearray = "incredible" parent* .
-            quotation = [ ] parent* .
-            callable = (| |) .
-        |) .
-    |) .
-    t = 0 0 fixnum= . 
-    f = 0 1 fixnum= .
-|) dup globals addTraitSlots |) drop
-
-(| println = : ( -- ) self (println) ; |) std traits bytearray addTraitSlots
-
-(|
-    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
-    >string = : ( -- str ) self fixnum>string ; .
-    println = : ( -- ) self >string println ; .
-    = = : ( lhs -- ? ) self fixnum= ; .
-|) std traits fixnum addTraitSlots
-
-
-(| 
-    keep = : ( x -- x ) dup [ self call ] dip ; .
-|) std traits callable addTraitSlots
-
-(|
-    callable* = std traits callable .
-    call = : ( -- ... ) self (call) ; .
-|) std traits quotation addTraitSlots
-
-"hello" [ println ] keep println
-
-LanguageVersion println
-
-10 34 + 44 = [ "true" ] [ "false" ] if println
-
-(| 
-    parent* = (| x := 33 |) . 
-    y = 10 .
-    hello = : ( -- value ) self x 10 + ;
-|) hello println
-"#;
-
+// We create a helper to define the parser's initial "boot" script.
+// This tells the parser object to parse its internal buffer.
 fn execute_parser_code(parser: Value) -> Block {
     let instructions = vec![
         Instruction::PushValue { value: parser },
@@ -63,6 +17,28 @@ fn execute_parser_code(parser: Value) -> Block {
 }
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 2 {
+        eprintln!("Usage: {} <file.ktt>", args[0]);
+        process::exit(1);
+    }
+
+    let filename = &args[1];
+
+    let source_code = match fs::read_to_string(filename) {
+        Ok(content) => content,
+        Err(err) => {
+            eprintln!("Error reading file '{}': {}", filename, err);
+            process::exit(1);
+        }
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::EXIT)
+        .init();
+
     let vm = VM::new(VMCreateInfo {
         image: None,
         heap: HeapCreateInfo {
@@ -71,12 +47,6 @@ fn main() {
         },
     });
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::EXIT)
-        .init();
-
-    // TODO: use consistent naming
     let main_proxy = vm.new_proxy();
     let mut heap = main_proxy.shared.heap.create_proxy();
 
@@ -85,14 +55,16 @@ fn main() {
         return_stack_size: 128,
     });
 
-    // TODO: make create function for this.
     let main_thread = VMThread::new_main();
     let thread_proxy = ThreadProxy(main_thread.inner);
 
     let proxy = vm.new_proxy();
 
-    let mut parser =
-        Box::new(Parser::new_object(&proxy, &mut heap, CODE.as_bytes()));
+    let mut parser = Box::new(Parser::new_object(
+        &proxy,
+        &mut heap,
+        source_code.as_bytes(),
+    ));
 
     let parser_obj = Tagged::new_ptr(parser.as_mut());
 
@@ -104,12 +76,12 @@ fn main() {
         interpreter.execute_single_bytecode(instruction);
     }
 
-    // SAFETY: this is guaranteed by the contract
+    // SAFETY: We expect the parser to leave exactly one Array on the stack upon success.
     let body = unsafe {
         interpreter
             .state
             .pop()
-            .expect("exists")
+            .expect("Parser did not return a body")
             .as_handle_unchecked()
             .cast::<Array>()
     };
@@ -117,7 +89,8 @@ fn main() {
     let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, body);
 
     let quotation = interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
-    // SAFETY: this is safe
+
+    // SAFETY: Promoting a newly allocated pointer to a handle is safe here.
     let quotation = unsafe { quotation.promote_to_handle() };
 
     interpreter.add_quotation(quotation);

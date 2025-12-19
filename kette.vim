@@ -1,18 +1,19 @@
 if exists("b:current_syntax") | finish | endif
 
-syn match ketteKeyword "\<if\>"
+syn match ketteKeyword "\<\%(if\|call\|while\|match\)\>"
+syn match ketteKeyword "\v%(^|\s)\zs\(call\)\ze%($|\s)"
 syn match ketteBoolean "\<t\>"
 syn match ketteBoolean "\<f\>"
 
-syn match ketteSpecial "\<\%(traits\|universe\|globals\|std\)\>"
+syn match ketteSpecial "\<\%(traits\|universe\|std\)\>"
 
 syn match ketteSelf "\<self\>"
 
 "Matches = or := only when part of a definition
 syn match ketteAssignment "\S\+\s\+\zs\%(=\|:=\)"
 
-syn keyword ketteOperator dup drop swap over rot neq bi 2bi
-syn match ketteOperator "\v%(^|\s)\zs([+\-*%=]|bi\@|fixnum\+|fixnum\-|fixnum\?|float\?|\>string)\ze%($|\s)"
+syn keyword ketteOperator dup drop swap over rot neq bi 2bi keep dip 2dip
+syn match ketteOperator "\v%(^|\s)\zs([+\-*%=]|bi\@\|bi\*\|fixnum\+\|fixnum\-|fixnum\*\|fixnum\/\|fixnum\%\|fixnum\?|float\?|\>string)\ze%($|\s)"
 
 " Trait Target (word before addTraitSlots)
 syn match ketteTraitTarget "\S\+\ze\s\+addTraitSlots\>"

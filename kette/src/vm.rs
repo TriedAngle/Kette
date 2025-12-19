@@ -11,7 +11,6 @@ use crate::{
 pub struct SpecialObjects {
     pub universe: Handle<HeapValue>,
     pub parsers: Handle<HeapValue>,
-    pub globals: Handle<HeapValue>,
 
     pub bytearray_traits: Handle<HeapValue>,
     pub array_traits: Handle<HeapValue>,
@@ -231,22 +230,17 @@ impl VM {
             SlotHelper::primitive_message("/*", SlotTags::empty()),
         ]);
 
-        #[rustfmt::skip]
-        let globals_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::constant("stack*", stack_object.into(), SlotTags::PARENT),
-            SlotHelper::constant("universe", Value::zero(), SlotTags::empty()),
-            SlotHelper::primitive_message2("globals", "(identity)", SlotTags::empty()),
-            SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
-            SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
-        ]);
-
         let parsers = heap.allocate_slot_object(parsers_map, &[]);
-        let globals = heap.allocate_slot_object(globals_map, &[]);
 
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::constant("stack*", stack_object.into(), SlotTags::PARENT),
             SlotHelper::constant("parsers", parsers.into(), SlotTags::PARENT),
-            SlotHelper::constant("globals", globals.into(), SlotTags::PARENT),
+            SlotHelper::primitive_message2("universe", "(identity)", SlotTags::empty()),
+            SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
+            SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
+            SlotHelper::primitive_message("(clone)", SlotTags::empty()),
+            SlotHelper::primitive_message("(cloneBoa)", SlotTags::empty()),
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
@@ -313,16 +307,6 @@ impl VM {
                 .promote_to_handle()
                 .cast::<HeapValue>();
 
-            // FIXUP
-            let glob_map = globals_map.as_mut();
-            for slot in glob_map.slots_mut() {
-                if slot.name
-                    == self.intern_string("universe", &mut heap).as_tagged()
-                {
-                    slot.value = universe.as_value();
-                }
-            }
-
             let dip_code = self.inner.code_heap.push(Block {
                 instructions: [
                     Instruction::StackToReturn,
@@ -347,7 +331,6 @@ impl VM {
             let specials = SpecialObjects {
                 universe,
                 parsers: parsers.promote_to_handle().cast(),
-                globals: globals.promote_to_handle().cast(),
                 stack_object: stack_object.promote_to_handle().cast(),
                 bytearray_traits,
                 array_traits,
@@ -442,7 +425,6 @@ impl SpecialObjects {
             Self {
                 universe: Value::zero().as_heap_handle_unchecked(),
                 parsers: Value::zero().as_heap_handle_unchecked(),
-                globals: Value::zero().as_heap_handle_unchecked(),
                 bytearray_traits: Value::zero().as_heap_handle_unchecked(),
                 array_traits: Value::zero().as_heap_handle_unchecked(),
                 fixnum_traits: Value::zero().as_heap_handle_unchecked(),

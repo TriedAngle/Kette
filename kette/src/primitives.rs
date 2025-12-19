@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    ByteArray, ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter,
-    SlotDescriptor, SlotObject, SlotTags, Tagged, ThreadProxy, VMProxy, Value,
+    Array, ByteArray, ExecutionResult, ExecutionState, Handle, HeapProxy,
+    Interpreter, ObjectType, SlotDescriptor, SlotObject, SlotTags, Tagged,
+    ThreadProxy, VMProxy, Value,
 };
 
 mod array;
@@ -272,6 +273,8 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("addTraitSlots", 2, 0, add_trait_slots),
     PrimitiveMessage::new("removeTraitSlots", 2, 0, remove_trait_slots),
     PrimitiveMessage::new("(identity)", 0, 1, identity),
+    PrimitiveMessage::new("(clone)", 1, 1, clone_obj),
+    PrimitiveMessage::new("(cloneBoa)", 1, 1, clone_obj_boa),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
@@ -444,5 +447,94 @@ pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 pub fn identity(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ctx.outputs[0] = ctx.receiver;
+    ExecutionResult::Normal
+}
+
+/// ( obj -- new_obj )
+pub fn clone_obj(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let [obj] = inputs(ctx);
+
+    if !obj.is_object() {
+        ctx.outputs[0] = obj;
+        return ExecutionResult::Normal;
+    }
+
+    let heap_obj = unsafe { obj.as_heap_value_handle() };
+
+    let new_val: Handle<Value> = match heap_obj.header.object_type() {
+        Some(ObjectType::Slot) => {
+            // SAFETY: Type checked via header
+            let slot_obj = unsafe { obj.cast::<SlotObject>() };
+            // SAFETY: Handle is valid, access internal refs
+            let map = slot_obj.map;
+            let slots = slot_obj.inner().slots();
+
+            // Allocate new object with same map and exact copy of slots
+            let res = ctx.heap.allocate_slot_object(map, slots);
+            // SAFETY: just allocated
+            unsafe { res.promote_to_handle().cast() }
+        }
+        Some(ObjectType::Array) => {
+            // SAFETY: Type checked via header
+            let arr = unsafe { obj.cast::<Array>() };
+            // SAFETY: Assuming Array follows similar pattern to SlotObject with a slots/data accessor
+            let data = arr.inner().fields();
+
+            let res = ctx.heap.allocate_array(data);
+            // SAFETY: just allocated
+            unsafe { res.promote_to_handle().cast() }
+        }
+        Some(ObjectType::ByteArray) => {
+            // SAFETY: Type checked via header
+            let ba = unsafe { obj.cast::<ByteArray>() };
+            // SAFETY: Assuming ByteArray has as_bytes() or similar
+            let data = ba.as_bytes();
+
+            let res = ctx.heap.allocate_bytearray_data(data);
+            // SAFETY: just allocated
+            unsafe { res.promote_to_handle().cast() }
+        }
+        // For other types (Method, Quotation, etc.) we typically return self
+        // if they are immutable, or implement specific cloning logic.
+        // Falling back to identity for now.
+        _ => obj,
+    };
+
+    ctx.outputs[0] = new_val;
+    ExecutionResult::Normal
+}
+
+/// ( ... prototype -- new_obj )
+/// Pops N values from the stack where N is the number of assignable slots in prototype.
+pub fn clone_obj_boa(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let [obj] = inputs(ctx);
+
+    // CloneBoa mainly makes sense for SlotObjects (objects with assignable slots).
+    // If passed a primitive or non-slot object, we panic or return error.
+    if !obj.is_object() {
+        return ExecutionResult::Panic("cloneBoa: expected heap object");
+    }
+
+    let heap_obj = unsafe { obj.as_heap_value_handle() };
+
+    if heap_obj.header.object_type() != Some(ObjectType::Slot) {
+        return ExecutionResult::Panic("cloneBoa: expected SlotObject");
+    }
+
+    let prototype = unsafe { obj.cast::<SlotObject>() };
+
+    let map = prototype.map;
+
+    let count = unsafe { map.as_ref().assignable_slots_count() };
+
+    // SAFETY: We assume the interpreter ensures stack depth before calling,
+    // or pop_slice_unchecked handles bounds implicitly/unsafe.
+    let slots_data = unsafe { ctx.state.stack_pop_slice_unchecked(count) };
+
+    // Allocate the new object using the prototype's map and the stack data
+    let new_obj = ctx.heap.allocate_slot_object(map, slots_data);
+
+    // SAFETY: this is safe
+    ctx.outputs[0] = unsafe { new_obj.promote_to_handle().cast() };
     ExecutionResult::Normal
 }

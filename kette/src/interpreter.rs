@@ -215,21 +215,23 @@ impl Interpreter {
                 let selector =
                     Selector::new_message(message, self.vm.shared.clone());
 
-                let globals = self.vm.specials().globals;
+                let universe = self.vm.specials().universe;
 
-                let receiver =
-                    match selector.clone().lookup_object(&globals.as_value()) {
-                        LookupResult::Found { object, .. } => {
-                            // SAFETY: this is safe
-                            unsafe { object.as_value().as_handle_unchecked() }
+                let receiver = match selector
+                    .clone()
+                    .lookup_object(&universe.as_value())
+                {
+                    LookupResult::Found { object, .. } => {
+                        // SAFETY: this is safe
+                        unsafe { object.as_value().as_handle_unchecked() }
+                    }
+                    LookupResult::None => {
+                        // SAFETY: this is safe
+                        unsafe {
+                            self.state.pop_unchecked().as_handle_unchecked()
                         }
-                        LookupResult::None => {
-                            // SAFETY: this is safe
-                            unsafe {
-                                self.state.pop_unchecked().as_handle_unchecked()
-                            }
-                        }
-                    };
+                    }
+                };
 
                 let res = self.send(receiver, selector);
                 self.record_depth();

@@ -101,7 +101,6 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         let msg = unsafe { h.cast::<Message>() };
         // SAFETY: message.value is an interned ByteArray
         let ba = unsafe { msg.value.promote_to_handle() };
-
         // SAFETY: lifetime valid here
         Some(unsafe {
             std::mem::transmute::<&'_ str, &'a str>(
@@ -149,22 +148,19 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         if expr.is_empty() {
             return Err("Parsing Object: Empty slot initializer");
         }
-
         let arr = ctx.heap.allocate_array(expr);
         // SAFETY: just allocated
         let arr_h = unsafe { arr.promote_to_handle() };
-
         let block = BytecodeCompiler::compile(&ctx.vm.shared, arr_h);
         let code = ctx.vm.shared.code_heap.push(block);
-
         let quot = ctx.heap.allocate_quotation(arr_h, code, 0, 0);
         // SAFETY: just allocated
         let quot_h = unsafe { quot.promote_to_handle() };
 
         let before = ctx.state.depth;
-
         ctx.interpreter.add_quotation(quot_h);
         let exec_res = ctx.interpreter.execute_with_depth();
+
         if exec_res != ExecutionResult::Normal {
             return Err("Parsing Object: Slot initializer execution failed");
         }
@@ -175,7 +171,6 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
                 "Parsing Object: Slot initializer must leave exactly one value on stack",
             );
         }
-
         // SAFETY: after == before + 1 implies at least one value exists
         Ok(unsafe { ctx.state.pop_unchecked() })
     }
@@ -197,10 +192,8 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             if res != ExecutionResult::Normal {
                 return Err("Parsing Object: Parsing initializer failed");
             }
-
             // SAFETY: parse_next must return
             let next = unsafe { ctx.state.pop_unchecked() };
-
             if next == ctx.vm.shared.specials.false_object.as_value() {
                 return Err(
                     "Parsing Object: Unterminated initializer (missing '.' or '|)')",
@@ -318,13 +311,9 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
 
         let mut tags = SlotTags::empty();
-        let (clean_name, is_parent) = match head.strip_suffix('*') {
-            Some(n) => (n, true),
-            None => (head, false),
-        };
-        if is_parent {
-            tags |= SlotTags::PARENT;
-        }
+
+        // Don't strip the suffix, but note it for potential parent tagging
+        let is_potential_parent = head.ends_with('*');
 
         // Read the next token to decide what kind of descriptor this is.
         let peek = next_value(ctx);
@@ -333,24 +322,25 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
                 "Parsing Object: Unterminated object (missing '|)')",
             );
         }
-
         let Some(peek_str) = message_name(peek) else {
             return ExecutionResult::Panic(
                 "Parsing Object: Expected '<-', '=', '.', or '|)' after slot name",
             );
         };
 
-        // Intern slot name now
-        let name_ba = ctx.vm.intern_string(clean_name, ctx.heap);
+        // Intern slot name now (raw name including *)
+        let name_ba = ctx.vm.intern_string(head, ctx.heap);
         let name_tagged: Tagged<ByteArray> = name_ba.into();
 
         // Shorthand: `<name> .` => assignable false
         if peek_str == "." {
             tags |= SlotTags::ASSIGNABLE;
-
+            // Shorthands are always data slots, so check parent flag
+            if is_potential_parent {
+                tags |= SlotTags::PARENT;
+            }
             let offset_value = Value::from_fixnum(assignable_offset);
             assignable_offset += 1;
-
             slot_descs.push(SlotDescriptor::new(
                 name_tagged,
                 tags,
@@ -364,10 +354,12 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         // Shorthand: `<name>` as last before `|)` => assignable false
         if peek_str == "|)" {
             tags |= SlotTags::ASSIGNABLE;
-
+            // Shorthands are always data slots, so check parent flag
+            if is_potential_parent {
+                tags |= SlotTags::PARENT;
+            }
             let offset_value = Value::from_fixnum(assignable_offset);
             assignable_offset += 1;
-
             slot_descs.push(SlotDescriptor::new(
                 name_tagged,
                 tags,
@@ -393,7 +385,6 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         let expr_vec = Vector::new(ctx.heap, &ctx.vm.shared, 8);
         // SAFETY: just created
         let expr_accum = unsafe { expr_vec.promote_to_handle() };
-
         let (expr_accum, ended_by) =
             match parse_until_dot_or_end(ctx, dot, obj_end, expr_accum) {
                 Ok(v) => v,
@@ -406,33 +397,36 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         };
 
         // If initializer evaluates to a Method, mark slot EXECUTABLE.
-        if as_method(init_value).is_some() {
+        let is_method = as_method(init_value).is_some();
+        if is_method {
             tags |= SlotTags::EXECUTABLE;
+        }
+
+        // Only mark as PARENT if it has the * suffix AND it is NOT a method.
+        if !is_method && is_potential_parent {
+            tags |= SlotTags::PARENT;
         }
 
         if is_assignable {
             tags |= SlotTags::ASSIGNABLE;
-
             let offset_value = Value::from_fixnum(assignable_offset);
             assignable_offset += 1;
-
             slot_descs.push(SlotDescriptor::new(
                 name_tagged,
                 tags,
                 offset_value,
             ));
             assignable_inits.push(init_value);
-
             let setter_name = {
-                let mut s = String::with_capacity(clean_name.len() + 2);
-                s.push_str(clean_name);
+                // Keep the suffix in the setter name as well
+                let mut s = String::with_capacity(head.len() + 2);
+                s.push_str(head);
                 s.push_str("<<");
                 s
             };
             let setter_ba =
                 ctx.vm.intern_string(setter_name.as_str(), ctx.heap);
             let setter_tagged: Tagged<ByteArray> = setter_ba.into();
-
             slot_descs.push(SlotDescriptor::new(
                 setter_tagged,
                 SlotTags::ASSIGNMENT,
@@ -451,10 +445,8 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let obj = ctx
         .heap
         .allocate_slot_object(map, assignable_inits.as_slice());
-
     outer_accum.push(obj.into(), ctx.heap, &ctx.vm.shared);
     ctx.outputs[0] = outer_accum.into();
-
     ExecutionResult::Normal
 }
 
