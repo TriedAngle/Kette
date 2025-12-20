@@ -5,7 +5,7 @@
         traits = (| 
             clonable = (| 
                 clone = : ( -- new ) self (clone) ; .
-                cloneBoa = : ( -- new ) self (cloneBoa) ; .
+                clone! = : ( -- new ) self (cloneBoa) ; .
                 copy = : ( -- copy ) self clone ; .
             |) .
             oddball = (| 
@@ -33,17 +33,48 @@
 
 (|
     number* = std traits number .
+    clonable* = std traits clonable .
     + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
     - = : ( lhs -- new ) dup fixnum? [ self fixnum- ] [ drop /* TODO: handle this */ ] if ; .
     * = : ( lhs -- new ) dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ; .
     / = : ( lhs -- new ) dup fixnum? [ self fixnum/ ] [ drop /* TODO: handle this */ ] if ; .
+    % = : ( lhs -- new ) dup fixnum? [ self fixnum% ] [ drop /* TODO: handle this */ ] if ; .
     >string = : ( -- str ) self fixnum>string ; .
     = = : ( lhs -- ? ) self fixnum= ; .
 |) std traits fixnum addTraitSlots
 
+(|
+    number* = std traits number .
+    clonable* = std traits clonable .
+    + = : ( lhs -- new ) dup float? [ self float+ ] [ drop /* TODO: handle this */ ] if ; .
+    - = : ( lhs -- new ) dup float? [ self float- ] [ drop /* TODO: handle this */ ] if ; .
+    * = : ( lhs -- new ) dup float? [ self float* ] [ drop /* TODO: handle this */ ] if ; .
+    / = : ( lhs -- new ) dup float? [ self float/ ] [ drop /* TODO: handle this */ ] if ; .
+    % = : ( lhs -- new ) dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ; .
+    ^ = : ( lhs -- new ) dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ; .
+    sqrt = : ( -- sqrt ) self floatSqrt ; .
+    >string = : ( -- str ) self float>string ; .
+    = = : ( lhs -- ? ) self float= ; .
+|) std traits float addTraitSlots
+
 (| 
     print = : ( -- ) self (print) ; .
     println = : ( -- ) self (println) ; . 
+    size = : ( -- ) self (bytearraySize) ; .
+    newWithSize = : ( size -- new ) self (bytearrayNew) ; .
+    nth = : ( idx -- value ) self (bytearrayAt) ; .
+    set-nth = : ( vale idx -- ) self (bytearrayAtPut) ; .
+    memset = : ( offset count value -- ) self (bytearrayMemset) ; .
+    memcpy = : ( offset src srcOffset count -- ) self (bytearrayMemcpy) ; .
+    memcpyFull = : ( offset src -- ) 0 over size self memcpy ; .  
+    + = : ( lhs -- new ) 
+        dup self [ size ] bi@ + // lhs ns 
+        std traits bytearray newWithSize // lhs new 
+        [ 0 -rot memcpyFull ] 2keep // lhs new
+        [ size self ] dip 
+        [ memcpyFull ] keep
+    ; .
+
 |) std traits bytearray addTraitSlots
 
 (| comptime = (| 
@@ -51,15 +82,21 @@
     if = // takes ? then execute either trueBranch or falseBranch (self) 
         : ( ? trueBranch -- ... ) swap [ call ] [ drop self call ] if ; .
     dip = // takes x, calls self, puts back x 
-        : ( x -- ... x ) [ self call ] dip ; .
+        : ( x -- ..a x ) [ self call ] dip ; .
     keep = // calls self with x, then puts back x
-        : ( x -- ... x ) dup [ self call ] dip ; .
+        : ( x -- ..a x ) dup [ self call ] dip ; .
     bi = // applies p to x, then self to x 
-        : ( x p -- ... ) keep self call ; .
+        : ( x p -- ..a ) keep self call ; .
     bi* = // appplies p to x, then self to y
-        : ( x y p -- ... ) dip self call ; .
+        : ( x y p -- ..a ) dip self call ; .
     bi@ = // applies self to x, then y
-        : ( x y -- ... ) self dup bi* ; .
+        : ( x y -- ..a ) self dup bi* ; .
+    2dip = // removes x and y from stack then call self
+        : ( ..a x y -- ..b x y ) [ self dip ] dip ; .
+    2keep = // calls self with x and y then put x and y back
+        : ( ..a x y -- ..b x y ) 2dup self 2dip ; .
+    2bi = // applies p to x and y then self to x and y
+        : ( x y p -- ) 2keep self call ; .
 |) dup std traits callable addTraitSlots |) drop
 
 (| comptime = 
@@ -81,22 +118,25 @@
 (|
     callable* = std traits callable .
     call = : ( -- ... ) self (call) ; .
-    curry = : ( obj -- curried ) self std curried cloneBoa ; .
-    compose = : ( quot -- curried ) self std composed cloneBoa ; .
+    curry = : ( obj -- curried ) self std curried clone! ; .
+    compose = : ( quot -- curried ) self std composed clone! ; .
 |) std traits quotation addTraitSlots
 
-33 66 [ >string println ] bi@
-5 10 [ 2 * ] curry [ + ] compose call >string println
+(| vec2 = (|  
+    parent* = std traits clonable .
+    x := 0.0 . y := 0.0 .
+    + = : ( other -- new ) 
+        self [ [ x ] bi@ + ] [ [ y ] bi@ + ] 2bi self clone! ; .
+    mag = : ( -- magnitude )
+        self [ x ] [ y ] bi  [ 2.0 ^ ] bi@ + sqrt ; .
+    >string = : ( -- string ) 
+       "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ; .
+|) |) universe addTraitSlots
 
+6.7 11.3 vec2 clone! 
+30.0 70.0 vec2 clone! 
++ [ >string println ] keep
+"magnitude: " print mag >string println
 
-LanguageVersion println
-
-10 34 + 44 = [ "true" ] [ "false" ] if println
-
-(| 
-    parent* = (| x := 33 |) . 
-    y = 10 .
-    hello = : ( -- value ) self x 10 + ;
-|) hello >string println
 
 

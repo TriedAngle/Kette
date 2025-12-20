@@ -42,7 +42,7 @@ fn main() {
     let vm = VM::new(VMCreateInfo {
         image: None,
         heap: HeapCreateInfo {
-            size: 1024 * 64 * 2,
+            size: 1024 * 64 * 4,
             ..Default::default()
         },
     });

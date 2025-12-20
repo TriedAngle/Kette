@@ -119,6 +119,7 @@ impl VM {
             strings,
             &[
                 SlotHelper::primitive_message("dup", SlotTags::empty()),
+                SlotHelper::primitive_message("2dup", SlotTags::empty()),
                 SlotHelper::primitive_message("drop", SlotTags::empty()),
                 SlotHelper::primitive_message("2drop", SlotTags::empty()),
                 SlotHelper::primitive_message("3drop", SlotTags::empty()),
@@ -131,6 +132,7 @@ impl VM {
                 SlotHelper::primitive_message("dropd", SlotTags::empty()),
                 SlotHelper::primitive_message("2dropd", SlotTags::empty()),
                 SlotHelper::primitive_message("swapd", SlotTags::empty()),
+                SlotHelper::primitive_message("@vm-depth", SlotTags::empty()),
             ],
         );
 
@@ -193,12 +195,22 @@ impl VM {
             SlotHelper::primitive_message("(print)", SlotTags::empty()),
             SlotHelper::primitive_message("(println)", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "bytearrayParent", SlotTags::empty()),
+            SlotHelper::primitive_message("(bytearraySize)", SlotTags::empty()),
+            SlotHelper::primitive_message("(bytearrayNew)", SlotTags::empty()),
+            SlotHelper::primitive_message("(bytearrayAt)", SlotTags::empty()),
+            SlotHelper::primitive_message("(bytearrayAtPut)", SlotTags::empty()),
+            SlotHelper::primitive_message("(bytearrayMemset)", SlotTags::empty()),
+            SlotHelper::primitive_message("(bytearrayMemcpy)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let array_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(>quotation)", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "arrayParent", SlotTags::empty()),
+            SlotHelper::primitive_message("(arraySize)", SlotTags::empty()),
+            SlotHelper::primitive_message("(newArray)", SlotTags::empty()),
+            SlotHelper::primitive_message("(arrayAt)", SlotTags::empty()),
+            SlotHelper::primitive_message("(arrayAtPut)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]

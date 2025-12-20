@@ -311,12 +311,12 @@ impl Interpreter {
         let selector_name = selector.name.as_utf8();
         let _span = tracing::span!(tracing::Level::TRACE, "send message", receiver = ?receiver, selector = ?selector_name).entered();
 
-        let res = selector.lookup_object(&receiver.inner());
+        let res = selector.clone().lookup_object(&receiver.inner());
 
         let slot = match res {
             LookupResult::Found { slot, .. } => slot,
             LookupResult::None => {
-                panic!("TODO: implement error handling")
+                panic!("Panic: {:?} not found", selector_name)
             }
         };
 

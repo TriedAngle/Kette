@@ -1,5 +1,5 @@
 use super::{inputs, outputs};
-use crate::{ExecutionResult, PrimitiveContext};
+use crate::{ExecutionResult, PrimitiveContext, Value};
 macro_rules! shuffle {
     (
         $(
@@ -19,8 +19,17 @@ macro_rules! shuffle {
     };
 }
 
+pub fn depth(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let depth = ctx.state.depth();
+    // SAFETY: this is safe
+    ctx.outputs[0] = unsafe { Value::from_usize(depth).as_handle_unchecked() };
+    ExecutionResult::Normal
+}
+
 shuffle! {
     dup: x -- x x ;
+
+    dup2: x y -- x y x y ;
 
     drop: x -- ;
 

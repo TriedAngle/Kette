@@ -123,7 +123,7 @@ pub fn float_mod(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn float_pow(ctx: &mut PrimitiveContext) -> ExecutionResult {
     float_binop(ctx, |ctx, a, b| {
         let (a, b) = values(a, b);
-        let res = a.powf(b);
+        let res = b.powf(a);
         let res = ctx.heap.allocate_float(res);
         Ok(res)
     })
