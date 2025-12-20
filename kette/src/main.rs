@@ -1,12 +1,20 @@
+use clap::Parser as ClapParser;
 use kette::{
     Array, Block, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
     HeapCreateInfo, Instruction, Interpreter, Parser, Tagged, ThreadProxy, VM,
     VMCreateInfo, VMThread, Value,
 };
-use std::{env, fs, process};
+use std::{fs, process};
 
-// We create a helper to define the parser's initial "boot" script.
-// This tells the parser object to parse its internal buffer.
+/// CLI arguments struct derived for Clap
+#[derive(ClapParser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Input kette source files to execute in order
+    #[arg(required = true, help = "The .ktt files to execute")]
+    files: Vec<String>,
+}
+
 fn execute_parser_code(parser: Value) -> Block {
     let instructions = vec![
         Instruction::PushValue { value: parser },
@@ -17,22 +25,7 @@ fn execute_parser_code(parser: Value) -> Block {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage: {} <file.ktt>", args[0]);
-        process::exit(1);
-    }
-
-    let filename = &args[1];
-
-    let source_code = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(err) => {
-            eprintln!("Error reading file '{}': {}", filename, err);
-            process::exit(1);
-        }
-    };
+    let cli = Cli::parse();
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -48,7 +41,8 @@ fn main() {
     });
 
     let main_proxy = vm.new_proxy();
-    let mut heap = main_proxy.shared.heap.create_proxy();
+
+    let heap = main_proxy.shared.heap.create_proxy();
 
     let state = ExecutionState::new(&ExecutionStateInfo {
         stack_size: 128,
@@ -57,44 +51,55 @@ fn main() {
 
     let main_thread = VMThread::new_main();
     let thread_proxy = ThreadProxy(main_thread.inner);
-
     let proxy = vm.new_proxy();
-
-    let mut parser = Box::new(Parser::new_object(
-        &proxy,
-        &mut heap,
-        source_code.as_bytes(),
-    ));
-
-    let parser_obj = Tagged::new_ptr(parser.as_mut());
-
-    let parser_code = execute_parser_code(parser_obj.into());
 
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
 
-    for instruction in parser_code.instructions {
-        interpreter.execute_single_bytecode(instruction);
+    for filename in &cli.files {
+        tracing::debug!("Loading file: {}", filename);
+
+        let source_code = match fs::read_to_string(filename) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("Error reading file '{}': {}", filename, err);
+                process::exit(1);
+            }
+        };
+
+        let parser_proxy = vm.new_proxy();
+
+        let mut parser = Box::new(Parser::new_object(
+            &parser_proxy,
+            &mut interpreter.heap,
+            source_code.as_bytes(),
+        ));
+
+        let parser_obj = Tagged::new_ptr(parser.as_mut());
+        let parser_code = execute_parser_code(parser_obj.into());
+
+        for instruction in parser_code.instructions {
+            interpreter.execute_single_bytecode(instruction);
+        }
+
+        let body = unsafe {
+            interpreter
+                .state
+                .pop()
+                .expect("Parser did not return a body")
+                .as_handle_unchecked()
+                .cast::<Array>()
+        };
+
+        let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, body);
+
+        let quotation =
+            interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
+
+        let quotation = unsafe { quotation.promote_to_handle() };
+
+        interpreter.add_quotation(quotation);
+
+        tracing::debug!("Executing {}", filename);
+        interpreter.execute();
     }
-
-    // SAFETY: We expect the parser to leave exactly one Array on the stack upon success.
-    let body = unsafe {
-        interpreter
-            .state
-            .pop()
-            .expect("Parser did not return a body")
-            .as_handle_unchecked()
-            .cast::<Array>()
-    };
-
-    let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, body);
-
-    let quotation = interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
-
-    // SAFETY: Promoting a newly allocated pointer to a handle is safe here.
-    let quotation = unsafe { quotation.promote_to_handle() };
-
-    interpreter.add_quotation(quotation);
-
-    tracing::debug!("RUN");
-    interpreter.execute();
 }

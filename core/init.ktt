@@ -17,11 +17,30 @@
             quotation = [ ] parent* .
             number = (| |) .
             callable = (| |) .
+            boolean = (| |) .
         |) .
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
 |) dup universe addTraitSlots |) drop
+
+(| comptime = (| addBoolAbilities = : ( -- )
+    (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
+    (| parent* = (| parent* = std traits boolean |) |) f addTraitSlots
+    
+    (| 
+        not = : ( -- ? ) f ; .
+        && = : ( other -- ? ) ; . 
+        >string = "t" .
+    |) t parent* addTraitSlots
+
+    (| 
+        not = : ( -- ? ) t ; .
+        && = : ( other -- ? ) drop self ; .
+        >string = "f" .
+    |) f parent* addTraitSlots 
+; . |) dup addBoolAbilities |) drop
+
 
 (|  parent* = std traits clonable .
     number? = t .
@@ -39,8 +58,16 @@
     * = : ( lhs -- new ) dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ; .
     / = : ( lhs -- new ) dup fixnum? [ self fixnum/ ] [ drop /* TODO: handle this */ ] if ; .
     % = : ( lhs -- new ) dup fixnum? [ self fixnum% ] [ drop /* TODO: handle this */ ] if ; .
-    >string = : ( -- str ) self fixnum>string ; .
+    neg = : ( -- -self ) self fixnumNeg ; .
+    bit& = : ( lhs -- ? ) self fixnumBitAnd ; .
+    bit| = : ( lhs -- ? ) self fixnumBitOr ; .
     = = : ( lhs -- ? ) self fixnum= ; .
+    != = : ( lhs -- ? ) self fixnum!= ; .
+    < = : ( lhs -- ? ) self fixnum< ; .
+    > = : ( lhs -- ? ) self fixnum> ; .
+    <= = : ( lhs -- ? ) self fixnum<= ; .
+    >= = : ( lhs -- ? ) self fixnum>= ; .
+    >string = : ( -- str ) self fixnum>string ; .
 |) std traits fixnum addTraitSlots
 
 (|
@@ -53,8 +80,14 @@
     % = : ( lhs -- new ) dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ; .
     ^ = : ( lhs -- new ) dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ; .
     sqrt = : ( -- sqrt ) self floatSqrt ; .
-    >string = : ( -- str ) self float>string ; .
+    neg = : ( -- -self ) self floatNeg ; .
     = = : ( lhs -- ? ) self float= ; .
+    != = : ( lhs -- ? ) self float!= ; .
+    < = : ( lhs -- ? ) self float< ; .
+    > = : ( lhs -- ? ) self float> ; .
+    <= = : ( lhs -- ? ) self float<= ; .
+    >= = : ( lhs -- ? ) self float>= ; .
+    >string = : ( -- str ) self float>string ; .
 |) std traits float addTraitSlots
 
 (| 
@@ -81,6 +114,8 @@
     call = f  .
     if = // takes ? then execute either trueBranch or falseBranch (self) 
         : ( ? trueBranch -- ... ) swap [ call ] [ drop self call ] if ; .
+    when = : ( ? -- ... ) self [ ] if ; .
+    unless = : ( ? -- ... ) [ ] self if ; .
     dip = // takes x, calls self, puts back x 
         : ( x -- ..a x ) [ self call ] dip ; .
     keep = // calls self with x, then puts back x
@@ -121,22 +156,3 @@
     curry = : ( obj -- curried ) self std curried clone! ; .
     compose = : ( quot -- curried ) self std composed clone! ; .
 |) std traits quotation addTraitSlots
-
-(| vec2 = (|  
-    parent* = std traits clonable .
-    x := 0.0 . y := 0.0 .
-    + = : ( other -- new ) 
-        self [ [ x ] bi@ + ] [ [ y ] bi@ + ] 2bi self clone! ; .
-    mag = : ( -- magnitude )
-        self [ x ] [ y ] bi  [ 2.0 ^ ] bi@ + sqrt ; .
-    >string = : ( -- string ) 
-       "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ; .
-|) |) universe addTraitSlots
-
-6.7 11.3 vec2 clone! 
-30.0 70.0 vec2 clone! 
-+ [ >string println ] keep
-"magnitude: " print mag >string println
-
-
-

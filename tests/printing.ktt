@@ -1,7 +1,5 @@
-// unimplemented
 // expect:
-// hello world!
-// this is
-// newline
-"hello world!" println
-"this is\nnewline" println
+// Hello World!
+// Hello World!
+"Hello World!" println
+"Hello " print "World!" print

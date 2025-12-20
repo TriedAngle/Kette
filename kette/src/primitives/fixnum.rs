@@ -17,8 +17,8 @@ fn fixnum_binop(
     ctx: &mut PrimitiveContext<'_, '_>,
     op: Fixnum2Op,
 ) -> ExecutionResult {
-    let a = ctx.receiver.as_tagged::<i64>();
-    let b = ctx.inputs[0].as_tagged::<i64>();
+    let b = ctx.receiver.as_tagged::<i64>();
+    let a = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = res.into(),
         Err(err) => return ExecutionResult::NumberError(err),
@@ -35,8 +35,8 @@ fn fixnum_logic_binop(
     ctx: &mut PrimitiveContext,
     op: Fixnum2LogicOp,
 ) -> ExecutionResult {
-    let a = ctx.receiver.as_tagged::<i64>();
-    let b = ctx.inputs[0].as_tagged::<i64>();
+    let b = ctx.receiver.as_tagged::<i64>();
+    let a = ctx.inputs[0].as_tagged::<i64>();
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = bool_object(ctx, res),
         Err(err) => return ExecutionResult::NumberError(err),
@@ -56,7 +56,7 @@ pub fn fixnum_add(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn fixnum_sub(ctx: &mut PrimitiveContext) -> ExecutionResult {
     fixnum_binop(ctx, |_, a, b| {
         let (a, b) = (a.raw_i64(), b.raw_i64());
-        let res = a + b;
+        let res = a - b;
         let res = Tagged::from_raw(res);
         Ok(res)
     })
@@ -75,12 +75,12 @@ pub fn fixnum_mul(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 pub fn fixnum_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
     fixnum_binop(ctx, |_, a, b| {
-        if b.raw() == 0 {
+        let (a, b) = (a.as_i64(), b.as_i64());
+        if b == 0 {
             return Err(NumberError::DivisionByZero);
         }
-        let (a, b) = (a.raw_i64(), b.raw_i64());
         let res = a / b;
-        let res = Tagged::from_raw(res);
+        let res = Tagged::new_value(res);
         Ok(res)
     })
 }
@@ -88,6 +88,9 @@ pub fn fixnum_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn fixnum_mod(ctx: &mut PrimitiveContext) -> ExecutionResult {
     fixnum_binop(ctx, |_, a, b| {
         let (a, b) = (a.raw_i64(), b.raw_i64());
+        if b == 0 {
+            return Err(NumberError::DivisionByZero);
+        }
         let res = a % b;
         let res = Tagged::from_raw(res);
         Ok(res)

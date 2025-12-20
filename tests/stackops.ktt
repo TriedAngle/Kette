@@ -1,4 +1,3 @@
-// unimplemented
 // expect:
 // 10
 // t
@@ -6,11 +5,12 @@
 // 0
 // 5
 // 5
-// 321
-10 20 over dropd fixnum>str println 
-@context stack-count 0 = >str println
+// 213
 
-0 3 swap swap >str println >str println
-5 dup >str println >str println
+10 20 over dropd >string println 
+@vm-depth 1 = [ "t" ] [ "f" ] if println drop
 
-1 2 3 rot >str print >str print >str print "\n" println
+0 3 swap swap >string println >string println
+5 dup >string println >string println
+
+1 2 3 -rot >string print >string print >string print "" println

@@ -580,8 +580,8 @@ impl<T: PtrSizedObject> From<Tagged<T>> for i64 {
     #[inline]
     fn from(value: Tagged<T>) -> Self {
         let raw = value.raw();
-        let untagged = raw >> 1;
-        Self::from_ptr_sized(untagged)
+        let untagged = (raw as i64) >> 1;
+        Self::from_ptr_sized(untagged as u64)
     }
 }
 

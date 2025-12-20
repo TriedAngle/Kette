@@ -23,6 +23,7 @@ pub struct SpecialObjects {
 
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
+
     pub stack_object: Handle<HeapValue>,
 
     pub primitive_vector_map: Handle<HeapValue>,
