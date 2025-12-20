@@ -6,7 +6,6 @@ use kette::{
 };
 use std::{fs, process};
 
-/// CLI arguments struct derived for Clap
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -81,6 +80,7 @@ fn main() {
             interpreter.execute_single_bytecode(instruction);
         }
 
+        // SAFETY: this is safe
         let body = unsafe {
             interpreter
                 .state
@@ -95,6 +95,7 @@ fn main() {
         let quotation =
             interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
 
+        // SAFETY: this is safe
         let quotation = unsafe { quotation.promote_to_handle() };
 
         interpreter.add_quotation(quotation);

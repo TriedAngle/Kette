@@ -43,16 +43,12 @@
 
 
 (|  parent* = std traits clonable .
-    number? = t .
-    + = : ( lhs -- new ) drop f /* TODO: throw */ ; .
-    - = : ( lhs -- new ) drop f /* TODO: throw */ ; .
-    * = : ( lhs -- new ) drop f /* TODO: throw */ ; .
-    / = : ( lhs -- new ) drop f /* TODO: throw */ ; .
+    abs = : ( -- new ) self positive? [ self ] [ self neg ] ; .
 |) std traits number addTraitSlots
 
 (|
-    number* = std traits number .
     clonable* = std traits clonable .
+    number* = std traits number .
     + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
     - = : ( lhs -- new ) dup fixnum? [ self fixnum- ] [ drop /* TODO: handle this */ ] if ; .
     * = : ( lhs -- new ) dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ; .
@@ -67,12 +63,13 @@
     > = : ( lhs -- ? ) self fixnum> ; .
     <= = : ( lhs -- ? ) self fixnum<= ; .
     >= = : ( lhs -- ? ) self fixnum>= ; .
+    positive? = : ( -- ? ) self 0 > ; .
     >string = : ( -- str ) self fixnum>string ; .
 |) std traits fixnum addTraitSlots
 
 (|
-    number* = std traits number .
     clonable* = std traits clonable .
+    number* = std traits number .
     + = : ( lhs -- new ) dup float? [ self float+ ] [ drop /* TODO: handle this */ ] if ; .
     - = : ( lhs -- new ) dup float? [ self float- ] [ drop /* TODO: handle this */ ] if ; .
     * = : ( lhs -- new ) dup float? [ self float* ] [ drop /* TODO: handle this */ ] if ; .
@@ -80,13 +77,22 @@
     % = : ( lhs -- new ) dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ; .
     ^ = : ( lhs -- new ) dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ; .
     sqrt = : ( -- sqrt ) self floatSqrt ; .
+    e^ = : ( -- new ) self floate^ ; .
+    2^ = : ( -- new ) self float2^ ; .
     neg = : ( -- -self ) self floatNeg ; .
+    sin  = : ( -- res ) self floatSin ; .
+    cos  = : ( -- res ) self floatCos ; .
+    tan  = : ( -- res ) self floatTan ; .
+    asin = : ( -- res ) self floatAsin ; .
+    acos = : ( -- res ) self floatAcos ; .
+    atan = : ( -- res ) self floatAtan ; .
     = = : ( lhs -- ? ) self float= ; .
     != = : ( lhs -- ? ) self float!= ; .
     < = : ( lhs -- ? ) self float< ; .
     > = : ( lhs -- ? ) self float> ; .
     <= = : ( lhs -- ? ) self float<= ; .
     >= = : ( lhs -- ? ) self float>= ; .
+    positive? = : ( -- ? ) self 0.0 > ; .
     >string = : ( -- str ) self float>string ; .
 |) std traits float addTraitSlots
 

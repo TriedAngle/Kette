@@ -1,4 +1,6 @@
 # Kette VM Internals
+THIS IS MOSTLY OUTDATED
+TODO: UPDATE THIS
 Overview of the internals of the virtual machine
 
 ## Hidden Maps

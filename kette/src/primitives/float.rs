@@ -14,9 +14,9 @@ fn float_binop(
     op: Float2Op,
 ) -> ExecutionResult {
     // SAFETY: this is safe
-    let a = unsafe { ctx.receiver.cast::<Float>() };
+    let b = unsafe { ctx.receiver.cast::<Float>() };
     // SAFETY: this is safe
-    let b = unsafe { ctx.inputs[0].cast::<Float>() };
+    let a = unsafe { ctx.inputs[0].cast::<Float>() };
     match op(ctx, a, b) {
         Ok(res) => {
             ctx.outputs[0] =
@@ -61,9 +61,9 @@ fn float_logic_binop(
     op: Float2LogicOp,
 ) -> ExecutionResult {
     // SAFETY: this is safe
-    let a = unsafe { ctx.receiver.cast::<Float>() };
+    let b = unsafe { ctx.receiver.cast::<Float>() };
     // SAFETY: this is safe
-    let b = unsafe { ctx.inputs[0].cast::<Float>() };
+    let a = unsafe { ctx.inputs[0].cast::<Float>() };
     match op(ctx, a, b) {
         Ok(res) => ctx.outputs[0] = bool_object(ctx, res),
         Err(err) => return ExecutionResult::NumberError(err),
@@ -123,7 +123,7 @@ pub fn float_mod(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn float_pow(ctx: &mut PrimitiveContext) -> ExecutionResult {
     float_binop(ctx, |ctx, a, b| {
         let (a, b) = values(a, b);
-        let res = b.powf(a);
+        let res = a.powf(b);
         let res = ctx.heap.allocate_float(res);
         Ok(res)
     })

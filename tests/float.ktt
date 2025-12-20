@@ -1,0 +1,67 @@
+// expect:
+// arithmetic
+// 30.5
+// 1.9
+// -2
+// 25
+// 4
+// -20
+// 3
+// trig/pow
+// 0
+// 1
+// 10
+// eq
+// t
+// f
+// neq
+// t
+// f
+// lt leq
+// t
+// f
+// t
+// t
+// f
+// gt geq
+// t
+// f
+// t
+// t
+// f
+
+"arithmetic" println
+10.0 20.5 + >string println
+5.0 3.1 - >string println
+3.0 5.0 - >string println
+5.0 5.0 * >string println
+12.0 3.0 / >string println
+10.0 neg 2.0 * >string println
+23.0 4.0 % >string println
+
+"trig/pow" println
+0.0 sin >string println
+0.0 cos >string println
+100.0 sqrt >string println
+
+"eq" println
+10.0 10.0 = >string println
+10.0 10.1 = >string println
+
+"neq" println
+10.0 10.1 != >string println
+10.0 10.0 != >string println    
+
+"lt leq" println
+10.0 20.0 < >string println
+20.0 10.0 < >string println
+10.0 10.0 <= >string println
+10.0 20.0 <= >string println
+20.0 10.0 <= >string println
+
+"gt geq" println
+20.0 10.0 > >string println
+10.0 20.0 > >string println
+10.0 10.0 >= >string println
+20.0 10.0 >= >string println
+10.0 20.0 >= >string println
