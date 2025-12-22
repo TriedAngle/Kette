@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    Block, ByteArray, Handle, Heap, HeapCreateInfo, HeapProxy, HeapValue,
-    Instruction, Message, Quotation, SlotHelper, SlotTags, Strings, Value,
-    bytecode::CodeHeap, interning::Messages, primitive_index,
+    Allocator, Block, ByteArray, Handle, Heap, HeapProxy, HeapSettings,
+    HeapValue, Instruction, Message, Quotation, SlotHelper, SlotMap, SlotTags,
+    Strings, Value, bytecode::CodeHeap, interning::Messages, primitive_index,
     primitives::Vector,
 };
 
@@ -26,7 +26,7 @@ pub struct SpecialObjects {
 
     pub stack_object: Handle<HeapValue>,
 
-    pub primitive_vector_map: Handle<HeapValue>,
+    pub primitive_vector_map: Handle<SlotMap>,
 
     pub dip_quotation: Handle<Quotation>,
 
@@ -67,7 +67,7 @@ unsafe impl Sync for VMProxy {}
 
 #[derive(Debug)]
 pub struct VMCreateInfo {
-    pub heap: HeapCreateInfo,
+    pub heap: HeapSettings,
     pub image: Option<String>,
 }
 
@@ -110,7 +110,7 @@ impl VM {
 
     // TODO: special objects should be allocated on the startup heap
     fn init_new(&mut self) {
-        let mut heap = self.inner.heap.create_proxy();
+        let mut heap = self.inner.heap.proxy();
         let strings = &self.inner.strings;
 
         let empty_map = heap.allocate_empty_map();
@@ -137,7 +137,7 @@ impl VM {
             ],
         );
 
-        let stack_object = heap.allocate_slot_object(stack_map, &[]);
+        let stack_object = heap.allocate_slots(stack_map, &[]);
 
         #[rustfmt::skip]
         let fixnum_map = heap.allocate_slot_map_helper(strings, &[
@@ -243,12 +243,12 @@ impl VM {
             SlotHelper::primitive_message("/*", SlotTags::empty()),
         ]);
 
-        let parsers = heap.allocate_slot_object(parsers_map, &[]);
+        let parsers = heap.allocate_slots(parsers_map, &[]);
 
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::constant("stack*", stack_object.into(), SlotTags::PARENT),
-            SlotHelper::constant("parsers", parsers.into(), SlotTags::PARENT),
+            SlotHelper::constant("stack*", stack_object.as_value(), SlotTags::PARENT),
+            SlotHelper::constant("parsers", parsers.as_value(), SlotTags::PARENT),
             SlotHelper::primitive_message2("universe", "(identity)", SlotTags::empty()),
             SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
             SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
@@ -258,67 +258,38 @@ impl VM {
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
         unsafe {
-            let primitive_vector_map = Vector::new_map(&mut heap, strings)
-                .promote_to_handle()
-                .cast();
+            let primitive_vector_map = Vector::new_map(&mut heap, strings);
 
-            let bytearray_traits = heap
-                .allocate_slot_object(bytearray_map, &[])
-                .promote_to_handle()
-                .cast();
+            let bytearray_traits =
+                heap.allocate_slots(bytearray_map, &[]).cast();
 
-            let array_traits = heap
-                .allocate_slot_object(array_map, &[])
-                .promote_to_handle()
-                .cast();
+            let array_traits = heap.allocate_slots(array_map, &[]).cast();
 
-            let fixnum_traits = heap
-                .allocate_slot_object(fixnum_map, &[])
-                .promote_to_handle()
-                .cast();
+            let fixnum_traits = heap.allocate_slots(fixnum_map, &[]).cast();
 
-            let float_traits = heap
-                .allocate_slot_object(float_map, &[])
-                .promote_to_handle()
-                .cast();
+            let float_traits = heap.allocate_slots(float_map, &[]).cast();
 
-            let bignum_traits = heap
-                .allocate_slot_object(empty_map, &[])
-                .promote_to_handle()
-                .cast();
+            let bignum_traits = heap.allocate_slots(empty_map, &[]).cast();
 
-            let quotation_traits = heap
-                .allocate_slot_object(quotation_map, &[])
-                .promote_to_handle()
-                .cast();
+            let quotation_traits =
+                heap.allocate_slots(quotation_map, &[]).cast();
 
-            let method_traits = heap
-                .allocate_slot_object(method_map, &[])
-                .promote_to_handle()
-                .cast();
+            let method_traits = heap.allocate_slots(method_map, &[]).cast();
 
-            let true_object = heap
-                .allocate_slot_object(empty_map, &[])
-                .promote_to_handle()
-                .cast();
+            let true_object = heap.allocate_slots(empty_map, &[]).cast();
 
-            let false_object = heap
-                .allocate_slot_object(empty_map, &[])
-                .promote_to_handle()
-                .cast::<HeapValue>();
+            let false_object =
+                heap.allocate_slots(empty_map, &[]).cast::<HeapValue>();
 
             let effect_traits = heap
-                .allocate_slot_object(
+                .allocate_slots(
                     effect_map,
                     &[false_object.as_value(), false_object.as_value()],
                 )
-                .promote_to_handle()
                 .cast();
 
-            let universe = heap
-                .allocate_slot_object(universe_map, &[])
-                .promote_to_handle()
-                .cast::<HeapValue>();
+            let universe =
+                heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
 
             let dip_code = self.inner.code_heap.push(Block {
                 instructions: [
@@ -333,18 +304,17 @@ impl VM {
             });
 
             // SAFETY: just allocated
-            let dip_body = heap.allocate_array(&[]).promote_to_handle();
+            let dip_body = heap.allocate_array(&[]);
 
-            let dip_quotation = heap
-                .allocate_quotation(dip_body, dip_code, 2, 1)
-                .promote_to_handle();
+            let dip_quotation =
+                heap.allocate_quotation(dip_body, dip_code, 2, 1);
 
             let message_self = self.intern_string_message("self", &mut heap);
 
             let specials = SpecialObjects {
                 universe,
-                parsers: parsers.promote_to_handle().cast(),
-                stack_object: stack_object.promote_to_handle().cast(),
+                parsers: parsers.cast(),
+                stack_object: stack_object.cast(),
                 bytearray_traits,
                 array_traits,
                 fixnum_traits,
@@ -444,7 +414,9 @@ impl SpecialObjects {
                 float_traits: Value::zero().as_heap_handle_unchecked(),
                 bignum_traits: Value::zero().as_heap_handle_unchecked(),
                 quotation_traits: Value::zero().as_heap_handle_unchecked(),
-                primitive_vector_map: Value::zero().as_heap_handle_unchecked(),
+                primitive_vector_map: Value::zero()
+                    .as_heap_handle_unchecked()
+                    .cast(),
                 effect_traits: Value::zero().as_heap_handle_unchecked(),
                 method_traits: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),

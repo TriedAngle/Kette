@@ -1,5 +1,5 @@
 use crate::{
-    ActivationType, ExecutionResult, PrimitiveContext, Quotation,
+    ActivationType, Allocator, ExecutionResult, PrimitiveContext, Quotation,
     primitives::{bool_object, inputs, outputs},
 };
 

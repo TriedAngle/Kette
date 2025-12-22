@@ -1,8 +1,8 @@
 use crate::{
-    Activation, ActivationStack, ActivationType, ExecutionState, Handle,
-    HeapProxy, Instruction, LookupResult, Method, PrimitiveMessageIndex,
-    Quotation, Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value,
-    get_primitive, transmute,
+    Activation, ActivationStack, ActivationType, Allocator, ExecutionState,
+    Handle, HeapProxy, Instruction, LookupResult, Method,
+    PrimitiveMessageIndex, Quotation, Selector, SlotObject, SlotTags,
+    ThreadProxy, VMProxy, Value, get_primitive, transmute,
 };
 
 pub struct Interpreter {
@@ -192,13 +192,13 @@ impl Interpreter {
             }
             Instruction::AllocateSlotObject { map } => {
                 tracing::trace!("allocate_slot_object: {:?}", map);
-                // SAFETY: map must be valid here
-                let map_ref = unsafe { map.as_ref() };
-                let slot_count = map_ref.assignable_slots_count();
+                let slot_count = map.assignable_slots_count();
+
                 // SAFETY: not safe yet, TODO: depth check
                 let slots =
                     unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
-                let obj = self.heap.allocate_slot_object(map, slots);
+
+                let obj = self.heap.allocate_slots(map, slots);
                 self.state.push(obj.into());
                 self.record_depth();
                 ExecutionResult::Normal

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use parking_lot::RwLock;
 
-use crate::{ByteArray, Handle, HeapProxy, Message};
+use crate::{Allocator, ByteArray, Handle, HeapProxy, Message};
 
 /// TODO: single RW lock is bad in multithreading.
 /// I think a better solution would be to have first thread local
@@ -28,17 +28,16 @@ impl Strings {
         }
     }
 
-    pub fn get(&self, s: &str, heap: &mut HeapProxy) -> Handle<ByteArray> {
+    pub fn get(&self, s: &str, heap: &mut impl Allocator) -> Handle<ByteArray> {
         {
             let table = self.table.read();
             if let Some(ba) = table.get(s).copied() {
                 return ba;
             }
         }
-        let ba = heap.allocate_bytearray_data(s.as_bytes());
+        let ba = heap.allocate_aligned_bytearray(s.as_bytes(), 8);
         let s = s.to_owned();
         // Safety: the table is part of the rootset;
-        let ba = unsafe { ba.promote_to_handle() };
         {
             let mut table = self.table.write();
             table.insert(s, ba);
@@ -84,13 +83,9 @@ impl Messages {
             }
         }
 
-        let message = heap.allocate_message(ba.into());
-        // SAFETY: this is safe
-        let message = unsafe { message.promote_to_handle() };
-        {
-            let mut table = self.table.write();
-            table.insert(ba, message);
-        }
+        let message = heap.allocate_message(ba);
+        let mut table = self.table.write();
+        table.insert(ba, message);
         message
     }
 }

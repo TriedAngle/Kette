@@ -25,9 +25,7 @@ pub struct Array {
 
 impl Array {
     /// initialize array with data
-    /// # Safety
-    /// must be allocated with correct size
-    pub unsafe fn init_with_data(&mut self, data: &[Value]) {
+    pub fn init_with_data(&mut self, data: &[Value]) {
         // SAFETY: safe if contract ok
         unsafe { self.init(data.len()) };
         // SAFETY: safe if contract ok

@@ -29,12 +29,7 @@ impl QuotationMap {
 
     /// # Safety
     /// must be correctly allocated
-    pub unsafe fn init(
-        &mut self,
-        code: *const Block,
-        input: usize,
-        output: usize,
-    ) {
+    pub fn init(&mut self, code: *const Block, input: usize, output: usize) {
         // SAFETY: safe if contract holds
         unsafe { self.map.init_quotation(code as _, input, output) };
     }
@@ -64,11 +59,7 @@ pub struct Quotation {
 impl Quotation {
     /// # Safety
     /// must be allocated with corretc size
-    pub unsafe fn init(
-        &mut self,
-        body: Tagged<Array>,
-        map: Tagged<QuotationMap>,
-    ) {
+    pub fn init(&mut self, body: Tagged<Array>, map: Tagged<QuotationMap>) {
         self.header = Header::encode_object(
             ObjectType::Quotation,
             0,

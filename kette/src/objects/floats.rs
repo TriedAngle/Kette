@@ -10,10 +10,7 @@ pub struct Float {
 }
 
 impl Float {
-    /// # Safety
-    /// internal function
-    /// must be allocated with correct size and alignment
-    pub unsafe fn init(&mut self, value: f64) {
+    pub fn init(&mut self, value: f64) {
         self.header = Header::encode_object(
             ObjectType::Float,
             0,

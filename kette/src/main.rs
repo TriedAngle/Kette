@@ -1,8 +1,8 @@
 use clap::Parser as ClapParser;
 use kette::{
-    Array, Block, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
-    HeapCreateInfo, Instruction, Interpreter, Parser, Tagged, ThreadProxy, VM,
-    VMCreateInfo, VMThread, Value,
+    Allocator, Array, Block, BytecodeCompiler, ExecutionState,
+    ExecutionStateInfo, HeapSettings, Instruction, Interpreter, Parser, Tagged,
+    ThreadProxy, VM, VMCreateInfo, VMThread, Value,
 };
 use std::{fs, process};
 
@@ -33,15 +33,14 @@ fn main() {
 
     let vm = VM::new(VMCreateInfo {
         image: None,
-        heap: HeapCreateInfo {
-            size: 1024 * 64 * 4,
+        heap: HeapSettings {
             ..Default::default()
         },
     });
 
     let main_proxy = vm.new_proxy();
 
-    let heap = main_proxy.shared.heap.create_proxy();
+    let heap = main_proxy.shared.heap.proxy();
 
     let state = ExecutionState::new(&ExecutionStateInfo {
         stack_size: 128,
@@ -94,9 +93,6 @@ fn main() {
 
         let quotation =
             interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
-
-        // SAFETY: this is safe
-        let quotation = unsafe { quotation.promote_to_handle() };
 
         interpreter.add_quotation(quotation);
 

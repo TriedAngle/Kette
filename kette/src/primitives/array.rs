@@ -1,4 +1,6 @@
-use crate::{Array, BytecodeCompiler, ExecutionResult, PrimitiveContext};
+use crate::{
+    Allocator, Array, BytecodeCompiler, ExecutionResult, PrimitiveContext,
+};
 
 pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: required by contract, will be eruntime checked
@@ -8,8 +10,7 @@ pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // TODO: update this with inferred
     let quotation = ctx.heap.allocate_quotation(array, block, 0, 0);
 
-    // SAFETY: no gc here
-    ctx.outputs[0] = unsafe { quotation.promote_to_handle().into() };
+    ctx.outputs[0] = quotation.into();
     ExecutionResult::Normal
 }
 
@@ -37,18 +38,15 @@ pub fn array_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: safe by contract
     let size = unsafe { size_val.as_fixnum::<usize>() };
 
-    let default_val = ctx.vm.specials().false_object.as_value(); //
+    let default_val = ctx.vm.specials().false_object.as_value();
 
-    let arr_tagged = ctx.heap.allocate_array_raw(size); //
+    // SAFETY: we initialize
+    let mut arr = unsafe { ctx.heap.allocate_raw_array(size) };
 
-    // SAFETY: allocate_array_raw returns a valid pointer to allocated memory
-    let arr = unsafe { arr_tagged.as_mut() };
     arr.fields_mut().fill(default_val);
 
     // SAFETY: object is now fully initialized
-    unsafe {
-        ctx.outputs[0] = arr_tagged.promote_to_handle().cast();
-    }
+    ctx.outputs[0] = arr.into();
     ExecutionResult::Normal
 }
 

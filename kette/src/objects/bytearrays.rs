@@ -1,5 +1,5 @@
 use core::str;
-use std::{mem, ptr};
+use std::{alloc::Layout, mem, ptr};
 
 use crate::{
     Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
@@ -33,7 +33,7 @@ impl ByteArray {
     /// # Safety
     /// this sets metadata, should only be called internally
     /// memory allocation must be at least size
-    pub unsafe fn init_zeroed(&mut self, size: usize) {
+    pub fn init_zeroed(&mut self, size: usize) {
         // Safety: same contract as above
         unsafe { self.init(size) };
         let data = self.data.as_mut_ptr();
@@ -45,7 +45,7 @@ impl ByteArray {
     /// # Safety
     /// this sets metadata, should only be called internally
     /// data must be same size as allocated
-    pub unsafe fn init_data(&mut self, data: &[u8]) {
+    pub fn init_data(&mut self, data: &[u8]) {
         let size = data.len();
         // Safety: same contract as above
         unsafe { self.init(size) };
@@ -76,6 +76,14 @@ impl ByteArray {
     /// convert bytearray to utf8
     pub fn as_utf8(&self) -> Result<&str, str::Utf8Error> {
         str::from_utf8(self.as_bytes())
+    }
+
+    pub fn required_layout_size_align(size: usize, align: usize) -> Layout {
+        let new = Layout::new::<Self>();
+        let inner =
+            Layout::from_size_align(size, align).expect("create layout");
+        let (merged, _) = new.extend(inner).expect("new layout");
+        merged
     }
 }
 

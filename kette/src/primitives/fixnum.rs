@@ -1,7 +1,7 @@
 use std::ops::Neg;
 
 use crate::{
-    ExecutionResult, NumberError, PrimitiveContext, Tagged,
+    Allocator, ExecutionResult, NumberError, PrimitiveContext, Tagged,
     primitives::bool_object,
 };
 
@@ -198,9 +198,9 @@ pub fn fixnum_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: receiver must be valid fixnum
     let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
     let string = value.to_string();
-    let ba = ctx.heap.allocate_bytearray_data(string.as_bytes());
+    let ba = ctx.heap.allocate_aligned_bytearray(string.as_bytes(), 8);
     // SAFETY: no gc here
-    ctx.outputs[0] = unsafe { ba.promote_to_handle().cast() };
+    ctx.outputs[0] = ba.into();
     ExecutionResult::Normal
 }
 

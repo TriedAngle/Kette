@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    Array, ByteArray, ExecutionResult, Handle, ObjectType, PrimitiveContext,
-    SlotDescriptor, SlotObject, SlotTags, Tagged, Value, primitives::inputs,
+    Allocator, Array, ByteArray, ExecutionResult, Handle, ObjectType,
+    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, Tagged, Value,
+    primitives::inputs,
 };
 
 #[inline]
@@ -68,11 +69,11 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     // Allocate new map and patch ONLY this object
-    let new_map = ctx.heap.allocate_slot_map(&new_slots);
+    let new_map = ctx.heap.allocate_slots_map(&new_slots);
 
     // SAFETY: we have exclusive access; patch map pointer
     unsafe {
-        (*target_ptr).map = new_map;
+        (*target_ptr).map = new_map.into();
     }
 
     ExecutionResult::Normal
@@ -122,11 +123,11 @@ pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     // Allocate new map and patch ONLY this object
-    let new_map = ctx.heap.allocate_slot_map(&new_slots);
+    let new_map = ctx.heap.allocate_slots_map(&new_slots);
 
     // SAFETY: we have exclusive access; patch map pointer
     unsafe {
-        (*target_ptr).map = new_map;
+        (*target_ptr).map = new_map.into();
     }
 
     ExecutionResult::Normal
@@ -153,12 +154,12 @@ pub fn clone_obj(ctx: &mut PrimitiveContext) -> ExecutionResult {
         Some(ObjectType::Slot) => {
             // SAFETY: Type checked via header
             let slot_obj = unsafe { obj.cast::<SlotObject>() };
-            let map = slot_obj.map;
+            // SAFETY: this is safe
+            let map = unsafe { slot_obj.map.promote_to_handle() };
             let slots = slot_obj.inner().slots();
 
-            let res = ctx.heap.allocate_slot_object(map, slots);
-            // SAFETY: just allocated
-            unsafe { res.promote_to_handle().cast() }
+            let res = ctx.heap.allocate_slots(map, slots);
+            res.into()
         }
         Some(ObjectType::Array) => {
             // SAFETY: Type checked via header
@@ -166,17 +167,17 @@ pub fn clone_obj(ctx: &mut PrimitiveContext) -> ExecutionResult {
             let data = arr.inner().fields();
 
             let res = ctx.heap.allocate_array(data);
-            // SAFETY: just allocated
-            unsafe { res.promote_to_handle().cast() }
+            res.into()
         }
         Some(ObjectType::ByteArray) => {
             // SAFETY: Type checked via header
             let ba = unsafe { obj.cast::<ByteArray>() };
             let data = ba.as_bytes();
 
-            let res = ctx.heap.allocate_bytearray_data(data);
+            // TODO: handle alignment
+            let res = ctx.heap.allocate_aligned_bytearray(data, 8);
             // SAFETY: just allocated
-            unsafe { res.promote_to_handle().cast() }
+            res.into()
         }
         // For other types (Method, Quotation, Float etc.) we typically return self
         // Falling back to identity for now.
@@ -209,18 +210,18 @@ pub fn clone_obj_boa(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: checked
     let prototype = unsafe { obj.cast::<SlotObject>() };
 
-    let map = prototype.map;
+    // SAFETY: this is safe
+    let map = unsafe { prototype.map.promote_to_handle() };
 
-    // SAFETY: safe by contract
-    let count = unsafe { map.as_ref().assignable_slots_count() };
+    let count = map.assignable_slots_count();
 
     // SAFETY: We assume the interpreter ensures stack depth before calling,
     // or pop_slice_unchecked handles bounds implicitly/unsafe.
     let slots_data = unsafe { ctx.state.stack_pop_slice_unchecked(count) };
 
-    let new_obj = ctx.heap.allocate_slot_object(map, slots_data);
+    let new_obj = ctx.heap.allocate_slots(map, slots_data);
 
     // SAFETY: this is safe
-    ctx.outputs[0] = unsafe { new_obj.promote_to_handle().cast() };
+    ctx.outputs[0] = new_obj.into();
     ExecutionResult::Normal
 }

@@ -1,6 +1,7 @@
 mod bytecode;
 mod compiler;
 
+mod allocator;
 mod heap;
 mod interning;
 mod interpreter;
@@ -15,12 +16,15 @@ mod tagged;
 mod visitor;
 mod vm;
 
+pub use allocator::{AllocationResult, AllocationType, Allocator, Search};
+pub use heap::{Heap, HeapProxy, HeapSettings, Tlab};
+
 pub use objects::activation::{
     Activation, ActivationObject, ActivationStack, ActivationType,
 };
 pub use objects::arrays::Array;
 pub use objects::bytearrays::ByteArray;
-pub use objects::executable::{ExecutableMap, Method, MethodMap};
+pub use objects::executable::{ExecutableMap, Method, MethodMap, StackEffect};
 pub use objects::floats::Float;
 pub use objects::message::Message;
 pub use objects::parser::{ParsedToken, Parser, Token};
@@ -41,7 +45,6 @@ pub use primitives::Vector;
 
 pub use bytecode::{Block, Instruction};
 pub use compiler::BytecodeCompiler;
-pub use heap::{Heap, HeapCreateInfo, HeapProxy, HeapSettings};
 pub use interning::Strings;
 pub use interpreter::{ExecutionResult, Interpreter, NumberError};
 pub use lookup::{LookupResult, Selector, VisitedLink};
@@ -52,7 +55,7 @@ pub use primitives::{
 };
 
 pub use stack::{ExecutionState, ExecutionStateInfo};
-pub use system::{PAGE_SIZE, map_memory, unmap_memory};
+pub use system::{OS_PAGE_SIZE, PAGE_SIZE, map_memory, unmap_memory};
 pub use tagged::{Handle, OBECT_TAG_MASK, Tagged, Value, ValueTag, transmute};
 
 pub use visitor::{Visitable, Visitor};

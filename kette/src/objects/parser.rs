@@ -1,9 +1,9 @@
 use std::{mem, num::IntErrorKind, sync::Arc};
 
 use crate::{
-    Header, HeaderFlags, HeapObject, HeapProxy, LookupResult, Object,
-    ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy,
-    Visitable, VisitedLink,
+    Allocator, Header, HeaderFlags, HeapObject, HeapProxy, LookupResult,
+    Object, ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged,
+    VMProxy, Visitable, VisitedLink,
 };
 
 #[repr(C)]
@@ -64,7 +64,7 @@ impl Parser {
 
         Self {
             header,
-            map,
+            map: map.as_tagged(),
             code: Arc::from(code),
             end,
             offset: 0,

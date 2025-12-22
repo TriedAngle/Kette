@@ -304,6 +304,12 @@ impl<T: Object> From<Tagged<T>> for Value {
     }
 }
 
+impl<T: Object> From<Handle<T>> for Value {
+    fn from(value: Handle<T>) -> Self {
+        value.as_value()
+    }
+}
+
 impl<T: PtrSizedObject> From<T> for Tagged<T> {
     #[inline]
     fn from(value: T) -> Self {
@@ -405,6 +411,34 @@ impl<T: Object> hash::Hash for Handle<T> {
 }
 
 impl<T: HeapObject> Handle<T> {
+    /// Create a new Handle from the value
+    /// # Safety
+    /// - the raw value must be correctly tagged and either a fixnum or a reference to a heap object
+    /// - it must be guaranted to be GC stable throughout its whole lifetime
+    #[inline]
+    const unsafe fn new_raw(value: u64) -> Self {
+        Self {
+            data: value,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a new Handle from the ptr
+    /// # Safety
+    /// it must be guaranted to be GC stable throughout its whole lifetime
+    #[inline]
+    pub unsafe fn new_ptr(ptr: *mut T) -> Handle<T> {
+        let value = ptr as u64;
+        debug_assert_eq!(
+            value & OBECT_TAG_MASK,
+            0,
+            "pointer must be aligned so low 2 bits are free"
+        );
+        let tagged = value | (ValueTag::Reference as u64);
+        // SAFETY: this is safe, we check before
+        unsafe { Self::new_raw(tagged) }
+    }
+
     #[inline]
     pub fn as_object(self) -> Tagged<T> {
         // SAFETY: this is safe, Handle is stricter than Tagged
@@ -551,12 +585,6 @@ impl From<Handle<i64>> for Handle<Value> {
             data: value.data,
             _marker: PhantomData,
         }
-    }
-}
-
-impl From<Handle<Value>> for Value {
-    fn from(value: Handle<Value>) -> Self {
-        value.inner()
     }
 }
 

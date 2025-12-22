@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 
 use crate::{
-    Handle, Message, PrimitiveMessageIndex, Quotation, SlotMap, Tagged, Value,
+    Handle, Message, PrimitiveMessageIndex, Quotation, SlotMap, Value,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -31,7 +31,7 @@ pub enum Instruction {
     SuperSendNamed { message: &'static str },
     DelegatSendeNamed { message: &'static str },
 
-    AllocateSlotObject { map: Tagged<SlotMap> },
+    AllocateSlotObject { map: Handle<SlotMap> },
 }
 
 // TODO: replace instructions to actual byte instructions

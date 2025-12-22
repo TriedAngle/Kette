@@ -1,5 +1,6 @@
 use crate::{
-    ByteArray, ExecutionResult, PrimitiveContext, Value, primitives::inputs,
+    Allocator, ByteArray, ExecutionResult, ObjectType, PrimitiveContext, Value,
+    primitives::inputs,
 };
 use std::ptr;
 
@@ -46,12 +47,9 @@ pub fn bytearray_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     // allocate_bytearray inside heap.rs calls init_zeroed internally,
     // which uses ptr::write_bytes to zero the memory.
-    let ba = ctx.heap.allocate_bytearray(size);
+    let ba = ctx.heap.allocate_aligned_bytearray_zeroed(size, 8);
 
-    // SAFETY: just allocated
-    unsafe {
-        ctx.outputs[0] = ba.promote_to_handle().cast();
-    }
+    ctx.outputs[0] = ba.into();
     ExecutionResult::Normal
 }
 
@@ -155,7 +153,7 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     // SAFETY: checked
     let src_handle = unsafe { src_obj_v.as_heap_value_handle() };
-    if src_handle.header.object_type() != Some(crate::ObjectType::ByteArray) {
+    if src_handle.header.object_type() != Some(ObjectType::ByteArray) {
         return ExecutionResult::Panic(
             "bytearrayMemcpy: source must be a bytearray",
         );

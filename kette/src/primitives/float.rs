@@ -1,13 +1,13 @@
 use crate::{
-    ExecutionResult, Float, Handle, NumberError, ObjectType, PrimitiveContext,
-    Tagged, Value, primitives::bool_object,
+    Allocator, ExecutionResult, Float, Handle, NumberError, ObjectType,
+    PrimitiveContext, Value, primitives::bool_object,
 };
 
 type Float2Op = fn(
     ctx: &mut PrimitiveContext,
     a: Handle<Float>,
     b: Handle<Float>,
-) -> Result<Tagged<Float>, NumberError>;
+) -> Result<Handle<Float>, NumberError>;
 
 fn float_binop(
     ctx: &mut PrimitiveContext<'_, '_>,
@@ -18,11 +18,7 @@ fn float_binop(
     // SAFETY: this is safe
     let a = unsafe { ctx.inputs[0].cast::<Float>() };
     match op(ctx, a, b) {
-        Ok(res) => {
-            ctx.outputs[0] =
-                // SAFETY: this is safe
-                unsafe { res.promote_to_handle().as_value_handle() }
-        }
+        Ok(res) => ctx.outputs[0] = res.into(),
         Err(err) => return ExecutionResult::NumberError(err),
     }
     ExecutionResult::Normal
@@ -31,7 +27,7 @@ fn float_binop(
 type Float1Op = fn(
     ctx: &mut PrimitiveContext,
     a: Handle<Float>,
-) -> Result<Tagged<Float>, NumberError>;
+) -> Result<Handle<Float>, NumberError>;
 
 fn float_op(
     ctx: &mut PrimitiveContext<'_, '_>,
@@ -40,11 +36,7 @@ fn float_op(
     // SAFETY: this is safe
     let a = unsafe { ctx.receiver.cast::<Float>() };
     match op(ctx, a) {
-        Ok(res) => {
-            ctx.outputs[0] =
-                // SAFETY: this is safe
-                unsafe { res.promote_to_handle().as_value_handle() }
-        }
+        Ok(res) => ctx.outputs[0] = res.into(),
         Err(err) => return ExecutionResult::NumberError(err),
     }
     ExecutionResult::Normal
@@ -296,9 +288,8 @@ pub fn float_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: receiver must be valid float
     let value = unsafe { ctx.receiver.cast::<Float>() };
     let string = value.value.to_string();
-    let ba = ctx.heap.allocate_bytearray_data(string.as_bytes());
-    // SAFETY: no gc here
-    ctx.outputs[0] = unsafe { ba.promote_to_handle().cast() };
+    let ba = ctx.heap.allocate_aligned_bytearray(string.as_bytes(), 8);
+    ctx.outputs[0] = ba.into();
     ExecutionResult::Normal
 }
 

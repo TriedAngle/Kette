@@ -4,10 +4,11 @@
 use std::ops::Deref;
 
 use crate::{
-    Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
-    Message, Method, Object, ObjectType, ParsedToken, Parser, PrimitiveContext,
-    PrimitiveMessageIndex, Quotation, Selector, SlotDescriptor, SlotTags,
-    Tagged, Value, Vector, get_primitive, primitive_index,
+    Allocator, Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle,
+    LookupResult, Message, Method, Object, ObjectType, ParsedToken, Parser,
+    PrimitiveContext, PrimitiveMessageIndex, Quotation, Selector,
+    SlotDescriptor, SlotTags, Tagged, Value, Vector, get_primitive,
+    primitive_index,
 };
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
@@ -53,9 +54,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: must exist by contract
     let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
 
-    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 100);
-    // SAFETY: just created
-    let mut body_accum = unsafe { vector.promote_to_handle() };
+    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
 
     let end = ctx.vm.intern_string_message("]", ctx.heap);
 
@@ -65,11 +64,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     // SAFETY: TODO: must be added to handleset
-    let body = unsafe {
-        ctx.heap
-            .allocate_array(body_accum.as_slice())
-            .promote_to_handle()
-    };
+    let body = unsafe { ctx.heap.allocate_array(body_accum.as_slice()) };
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
     let code = ctx.vm.shared.code_heap.push(block);
     // TODO: this must be updated
@@ -149,16 +144,12 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             return Err("Parsing Object: Empty slot initializer");
         }
         let arr = ctx.heap.allocate_array(expr);
-        // SAFETY: just allocated
-        let arr_h = unsafe { arr.promote_to_handle() };
-        let block = BytecodeCompiler::compile(&ctx.vm.shared, arr_h);
+        let block = BytecodeCompiler::compile(&ctx.vm.shared, arr);
         let code = ctx.vm.shared.code_heap.push(block);
-        let quot = ctx.heap.allocate_quotation(arr_h, code, 0, 0);
-        // SAFETY: just allocated
-        let quot_h = unsafe { quot.promote_to_handle() };
+        let quot = ctx.heap.allocate_quotation(arr, code, 0, 0);
 
         let before = ctx.state.depth;
-        ctx.interpreter.add_quotation(quot_h);
+        ctx.interpreter.add_quotation(quot);
         let exec_res = ctx.interpreter.execute_with_depth();
 
         if exec_res != ExecutionResult::Normal {
@@ -382,9 +373,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         };
 
         // Parse initializer until '.' OR '|)' (dot optional if ends at |))
-        let expr_vec = Vector::new(ctx.heap, &ctx.vm.shared, 8);
-        // SAFETY: just created
-        let expr_accum = unsafe { expr_vec.promote_to_handle() };
+        let expr_accum = Vector::new(ctx.heap, &ctx.vm.shared, 8);
         let (expr_accum, ended_by) =
             match parse_until_dot_or_end(ctx, dot, obj_end, expr_accum) {
                 Ok(v) => v,
@@ -441,10 +430,8 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
     }
 
-    let map = ctx.heap.allocate_slot_map(&slot_descs);
-    let obj = ctx
-        .heap
-        .allocate_slot_object(map, assignable_inits.as_slice());
+    let map = ctx.heap.allocate_slots_map(&slot_descs);
+    let obj = ctx.heap.allocate_slots(map, assignable_inits.as_slice());
     outer_accum.push(obj.into(), ctx.heap, &ctx.vm.shared);
     ctx.outputs[0] = outer_accum.into();
     ExecutionResult::Normal
@@ -463,13 +450,9 @@ fn parse_effect_inner(
         _ => return Err("Parsing Effect: Expected '('"),
     }
 
-    let in_vec = Vector::new(ctx.heap, &ctx.vm.shared, 0);
-    // SAFETY: just created
-    let mut inputs = unsafe { in_vec.promote_to_handle() };
+    let mut inputs = Vector::new(ctx.heap, &ctx.vm.shared, 0);
 
-    let out_vec = Vector::new(ctx.heap, &ctx.vm.shared, 0);
-    // SAFETY: just created
-    let mut outputs = unsafe { out_vec.promote_to_handle() };
+    let mut outputs = Vector::new(ctx.heap, &ctx.vm.shared, 0);
 
     let mut reading_inputs = true;
     let mut saw_separator = false;
@@ -576,22 +559,14 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     // Convert Vectors to Arrays for Method storage
     // SAFETY: allocating this here
-    let inputs_arr = unsafe {
-        ctx.heap
-            .allocate_array(inputs_vec.as_slice())
-            .promote_to_handle()
-    };
+    let inputs_arr = unsafe { ctx.heap.allocate_array(inputs_vec.as_slice()) };
     // SAFETY: allocating this here
-    let outputs_arr = unsafe {
-        ctx.heap
-            .allocate_array(outputs_vec.as_slice())
-            .promote_to_handle()
-    };
+    let outputs_arr =
+        unsafe { ctx.heap.allocate_array(outputs_vec.as_slice()) };
 
     // Parse body until ';'
-    let body_vec = Vector::new(ctx.heap, &ctx.vm.shared, 100);
+    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
     // SAFETY: just created
-    let mut body_accum = unsafe { body_vec.promote_to_handle() };
 
     let end = ctx.vm.intern_string_message(";", ctx.heap);
 
@@ -602,19 +577,15 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     // Compile into a quotation (with effect counts)
     // SAFETY: allocating here
-    let body_arr = unsafe {
-        ctx.heap
-            .allocate_array(body_accum.as_slice())
-            .promote_to_handle()
-    };
+    let body_arr = unsafe { ctx.heap.allocate_array(body_accum.as_slice()) };
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
     let code = ctx.vm.shared.code_heap.push(block);
 
     let effect = ctx
         .heap
-        .allocate_effect_object(inputs_arr.into(), outputs_arr.into());
+        .allocate_effect(inputs_arr.into(), outputs_arr.into());
     let method_map =
-        ctx.heap.allocate_method_map(name.into(), code, &[], effect);
+        ctx.heap.allocate_method_map(name, code, &[], effect.into());
     let method = ctx.heap.allocate_method_object(method_map);
 
     accumulator.push(method.into(), ctx.heap, &ctx.vm.shared);
@@ -626,9 +597,7 @@ pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 // -- array
 pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 100);
-    // SAFETY: just created
-    let mut accumulator = unsafe { vector.promote_to_handle() };
+    let accumulator = Vector::new(ctx.heap, &ctx.vm.shared, 100);
 
     let res = parse_until_inner(ctx, None, accumulator);
     if res != ExecutionResult::Normal {
@@ -636,10 +605,8 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     let accumulated = ctx.heap.allocate_array(accumulator.as_slice());
-    // SAFETY: just created, will become handle there anyways
-    let acummulated = unsafe { accumulated.promote_to_handle() };
 
-    ctx.outputs[0] = acummulated.as_value_handle();
+    ctx.outputs[0] = accumulated.as_value_handle();
 
     ExecutionResult::Normal
 }
@@ -647,9 +614,7 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
 // TODO: this is not correct, use parse_complete as correct example
 // end -- array
 pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let vector = Vector::new(ctx.heap, &ctx.vm.shared, 10);
-    // SAFETY: just created
-    let mut accumulator = unsafe { vector.promote_to_handle() };
+    let accumulator = Vector::new(ctx.heap, &ctx.vm.shared, 10);
 
     // SAFETY: must exist
     let end = unsafe { ctx.state.pop_unchecked() };
@@ -664,7 +629,7 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // trimming
     let accumulated = ctx.heap.allocate_array(accumulator.as_slice());
     // SAFETY: just created, will become handle there anyways
-    ctx.outputs[0] = unsafe { accumulated.promote_to_handle().into() };
+    ctx.outputs[0] = unsafe { accumulated.into() };
 
     ExecutionResult::Normal
 }

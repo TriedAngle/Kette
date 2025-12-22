@@ -84,9 +84,7 @@ impl SlotDescriptor {
 
 impl SlotMap {
     /// initialize slot map with data
-    /// # Safety
-    /// must be allocated with correct size
-    pub unsafe fn init_with_data(&mut self, slots: &[SlotDescriptor]) {
+    pub fn init_with_data(&mut self, slots: &[SlotDescriptor]) {
         let mut slots = slots.to_vec();
 
         #[inline(always)]
@@ -192,15 +190,9 @@ impl SlotMap {
 }
 
 impl SlotObject {
-    /// # Safety
-    /// object must be allocated with correct size
     /// # Panics
     /// data length must match assignable slot count of map
-    pub unsafe fn init_with_data(
-        &mut self,
-        map: Tagged<SlotMap>,
-        data: &[Value],
-    ) {
+    pub fn init_with_data(&mut self, map: Tagged<SlotMap>, data: &[Value]) {
         // SAFETY: map must be valid here
         let map_slot_count = unsafe { map.as_ref().assignable_slots_count() };
         assert_eq!(map_slot_count, data.len());
@@ -218,6 +210,7 @@ impl SlotObject {
     /// Initialize a slot object
     /// # Safety
     /// the reference must be valid and assignable slots < total slots
+    /// must set the data
     pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
         self.map = map;
         self.header =

@@ -3,9 +3,9 @@
 // later in runtime we define an actual vector
 
 use crate::{
-    Array, ExecutionResult, Header, HeapObject, HeapProxy, Object,
-    PrimitiveContext, SlotHelper, SlotMap, SlotTags, Strings, Tagged, VMShared,
-    Value, Visitable,
+    Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy,
+    Object, PrimitiveContext, SlotHelper, SlotMap, SlotTags, Strings, Tagged,
+    VMShared, Value, Visitable,
 };
 
 #[repr(C)]
@@ -22,21 +22,20 @@ impl Vector {
         heap: &mut HeapProxy,
         vm: &VMShared,
         size: usize,
-    ) -> Tagged<Vector> {
+    ) -> Handle<Vector> {
         let false_obj = vm.specials.false_object.as_value();
-        let raw = heap.allocate_array_raw(size);
-        // SAFETY: this is safe
-        let mut array_handle = unsafe { raw.promote_to_handle() };
-        array_handle.fields_mut().fill(false_obj);
-        let data = &[array_handle.as_value(), 0usize.into()];
-        let map = vm.specials.primitive_vector_map.as_tagged();
-        let vector = heap.allocate_slot_object(map, data);
+        // SAFETY: initialize directly after
+        let mut array = unsafe { heap.allocate_raw_array(size) };
+        array.fields_mut().fill(false_obj);
+        let data = &[array.as_value(), 0usize.into()];
+        let map = vm.specials.primitive_vector_map;
+        let vector = heap.allocate_slots(map, data);
         // SAFETY: this is safe
         unsafe { vector.cast() }
     }
 
     #[rustfmt::skip]
-    pub fn new_map(heap: &mut HeapProxy, strings: &Strings) -> Tagged<SlotMap> {
+    pub fn new_map(heap: &mut HeapProxy, strings: &Strings) -> Handle<SlotMap> {
         heap.allocate_slot_map_helper(strings, &[
             SlotHelper::assignable("data", Value::from_usize(0), SlotTags::empty()),
             SlotHelper::assignable("length", Value::from_usize(1), SlotTags::empty()),
@@ -65,19 +64,18 @@ impl Vector {
             let new_cap = if current_cap == 0 { 4 } else { current_cap * 2 };
 
             let false_obj = vm.specials.false_object.as_value();
-            let raw = heap.allocate_array_raw(new_cap);
+            // SAFETY: initialize directly after
+            let mut array = unsafe { heap.allocate_raw_array(new_cap) };
 
-            // SAFETY: just allocated
-            let array_handle = unsafe { raw.as_mut() };
-            array_handle.fields_mut().fill(false_obj);
+            array.fields_mut().fill(false_obj);
 
             // SAFETY: this must exist
             let old_array = unsafe { self.data.as_ref() };
 
-            array_handle.fields_mut()[..current_len]
+            array.fields_mut()[..current_len]
                 .copy_from_slice(old_array.fields());
 
-            self.data = raw;
+            self.data = array.as_tagged();
         }
         // SAFETY: size checked
         unsafe {

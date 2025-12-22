@@ -1,8 +1,8 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Array, ByteArray, Header, HeaderFlags, HeapObject, LookupResult, Map,
-    MapType, Object, ObjectType, QuotationMap, Selector, SlotDescriptor,
+    Array, ByteArray, Handle, Header, HeaderFlags, HeapObject, LookupResult,
+    Map, MapType, Object, ObjectType, QuotationMap, Selector, SlotDescriptor,
     SlotMap, Tagged, Visitable, VisitedLink,
 };
 
@@ -133,9 +133,9 @@ impl MethodMap {
     /// internal function, dicouraged to be used.
     /// must have valid allocation size
     /// inputs must not be null/false
-    pub unsafe fn init_with_data(
+    pub fn init_with_data(
         &mut self,
-        name: Tagged<ByteArray>,
+        name: Handle<ByteArray>,
         effect: Tagged<StackEffect>,
         code_ptr: usize,
         slots: &[SlotDescriptor],
@@ -158,7 +158,7 @@ impl MethodMap {
 
         // SAFETY: safe by contract
         unsafe { self.map.init_method(code_ptr, input, output) };
-        self.name = name;
+        self.name = name.as_tagged();
         self.effect = effect;
         self.slott_count = Tagged::new_value(slots.len());
 
@@ -205,11 +205,7 @@ impl Method {
 impl StackEffect {
     /// # Safety
     /// internal function do not use pls
-    pub unsafe fn init(
-        &mut self,
-        inputs: Tagged<Array>,
-        outputs: Tagged<Array>,
-    ) {
+    pub fn init(&mut self, inputs: Tagged<Array>, outputs: Tagged<Array>) {
         self.header = Header::encode_object(
             ObjectType::Effect,
             0,

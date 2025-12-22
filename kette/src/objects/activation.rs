@@ -2,8 +2,7 @@ use std::{alloc::Layout, mem};
 
 use crate::{
     Block, ExecutableMap, Handle, Header, HeaderFlags, HeapObject,
-    LookupResult, MethodMap, Object, Selector, Tagged, Value, Visitable,
-    VisitedLink,
+    LookupResult, MethodMap, Object, Selector, Value, Visitable, VisitedLink,
 };
 
 #[repr(C)]
@@ -51,7 +50,7 @@ impl ActivationObject {
     /// must all be valid ojects and correctly sized allocated
     /// # Panics
     /// arguments must have same length as map requires
-    pub unsafe fn init(
+    pub fn init(
         &mut self,
         receiver: Handle<Value>,
         map: Handle<ExecutableMap>,
@@ -152,11 +151,10 @@ impl ActivationStack {
 
     pub fn new_activation(
         &mut self,
-        object: Tagged<ActivationObject>,
+        object: Handle<ActivationObject>,
         ty: ActivationType,
     ) {
         // SAFETY: part of gc scan
-        let object = unsafe { object.promote_to_handle() };
         let activation = Activation {
             object,
             ty,

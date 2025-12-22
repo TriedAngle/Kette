@@ -14,9 +14,7 @@ pub struct Message {
 
 impl Message {
     /// initialize message
-    /// # Safety
-    /// value must be interned, later code assumes this
-    pub unsafe fn init(&mut self, value: Tagged<ByteArray>) {
+    pub fn init(&mut self, value: Tagged<ByteArray>) {
         self.header = Header::encode_object(
             ObjectType::Message,
             0,
