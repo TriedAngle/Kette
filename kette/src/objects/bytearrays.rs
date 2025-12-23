@@ -2,8 +2,8 @@ use core::str;
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Header, HeapObject, LookupResult, Object, ObjectType, Selector, Tagged,
-    Visitable, VisitedLink, Visitor,
+    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector,
+    Tagged, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]
@@ -92,7 +92,10 @@ impl Object for ByteArray {
         traits.lookup(selector, link)
     }
 }
+
 impl HeapObject for ByteArray {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::ByteArray as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>() + self.size()
     }

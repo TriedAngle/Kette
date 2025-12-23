@@ -41,6 +41,7 @@ pub enum ObjectType {
     Message     = 0b01000,
     Float       = 0b01001,
     BigNum      = 0b01010,
+    Thread      = 0b01011,
     Max         = 0b11111,
 }
 
@@ -50,9 +51,9 @@ pub enum ObjectType {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MapType {
     Slot = 0b000,
-    // Array = 0b001,
-    Method = 0b100,
-    Quotation = 0b101,
+    Method = 0b101,
+    Quotation = 0b110,
+    Max = 0b11111,
 }
 
 bitflags::bitflags! {
@@ -102,6 +103,9 @@ pub trait PtrSizedObject: Object {
 }
 
 pub trait HeapObject: Object {
+    const KIND: ObjectKind;
+    const TYPE_BITS: u8;
+
     fn header(&self) -> &Header {
         // SAFETY: every heap object has header
         unsafe { std::mem::transmute::<&Self, &Header>(self) }
@@ -240,8 +244,8 @@ impl Header {
         }
         Some(match self.type_bits() {
             0b000 => MapType::Slot,
-            0b100 => MapType::Method,
-            0b101 => MapType::Quotation,
+            0b101 => MapType::Method,
+            0b110 => MapType::Quotation,
             _ => unreachable!("map type doesn't exist"),
         })
     }
@@ -378,6 +382,7 @@ impl Object for HeapValue {
                 // SAFETY: checked
                 unimplemented!()
             }
+            ObjectType::Thread => unimplemented!(),
             ObjectType::Message | ObjectType::Max => {
                 unreachable!("illegal object type for lookup")
             }
@@ -385,6 +390,9 @@ impl Object for HeapValue {
     }
 }
 impl HeapObject for HeapValue {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Max as u8;
+
     fn heap_size(&self) -> usize {
         let obj = match self.header.kind() {
             ObjectKind::Map => {
@@ -458,7 +466,7 @@ impl HeapObject for HeapValue {
                     unsafe { std::mem::transmute::<&HeapValue, &Float>(self) };
                 message.heap_size()
             }
-            ObjectType::BigNum => {
+            ObjectType::BigNum | ObjectType::Thread => {
                 unimplemented!()
             }
             ObjectType::Max => unreachable!(),
@@ -558,7 +566,7 @@ impl Visitable for HeapValue {
                 };
                 message.visit_edges_mut(visitor);
             }
-            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
+            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum | ObjectType::Thread => {}
             ObjectType::Max => unreachable!(),
         };
     }
@@ -625,7 +633,7 @@ impl Visitable for HeapValue {
                 };
                 message.visit_edges(visitor);
             }
-            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
+            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum | ObjectType::Thread => {}
             ObjectType::Max => unreachable!(),
         };
     }
@@ -633,6 +641,8 @@ impl Visitable for HeapValue {
 
 impl Object for Map {}
 impl HeapObject for Map {
+    const KIND: ObjectKind = ObjectKind::Map;
+    const TYPE_BITS: u8 = MapType::Max as u8;
     fn heap_size(&self) -> usize {
         // SAFETY: this is a map
         match unsafe { self.header.map_type().unwrap_unchecked() } {
@@ -654,6 +664,7 @@ impl HeapObject for Map {
                     unsafe { std::mem::transmute::<&Map, &QuotationMap>(self) };
                 map.heap_size()
             }
+            MapType::Max => unreachable!(),
         }
     }
 }
@@ -678,6 +689,7 @@ impl Visitable for Map {
                 let sm: &mut QuotationMap = &mut *(self as *mut Map as *mut _);
                 sm.visit_edges_mut(visitor);
             },
+            Some(MapType::Max) => unreachable!(),
             None => {
                 panic!("visiting map type that doesnt exist")
             }
@@ -702,6 +714,7 @@ impl Visitable for Map {
                 let sm: &QuotationMap = &*(self as *const Map as *const _);
                 sm.visit_edges(visitor);
             },
+            Some(MapType::Max) => unreachable!(),
             None => {
                 panic!("visiting map type that doesnt exist")
             }

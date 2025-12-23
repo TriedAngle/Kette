@@ -1,16 +1,11 @@
 use std::{
-    cell::UnsafeCell,
-    ops::Deref,
-    sync::Arc,
-    thread::{self, JoinHandle},
-    time::Duration,
+    cell::UnsafeCell, mem, ops::Deref, sync::Arc, thread::{self, JoinHandle}, time::Duration
 };
 
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
-    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter,
-    NativeParker, Object, Tagged, VMProxy, Visitable,
+    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter, NativeParker, Object, ObjectKind, ObjectType, Tagged, VMProxy, Visitable
 };
 
 #[derive(Debug)]
@@ -41,7 +36,13 @@ pub struct ThreadObject {
 
 impl Visitable for ThreadObject {}
 impl Object for ThreadObject {}
-impl HeapObject for ThreadObject {}
+impl HeapObject for ThreadObject {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Thread as u8;
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
 
 #[derive(Debug)]
 pub struct ThreadShared {

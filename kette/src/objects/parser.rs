@@ -1,9 +1,7 @@
 use std::{mem, num::IntErrorKind, sync::Arc};
 
 use crate::{
-    Allocator, Header, HeapObject, HeapProxy, LookupResult, Object, ObjectType,
-    Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy, Visitable,
-    VisitedLink,
+    Allocator, Header, HeapObject, HeapProxy, LookupResult, Object, ObjectKind, ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy, Visitable, VisitedLink
 };
 
 #[repr(C)]
@@ -215,6 +213,8 @@ impl Object for Parser {
     }
 }
 impl HeapObject for Parser {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Slot as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }

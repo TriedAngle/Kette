@@ -1,8 +1,7 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Header, HeapObject, LookupResult, Object, ObjectType, Selector, Tagged,
-    Value, Visitable, VisitedLink, Visitor,
+    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink, Visitor
 };
 
 #[repr(C)]
@@ -27,8 +26,6 @@ impl Array {
         };
     }
     /// Initialize a slot object
-    /// # Safety
-    /// must get initialized and allocated with correct size
     pub fn init(&mut self, size: usize) {
         self.header = Header::new_object(ObjectType::Array);
         self.size = size.into();
@@ -128,6 +125,9 @@ impl Object for Array {
 }
 
 impl HeapObject for Array {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Array as u8;
+
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>() + self.size() * mem::size_of::<Value>()
     }
@@ -143,8 +143,3 @@ impl Visitable for Array {
         self.fields().iter().for_each(|&obj| visitor.visit(obj));
     }
 }
-
-// impl Object for ArrayMap {}
-// impl HeapObject for ArrayMap {}
-//
-// impl Visitable for ArrayMap {}

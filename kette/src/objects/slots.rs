@@ -4,8 +4,8 @@ use bitflags::bitflags;
 
 use crate::{
     ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType, Method,
-    Object, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink,
-    Visitor, primitive_index,
+    Object, ObjectKind, ObjectType, Selector, Tagged, Value, Visitable,
+    VisitedLink, Visitor, primitive_index,
 };
 
 bitflags! {
@@ -377,6 +377,8 @@ impl Object for SlotObject {
 }
 
 impl HeapObject for SlotObject {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Slot as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
             + self.assignable_slots() * mem::size_of::<Value>()
@@ -385,8 +387,11 @@ impl HeapObject for SlotObject {
 
 impl Object for SlotMap {}
 impl HeapObject for SlotMap {
+    const KIND: ObjectKind = ObjectKind::Map;
+    const TYPE_BITS: u8 = MapType::Slot as u8;
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>() + self.slot_count()
+        mem::size_of::<Self>()
+            + self.slot_count() * mem::size_of::<SlotDescriptor>()
     }
 }
 

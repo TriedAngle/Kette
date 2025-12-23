@@ -1,8 +1,8 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Block, ExecutableMap, Handle, Header, HeapObject, LookupResult, MethodMap,
-    Object, Selector, Value, Visitable, VisitedLink,
+    Block, ExecutableMap, Handle, Header, HeapObject, LookupResult,
+    Object, ObjectKind, ObjectType, Selector, Value, Visitable, VisitedLink,
 };
 
 #[repr(C)]
@@ -46,8 +46,6 @@ impl Activation {
 }
 
 impl ActivationObject {
-    /// # Safety
-    /// must all be valid ojects and correctly sized allocated
     /// # Panics
     /// arguments must have same length as map requires
     pub fn init(
@@ -56,7 +54,7 @@ impl ActivationObject {
         map: Handle<ExecutableMap>,
         arguments: &[Handle<Value>],
     ) {
-        self.header = Header::new_object(crate::ObjectType::Activation);
+        self.header = Header::new_object(ObjectType::Activation);
         self.map = map;
         self.receiver = receiver;
 
@@ -183,17 +181,18 @@ impl Object for ActivationObject {
 }
 
 impl HeapObject for ActivationObject {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Activation as u8;
+
     fn heap_size(&self) -> usize {
         if let Some(method) = self.map.as_method_map() {
             let slot_count = method.slot_count();
-            return mem::size_of::<MethodMap>()
+            return mem::size_of::<Self>()
                 + slot_count * mem::size_of::<Value>();
         }
 
         if let Some(_quotation) = self.map.as_quotation_map() {
-            unimplemented!("TODO: implement quotation fully")
-            // let slot_count = method.slot_count();
-            // return mem::size_of::<Self>() + slot_count * mem::size_of::<Value>()
+            return mem::size_of::<Self>();
         }
 
         unreachable!("all map types should be covered")

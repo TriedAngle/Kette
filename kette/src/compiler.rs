@@ -29,6 +29,7 @@ impl BytecodeCompiler {
                     | ObjectType::Method
                     | ObjectType::Effect
                     | ObjectType::Float
+                    | ObjectType::Thread
                     | ObjectType::BigNum => {
                         instructions.push(Instruction::PushValue {
                             value: obj.as_value(),

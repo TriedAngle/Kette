@@ -1,8 +1,7 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Array, Block, ExecutableMap, Header, HeapObject, LookupResult, Object,
-    ObjectType, Selector, Tagged, Visitable, VisitedLink,
+    Array, Block, ExecutableMap, Header, HeapObject, LookupResult, MapType, Object, ObjectKind, ObjectType, Selector, Tagged, Visitable, VisitedLink
 };
 
 /// TODO: once we have variables we want to store parent scope pointer
@@ -41,6 +40,8 @@ impl QuotationMap {
 
 impl Object for QuotationMap {}
 impl HeapObject for QuotationMap {
+    const KIND: ObjectKind = ObjectKind::Map;
+    const TYPE_BITS: u8 = MapType::Quotation as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
@@ -78,6 +79,8 @@ impl Object for Quotation {
 }
 
 impl HeapObject for Quotation {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Quotation as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }

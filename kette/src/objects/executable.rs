@@ -2,8 +2,8 @@ use std::{alloc::Layout, mem, ptr};
 
 use crate::{
     Array, ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType,
-    Object, ObjectType, QuotationMap, Selector, SlotDescriptor, SlotMap,
-    Tagged, Visitable, VisitedLink,
+    Object, ObjectKind, ObjectType, QuotationMap, Selector, SlotDescriptor,
+    SlotMap, Tagged, Visitable, VisitedLink,
 };
 
 // TODO: I wish there was an easy way to share SlotMap here
@@ -217,6 +217,8 @@ impl Object for StackEffect {
     }
 }
 impl HeapObject for StackEffect {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Effect as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
@@ -238,18 +240,28 @@ impl Visitable for StackEffect {
 
 impl Object for ExecutableMap {}
 impl HeapObject for ExecutableMap {
+    const KIND: ObjectKind = ObjectKind::Map;
+    const TYPE_BITS: u8 = MapType::Quotation as u8;
+
     fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
+        if let Some(method) = self.as_method_map() {
+            return method.heap_size()
+        }
+
+        if let Some(quotation) = self.as_quotation_map() {
+            return quotation.heap_size()
+        }
+
+        unreachable!()
     }
 }
-impl Visitable for ExecutableMap {
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
-}
+impl Visitable for ExecutableMap {}
 
 // TODO: implment this
 impl Object for MethodMap {}
 impl HeapObject for MethodMap {
+    const KIND: ObjectKind = ObjectKind::Map;
+    const TYPE_BITS: u8 = MapType::Method as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
@@ -271,7 +283,14 @@ impl Object for Method {
     }
 }
 
-impl HeapObject for Method {}
+impl HeapObject for Method {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Method as u8;
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}
+
 impl Visitable for Method {
     fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
     fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}

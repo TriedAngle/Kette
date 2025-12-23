@@ -1,6 +1,7 @@
+use std::mem;
+
 use crate::{
-    Header, HeapObject, LookupResult, Object, ObjectType, Selector, Visitable,
-    VisitedLink,
+    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector, Visitable, VisitedLink
 };
 
 #[derive(Debug)]
@@ -27,4 +28,10 @@ impl Object for Float {
         traits.lookup(selector, link)
     }
 }
-impl HeapObject for Float {}
+impl HeapObject for Float {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Float as u8;
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+}

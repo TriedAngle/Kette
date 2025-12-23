@@ -3,9 +3,7 @@
 // later in runtime we define an actual vector
 
 use crate::{
-    Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy,
-    Object, PrimitiveContext, SlotHelper, SlotMap, SlotTags, Strings, Tagged,
-    VMShared, Value, Visitable,
+    Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy, Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper, SlotMap, SlotTags, Strings, Tagged, VMShared, Value, Visitable
 };
 
 #[repr(C)]
@@ -102,6 +100,8 @@ impl Vector {
 impl Visitable for Vector {}
 impl Object for Vector {}
 impl HeapObject for Vector {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Slot as u8;
     fn heap_size(&self) -> usize {
         std::mem::size_of::<Self>()
     }

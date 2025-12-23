@@ -1,8 +1,7 @@
 use std::mem;
 
 use crate::{
-    ByteArray, Handle, Header, HeapObject, Object, ObjectType, Tagged,
-    Visitable,
+    ByteArray, Handle, Header, HeapObject, Object, ObjectKind, ObjectType, Tagged, Visitable
 };
 
 #[repr(C)]
@@ -36,6 +35,9 @@ impl Visitable for Message {
 
 impl Object for Message {}
 impl HeapObject for Message {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Message as u8;
+
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
     }
