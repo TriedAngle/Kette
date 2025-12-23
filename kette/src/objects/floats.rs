@@ -1,7 +1,8 @@
 use std::mem;
 
 use crate::{
-    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector, Visitable, VisitedLink
+    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector,
+    Visitable, VisitedLink,
 };
 
 #[derive(Debug)]

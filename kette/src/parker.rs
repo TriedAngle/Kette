@@ -96,7 +96,7 @@ impl NativeParker {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Header, HeapValue, NativeThread};
+    use crate::{Header, HeapValue, NativeThread, ObjectType};
 
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
@@ -263,7 +263,7 @@ mod tests {
 
     fn dummy_view() -> Handle<HeapValue> {
         static mut DUMMY: HeapValue = HeapValue {
-            header: Header::zeroed(),
+            header: Header::new_object(ObjectType::Max),
         };
         let view = unsafe { Handle::from_ptr(&raw mut DUMMY) };
         view

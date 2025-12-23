@@ -1,7 +1,9 @@
 use std::{mem, num::IntErrorKind, sync::Arc};
 
 use crate::{
-    Allocator, Header, HeapObject, HeapProxy, LookupResult, Object, ObjectKind, ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy, Visitable, VisitedLink
+    Allocator, Header, HeapObject, HeapProxy, LookupResult, Object, ObjectKind,
+    ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy,
+    Visitable, VisitedLink,
 };
 
 #[repr(C)]

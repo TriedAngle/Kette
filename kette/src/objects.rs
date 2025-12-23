@@ -15,7 +15,10 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method, MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject, StackEffect, ThreadObject, Value, ValueTag, Visitable, VisitedLink, Visitor
+    ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method,
+    MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject,
+    StackEffect, ThreadObject, Value, ValueTag, Visitable, VisitedLink,
+    Visitor,
 };
 
 #[repr(u8)]
@@ -151,27 +154,31 @@ impl Header {
         | (((ObjectType::Max as u8) & 0x1F) << Self::TYPE_SHIFT);
 
     #[inline]
-    pub fn new_object(ty: ObjectType) -> Self {
+    pub const fn new_object(ty: ObjectType) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, HeaderFlags::empty(), 0)
     }
 
     #[inline]
-    pub fn new_map(ty: MapType) -> Self {
+    pub const fn new_map(ty: MapType) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, HeaderFlags::empty(), 0)
     }
 
     #[inline]
-    pub fn new_object2(ty: ObjectType, flags: HeaderFlags, data: u32) -> Self {
+    pub const fn new_object2(
+        ty: ObjectType,
+        flags: HeaderFlags,
+        data: u32,
+    ) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, flags, data)
     }
 
     #[inline]
-    pub fn new_map2(ty: MapType, flags: HeaderFlags, data: u32) -> Self {
+    pub const fn new_map2(ty: MapType, flags: HeaderFlags, data: u32) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, flags, data)
     }
 
     #[inline]
-    fn new_raw(
+    const fn new_raw(
         kind: ObjectKind,
         type_bits: u8,
         flags: HeaderFlags,
@@ -313,20 +320,20 @@ impl Map {
 
     #[inline(always)]
     fn is<T: HeapObject>(&self) -> bool {
-        self.header.kind() == ObjectKind::Map && self.header.type_bits() == T::TYPE_BITS
+        self.header.kind() == ObjectKind::Map
+            && self.header.type_bits() == T::TYPE_BITS
     }
 
     #[inline(always)]
     pub fn downcast_ref_match<T: HeapObject>(&self) -> &T {
         if self.is::<T>() {
             // SAFETY: already matched in call site
-            unsafe { & *(self as *const Map as *const T) }
+            unsafe { &*(self as *const Map as *const T) }
         } else {
             // SAFETY: already matched in call site
             unsafe { std::hint::unreachable_unchecked() }
         }
     }
-
 
     #[inline(always)]
     pub fn downcast_mut_match<T: HeapObject>(&mut self) -> &mut T {
@@ -349,7 +356,7 @@ impl HeapValue {
     #[inline(always)]
     pub fn downcast_ref<T: HeapObject>(&self) -> Option<&T> {
         if self.is::<T>() {
-            // SAFETY: guarded by tag check + layout invariant of HeapObject 
+            // SAFETY: guarded by tag check + layout invariant of HeapObject
             Some(unsafe { &*(self as *const HeapValue as *const T) })
         } else {
             None
@@ -359,7 +366,7 @@ impl HeapValue {
     #[inline(always)]
     pub fn downcast_mut<T: HeapObject>(&mut self) -> Option<&mut T> {
         if self.is::<T>() {
-            // SAFETY: guarded by tag check + layout invariant ofHeapObject 
+            // SAFETY: guarded by tag check + layout invariant ofHeapObject
             Some(unsafe { &mut *(self as *mut HeapValue as *mut T) })
         } else {
             None
@@ -464,7 +471,7 @@ impl HeapObject for HeapValue {
                     MapType::Slot      => self.downcast_ref_match::<SlotMap>().heap_size(),
                     MapType::Method    => self.downcast_ref_match::<MethodMap>().heap_size(),
                     MapType::Quotation => self.downcast_ref_match::<QuotationMap>().heap_size(),
-                    MapType::Max => unreachable!(), 
+                    MapType::Max => unreachable!(),
                 }
             }
         }

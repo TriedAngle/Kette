@@ -1,11 +1,17 @@
 use std::{
-    cell::UnsafeCell, mem, ops::Deref, sync::Arc, thread::{self, JoinHandle}, time::Duration
+    cell::UnsafeCell,
+    mem,
+    ops::Deref,
+    sync::Arc,
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
-    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter, NativeParker, Object, ObjectKind, ObjectType, Tagged, VMProxy, Visitable
+    ExecutionState, Handle, Header, HeapObject, HeapProxy, Interpreter,
+    NativeParker, Object, ObjectKind, ObjectType, Tagged, VMProxy, Visitable,
 };
 
 #[derive(Debug)]

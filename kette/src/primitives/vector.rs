@@ -3,7 +3,9 @@
 // later in runtime we define an actual vector
 
 use crate::{
-    Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy, Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper, SlotMap, SlotTags, Strings, Tagged, VMShared, Value, Visitable
+    Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy,
+    Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper, SlotMap,
+    SlotTags, Strings, Tagged, VMShared, Value, Visitable,
 };
 
 #[repr(C)]

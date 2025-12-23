@@ -1,7 +1,8 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink, Visitor
+    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector,
+    Tagged, Value, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]

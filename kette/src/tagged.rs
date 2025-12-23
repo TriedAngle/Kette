@@ -813,6 +813,8 @@ pub mod transmute {
 
 #[cfg(test)]
 mod value_tests {
+    use crate::ObjectKind;
+
     use super::*;
 
     struct TestObj {
@@ -822,7 +824,10 @@ mod value_tests {
 
     impl Visitable for TestObj {}
     impl Object for TestObj {}
-    impl HeapObject for TestObj {}
+    impl HeapObject for TestObj {
+        const KIND: ObjectKind = ObjectKind::Object;
+        const TYPE_BITS: u8 = 0b11111;
+    }
 
     fn boxed_test_obj(n: i64, m: usize) -> Box<TestObj> {
         Box::new(TestObj { n, m })

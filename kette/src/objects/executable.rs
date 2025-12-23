@@ -245,11 +245,11 @@ impl HeapObject for ExecutableMap {
 
     fn heap_size(&self) -> usize {
         if let Some(method) = self.as_method_map() {
-            return method.heap_size()
+            return method.heap_size();
         }
 
         if let Some(quotation) = self.as_quotation_map() {
-            return quotation.heap_size()
+            return quotation.heap_size();
         }
 
         unreachable!()

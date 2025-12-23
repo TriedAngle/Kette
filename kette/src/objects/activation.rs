@@ -1,8 +1,8 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Block, ExecutableMap, Handle, Header, HeapObject, LookupResult,
-    Object, ObjectKind, ObjectType, Selector, Value, Visitable, VisitedLink,
+    Block, ExecutableMap, Handle, Header, HeapObject, LookupResult, Object,
+    ObjectKind, ObjectType, Selector, Value, Visitable, VisitedLink,
 };
 
 #[repr(C)]

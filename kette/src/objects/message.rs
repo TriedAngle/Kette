@@ -1,7 +1,8 @@
 use std::mem;
 
 use crate::{
-    ByteArray, Handle, Header, HeapObject, Object, ObjectKind, ObjectType, Tagged, Visitable
+    ByteArray, Handle, Header, HeapObject, Object, ObjectKind, ObjectType,
+    Tagged, Visitable,
 };
 
 #[repr(C)]
