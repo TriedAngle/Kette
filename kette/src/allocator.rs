@@ -29,8 +29,7 @@ impl HeapSpace {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Search {
-    pub size: usize,
-    pub align: usize,
+    pub layout: Layout, 
     pub kind: AllocationType,
     pub space: HeapSpace,
 }
@@ -321,14 +320,27 @@ pub trait Allocator: Sized {
 impl Search {
     #[inline]
     pub fn new(
+        layout: Layout,
+        kind: AllocationType,
+        space: HeapSpace,
+    ) -> Self {
+        Self {
+            layout, 
+            kind,
+            space,
+        }
+    }
+
+    #[inline]
+    pub fn new_size_align(
         size: usize,
         align: usize,
         kind: AllocationType,
         space: HeapSpace,
     ) -> Self {
+        let layout = Layout::from_size_align(size, align).expect("valid layout");
         Self {
-            size,
-            align,
+            layout, 
             kind,
             space,
         }
@@ -336,14 +348,14 @@ impl Search {
 
     #[inline]
     pub fn boxed(size: usize) -> Self {
-        Self::new(size, 8, AllocationType::Boxed, HeapSpace::Nursery)
+        let layout = Layout::from_size_align(size, 16).expect("valid layout");
+        Self::new(layout, AllocationType::Boxed, HeapSpace::Nursery)
     }
 
     #[inline]
     pub fn unboxed(layout: Layout) -> Self {
         Self::new(
-            layout.size(),
-            layout.align(),
+           layout, 
             AllocationType::Unboxed,
             HeapSpace::Nursery,
         )
