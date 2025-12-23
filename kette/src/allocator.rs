@@ -75,8 +75,8 @@ pub trait Allocator: Sized {
         let search = Search::unboxed(layout);
         // SAFETY: this is safe
         let mut ba = unsafe { self.allocate_handle::<ByteArray>(search) };
-        ba.init_zeroed(size);
 
+        ba.init_zeroed(size);
         ba
     }
 
@@ -89,8 +89,8 @@ pub trait Allocator: Sized {
         let search = Search::unboxed(layout);
         // SAFETY: this is safe
         let mut ba = unsafe { self.allocate_handle::<ByteArray>(search) };
-        ba.init_data(data);
 
+        ba.init_data(data);
         ba
     }
 
@@ -117,8 +117,7 @@ pub trait Allocator: Sized {
         // SAFETY: initialize after
         let mut array = unsafe { self.allocate_handle::<Array>(search) };
 
-        // SAFETY: must be initialized before usage
-        unsafe { array.init(size) };
+        array.init(size);
 
         array
     }
@@ -213,7 +212,6 @@ pub trait Allocator: Sized {
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<MethodMap>(search) };
 
-        // SAFETY: this is safe
         obj.init_with_data(name, effect, code as *const _ as _, slots);
         obj
     }
@@ -244,7 +242,6 @@ pub trait Allocator: Sized {
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<QuotationMap>(search) };
 
-        // SAFETY: initialize after
         obj.init(code, input, output);
 
         obj
@@ -264,7 +261,6 @@ pub trait Allocator: Sized {
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<Quotation>(search) };
 
-        // SAFETY: we just create this here
         obj.init(body.as_tagged(), map.as_tagged());
         obj
     }

@@ -1,6 +1,6 @@
 use crate::{
-    Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
-    Selector, Visitable, VisitedLink,
+    Header, HeapObject, LookupResult, Object, ObjectType, Selector, Visitable,
+    VisitedLink,
 };
 
 #[derive(Debug)]
@@ -11,12 +11,7 @@ pub struct Float {
 
 impl Float {
     pub fn init(&mut self, value: f64) {
-        self.header = Header::encode_object(
-            ObjectType::Float,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+        self.header = Header::new_object(ObjectType::Float);
         self.value = value;
     }
 }

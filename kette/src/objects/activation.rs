@@ -1,8 +1,8 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Block, ExecutableMap, Handle, Header, HeaderFlags, HeapObject,
-    LookupResult, MethodMap, Object, Selector, Value, Visitable, VisitedLink,
+    Block, ExecutableMap, Handle, Header, HeapObject, LookupResult, MethodMap,
+    Object, Selector, Value, Visitable, VisitedLink,
 };
 
 #[repr(C)]
@@ -56,12 +56,7 @@ impl ActivationObject {
         map: Handle<ExecutableMap>,
         arguments: &[Handle<Value>],
     ) {
-        self.header = Header::encode_object(
-            crate::ObjectType::Activation,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+        self.header = Header::new_object(crate::ObjectType::Activation);
         self.map = map;
         self.receiver = receiver;
 

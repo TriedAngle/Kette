@@ -22,9 +22,17 @@ pub trait Visitable {
 
 pub trait Visitor: Sized {
     fn visit(&self, value: Value) {
-        let _ = value;
+        unimplemented!(
+            "Calling visit on {:?} as a visitor {} that doesn't implement visit",
+            value,
+            type_name_of_val(self),
+        );
     }
     fn visit_mut(&mut self, value: Value) {
-        let _ = value;
+        unimplemented!(
+            "Calling visit_mut on {:?} as a visitor {} that doesn't implement visit_mut",
+            value,
+            type_name_of_val(self),
+        );
     }
 }

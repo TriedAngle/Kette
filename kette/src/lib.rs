@@ -39,8 +39,8 @@ pub use objects::threads::{
     ThreadState, VMThread,
 };
 pub use objects::{
-    HEADER_FREE, Header, HeaderFlags, HeapObject, HeapValue, Map, MapType,
-    Object, ObjectKind, ObjectType, PtrSizedObject,
+    Header, HeaderFlags, HeapObject, HeapValue, Map, MapType, Object,
+    ObjectKind, ObjectType, PtrSizedObject,
 };
 
 pub use primitives::Vector;

@@ -1,9 +1,9 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Array, ByteArray, Handle, Header, HeaderFlags, HeapObject, LookupResult,
-    Map, MapType, Object, ObjectType, QuotationMap, Selector, SlotDescriptor,
-    SlotMap, Tagged, Visitable, VisitedLink,
+    Array, ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType,
+    Object, ObjectType, QuotationMap, Selector, SlotDescriptor, SlotMap,
+    Tagged, Visitable, VisitedLink,
 };
 
 // TODO: I wish there was an easy way to share SlotMap here
@@ -57,8 +57,7 @@ impl ExecutableMap {
         input: usize,
         output: usize,
     ) {
-        // SAFETY: safe by contract
-        unsafe { self.map.init(MapType::Method) };
+        self.map.init(MapType::Method);
         self.code = Tagged::new_value(code);
         self.input_effect = input.into();
         self.output_effect = output.into();
@@ -74,8 +73,7 @@ impl ExecutableMap {
         input: usize,
         output: usize,
     ) {
-        // SAFETY: safe by contract
-        unsafe { self.map.init(MapType::Quotation) };
+        self.map.init(MapType::Quotation);
         self.code = Tagged::new_value(code);
         self.input_effect = input.into();
         self.output_effect = output.into();
@@ -192,12 +190,7 @@ impl MethodMap {
 
 impl Method {
     pub fn init(&mut self, map: Tagged<MethodMap>) {
-        self.header = Header::encode_object(
-            ObjectType::Method,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+        self.header = Header::new_object(ObjectType::Method);
         self.map = map;
     }
 }
@@ -206,12 +199,7 @@ impl StackEffect {
     /// # Safety
     /// internal function do not use pls
     pub fn init(&mut self, inputs: Tagged<Array>, outputs: Tagged<Array>) {
-        self.header = Header::encode_object(
-            ObjectType::Effect,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+        self.header = Header::new_object(ObjectType::Effect);
         self.inputs = inputs;
         self.outputs = outputs;
     }

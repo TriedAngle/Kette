@@ -3,9 +3,9 @@ use std::{alloc::Layout, mem, ptr};
 use bitflags::bitflags;
 
 use crate::{
-    ByteArray, Handle, Header, HeaderFlags, HeapObject, LookupResult, Map,
-    MapType, Method, Object, ObjectType, Selector, Tagged, Value, Visitable,
-    VisitedLink, Visitor, primitive_index,
+    ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType, Method,
+    Object, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink,
+    Visitor, primitive_index,
 };
 
 bitflags! {
@@ -135,7 +135,7 @@ impl SlotMap {
         self.assignable_slots = assignable_slots.into();
         self.total_slots = total_slots.into();
         // SAFETY: safe if contract holds
-        unsafe { self.map.init(MapType::Slot) };
+        self.map.init(MapType::Slot);
     }
 
     #[inline]
@@ -213,8 +213,7 @@ impl SlotObject {
     /// must set the data
     pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
         self.map = map;
-        self.header =
-            Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+        self.header = Header::new_object(ObjectType::Slot);
     }
 
     #[inline]

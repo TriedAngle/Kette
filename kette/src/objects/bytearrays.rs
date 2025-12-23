@@ -2,8 +2,8 @@ use core::str;
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
-    Selector, Tagged, Visitable, VisitedLink, Visitor,
+    Header, HeapObject, LookupResult, Object, ObjectType, Selector, Tagged,
+    Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]
@@ -20,12 +20,7 @@ impl ByteArray {
     /// this sets metadata, should only be called internally
     /// memory allocation must be at least size
     pub unsafe fn init(&mut self, size: usize) {
-        self.header = Header::encode_object(
-            ObjectType::ByteArray,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+        self.header = Header::new_object(ObjectType::ByteArray);
         self.size = size.into();
     }
 

@@ -1,19 +1,9 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Header, HeaderFlags, HeapObject, LookupResult, Object, ObjectType,
-    Selector, Tagged, Value, Visitable, VisitedLink, Visitor,
+    Header, HeapObject, LookupResult, Object, ObjectType, Selector, Tagged,
+    Value, Visitable, VisitedLink, Visitor,
 };
-
-// TODO: find a way to implement specific functions for arrays of some specific n
-// we could introduce <size> as part of the the map.
-// the question is, would that be good for the game? I am not sure yet
-// keep it dynamically sized, and then figure out a nice way to have both dynamic and sized arrays.
-// #[repr(C)]
-// #[derive(Debug)]
-// pub struct ArrayMap {
-//     pub map: Map,
-// }
 
 #[repr(C)]
 #[derive(Debug)]
@@ -26,8 +16,7 @@ pub struct Array {
 impl Array {
     /// initialize array with data
     pub fn init_with_data(&mut self, data: &[Value]) {
-        // SAFETY: safe if contract ok
-        unsafe { self.init(data.len()) };
+        self.init(data.len());
         // SAFETY: safe if contract ok
         unsafe {
             ptr::copy_nonoverlapping(
@@ -40,13 +29,8 @@ impl Array {
     /// Initialize a slot object
     /// # Safety
     /// must get initialized and allocated with correct size
-    pub unsafe fn init(&mut self, size: usize) {
-        self.header = Header::encode_object(
-            ObjectType::Array,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+    pub fn init(&mut self, size: usize) {
+        self.header = Header::new_object(ObjectType::Array);
         self.size = size.into();
     }
 

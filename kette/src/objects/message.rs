@@ -1,8 +1,8 @@
 use std::mem;
 
 use crate::{
-    ByteArray, Handle, Header, HeaderFlags, HeapObject, Object, ObjectType,
-    Tagged, Visitable,
+    ByteArray, Handle, Header, HeapObject, Object, ObjectType, Tagged,
+    Visitable,
 };
 
 #[repr(C)]
@@ -15,12 +15,7 @@ pub struct Message {
 impl Message {
     /// initialize message
     pub fn init(&mut self, value: Tagged<ByteArray>) {
-        self.header = Header::encode_object(
-            ObjectType::Message,
-            0,
-            HeaderFlags::empty(),
-            0,
-        );
+        self.header = Header::new_object(ObjectType::Message);
         self.value = value;
     }
 

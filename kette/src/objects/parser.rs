@@ -1,9 +1,9 @@
 use std::{mem, num::IntErrorKind, sync::Arc};
 
 use crate::{
-    Allocator, Header, HeaderFlags, HeapObject, HeapProxy, LookupResult,
-    Object, ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged,
-    VMProxy, Visitable, VisitedLink,
+    Allocator, Header, HeapObject, HeapProxy, LookupResult, Object, ObjectType,
+    Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy, Visitable,
+    VisitedLink,
 };
 
 #[repr(C)]
@@ -34,8 +34,7 @@ impl Parser {
     #[inline]
     pub fn new(code: &[u8]) -> Self {
         let end = code.len();
-        let header =
-            Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+        let header = Header::new_object(ObjectType::Slot);
         let map = Tagged::new_ptr(std::ptr::null_mut());
 
         Self {
@@ -50,8 +49,7 @@ impl Parser {
     #[inline]
     pub fn new_object(vm: &VMProxy, heap: &mut HeapProxy, code: &[u8]) -> Self {
         let end = code.len();
-        let header =
-            Header::encode_object(ObjectType::Slot, 0, HeaderFlags::empty(), 0);
+        let header = Header::new_object(ObjectType::Slot);
 
         let map = heap.allocate_slot_map_helper(
             &vm.shared.strings,

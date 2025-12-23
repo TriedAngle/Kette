@@ -1,4 +1,7 @@
-use std::mem;
+use std::{
+    mem,
+    sync::atomic::{AtomicU8, Ordering},
+};
 
 pub mod activation;
 pub mod arrays;
@@ -13,9 +16,8 @@ pub mod threads;
 
 use crate::{
     ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method,
-    MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject, Value,
-    ValueTag, Visitable, VisitedLink, Visitor,
-    objects::executable::StackEffect,
+    MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject,
+    StackEffect, Value, ValueTag, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(u8)]
@@ -53,32 +55,32 @@ pub enum MapType {
     Quotation = 0b101,
 }
 
-// TODO: in our current garbage collector iteration objects do not move, thus pin does nothing.
-// in future iterations of the garbage collector, we will move objects to defragment.
-// if objects are currently in a FFI context, we will pin them so they don't move.
 bitflags::bitflags! {
+    /// Header flags are intentionally tiny (currently only PINNED).
+    #[repr(transparent)]
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     pub struct HeaderFlags: u8 {
-        const MARK    = 1 << 0;
-        const PIN     = 1 << 1;
-        const LARGE   = 1 << 2;
+        const PINNED = 1 << 0;
     }
 }
 
-// ValueTag::Header + ObjectKind::Object + ObjectType::Max
-pub const HEADER_FREE: u8 = 0b11111011;
-
-// Bit layout:
-//
-// [0..<2  tag]            2 bits  (ValueTag)
-// [2..<3  kind]           1 bit   (0 = Object, 1 = Map)
-// [3..<8  type]           5 bits  (ObjectType or MapType depending on kind)
-// [8..<12 age]            4 bits
-// [12..<16 flags]         4 bits
-// [16..<32 reserved]     16 bits  (unused; keep zeroed for now)
-// [32..<64 data]         32 bits  (general-purpose payload)
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Hash)]
-pub struct Header(u64);
+#[derive(Debug)]
+pub struct Header {
+    /// Bits:
+    /// [0..2) tag  (ValueTag: Number=0b00, Ref=0b01, Header=0b11)
+    /// [2]    kind (0=Object, 1=Map)
+    /// [3..8) type (5 bits: ObjectType or MapType)
+    pub ty: u8,
+
+    pub flags: HeaderFlags,
+    /// GC mark byte.
+    pub mark: AtomicU8,
+    /// Padding / future use.
+    pub _reserved: u8,
+    /// General payload (formerly bits [32..64) of the packed header).
+    pub data: u32,
+}
 
 pub trait Object: Sized + Visitable {
     fn lookup(
@@ -127,77 +129,78 @@ pub struct Map {
 }
 
 impl Header {
-    pub const TAG_SHIFT: u64 = 0;
-    pub const TAG_MASK: u64 = 0b11 << Self::TAG_SHIFT;
+    pub const FLAG_PINNED: u8 = 1 << 0;
 
-    pub const KIND_SHIFT: u64 = 2;
-    pub const KIND_MASK: u64 = 0b1 << Self::KIND_SHIFT;
+    pub const TAG_SHIFT: u8 = 0;
+    pub const TAG_MASK: u8 = 0b11;
 
-    pub const TYPE_SHIFT: u64 = 3;
-    pub const TYPE_MASK: u64 = 0b1_1111 << Self::TYPE_SHIFT; // 5 bits
+    pub const KIND_SHIFT: u8 = 2;
+    pub const KIND_MASK: u8 = 0b1 << Self::KIND_SHIFT;
 
-    pub const AGE_SHIFT: u64 = 8;
-    pub const AGE_MASK: u64 = 0xF << Self::AGE_SHIFT;
+    pub const TYPE_SHIFT: u8 = 3;
+    pub const TYPE_MASK: u8 = 0b1_1111 << Self::TYPE_SHIFT;
 
-    pub const FLAGS_SHIFT: u64 = 12;
-    pub const FLAGS_MASK: u64 = 0xF << Self::FLAGS_SHIFT;
+    pub const TAG_HEADER_BITS: u8 = 0b11;
 
-    // [16..32) reserved for future use (keep zero)
-
-    /// Additional data lives in bits [32..64)
-    pub const DATA_SHIFT: u64 = 32;
-    pub const DATA_MASK: u64 = 0xFFFF_FFFFu64 << Self::DATA_SHIFT;
-
-    const DATA_LO16_MASK: u32 = 0xFFFF; // cached size/slots
+    /// Equivalent of your old `HEADER_FREE` (0b11111011).
+    /// This corresponds to: tag=Header(0b11), kind=Object(0), type=Max(0b11111).
+    pub const TY_FREE: u8 = ((ValueTag::Header as u8) & Self::TAG_MASK)
+        | (((ObjectKind::Object as u8) & 0x1) << Self::KIND_SHIFT)
+        | (((ObjectType::Max as u8) & 0x1F) << Self::TYPE_SHIFT);
 
     #[inline]
-    pub const fn zeroed() -> Self {
-        Self(0)
+    pub fn new_object(ty: ObjectType) -> Self {
+        Self::new_raw(ObjectKind::Object, ty as u8, HeaderFlags::empty(), 0)
     }
 
     #[inline]
-    fn encode_raw(
+    pub fn new_map(ty: MapType) -> Self {
+        Self::new_raw(ObjectKind::Map, ty as u8, HeaderFlags::empty(), 0)
+    }
+
+    #[inline]
+    pub fn new_object2(ty: ObjectType, flags: HeaderFlags, data: u32) -> Self {
+        Self::new_raw(ObjectKind::Object, ty as u8, flags, data)
+    }
+
+    #[inline]
+    pub fn new_map2(ty: MapType, flags: HeaderFlags, data: u32) -> Self {
+        Self::new_raw(ObjectKind::Map, ty as u8, flags, data)
+    }
+
+    #[inline]
+    fn new_raw(
         kind: ObjectKind,
         type_bits: u8,
-        age: u8,
         flags: HeaderFlags,
         data: u32,
-    ) -> Header {
-        let inner = (ValueTag::Header as u64)
-            | (((kind as u64) & 0x1) << Self::KIND_SHIFT)
-            | ((((type_bits as u64) & 0x1F) << Self::TYPE_SHIFT)
-                & Self::TYPE_MASK)
-            | (((age as u64) & 0xF) << Self::AGE_SHIFT)
-            | (((flags.bits() as u64) & 0xF) << Self::FLAGS_SHIFT)
-            | ((data as u64) << Self::DATA_SHIFT);
-        Header(inner)
-    }
+    ) -> Self {
+        let ty = (Self::TAG_HEADER_BITS & Self::TAG_MASK)
+            | (((kind as u8) & 0x1) << Self::KIND_SHIFT)
+            | (((type_bits & 0x1F) << Self::TYPE_SHIFT) & Self::TYPE_MASK);
 
-    /// Encode an Object header.
-    #[inline]
-    pub fn encode_object(
-        ty: ObjectType,
-        age: u8,
-        flags: HeaderFlags,
-        data: u32,
-    ) -> Header {
-        Self::encode_raw(ObjectKind::Object, ty as u8, age, flags, data)
-    }
-
-    /// Encode a Map header.
-    #[inline]
-    pub fn encode_map(
-        ty: MapType,
-        age: u8,
-        flags: HeaderFlags,
-        data: u32,
-    ) -> Header {
-        Self::encode_raw(ObjectKind::Map, ty as u8, age, flags, data)
+        Header {
+            ty,
+            flags,
+            mark: AtomicU8::new(0),
+            _reserved: 0,
+            data,
+        }
     }
 
     #[inline]
-    pub fn kind(self) -> ObjectKind {
-        if ((self.0 & Self::KIND_MASK) >> Self::KIND_SHIFT) as u8 == 0 {
+    pub fn tag(&self) -> ValueTag {
+        match self.ty & Self::TAG_MASK {
+            0b00 => ValueTag::Fixnum,
+            0b01 => ValueTag::Reference,
+            0b11 => ValueTag::Header,
+            _ => unreachable!("2-bit tag only"),
+        }
+    }
+
+    #[inline]
+    pub fn kind(&self) -> ObjectKind {
+        if (self.ty & Self::KIND_MASK) == 0 {
             ObjectKind::Object
         } else {
             ObjectKind::Map
@@ -205,13 +208,12 @@ impl Header {
     }
 
     #[inline]
-    pub fn type_bits(self) -> u8 {
-        ((self.0 & Self::TYPE_MASK) >> Self::TYPE_SHIFT) as u8
+    pub fn type_bits(&self) -> u8 {
+        (self.ty & Self::TYPE_MASK) >> Self::TYPE_SHIFT
     }
 
-    /// Meaningful only when kind() == Kind::Object.
     #[inline]
-    pub fn object_type(self) -> Option<ObjectType> {
+    pub fn object_type(&self) -> Option<ObjectType> {
         if self.kind() != ObjectKind::Object {
             return None;
         }
@@ -231,9 +233,8 @@ impl Header {
         })
     }
 
-    /// Meaningful only when kind() == Kind::Map.
     #[inline]
-    pub fn map_type(self) -> Option<MapType> {
+    pub fn map_type(&self) -> Option<MapType> {
         if self.kind() != ObjectKind::Map {
             return None;
         }
@@ -247,121 +248,60 @@ impl Header {
 
     #[inline]
     pub fn is_free(&self) -> bool {
-        (self.0 as u8) == HEADER_FREE
+        self.ty == Self::TY_FREE
     }
 
     #[inline]
-    pub fn new_free(size: u64) -> Self {
-        debug_assert!(
-            size <= 0x00FF_FFFF_FFFF_FFFF,
-            "Size must fit in 56 bits"
-        );
-
-        let mut bits = HEADER_FREE as u64;
-        bits |= size << 8;
-        Header(bits)
+    pub fn new_free(size_bytes: u32) -> Self {
+        Header {
+            ty: Self::TY_FREE,
+            flags: HeaderFlags::empty(),
+            mark: AtomicU8::new(0),
+            _reserved: 0,
+            data: size_bytes,
+        }
     }
 
     #[inline]
-    pub fn age(self) -> u8 {
-        ((self.0 & Self::AGE_MASK) >> Self::AGE_SHIFT) as u8
+    pub fn is_pinned(&self) -> bool {
+        self.flags.contains(HeaderFlags::PINNED)
     }
 
     #[inline]
-    pub fn flags(self) -> HeaderFlags {
-        HeaderFlags::from_bits_truncate(
-            ((self.0 & Self::FLAGS_MASK) >> Self::FLAGS_SHIFT) as u8,
-        )
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.flags.set(HeaderFlags::PINNED, pinned);
     }
 
     #[inline]
-    pub fn data(self) -> u32 {
-        ((self.0 & Self::DATA_MASK) >> Self::DATA_SHIFT) as u32
+    pub fn is_marked(&self) -> bool {
+        self.mark.load(Ordering::Relaxed) != 0
     }
 
     #[inline]
-    pub fn set_kind(&mut self, kind: ObjectKind) -> &mut Self {
-        self.0 = (self.0 & !Self::KIND_MASK)
-            | (((kind as u64) & 0x1) << Self::KIND_SHIFT);
-        self
+    pub fn mark(&self) {
+        self.mark.store(1, Ordering::Relaxed);
     }
 
     #[inline]
-    pub fn set_object_type(&mut self, ty: ObjectType) -> &mut Self {
-        self.set_kind(ObjectKind::Object);
-        self.0 = (self.0 & !Self::TYPE_MASK)
-            | ((((ty as u64) & 0x1F) << Self::TYPE_SHIFT) & Self::TYPE_MASK);
-        self
+    pub fn unmark(&self) {
+        self.mark.store(0, Ordering::Relaxed);
     }
 
     #[inline]
-    pub fn set_map_type(&mut self, ty: MapType) -> &mut Self {
-        self.set_kind(ObjectKind::Map);
-        self.0 = (self.0 & !Self::TYPE_MASK)
-            | ((((ty as u64) & 0x1F) << Self::TYPE_SHIFT) & Self::TYPE_MASK);
-        self
+    pub fn data(&self) -> u32 {
+        self.data
     }
 
     #[inline]
-    pub fn set_age(&mut self, age: u8) -> &mut Self {
-        self.0 = (self.0 & !Self::AGE_MASK)
-            | (((age as u64) & 0xF) << Self::AGE_SHIFT);
-        self
-    }
-
-    #[inline]
-    pub fn set_flags(&mut self, flags: HeaderFlags) -> &mut Self {
-        self.0 = (self.0 & !Self::FLAGS_MASK)
-            | (((flags.bits() as u64) & 0xF) << Self::FLAGS_SHIFT);
-        self
-    }
-
-    #[inline]
-    pub fn set_data(&mut self, data: u32) -> &mut Self {
-        self.0 =
-            (self.0 & !Self::DATA_MASK) | ((data as u64) << Self::DATA_SHIFT);
-        self
-    }
-
-    #[inline]
-    pub fn is_marked(self) -> bool {
-        self.flags().contains(HeaderFlags::MARK)
-    }
-
-    #[inline]
-    pub fn mark(&mut self) -> &mut Self {
-        self.0 |= (HeaderFlags::MARK.bits() as u64) << Self::FLAGS_SHIFT;
-        self
-    }
-
-    #[inline]
-    pub fn unmark(&mut self) -> &mut Self {
-        self.0 &= !((HeaderFlags::MARK.bits() as u64) << Self::FLAGS_SHIFT);
-        self
-    }
-
-    /// Extracts the cached 16-bit value from DATA (used by SlotObject/Array for small sizes).
-    #[inline]
-    pub fn data_lo16(self) -> u16 {
-        (self.data() & Self::DATA_LO16_MASK) as u16
-    }
-
-    /// Puts a 16-bit cache into DATA’s low 16 bits (does not touch the rest of DATA).
-    #[inline]
-    pub fn set_data_lo16(&mut self, lo16: u16) -> &mut Self {
-        let mut data = self.data();
-        data &= !Self::DATA_LO16_MASK;
-        data |= lo16 as u32;
-        self.set_data(data)
+    pub fn set_data(&mut self, data: u32) {
+        self.data = data;
     }
 }
 
 impl Map {
-    /// # Safety
-    /// internal api
     #[inline]
-    pub unsafe fn init(&mut self, ty: MapType) {
-        self.header = Header::encode_map(ty, 0, HeaderFlags::empty(), 0);
+    pub fn init(&mut self, ty: MapType) {
+        self.header = Header::new_map(ty);
     }
 
     #[inline]
@@ -369,47 +309,6 @@ impl Map {
         self.header.map_type()
     }
 }
-// TODO: use this (maybe?) and maybe move this into heap
-// #[repr(C)]
-// #[derive(Debug, Copy, Clone)]
-// pub struct FreeLocation {
-//     pub header: Header,
-//     pub next: Option<*mut FreeLocation>,
-// }
-// impl FreeLocation {
-//     #[inline]
-//     pub fn new(size: u64, next: Option<*mut FreeLocation>) -> Self {
-//         Self {
-//             header: Header::new_free(size),
-//             next,
-//         }
-//     }
-
-//     /// Set the next free location pointer
-//     #[inline]
-//     pub fn set_next(&mut self, next: Option<*mut FreeLocation>) {
-//         self.next = next;
-//     }
-
-//     /// Get the next free location pointer
-//     #[inline]
-//     pub fn get_next(&self) -> Option<*mut FreeLocation> {
-//         self.next
-//     }
-
-//     /// Get the size of this free memory block
-//     #[inline]
-//     pub fn size(&self) -> u64 {
-//         debug_assert!(self.header.is_free(), "Header must be a free object");
-//         self.header.0 >> 8
-//     }
-
-//     /// Update the size of this free memory block
-//     #[inline]
-//     pub fn set_size(&mut self, size: u64) {
-//         self.header = Header::new_free(size);
-//     }
-// }
 
 impl Object for HeapValue {
     fn lookup(
