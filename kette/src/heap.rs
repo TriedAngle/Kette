@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::{
-    AllocationResult, AllocationType, Allocator, HeapObject, OS_PAGE_SIZE,
-    Search,
+    AllocationResult, AllocationType, Allocator, HeapObject, HeapSpace,
+    OS_PAGE_SIZE, Search,
 };
 
 #[repr(C)]
@@ -18,7 +18,7 @@ use crate::{
 pub struct PageMeta {
     start: NonNull<u8>,
     used: u16,
-    generation: u8,
+    space: HeapSpace,
     kind: AllocationType,
     /// The next page of the same type and age, used for faster allocation
     next: Option<usize>,
@@ -31,14 +31,15 @@ pub struct HeapSettings {
     /// must be a multiple of page size
     /// defaults to 2^29 bytes = 536.870912 mb
     pub heap_size: usize,
-    /// how many generations the GC has in total, default 6, 0 is nursery
-    pub generations: usize,
     /// how big a page is, default is 32kb (32768 bytes) (must be multiple of OS page)
     pub page_size: usize,
     /// granularity of dirtying, 128 bytes by default (must fully divide page_size)
     pub line_size: usize,
     /// per generation % of total heap to be allocated before GC runs
     pub bytes_before_gc: f64,
+    /// Nursery size as a fraction of the total heap (e.g. 0.05 = 5%).
+    /// Rounded up to the nearest full page during initialization.
+    pub nursery_fraction: f64,
     /// size of allocation window a single thread takes from the heap to then thread locally
     /// allocate, default 4kb (4096)
     pub tlab_size: usize,
@@ -48,22 +49,13 @@ impl Default for HeapSettings {
     fn default() -> Self {
         Self {
             heap_size: 536_870_912,
-            generations: 6,
             page_size: 32_768,
             line_size: 128,
             bytes_before_gc: 0.05,
+            nursery_fraction: 0.05,
             tlab_size: 4096,
         }
     }
-}
-
-/// Per-generation allocation stats since last GC.
-/// We track *consumed* bytes (payload + padding) because GC triggering uses consumption,
-/// and additionally how much of that was padding waste due to alignment.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GenAlloc {
-    pub consumed: usize,
-    pub padding_waste: usize,
 }
 
 #[derive(Debug)]
@@ -75,15 +67,15 @@ pub struct RuntimeInformation {
 
     pub freed_total: usize,
 
-    /// Per-generation consumption since last GC (+ padding waste).
-    pub allocated_since_last_gc: Box<[GenAlloc]>,
+    /// immix total allocation since last gc
+    pub allocated_since_last_gc: usize,
 }
 
 #[derive(Debug)]
 pub struct HeapState {
     pub track: RuntimeInformation,
     /// Start pointer of the heap
-    /// Heads of pages, indexed by (age x type)
+    /// Heads of pages, indexed by (space x type)
     pub heads: Box<[Option<usize>]>,
     pub pages: Box<[PageMeta]>,
 }
@@ -93,6 +85,7 @@ pub struct HeapInfo {
     pub page_count: usize,
     pub line_count: usize,
     pub lines_per_page: usize,
+    pub nursery_page_count: usize,
 }
 
 #[derive(Debug)]
@@ -162,6 +155,16 @@ impl HeapImpl {
         let page_count = settings.heap_size / settings.page_size;
         let line_count = settings.heap_size / settings.line_size;
 
+        let nursery_bytes_target = ((settings.heap_size as f64)
+            * settings.nursery_fraction)
+            .ceil() as usize;
+        let mut nursery_page_count = (nursery_bytes_target
+            .saturating_add(settings.page_size - 1))
+            / settings.page_size;
+        if nursery_page_count > page_count {
+            nursery_page_count = page_count;
+        }
+
         let mut pages = Vec::with_capacity(page_count);
         for i in 0..page_count {
             let page_start_ptr =
@@ -173,11 +176,16 @@ impl HeapImpl {
             pages.push(PageMeta {
                 start: page_start,
                 used: 0,
-                generation: 0,
+                space: if i < nursery_page_count {
+                    HeapSpace::Nursery
+                } else {
+                    HeapSpace::Immix
+                },
                 kind: AllocationType::Free,
                 next: None,
             });
         }
+
         let pages: Box<[PageMeta]> = pages.into_boxed_slice();
 
         let mut lines = Vec::with_capacity(line_count);
@@ -188,16 +196,11 @@ impl HeapImpl {
             allocated_total: 0,
             padding_waste_total: 0,
             freed_total: 0,
-            allocated_since_last_gc: vec![
-                GenAlloc::default();
-                settings.generations
-            ]
-            .into_boxed_slice(),
+            allocated_since_last_gc: 0,
         };
 
-        // 3 allocation kinds: Boxed / Unboxed / Code
         let heads: Box<[Option<usize>]> =
-            vec![None; settings.generations * 3].into_boxed_slice();
+            vec![None; HeapSpace::COUNT * 3].into_boxed_slice();
 
         let state = HeapState {
             heads,
@@ -209,6 +212,7 @@ impl HeapImpl {
             page_count,
             line_count,
             lines_per_page: settings.page_size / settings.line_size,
+            nursery_page_count,
         };
 
         let state = Mutex::new(state);
@@ -235,25 +239,16 @@ impl HeapImpl {
     }
 
     #[inline]
-    fn bucket_index(&self, kind: AllocationType, age: u8) -> usize {
+    fn bucket_index(&self, kind: AllocationType, space: HeapSpace) -> usize {
         let k = Self::kind_bucket(kind).expect("Free has no allocation bucket");
-        debug_assert!(
-            (age as usize) < self.settings.generations,
-            "age out of bounds"
-        );
-        (age as usize) * 3 + k
-    }
-
-    #[inline]
-    fn is_power_of_two(x: usize) -> bool {
-        x != 0 && (x & (x - 1)) == 0
+        (space as usize) * 3 + k
     }
 
     #[inline]
     fn bucket_push_front(&self, state: &mut HeapState, page_index: usize) {
         let kind = state.pages[page_index].kind;
-        let age = state.pages[page_index].generation;
-        let b = self.bucket_index(kind, age);
+        let space = state.pages[page_index].space;
+        let b = self.bucket_index(kind, space);
 
         let old_head = state.heads[b];
         state.pages[page_index].next = old_head;
@@ -392,8 +387,8 @@ impl HeapImpl {
         start..(start + lpp)
     }
 
-    /// Allocate using a Search request. Best-fit within (kind,age) bucket;
-    /// otherwise claim a Free page.
+    /// Allocate using a Search request. Best-fit within (kind,space) bucket;
+    /// otherwise claim a Free page in the requested space.
     pub fn allocate_raw(&self, s: Search) -> AllocationResult {
         debug_assert!(
             s.kind != AllocationType::Free,
@@ -401,13 +396,9 @@ impl HeapImpl {
         );
         debug_assert!(s.size != 0, "cannot allocate zero sized objects");
         debug_assert!(
-            Self::is_power_of_two(s.align),
+            s.align.is_power_of_two(),
             "align must be non-zero power of two, got {}",
             s.align
-        );
-        debug_assert!(
-            (s.age as usize) < self.settings.generations,
-            "age out of bounds"
         );
 
         if s.size > self.settings.page_size {
@@ -422,8 +413,8 @@ impl HeapImpl {
             Err(_e) => panic!("TODO: handle mutex poisoning"),
         };
 
-        // First pass: best-fit within bucket list (kind, age)
-        let bucket = self.bucket_index(s.kind, s.age);
+        // First pass: best-fit within bucket list (kind, space)
+        let bucket = self.bucket_index(s.kind, s.space);
         let mut cur = state.heads[bucket];
 
         // (page_index, remainder, padding, total_consumed, ptr)
@@ -432,7 +423,7 @@ impl HeapImpl {
         while let Some(i) = cur {
             // Sanity Check: list should be homogeneous
             debug_assert!(state.pages[i].kind == s.kind);
-            debug_assert!(state.pages[i].generation == s.age);
+            debug_assert!(state.pages[i].space == s.space);
 
             if let Some((padding, total, ptr)) =
                 self.compute_fit(&state, i, s.size, s.align)
@@ -457,7 +448,6 @@ impl HeapImpl {
         if let Some((page_index, _rem, padding, total, ptr)) = best {
             // consume space
             let new_used = (state.pages[page_index].used as usize) + total;
-            // sanity check
             debug_assert!(new_used <= self.settings.page_size);
             state.pages[page_index].used = new_used as u16;
 
@@ -465,20 +455,15 @@ impl HeapImpl {
             state.track.allocated_total += total;
             state.track.padding_waste_total += padding;
 
-            let g = state.pages[page_index].generation as usize;
-            if g < state.track.allocated_since_last_gc.len() {
-                state.track.allocated_since_last_gc[g].consumed += total;
-                state.track.allocated_since_last_gc[g].padding_waste += padding;
-            }
-
             return AllocationResult { page_index, ptr };
         }
 
-        // Second Pass: claim a Free page
+        // Second Pass: claim a Free page in the requested space
         for i in 0..state.pages.len() {
-            if state.pages[i].kind == AllocationType::Free {
+            if state.pages[i].kind == AllocationType::Free
+                && state.pages[i].space == s.space
+            {
                 state.pages[i].kind = s.kind;
-                state.pages[i].generation = s.age;
                 state.pages[i].used = 0;
                 state.pages[i].next = None;
 
@@ -497,18 +482,11 @@ impl HeapImpl {
                 state.track.allocated_total += total;
                 state.track.padding_waste_total += padding;
 
-                let g = state.pages[i].generation as usize;
-                if g < state.track.allocated_since_last_gc.len() {
-                    state.track.allocated_since_last_gc[g].consumed += total;
-                    state.track.allocated_since_last_gc[g].padding_waste +=
-                        padding;
-                }
-
                 return AllocationResult { page_index: i, ptr };
             }
         }
 
-        panic!("out of memory: no suitable page found");
+        panic!("out of memory: no suitable page found in requested space");
     }
 
     #[inline]
@@ -691,7 +669,8 @@ impl HeapProxy {
         let res = self.heap.allocate(Search::new(
             tlab_size,
             16, // tlab chunk alignment; objects will align inside
-            kind, 0, // gen0 only
+            kind,
+            HeapSpace::Nursery,
         ));
 
         let start = res.ptr;
@@ -715,8 +694,8 @@ impl HeapProxy {
         // Always synchronize with GC before doing anything.
         self.sync();
 
-        // TLABs are gen0 only.
-        if s.age != 0 {
+        // TLABs are Nursery Only
+        if s.space != HeapSpace::Nursery {
             return self.heap.allocate(s);
         }
 
@@ -801,12 +780,6 @@ impl HeapSettings {
         if self.line_size == 0 {
             return Err("line_size must be > 0");
         }
-        if self.generations == 0 {
-            return Err("generations must be > 0");
-        }
-        if self.generations > (u8::MAX as usize + 1) {
-            return Err("generations must fit into u8 indices (<= 256)");
-        }
 
         if !self.page_size.is_multiple_of(OS_PAGE_SIZE) {
             return Err(
@@ -835,6 +808,10 @@ impl HeapSettings {
         }
         if self.tlab_size > self.page_size {
             return Err("tlab_size should not exceed page_size");
+        }
+
+        if !(0.0..=1.0).contains(&self.nursery_fraction) {
+            return Err("nursery_fraction must be in [0.0, 1.0]");
         }
 
         if !(0.0..=1.0).contains(&self.bytes_before_gc) {

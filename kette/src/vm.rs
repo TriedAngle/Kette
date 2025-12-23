@@ -98,7 +98,7 @@ impl VM {
         new
     }
 
-    pub fn new_proxy(&self) -> VMProxy {
+    pub fn proxy(&self) -> VMProxy {
         VMProxy {
             shared: self.inner.clone(),
         }

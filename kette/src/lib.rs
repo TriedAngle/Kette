@@ -16,7 +16,9 @@ mod tagged;
 mod visitor;
 mod vm;
 
-pub use allocator::{AllocationResult, AllocationType, Allocator, Search};
+pub use allocator::{
+    AllocationResult, AllocationType, Allocator, HeapSpace, Search,
+};
 pub use heap::{Heap, HeapProxy, HeapSettings, Tlab};
 
 pub use objects::activation::{

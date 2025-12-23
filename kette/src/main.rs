@@ -38,7 +38,7 @@ fn main() {
         },
     });
 
-    let main_proxy = vm.new_proxy();
+    let main_proxy = vm.proxy();
 
     let heap = main_proxy.shared.heap.proxy();
 
@@ -49,7 +49,7 @@ fn main() {
 
     let main_thread = VMThread::new_main();
     let thread_proxy = ThreadProxy(main_thread.inner);
-    let proxy = vm.new_proxy();
+    let proxy = vm.proxy();
 
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
 
@@ -64,7 +64,7 @@ fn main() {
             }
         };
 
-        let parser_proxy = vm.new_proxy();
+        let parser_proxy = vm.proxy();
 
         let mut parser = Box::new(Parser::new_object(
             &parser_proxy,

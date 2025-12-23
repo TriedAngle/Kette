@@ -16,12 +16,23 @@ pub enum AllocationType {
     Code = 0b11,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeapSpace {
+    Nursery,
+    Immix,
+}
+
+impl HeapSpace {
+    pub const COUNT: usize = 2;
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Search {
     pub size: usize,
     pub align: usize,
     pub kind: AllocationType,
-    pub age: u8,
+    pub space: HeapSpace,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -313,23 +324,28 @@ impl Search {
         size: usize,
         align: usize,
         kind: AllocationType,
-        age: u8,
+        space: HeapSpace,
     ) -> Self {
         Self {
             size,
             align,
             kind,
-            age,
+            space,
         }
     }
 
     #[inline]
     pub fn boxed(size: usize) -> Self {
-        Self::new(size, 8, AllocationType::Boxed, 0)
+        Self::new(size, 8, AllocationType::Boxed, HeapSpace::Nursery)
     }
 
     #[inline]
     pub fn unboxed(layout: Layout) -> Self {
-        Self::new(layout.size(), layout.align(), AllocationType::Unboxed, 0)
+        Self::new(
+            layout.size(),
+            layout.align(),
+            AllocationType::Unboxed,
+            HeapSpace::Nursery,
+        )
     }
 }
