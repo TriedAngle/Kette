@@ -15,9 +15,7 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method,
-    MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject,
-    StackEffect, Value, ValueTag, Visitable, VisitedLink, Visitor,
+    ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method, MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject, StackEffect, ThreadObject, Value, ValueTag, Visitable, VisitedLink, Visitor
 };
 
 #[repr(u8)]
@@ -312,77 +310,124 @@ impl Map {
     pub fn map_type(&self) -> Option<MapType> {
         self.header.map_type()
     }
+
+    #[inline(always)]
+    fn is<T: HeapObject>(&self) -> bool {
+        self.header.kind() == ObjectKind::Map && self.header.type_bits() == T::TYPE_BITS
+    }
+
+    #[inline(always)]
+    pub fn downcast_ref_match<T: HeapObject>(&self) -> &T {
+        if self.is::<T>() {
+            // SAFETY: already matched in call site
+            unsafe { & *(self as *const Map as *const T) }
+        } else {
+            // SAFETY: already matched in call site
+            unsafe { std::hint::unreachable_unchecked() }
+        }
+    }
+
+
+    #[inline(always)]
+    pub fn downcast_mut_match<T: HeapObject>(&mut self) -> &mut T {
+        if self.is::<T>() {
+            // SAFETY: already matched in call site
+            unsafe { &mut *(self as *mut Map as *mut T) }
+        } else {
+            // SAFETY: already matched in call site
+            unsafe { std::hint::unreachable_unchecked() }
+        }
+    }
+}
+
+impl HeapValue {
+    #[inline(always)]
+    pub fn is<T: HeapObject>(&self) -> bool {
+        self.header.kind() == T::KIND && self.header.type_bits() == T::TYPE_BITS
+    }
+
+    #[inline(always)]
+    pub fn downcast_ref<T: HeapObject>(&self) -> Option<&T> {
+        if self.is::<T>() {
+            // SAFETY: guarded by tag check + layout invariant of HeapObject 
+            Some(unsafe { &*(self as *const HeapValue as *const T) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn downcast_mut<T: HeapObject>(&mut self) -> Option<&mut T> {
+        if self.is::<T>() {
+            // SAFETY: guarded by tag check + layout invariant ofHeapObject 
+            Some(unsafe { &mut *(self as *mut HeapValue as *mut T) })
+        } else {
+            None
+        }
+    }
+
+    /// Fast path for when already matched on type.
+    /// # Safety
+    /// must be be correct invariant
+    #[inline(always)]
+    pub unsafe fn downcast_ref_unchecked<T: HeapObject>(&self) -> &T {
+        debug_assert!(self.is::<T>());
+        // SAFETY: caller proves via match / debug_assert
+        unsafe { &*(self as *const HeapValue as *const T) }
+    }
+
+    /// Fast path for when already matched on type.
+    /// # Safety
+    /// must be be correct invariant
+    #[inline(always)]
+    pub fn downcast_mut_unchecked<T: HeapObject>(&mut self) -> &mut T {
+        debug_assert!(self.is::<T>());
+        // SAFETY: caller proves via match / debug_assert
+        unsafe { &mut *(self as *mut HeapValue as *mut T) }
+    }
+
+    /// Helper to downcast
+    /// must be checked
+    #[inline(always)]
+    pub fn downcast_ref_match<T: HeapObject>(&self) -> &T {
+        if self.is::<T>() {
+            // SAFETY: already matched in call site
+            unsafe { &*(self as *const HeapValue as *const T) }
+        } else {
+            // SAFETY: already matched in call site
+            unsafe { std::hint::unreachable_unchecked() }
+        }
+    }
+
+    /// Helper to downcast
+    /// must be checked
+    #[inline(always)]
+    pub fn downcast_mut_match<T: HeapObject>(&mut self) -> &mut T {
+        if self.is::<T>() {
+            // SAFETY: already matched in call site
+            unsafe { &mut *(self as *mut HeapValue as *mut T) }
+        } else {
+            // SAFETY: already matched in call site
+            unsafe { std::hint::unreachable_unchecked() }
+        }
+    }
 }
 
 impl Object for HeapValue {
-    fn lookup(
-        &self,
-        selector: Selector,
-        link: Option<&VisitedLink>,
-    ) -> LookupResult {
-        match self
-            .header
-            .object_type()
-            .expect("maps do not implement lookup, must be object")
-        {
-            ObjectType::Slot => {
-                // SAFETY: checked
-                let slot_object = unsafe {
-                    std::mem::transmute::<&HeapValue, &SlotObject>(self)
-                };
-                slot_object.lookup(selector, link)
-            }
-            ObjectType::Array => {
-                // SAFETY: checked
-                let array =
-                    unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
-                array.lookup(selector, link)
-            }
-            ObjectType::ByteArray => {
-                // SAFETY: checked
-                let byte_array = unsafe {
-                    std::mem::transmute::<&HeapValue, &ByteArray>(self)
-                };
-                byte_array.lookup(selector, link)
-            }
-            ObjectType::Method => {
-                // SAFETY: checked
-                let slot_object =
-                    unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
-                slot_object.lookup(selector, link)
-            }
-            ObjectType::Effect => {
-                // SAFETY: checked
-                let slot_object = unsafe {
-                    std::mem::transmute::<&HeapValue, &StackEffect>(self)
-                };
-                slot_object.lookup(selector, link)
-            }
-            ObjectType::Activation => {
-                // SAFETY: checked
-                let activation = unsafe {
-                    mem::transmute::<&HeapValue, &ActivationObject>(self)
-                };
-                activation.lookup(selector, link)
-            }
-            ObjectType::Quotation => {
-                // SAFETY: checked
-                let quotation = unsafe {
-                    std::mem::transmute::<&HeapValue, &Quotation>(self)
-                };
-                quotation.lookup(selector, link)
-            }
-            ObjectType::Float => {
-                // SAFETY: checked
-                let float =
-                    unsafe { std::mem::transmute::<&HeapValue, &Float>(self) };
-                float.lookup(selector, link)
-            }
-            ObjectType::BigNum => {
-                // SAFETY: checked
-                unimplemented!()
-            }
-            ObjectType::Thread => unimplemented!(),
+    #[rustfmt::skip]
+    fn lookup(&self, selector: Selector, link: Option<&VisitedLink>) -> LookupResult {
+        // SAFETY: only objects will ever be looked up 
+        match unsafe { self.header.object_type().unwrap_unchecked() } {
+            ObjectType::Slot        => self.downcast_ref_match::<SlotObject>().lookup(selector, link),
+            ObjectType::Array       => self.downcast_ref_match::<Array>().lookup(selector, link),
+            ObjectType::ByteArray   => self.downcast_ref_match::<ByteArray>().lookup(selector, link),
+            ObjectType::Method      => self.downcast_ref_match::<Method>().lookup(selector, link),
+            ObjectType::Effect      => self.downcast_ref_match::<StackEffect>().lookup(selector, link),
+            ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
+            ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().lookup(selector, link),
+            ObjectType::Float       => self.downcast_ref_match::<Float>().lookup(selector, link),
+            ObjectType::BigNum      => unimplemented!(),
+            ObjectType::Thread      => unimplemented!(),
             ObjectType::Message | ObjectType::Max => {
                 unreachable!("illegal object type for lookup")
             }
@@ -393,83 +438,35 @@ impl HeapObject for HeapValue {
     const KIND: ObjectKind = ObjectKind::Object;
     const TYPE_BITS: u8 = ObjectType::Max as u8;
 
+    #[rustfmt::skip]
     fn heap_size(&self) -> usize {
-        let obj = match self.header.kind() {
+        match self.header.kind() {
+            ObjectKind::Object => {
+                // SAFETY: matched to this 
+                match unsafe { self.header.object_type().unwrap_unchecked() } {
+                    ObjectType::Slot       => self.downcast_ref_match::<SlotObject>().heap_size(),
+                    ObjectType::Array      => self.downcast_ref_match::<Array>().heap_size(),
+                    ObjectType::ByteArray  => self.downcast_ref_match::<ByteArray>().heap_size(),
+                    ObjectType::Activation => self.downcast_ref_match::<ActivationObject>().heap_size(),
+                    ObjectType::Quotation  => self.downcast_ref_match::<Quotation>().heap_size(),
+                    ObjectType::Method     => self.downcast_ref_match::<Method>().heap_size(),
+                    ObjectType::Effect     => self.downcast_ref_match::<StackEffect>().heap_size(),
+                    ObjectType::Message    => self.downcast_ref_match::<Message>().heap_size(),
+                    ObjectType::Float      => self.downcast_ref_match::<Float>().heap_size(),
+                    ObjectType::BigNum     => unimplemented!(),
+                    ObjectType::Thread     => unimplemented!(),
+                    ObjectType::Max        => unreachable!(),
+                }
+            }
             ObjectKind::Map => {
-                // SAFETY: checked
-                let map =
-                    unsafe { std::mem::transmute::<&HeapValue, &Map>(self) };
-                return map.heap_size();
+                // SAFETY: matched to this 
+                match unsafe { self.header.map_type().unwrap_unchecked() } {
+                    MapType::Slot      => self.downcast_ref_match::<SlotMap>().heap_size(),
+                    MapType::Method    => self.downcast_ref_match::<MethodMap>().heap_size(),
+                    MapType::Quotation => self.downcast_ref_match::<QuotationMap>().heap_size(),
+                    MapType::Max => unreachable!(), 
+                }
             }
-            ObjectKind::Object => self,
-        };
-
-        // SAFETY: checked
-        match unsafe { obj.header.object_type().unwrap_unchecked() } {
-            ObjectType::Slot => {
-                // SAFETY: checked
-                let slot_object = unsafe {
-                    std::mem::transmute::<&HeapValue, &SlotObject>(self)
-                };
-                slot_object.heap_size()
-            }
-            ObjectType::Array => {
-                // SAFETY: checked
-                let array_object =
-                    unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
-                array_object.heap_size()
-            }
-            ObjectType::Activation => {
-                // SAFETY: checked
-                let activation = unsafe {
-                    std::mem::transmute::<&HeapValue, &ActivationObject>(self)
-                };
-                activation.heap_size()
-            }
-            ObjectType::Quotation => {
-                // SAFETY: checked
-                let quotation = unsafe {
-                    std::mem::transmute::<&HeapValue, &Quotation>(self)
-                };
-                quotation.heap_size()
-            }
-            ObjectType::Method => {
-                // SAFETY: checked
-                let method =
-                    unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
-                method.heap_size()
-            }
-            ObjectType::Effect => {
-                // SAFETY: checked
-                let effect = unsafe {
-                    std::mem::transmute::<&HeapValue, &StackEffect>(self)
-                };
-                effect.heap_size()
-            }
-            ObjectType::Message => {
-                // SAFETY: checked
-                let message = unsafe {
-                    std::mem::transmute::<&HeapValue, &Message>(self)
-                };
-                message.heap_size()
-            }
-            ObjectType::ByteArray => {
-                // SAFETY: checked
-                let message = unsafe {
-                    std::mem::transmute::<&HeapValue, &ByteArray>(self)
-                };
-                message.heap_size()
-            }
-            ObjectType::Float => {
-                // SAFETY: checked
-                let message =
-                    unsafe { std::mem::transmute::<&HeapValue, &Float>(self) };
-                message.heap_size()
-            }
-            ObjectType::BigNum | ObjectType::Thread => {
-                unimplemented!()
-            }
-            ObjectType::Max => unreachable!(),
         }
     }
 }
@@ -497,145 +494,66 @@ impl Object for Value {
 // so when we call on a generic object, we dispatch here on the actual object types.
 // the actual object types will then call visitor.visit() on its edges.
 impl Visitable for HeapValue {
-    #[inline]
+    #[rustfmt::skip]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         match self.header.kind() {
             ObjectKind::Map => {
-                // SAFETY: checked
-                let map = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut Map>(self)
-                };
-                map.visit_edges_mut(visitor);
-                return;
+                // SAFETY: matched to this
+                match unsafe { self.header.map_type().unwrap_unchecked() } {
+                    MapType::Slot       => self.downcast_mut_match::<SlotMap>().visit_edges_mut(visitor),
+                    MapType::Method     => self.downcast_mut_match::<MethodMap>().visit_edges_mut(visitor),
+                    MapType::Quotation  => self.downcast_mut_match::<QuotationMap>().visit_edges_mut(visitor),
+                    MapType::Max        => unreachable!(),
+                }
             }
-            ObjectKind::Object => (),
-        };
+            ObjectKind::Object => {
+                // SAFETY: matched to this
+                match unsafe { self.header.object_type().unwrap_unchecked() } {
+                    ObjectType::Slot        => self.downcast_mut_match::<SlotObject>().visit_edges_mut(visitor),
+                    ObjectType::Array       => self.downcast_mut_match::<Array>().visit_edges_mut(visitor),
+                    ObjectType::Activation  => self.downcast_mut_match::<ActivationObject>().visit_edges_mut(visitor),
+                    ObjectType::Quotation   => self.downcast_mut_match::<Quotation>().visit_edges_mut(visitor),
+                    ObjectType::Method      => self.downcast_mut_match::<Method>().visit_edges_mut(visitor),
+                    ObjectType::Effect      => self.downcast_mut_match::<StackEffect>().visit_edges_mut(visitor),
+                    ObjectType::Message     => self.downcast_mut_match::<Message>().visit_edges_mut(visitor),
+                    ObjectType::Thread      => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
+                    ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
 
-        // SAFETY: checked
-        match unsafe { self.header.object_type().unwrap_unchecked() } {
-            ObjectType::Slot => {
-                // SAFETY: checked
-                let slot_object = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut SlotObject>(self)
-                };
-                slot_object.visit_edges_mut(visitor);
+                    ObjectType::Max => unreachable!(),
+                }
             }
-            ObjectType::Array => {
-                // SAFETY: checked
-                let array_object = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut Array>(self)
-                };
-                array_object.visit_edges_mut(visitor);
-            }
-            ObjectType::Activation => {
-                // SAFETY: checked
-                let activation = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut ActivationObject>(
-                        self,
-                    )
-                };
-                activation.visit_edges_mut(visitor);
-            }
-            ObjectType::Quotation => {
-                // SAFETY: checked
-                let quotation = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut Quotation>(self)
-                };
-                quotation.visit_edges_mut(visitor);
-            }
-            ObjectType::Method => {
-                // SAFETY: checked
-                let method = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut Method>(self)
-                };
-                method.visit_edges_mut(visitor);
-            }
-            ObjectType::Effect => {
-                // SAFETY: checked
-                let effect = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut StackEffect>(
-                        self,
-                    )
-                };
-                effect.visit_edges_mut(visitor)
-            }
-            ObjectType::Message => {
-                // SAFETY: checked
-                let message = unsafe {
-                    std::mem::transmute::<&mut HeapValue, &mut Message>(self)
-                };
-                message.visit_edges_mut(visitor);
-            }
-            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum | ObjectType::Thread => {}
-            ObjectType::Max => unreachable!(),
-        };
+        }
     }
 
-    #[inline]
+    #[rustfmt::skip]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        let obj = match self.header.kind() {
+        match self.header.kind() {
             ObjectKind::Map => {
-                // SAFETY: checked
-                let map =
-                    unsafe { std::mem::transmute::<&HeapValue, &Map>(self) };
-                map.visit_edges(visitor);
-                return;
+                // SAFETY: matched to this
+                match unsafe { self.header.map_type().unwrap_unchecked() } {
+                    MapType::Slot       => self.downcast_ref_match::<SlotMap>().visit_edges(visitor),
+                    MapType::Method     => self.downcast_ref_match::<MethodMap>().visit_edges(visitor),
+                    MapType::Quotation  => self.downcast_ref_match::<QuotationMap>().visit_edges(visitor),
+                    MapType::Max        => unreachable!(),
+                }
             }
-            ObjectKind::Object => self,
-        };
+            ObjectKind::Object => {
+                // SAFETY: matched to this
+                match unsafe { self.header.object_type().unwrap_unchecked() } {
+                    ObjectType::Slot        => self.downcast_ref_match::<SlotObject>().visit_edges(visitor),
+                    ObjectType::Array       => self.downcast_ref_match::<Array>().visit_edges(visitor),
+                    ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().visit_edges(visitor),
+                    ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().visit_edges(visitor),
+                    ObjectType::Method      => self.downcast_ref_match::<Method>().visit_edges(visitor),
+                    ObjectType::Effect      => self.downcast_ref_match::<StackEffect>().visit_edges(visitor),
+                    ObjectType::Message     => self.downcast_ref_match::<Message>().visit_edges(visitor),
+                    ObjectType::Thread      => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
+                    ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
 
-        // SAFETY: checked
-        match unsafe { obj.header.object_type().unwrap_unchecked() } {
-            ObjectType::Slot => {
-                // SAFETY: checked
-                let slot_object = unsafe {
-                    std::mem::transmute::<&HeapValue, &SlotObject>(self)
-                };
-                slot_object.visit_edges(visitor);
+                    ObjectType::Max => unreachable!(),
+                }
             }
-            ObjectType::Array => {
-                // SAFETY: checked
-                let array_object =
-                    unsafe { std::mem::transmute::<&HeapValue, &Array>(self) };
-                array_object.visit_edges(visitor);
-            }
-            ObjectType::Activation => {
-                // SAFETY: checked
-                let activation = unsafe {
-                    std::mem::transmute::<&HeapValue, &ActivationObject>(self)
-                };
-                activation.visit_edges(visitor);
-            }
-            ObjectType::Quotation => {
-                // SAFETY: checked
-                let quotation = unsafe {
-                    std::mem::transmute::<&HeapValue, &Quotation>(self)
-                };
-                quotation.visit_edges(visitor);
-            }
-            ObjectType::Method => {
-                // SAFETY: checked
-                let method =
-                    unsafe { std::mem::transmute::<&HeapValue, &Method>(self) };
-                method.visit_edges(visitor);
-            }
-            ObjectType::Effect => {
-                // SAFETY: checked
-                let effect = unsafe {
-                    std::mem::transmute::<&HeapValue, &StackEffect>(self)
-                };
-                effect.visit_edges(visitor)
-            }
-            ObjectType::Message => {
-                // SAFETY: checked
-                let message = unsafe {
-                    std::mem::transmute::<&HeapValue, &Message>(self)
-                };
-                message.visit_edges(visitor);
-            }
-            ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum | ObjectType::Thread => {}
-            ObjectType::Max => unreachable!(),
-        };
+        }
     }
 }
 
@@ -643,81 +561,40 @@ impl Object for Map {}
 impl HeapObject for Map {
     const KIND: ObjectKind = ObjectKind::Map;
     const TYPE_BITS: u8 = MapType::Max as u8;
+
+    #[rustfmt::skip]
     fn heap_size(&self) -> usize {
         // SAFETY: this is a map
         match unsafe { self.header.map_type().unwrap_unchecked() } {
-            MapType::Slot => {
-                // SAFETY: checked
-                let map =
-                    unsafe { std::mem::transmute::<&Map, &SlotMap>(self) };
-                map.heap_size()
-            }
-            MapType::Method => {
-                // SAFETY: checked
-                let map =
-                    unsafe { std::mem::transmute::<&Map, &MethodMap>(self) };
-                map.heap_size()
-            }
-            MapType::Quotation => {
-                // SAFETY: checked
-                let map =
-                    unsafe { std::mem::transmute::<&Map, &QuotationMap>(self) };
-                map.heap_size()
-            }
-            MapType::Max => unreachable!(),
+            MapType::Slot       => self.downcast_ref_match::<SlotMap>().heap_size(),
+            MapType::Method     => self.downcast_ref_match::<MethodMap>().heap_size(),
+            MapType::Quotation  => self.downcast_ref_match::<QuotationMap>().heap_size(),
+            MapType::Max        => unreachable!()
         }
     }
 }
 
 // just like object, we dispatch here.
 impl Visitable for Map {
-    #[inline]
+    #[rustfmt::skip]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        match self.header.map_type() {
-            // SAFETY: checked
-            Some(MapType::Slot) => unsafe {
-                let sm: &mut SlotMap = &mut *(self as *mut Map as *mut _);
-                sm.visit_edges_mut(visitor);
-            },
-            // SAFETY: checked
-            Some(MapType::Method) => unsafe {
-                let sm: &mut MethodMap = &mut *(self as *mut Map as *mut _);
-                sm.visit_edges_mut(visitor);
-            },
-            // SAFETY: checked
-            Some(MapType::Quotation) => unsafe {
-                let sm: &mut QuotationMap = &mut *(self as *mut Map as *mut _);
-                sm.visit_edges_mut(visitor);
-            },
-            Some(MapType::Max) => unreachable!(),
-            None => {
-                panic!("visiting map type that doesnt exist")
-            }
+        // SAFETY: this is a map
+        match unsafe { self.header.map_type().unwrap_unchecked() } {
+            MapType::Slot       => self.downcast_mut_match::<SlotMap>().visit_edges_mut(visitor),
+            MapType::Method     => self.downcast_mut_match::<MethodMap>().visit_edges_mut(visitor),
+            MapType::Quotation  => self.downcast_mut_match::<QuotationMap>().visit_edges_mut(visitor),
+            MapType::Max        => unreachable!()
         }
     }
 
-    #[inline]
+    #[rustfmt::skip]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        match self.header.map_type() {
-            // SAFETY: checked
-            Some(MapType::Slot) => unsafe {
-                let sm: &SlotMap = &*(self as *const Map as *const _);
-                sm.visit_edges(visitor);
-            },
-            // SAFETY: checked
-            Some(MapType::Method) => unsafe {
-                let sm: &MethodMap = &*(self as *const Map as *const _);
-                sm.visit_edges(visitor);
-            },
-            // SAFETY: checked
-            Some(MapType::Quotation) => unsafe {
-                let sm: &QuotationMap = &*(self as *const Map as *const _);
-                sm.visit_edges(visitor);
-            },
-            Some(MapType::Max) => unreachable!(),
-            None => {
-                panic!("visiting map type that doesnt exist")
-            }
+        // SAFETY: this is a map
+        match unsafe { self.header.map_type().unwrap_unchecked() } {
+            MapType::Slot       => self.downcast_ref_match::<SlotMap>().visit_edges(visitor),
+            MapType::Method     => self.downcast_ref_match::<MethodMap>().visit_edges(visitor),
+            MapType::Quotation  => self.downcast_ref_match::<QuotationMap>().visit_edges(visitor),
+            MapType::Max        => unreachable!()
         }
     }
 }
