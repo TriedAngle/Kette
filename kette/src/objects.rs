@@ -109,16 +109,14 @@ pub trait HeapObject: Object {
 
     fn header(&self) -> &Header {
         // SAFETY: every heap object has header
-        unsafe { std::mem::transmute::<&Self, &Header>(self) }
+        unsafe { mem::transmute::<&Self, &Header>(self) }
     }
     fn header_mut(&mut self) -> &mut Header {
         // SAFETY: every heap object has header
-        unsafe { std::mem::transmute::<&mut Self, &mut Header>(self) }
+        unsafe { mem::transmute::<&mut Self, &mut Header>(self) }
     }
 
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
+    fn heap_size(&self) -> usize;
 }
 
 #[repr(C)]

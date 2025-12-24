@@ -1,13 +1,12 @@
-// this is a very simple vector implementation,
-// intended to be only used for parsing bootstrapping
-// later in runtime we define an actual vector
-
 use crate::{
     Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy,
     Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper, SlotMap,
     SlotTags, Strings, Tagged, VMShared, Value, Visitable,
 };
 
+// this is a very simple vector implementation,
+// intended to be only used for parsing bootstrapping
+// later in runtime we define an actual vector
 #[repr(C)]
 #[derive(Debug)]
 pub struct Vector {
@@ -99,13 +98,14 @@ impl Vector {
     }
 }
 
+// this should never get called, this is a slot object
 impl Visitable for Vector {}
 impl Object for Vector {}
 impl HeapObject for Vector {
     const KIND: ObjectKind = ObjectKind::Object;
     const TYPE_BITS: u8 = ObjectType::Slot as u8;
     fn heap_size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        unreachable!("slot object")
     }
 }
 

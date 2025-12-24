@@ -192,6 +192,7 @@ impl Interpreter {
             }
             Instruction::AllocateSlotObject { map } => {
                 tracing::trace!("allocate_slot_object: {:?}", map);
+                self.heap.safepoint_poll();
                 let slot_count = map.assignable_slots_count();
 
                 // SAFETY: not safe yet, TODO: depth check
@@ -204,6 +205,7 @@ impl Interpreter {
                 ExecutionResult::Normal
             }
             Instruction::SendPrimitive { id } => {
+                self.heap.safepoint_poll();
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
@@ -214,6 +216,8 @@ impl Interpreter {
             Instruction::Send { message } => {
                 let selector =
                     Selector::new_message(message, self.vm.shared.clone());
+
+                self.heap.safepoint_poll();
 
                 let universe = self.vm.specials().universe;
 
@@ -240,6 +244,8 @@ impl Interpreter {
             Instruction::SendNamed { message } => {
                 let message = self.vm.intern_string(message, &mut self.heap);
                 let selector = Selector::new(message, self.vm.shared.clone());
+
+                self.heap.safepoint_poll();
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
@@ -337,7 +343,8 @@ impl Interpreter {
             };
             let recv_ptr = recv_obj.as_ptr();
             // SAFETY: must be valid by protocol
-            // TODO: add write barrier
+            let dst_ptr = unsafe { (*recv_ptr).slots_mut_ptr().add(offset.into()) }; 
+            self.heap.heap.write_barrier(dst_ptr as _);
             unsafe { (*recv_ptr).set_slot_unchecked(offset.into(), new_value) };
             return ExecutionResult::Normal;
         }

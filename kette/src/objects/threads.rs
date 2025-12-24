@@ -40,7 +40,14 @@ pub struct ThreadObject {
     pub vm_thead: Tagged<*mut VMThread>,
 }
 
-impl Visitable for ThreadObject {}
+impl Visitable for ThreadObject {
+    #[inline]
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
+
+    #[inline]
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+}
+
 impl Object for ThreadObject {}
 impl HeapObject for ThreadObject {
     const KIND: ObjectKind = ObjectKind::Object;
@@ -133,7 +140,7 @@ impl VMThread {
                 let thread_id = thread::current().id();
                 // SAFETY: this is safe, the layout is the same, thread_id is nonzero
                 // furthermore, this allows us to model main as 0
-                let id: u64 = unsafe { std::mem::transmute(thread_id) };
+                let id: u64 = unsafe { mem::transmute(thread_id) };
                 info.thread_id = id;
             }
             let _interpreter = Interpreter::new(vm, proxy, heap, executor);

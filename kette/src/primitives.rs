@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::{
     ExecutionResult, ExecutionState, Handle, HeapProxy, Interpreter,
     ThreadProxy, VMProxy, Value,
@@ -97,7 +99,7 @@ impl<'ex, 'arg> PrimitiveContext<'ex, 'arg> {
     ) -> Self {
         // SAFETY: this is very dangerous, but we got motion
         let ereased = unsafe {
-            std::mem::transmute::<&mut Interpreter, &'ex mut Interpreter>(
+            mem::transmute::<&mut Interpreter, &'ex mut Interpreter>(
                 interpreter,
             )
         };

@@ -27,11 +27,8 @@ impl QuotationMap {
         unimplemented!("TODO")
     }
 
-    /// # Safety
-    /// must be correctly allocated
     pub fn init(&mut self, code: *const Block, input: usize, output: usize) {
-        // SAFETY: safe if contract holds
-        unsafe { self.map.init_quotation(code as _, input, output) };
+        self.map.init_quotation(code as _, input, output);
     }
 
     pub fn required_layout() -> Layout {
@@ -48,7 +45,17 @@ impl HeapObject for QuotationMap {
     }
 }
 
-impl Visitable for QuotationMap {}
+impl Visitable for QuotationMap {
+    #[inline]
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {
+        // No heap edges in a quotation map (code/effect are immediates/raw pointers).
+    }
+
+    #[inline]
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {
+        // No heap edges.
+    }
+}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -89,19 +96,12 @@ impl HeapObject for Quotation {
 
 impl Visitable for Quotation {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        // SAFETY: safe if correctly allocated
-        let map = unsafe { self.map.as_ref() };
-        map.visit_edges(visitor);
-        // SAFETY: safe right now, probably should do a null check here, or tighten contract
-        let body = unsafe { self.body.as_ref() };
-        body.visit_edges(visitor);
+        visitor.visit(self.map.into());
+        visitor.visit(self.body.into());
     }
+
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
-        // SAFETY: map is required by contract
-        let map = unsafe { self.map.as_ref() };
-        map.visit_edges(visitor);
-        // SAFETY: safe right now, probably should do a null check here, or tighten contract
-        let body = unsafe { self.body.as_mut() };
-        body.visit_edges_mut(visitor);
+        visitor.visit_mut(self.map.into());
+        visitor.visit_mut(self.body.into());
     }
 }

@@ -217,12 +217,12 @@ impl SlotObject {
     }
 
     #[inline]
-    fn slots_ptr(&self) -> *const Value {
+    pub fn slots_ptr(&self) -> *const Value {
         self.slots.as_ptr()
     }
 
     #[inline]
-    fn slots_mut_ptr(&mut self) -> *mut Value {
+    pub fn slots_mut_ptr(&mut self) -> *mut Value {
         self.slots.as_mut_ptr()
     }
 
@@ -399,12 +399,18 @@ impl Visitable for SlotMap {
     // TODO: update this once we actually use stuff here
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        let _ = visitor;
+        self.slots().iter().for_each(|desc| {
+            visitor.visit_mut(desc.name.into());
+            visitor.visit_mut(desc.value);
+        });
     }
 
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        let _ = visitor;
+        self.slots().iter().for_each(|desc| {
+            visitor.visit(desc.name.into());
+            visitor.visit(desc.value);
+        });
     }
 }
 

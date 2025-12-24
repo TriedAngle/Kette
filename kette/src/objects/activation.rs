@@ -2,7 +2,7 @@ use std::{alloc::Layout, mem};
 
 use crate::{
     Block, ExecutableMap, Handle, Header, HeapObject, LookupResult, Object,
-    ObjectKind, ObjectType, Selector, Value, Visitable, VisitedLink,
+    ObjectKind, ObjectType, Selector, Value, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]
@@ -168,7 +168,25 @@ impl Default for ActivationStack {
     }
 }
 
-impl Visitable for ActivationObject {}
+impl Visitable for ActivationObject {
+    #[inline]
+    fn visit_edges(&self, visitor: &impl Visitor) {
+        visitor.visit(self.map.as_value());
+        visitor.visit(self.receiver.as_value());
+        self.slots()
+            .iter()
+            .for_each(|slot| visitor.visit(slot.as_value()))
+    }
+
+    #[inline]
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        visitor.visit_mut(self.map.as_value());
+        visitor.visit_mut(self.receiver.as_value());
+        self.slots()
+            .iter()
+            .for_each(|slot| visitor.visit_mut(slot.as_value()))
+    }
+}
 
 impl Object for ActivationObject {
     fn lookup(

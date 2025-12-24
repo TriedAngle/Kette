@@ -3,7 +3,7 @@ use std::{alloc::Layout, mem, ptr};
 use crate::{
     Array, ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType,
     Object, ObjectKind, ObjectType, QuotationMap, Selector, SlotDescriptor,
-    SlotMap, Tagged, Visitable, VisitedLink,
+    SlotMap, Tagged, Visitable, VisitedLink, Visitor,
 };
 
 // TODO: I wish there was an easy way to share SlotMap here
@@ -48,15 +48,7 @@ pub struct StackEffect {
 
 impl ExecutableMap {
     /// Initialize the ExecutableMap for a MethodMap
-    /// # Safety
-    /// Pointers must be valid
-    /// usage must be valid
-    pub unsafe fn init_method(
-        &mut self,
-        code: usize,
-        input: usize,
-        output: usize,
-    ) {
+    pub fn init_method(&mut self, code: usize, input: usize, output: usize) {
         self.map.init(MapType::Method);
         self.code = Tagged::new_value(code);
         self.input_effect = input.into();
@@ -64,15 +56,7 @@ impl ExecutableMap {
     }
 
     /// Initialize the ExecutableMap for a MethodMap
-    /// # Safety
-    /// Pointers must be valid
-    /// usage must be valid
-    pub unsafe fn init_quotation(
-        &mut self,
-        code: usize,
-        input: usize,
-        output: usize,
-    ) {
+    pub fn init_quotation(&mut self, code: usize, input: usize, output: usize) {
         self.map.init(MapType::Quotation);
         self.code = Tagged::new_value(code);
         self.input_effect = input.into();
@@ -127,10 +111,6 @@ impl MethodMap {
         layout
     }
 
-    /// # Safety
-    /// internal function, dicouraged to be used.
-    /// must have valid allocation size
-    /// inputs must not be null/false
     pub fn init_with_data(
         &mut self,
         name: Handle<ByteArray>,
@@ -154,8 +134,7 @@ impl MethodMap {
         // SAFETY: safe by contract
         let output = unsafe { effect_ref.outputs.as_ref().size() };
 
-        // SAFETY: safe by contract
-        unsafe { self.map.init_method(code_ptr, input, output) };
+        self.map.init_method(code_ptr, input, output);
         self.name = name.as_tagged();
         self.effect = effect;
         self.slott_count = Tagged::new_value(slots.len());
@@ -255,6 +234,7 @@ impl HeapObject for ExecutableMap {
         unreachable!()
     }
 }
+// this should panic
 impl Visitable for ExecutableMap {}
 
 // TODO: implment this
@@ -264,11 +244,29 @@ impl HeapObject for MethodMap {
     const TYPE_BITS: u8 = MapType::Method as u8;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
+            + self.slot_count() * mem::size_of::<SlotDescriptor>()
     }
 }
 impl Visitable for MethodMap {
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+    #[inline]
+    fn visit_edges(&self, visitor: &impl Visitor) {
+        visitor.visit(self.effect.into());
+        visitor.visit(self.name.into());
+        for desc in self.slots() {
+            visitor.visit(desc.name.into());
+            visitor.visit(desc.value);
+        }
+    }
+
+    #[inline]
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        visitor.visit_mut(self.effect.into());
+        visitor.visit_mut(self.name.into());
+        for desc in self.slots() {
+            visitor.visit_mut(desc.name.into());
+            visitor.visit_mut(desc.value);
+        }
+    }
 }
 
 // TODO: implment this
@@ -292,6 +290,13 @@ impl HeapObject for Method {
 }
 
 impl Visitable for Method {
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+    #[inline]
+    fn visit_edges(&self, visitor: &impl Visitor) {
+        visitor.visit(self.map.into());
+    }
+
+    #[inline]
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        visitor.visit_mut(self.map.into());
+    }
 }

@@ -709,16 +709,18 @@ impl<T: Object> Debug for Tagged<T> {
 }
 
 pub mod transmute {
+    use std::mem;
+
     use crate::{Handle, Object, Tagged, Value};
 
-    const _: [(); std::mem::size_of::<Handle<Value>>()] =
-        [(); std::mem::size_of::<Value>()];
-    const _: [(); std::mem::align_of::<Handle<Value>>()] =
-        [(); std::mem::align_of::<Value>()];
-    const _: [(); std::mem::size_of::<Tagged<Value>>()] =
-        [(); std::mem::size_of::<Value>()];
-    const _: [(); std::mem::align_of::<Tagged<Value>>()] =
-        [(); std::mem::align_of::<Value>()];
+    const _: [(); mem::size_of::<Handle<Value>>()] =
+        [(); mem::size_of::<Value>()];
+    const _: [(); mem::align_of::<Handle<Value>>()] =
+        [(); mem::align_of::<Value>()];
+    const _: [(); mem::size_of::<Tagged<Value>>()] =
+        [(); mem::size_of::<Value>()];
+    const _: [(); mem::align_of::<Tagged<Value>>()] =
+        [(); mem::align_of::<Value>()];
 
     /// Reinterpret a slice of `Handle<Value>` as a slice of `Value`.
     ///
@@ -813,6 +815,8 @@ pub mod transmute {
 
 #[cfg(test)]
 mod value_tests {
+    use std::mem;
+
     use crate::ObjectKind;
 
     use super::*;
@@ -827,6 +831,9 @@ mod value_tests {
     impl HeapObject for TestObj {
         const KIND: ObjectKind = ObjectKind::Object;
         const TYPE_BITS: u8 = 0b11111;
+        fn heap_size(&self) -> usize {
+            mem::size_of::<Self>()
+        }
     }
 
     fn boxed_test_obj(n: i64, m: usize) -> Box<TestObj> {

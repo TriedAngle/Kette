@@ -18,7 +18,14 @@ impl Float {
     }
 }
 
-impl Visitable for Float {}
+impl Visitable for Float {
+    #[inline]
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {}
+
+    #[inline]
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {}
+}
+
 impl Object for Float {
     fn lookup(
         &self,

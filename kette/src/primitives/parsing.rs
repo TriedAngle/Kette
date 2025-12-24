@@ -1,7 +1,7 @@
 // TODO: remove this unused
 #![allow(unused)]
 
-use std::ops::Deref;
+use std::{mem, ops::Deref};
 
 use crate::{
     Allocator, Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle,
@@ -98,7 +98,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         let ba = unsafe { msg.value.promote_to_handle() };
         // SAFETY: lifetime valid here
         Some(unsafe {
-            std::mem::transmute::<&'_ str, &'a str>(
+            mem::transmute::<&'_ str, &'a str>(
                 ba.as_utf8().expect("must exist"),
             )
         })

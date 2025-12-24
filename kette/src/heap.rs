@@ -4,7 +4,7 @@ use std::{
     ops::{self, Deref},
     ptr::NonNull,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex, Weak,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
 };
@@ -19,11 +19,11 @@ pub const NONE: usize = usize::MAX;
 #[repr(C)]
 #[derive(Debug)]
 pub struct PageMeta {
-    // Current bump cursor for this page (address).
+    /// Current bump cursor for this page (address).
     bump: AtomicUsize,
-    // AllocationType as u8 for atomic access
+    /// AllocationType as u8 for atomic access
     kind: AtomicU8,
-    // Lock-free intrusive list link: page index or NONE
+    /// Lock-free intrusive list link: page index or NONE
     next: AtomicUsize,
 }
 
@@ -35,7 +35,7 @@ impl PageMeta {
             0b01 => AllocationType::Boxed,
             0b10 => AllocationType::Unboxed,
             0b11 => AllocationType::Code,
-            _ => AllocationType::Free, // or unreachable/debug panic
+            _ => unreachable!(),
         }
     }
 
@@ -91,19 +91,13 @@ pub struct Nursery {
 #[derive(Debug)]
 pub struct RuntimeInformation {
     /// Total bytes consumed by allocations (payload + padding).
-    pub allocated_total: usize,
+    pub allocated_total: AtomicUsize,
     /// Total padding waste (alignment) across all allocations.
-    pub padding_waste_total: usize,
-
-    pub freed_total: usize,
-
+    pub padding_waste_total: AtomicUsize,
+    /// Total amount of freed
+    pub freed_total: AtomicUsize,
     /// immix total allocation since last gc
-    pub allocated_since_last_gc: usize,
-}
-
-#[derive(Debug)]
-pub struct HeapState {
-    pub track: RuntimeInformation,
+    pub allocated_since_last_gc: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -113,6 +107,8 @@ pub struct HeapInfo {
     pub lines_per_page: usize,
     pub dirty_count: usize,
     pub dirty_per_page: usize,
+    pub tlab_large_threshold: usize,
+    pub bytes_before_major_gc: usize,
 }
 
 #[derive(Debug)]
@@ -130,7 +126,10 @@ pub struct HeapImpl {
     pub minor_epoch: AtomicU8,
     pub running: AtomicBool,
     pub info: HeapInfo,
-    pub state: Mutex<HeapState>,
+    pub track: RuntimeInformation,
+    pub gc_monitor: Mutex<()>,
+    pub gc_cond: Condvar,
+    pub proxies: Mutex<Vec<Weak<ProxyState>>>,
     pub heads: [AtomicUsize; 3],
     pub pages: Box<[PageMeta]>,
     pub lines: Box<[AtomicU8]>,
@@ -152,11 +151,45 @@ pub struct Tlab {
     end: NonNull<u8>,
 }
 
+pub const MUTATOR_ACTIVE: u8 = 0;
+pub const MUTATOR_PARKED: u8 = 1;
+
+#[derive(Debug)]
+pub struct ProxyState {
+    pub status: AtomicU8,
+}
+
+pub struct NoGcGuard<'a> {
+    proxy: &'a mut HeapProxy,
+}
+
+impl<'a> NoGcGuard<'a> {
+    pub fn new(proxy: &'a mut HeapProxy) -> Self {
+        proxy.no_gc_count += 1;
+        Self { proxy }
+    }
+}
+
+impl<'a> Drop for NoGcGuard<'a> {
+    fn drop(&mut self) {
+        self.proxy.no_gc_count -= 1;
+    }
+}
+
+impl<'a> std::ops::Deref for NoGcGuard<'a> {
+    type Target = HeapProxy;
+    fn deref(&self) -> &Self::Target {
+        self.proxy
+    }
+}
+
 #[derive(Debug)]
 pub struct HeapProxy {
     pub heap: Heap,
-    pub major_epoch: u8,
-    pub tlabs: [Option<Tlab>; 3],
+    pub state: Arc<ProxyState>,
+    pub epoch: u8,
+    pub tlab: Option<Tlab>,
+    pub no_gc_count: u32,
 }
 
 // SAFETY: this is threadsafe
@@ -291,13 +324,16 @@ impl HeapImpl {
         let dirty: Box<[AtomicU8]> = dirty.into_boxed_slice();
 
         let track = RuntimeInformation {
-            allocated_total: 0,
-            padding_waste_total: 0,
-            freed_total: 0,
-            allocated_since_last_gc: 0,
+            allocated_total: AtomicUsize::new(0),
+            padding_waste_total: AtomicUsize::new(0),
+            freed_total: AtomicUsize::new(0),
+            allocated_since_last_gc: AtomicUsize::new(0),
         };
 
-        let state = HeapState { track };
+        let bytes_before_major_gc =
+            ((immix_bytes as f64) * settings.bytes_before_gc).ceil() as usize;
+
+        let tlab_large_threshold = (settings.tlab_size * 3) / 4;
 
         let info = HeapInfo {
             page_count,
@@ -305,9 +341,9 @@ impl HeapImpl {
             lines_per_page: settings.page_size / settings.line_size,
             dirty_count,
             dirty_per_page,
+            tlab_large_threshold,
+            bytes_before_major_gc,
         };
-
-        let state = Mutex::new(state);
 
         HeapImpl {
             settings,
@@ -317,8 +353,11 @@ impl HeapImpl {
             major_epoch: AtomicU8::new(1),
             minor_epoch: AtomicU8::new(1),
             running: AtomicBool::new(false),
+            gc_monitor: Mutex::new(()),
+            gc_cond: Condvar::new(),
             heads,
-            state,
+            track,
+            proxies: Mutex::new(Vec::new()),
             info,
             pages,
             lines,
@@ -326,9 +365,50 @@ impl HeapImpl {
         }
     }
 
+    pub fn stop_mutators(&self) {
+        self.running.store(true, Ordering::SeqCst);
+
+        // 2. Wait for threads to park
+        // We spin here because we want to detect the stop ASAP.
+        let mut proxies = self.proxies.lock().unwrap();
+
+        proxies.retain(|weak| {
+            if let Some(state) = weak.upgrade() {
+                let mut spins = 0;
+                while state.status.load(Ordering::Acquire) == MUTATOR_ACTIVE {
+                    if spins < 100 {
+                        std::hint::spin_loop();
+                    } else {
+                        std::thread::yield_now();
+                    }
+                    spins += 1;
+                }
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub fn start_mutators(&self) {
+        // Advance Epoch
+        let next = self.minor_epoch.load(Ordering::Relaxed).wrapping_add(1);
+        self.minor_epoch.store(next, Ordering::Release);
+
+        self.running.store(false, Ordering::SeqCst);
+
+        let _guard = self.gc_monitor.lock().unwrap();
+        self.gc_cond.notify_all();
+    }
+
     #[inline]
     pub fn major_epoch(&self) -> u8 {
         self.major_epoch.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn minor_epoch(&self) -> u8 {
+        self.minor_epoch.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -511,6 +591,14 @@ impl HeapImpl {
     }
 
     #[inline]
+    fn maybe_trigger_major_gc(&self) {
+        let since = self.track.allocated_since_last_gc.load(Ordering::Relaxed);
+        if since >= self.info.bytes_before_major_gc {
+            self.major_gc();
+        }
+    }
+
+    #[inline]
     fn first_occupied_line_in_span(
         &self,
         start_line: usize,
@@ -619,7 +707,17 @@ impl HeapImpl {
                         page_index: 0,
                     };
                 }
-                unimplemented!("TODO: minor GC")
+
+                self.minor_gc();
+
+                if let Some(alloc) = self.nursery.allocate(s.layout) {
+                    return AllocationResult {
+                        ptr: alloc,
+                        page_index: 0,
+                    };
+                }
+
+                panic!("nursery: out of memory after minor GC");
             }
 
             HeapSpace::Immix => {
@@ -642,6 +740,8 @@ impl HeapImpl {
                     }
                     idx = self.pages[idx].next.load(Ordering::Acquire);
                 }
+
+                self.maybe_trigger_major_gc();
 
                 // No fit: claim a new free page.
                 if let Some(new_page) = self.claim_first_free_page(s.kind) {
@@ -667,7 +767,6 @@ impl HeapImpl {
     #[inline]
     pub fn write_barrier(
         &self,
-        _src_obj_addr: *mut u8,
         dst_slot_addr: *mut u8,
     ) {
         let dst = dst_slot_addr as usize;
@@ -690,16 +789,44 @@ impl HeapImpl {
         let e = self.minor_epoch.load(Ordering::Relaxed);
         self.dirty[dirty_index].store(e, Ordering::Relaxed);
     }
+
+    /// Major GC (full-heap / immix collection). Stub for now.
+    pub fn major_gc(&self) {
+        unimplemented!("major_gc")
+    }
+
+    /// Minor GC (nursery collection). Stub for now.
+    pub fn minor_gc(&self) {
+        unimplemented!("minor_gc")
+    }
+
+    fn register_proxy_state(&self, state: &Arc<ProxyState>) {
+        let mut v = self.proxies.lock().unwrap();
+        v.push(Arc::downgrade(state));
+    }
+}
+
+impl ProxyState {
+    pub fn new() -> Self {
+        Self {
+            status: AtomicU8::new(MUTATOR_ACTIVE),
+        }
+    }
 }
 
 impl HeapProxy {
     fn new(heap: &Heap) -> Self {
         let heap = heap.clone();
-        let major_epoch = heap.major_epoch();
+        let epoch = heap.minor_epoch();
+        let state = Arc::new(ProxyState::new());
+        heap.register_proxy_state(&state);
+
         Self {
             heap,
-            major_epoch,
-            tlabs: [None, None, None],
+            epoch,
+            tlab: None,
+            state,
+            no_gc_count: 0,
         }
     }
 
@@ -707,56 +834,13 @@ impl HeapProxy {
         Self::new(&self.heap)
     }
 
-    #[inline]
-    fn kind_index(kind: AllocationType) -> Option<usize> {
-        match kind {
-            AllocationType::Boxed => Some(0),
-            AllocationType::Unboxed => Some(1),
-            AllocationType::Code => Some(2),
-            AllocationType::Free => None,
-        }
-    }
-
-    #[inline]
-    fn sync(&mut self) {
-        // Fast reads, no heap lock.
-        let running = self.heap.running();
-        let major_epoch = self.heap.major_epoch();
-
-        if !running && major_epoch == self.major_epoch {
-            return;
-        }
-
-        // Wait until GC finishes.
-        while self.heap.running() {
-            std::thread::yield_now();
-        }
-
-        self.major_epoch = self.heap.major_epoch();
-        self.tlabs = [None, None, None];
-    }
-
-    #[inline]
-    fn tlab_threshold(&self) -> usize {
-        // 75% of tlab_size
-        // (avoid floats; exact integer math)
-        let tlab_size = self.heap.settings.tlab_size;
-        (tlab_size * 3) / 4
-    }
-
-    fn refill_tlab(&mut self, kind: AllocationType) {
-        let Some(k) = Self::kind_index(kind) else {
-            panic!("cannot refill TLAB for Free pages");
-        };
-
-        // Allocate a fresh tlab chunk from the real heap (gen0).
-        // Important: we call sync_with_gc before allocating.
+    fn refill_tlab(&mut self) {
         let tlab_size = self.heap.settings.tlab_size;
 
         let res = self.heap.allocate(Search::new_size_align(
             tlab_size,
-            16, // tlab chunk alignment; objects will align inside
-            kind,
+            16,
+            AllocationType::Free,
             HeapSpace::Nursery,
         ));
 
@@ -766,53 +850,110 @@ impl HeapProxy {
         // SAFETY: valid pointer end
         let end = unsafe { NonNull::new_unchecked(end_ptr) };
 
-        self.tlabs[k] = Some(Tlab {
+        self.tlab = Some(Tlab {
             page_index: res.page_index,
             cur: start,
             end,
         });
     }
 
+    pub fn enter_no_gc_scope(&mut self) -> NoGcGuard<'_> {
+        NoGcGuard { proxy: self }
+    }
+
+    #[inline(never)]
+    fn enter_safepoint(&mut self) {
+        self.state.status.store(MUTATOR_PARKED, Ordering::Release);
+
+        if self.heap.running() {
+            // Acquire the monitor lock
+            let mut guard = self.heap.gc_monitor.lock().unwrap();
+
+            // Wait while GC is running.
+            // Using Condvar::wait handles the OS-level sleep/wake.
+            while self.heap.running() {
+                guard = self.heap.gc_cond.wait(guard).unwrap();
+            }
+        }
+
+        // 3. We are back. Mark Active.
+        self.state.status.store(MUTATOR_ACTIVE, Ordering::Release);
+
+        // 4. Update local epoch and invalidate TLAB
+        // The GC might have moved objects, or we are in a new phase.
+        self.epoch = self.heap.minor_epoch();
+        self.tlab = None;
+    }
+
+    #[inline]
+    pub fn safepoint_poll(&mut self) {
+        // If we are in a NoGC scope, we CANNOT stop.
+        debug_assert!(self.no_gc_count == 0, "NoGcScope is not a safepoint");
+
+        if self.heap.running.load(Ordering::Relaxed) {
+            self.enter_safepoint();
+        }
+    }
+
+    /// Call this before a blocking but gc safe code
+    pub fn enter_blocking_region(&mut self) {
+        debug_assert!(self.no_gc_count == 0, "cannot park mutator while in NoGcScope");
+        self.state.status.store(MUTATOR_PARKED, Ordering::Release);
+    }
+
+    /// Call this immediately at the end of the gc safe code
+    pub fn exit_blocking_region(&mut self) {
+        // Declare intent to be ACTIVE first.
+        self.state.status.store(MUTATOR_ACTIVE, Ordering::SeqCst);
+
+        // CHECK: Did a GC start while we were waking up?
+        if self.heap.running.load(Ordering::SeqCst) {
+            // ROLLEBACK: A GC is running, and we just marked ourselves Active.
+            // The GC might be waiting for us now. We must park and wait.
+            self.state.status.store(MUTATOR_PARKED, Ordering::Release);
+
+            let mut guard = self.heap.gc_monitor.lock().unwrap();
+            while self.heap.running.load(Ordering::Relaxed) {
+                guard = self.heap.gc_cond.wait(guard).unwrap();
+            }
+
+            // Now the GC is finished. We can safely be Active.
+            self.state.status.store(MUTATOR_ACTIVE, Ordering::Release);
+        }
+
+        //  Check if we need to dump the TLAB
+        let global_epoch = self.heap.minor_epoch.load(Ordering::Relaxed);
+        if global_epoch != self.epoch {
+            self.epoch = global_epoch;
+            self.tlab = None;
+        }
+    }
+
     pub fn allocate_raw(&mut self, s: Search) -> AllocationResult {
-        let size = s.layout.size();
-        let align = s.layout.align();
-        debug_assert!(s.kind != AllocationType::Free);
-        debug_assert!(size != 0);
-        debug_assert!(align.is_power_of_two());
+        if s.space == HeapSpace::Nursery {
+            if let Some(ref mut tlab) = self.tlab {
+                if let Some(ptr) = tlab.try_alloc(s.layout) {
+                    return AllocationResult {
+                        page_index: tlab.page_index,
+                        ptr,
+                    };
+                }
+            }
+        }
 
-        // Always synchronize with GC before doing anything.
-        self.sync();
+        // Poll for GC
+        self.safepoint_poll();
 
-        // TLABs are Nursery Only
-        if s.space != HeapSpace::Nursery {
+        // Large/Immix objects
+        let is_large = s.layout.size() >= self.heap.info.tlab_large_threshold;
+        if s.space != HeapSpace::Nursery || is_large {
             return self.heap.allocate(s);
         }
 
-        // Skip TLAB if request is "large" relative to the tlab.
-        let threshold = self.tlab_threshold();
+        self.refill_tlab();
 
-        if size >= threshold {
-            return self.heap.allocate(s);
-        }
-
-        let Some(k) = Self::kind_index(s.kind) else {
-            panic!("Invalid kind {:?}", s.kind)
-        };
-
-        // Try existing tlab first.
-        if let Some(ref mut tlab) = self.tlabs[k]
-            && let Some(ptr) = tlab.try_alloc(s.layout)
-        {
-            return AllocationResult {
-                page_index: tlab.page_index,
-                ptr,
-            };
-        }
-
-        self.refill_tlab(s.kind);
-
-        // SAFETY: we just refilled
-        let tlab = unsafe { self.tlabs[k].as_mut().unwrap_unchecked() };
+        // Retry Allocation
+        let tlab = unsafe { self.tlab.as_mut().unwrap_unchecked() };
 
         if let Some(ptr) = tlab.try_alloc(s.layout) {
             return AllocationResult {
@@ -821,7 +962,7 @@ impl HeapProxy {
             };
         }
 
-        panic!("Failed to Allocate")
+        panic!("OOM: Failed to allocate even after TLAB refill");
     }
 }
 

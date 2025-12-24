@@ -92,6 +92,13 @@ impl ExecutionState {
         unsafe { self.stack.as_ptr().add(self.depth).read() }
     }
 
+    /// # Safety
+    /// caller must make sure that at least one element is in the stack
+    pub unsafe fn peek_unchecked(&mut self) -> Value {
+        // SAFETY: depth check
+        unsafe { self.stack.as_ptr().add(self.depth - 1).read() }
+    }
+
     /// the the n from the top of the stack
     /// # Safety
     /// caller must make sure that at least n elements are in the stack
