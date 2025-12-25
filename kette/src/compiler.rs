@@ -1,5 +1,6 @@
 use crate::{
-    Array, Block, Handle, Instruction, Message, ObjectType, Quotation, VMShared,
+    Array, Block, Handle, Instruction, Message, ObjectType, Quotation, SlotMap,
+    VMShared,
 };
 
 pub struct BytecodeCompiler {}
@@ -10,7 +11,8 @@ impl BytecodeCompiler {
             tracing::span!(tracing::Level::DEBUG, "compile", body = ?body )
                 .entered();
         let mut instructions = Vec::new();
-        for word in body.fields() {
+        let words = body.fields();
+        for (idx, word) in words.iter().enumerate() {
             if let Some(value) = word.as_tagged_fixnum::<i64>() {
                 instructions.push(Instruction::PushFixnum {
                     value: value.as_i64(),
@@ -20,6 +22,10 @@ impl BytecodeCompiler {
 
             // SAFETY: no gc here
             let obj = unsafe { word.as_heap_handle_unchecked() };
+
+            if let Some(_map) = obj.downcast_ref::<SlotMap>() {
+                continue;
+            }
 
             let message =
                 match obj.header.object_type().expect("must be object") {
@@ -54,6 +60,22 @@ impl BytecodeCompiler {
             // TODO: implement the resend and delegate
             if message == vm.specials.message_self {
                 instructions.push(Instruction::PushSelf);
+                continue;
+            }
+
+            if message == vm.specials.message_create_object {
+                let prior = words[idx - 1];
+
+                let obj = unsafe { prior.as_heap_handle_unchecked() };
+                if let Some(_map) = obj.downcast_ref::<SlotMap>() {
+                    let map =
+                        unsafe { prior.as_heap_handle_unchecked().cast() };
+                    instructions.push(Instruction::CreateSlotObject { map });
+                } else {
+                    panic!(
+                        "invalid state, CreateSlotObject requires map in parsing"
+                    )
+                }
                 continue;
             }
 

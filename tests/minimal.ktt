@@ -3,8 +3,6 @@
     inc = (| -- | self counter 1 fixnum+ self counter<< ) .
     fetchInc = (| -- current . | self counter self inc ) .
 |) 
-
-
 dup fetchInc fixnum>string (println)
 fetchInc fixnum>string (println)
 
@@ -18,5 +16,5 @@ dup fetchInc fixnum>string (println)
 fetchInc fixnum>string (println)
 
 (| x . y := 1 . |) y fixnum>string (println)
-(| x . y := 1 |)
-(| x . y |)
+(| x . y := 22 |) y fixnum>string (println)
+(| x . y |) 33 over y<< y fixnum>string (println)

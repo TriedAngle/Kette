@@ -26,8 +26,9 @@ pub enum ValueTag {
 pub const OBECT_TAG_MASK: u64 = 0b11;
 
 /// A generic Value
+/// its first one or two bits decide what type of value it is
 #[repr(transparent)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Value(u64);
 
 /// A tagged value
@@ -687,6 +688,12 @@ impl<T> PtrSizedObject for *mut T {
     }
     fn from_ptr_sized(value: u64) -> Self {
         value as _
+    }
+}
+
+impl Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("Value({:#x})", self.0))
     }
 }
 

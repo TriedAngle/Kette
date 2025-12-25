@@ -17,33 +17,13 @@
             number = (| |) .
             callable = (| |) .
             boolean = (| |) .
+            language = "helooo 1.0" .
         |) .
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
+    printDepth = (| -- | "depth: " print @vm-depth >string println ) .
 |) universe addTraitSlots
-
-(| addBoolAbilities = (| -- |
-    (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
-    (| parent* = (| parent* = std traits boolean |) |) f addTraitSlots
-    
-    (| 
-        not = (| -- ? | f ) .
-        && = (| other -- ? | ) . 
-        >string = "t" .
-    |) t parent* addTraitSlots
-
-    (| 
-        not = (| -- ? | t ) .
-        && = (| other -- ? | drop self ) .
-        >string = "f" .
-    |) f parent* addTraitSlots 
-) |)  addBoolAbilities
-
-
-(|  parent* = std traits clonable .
-    abs = (| -- new | self positive? [ self ] [ self neg ] if ) .
-|) std traits number addTraitSlots
 
 (|
     clonable* = std traits clonable .
@@ -66,36 +46,10 @@
     >string = (| -- str | self fixnum>string ) .
 |) std traits fixnum addTraitSlots
 
-(|
-    clonable* = std traits clonable .
-    number* = std traits number .
-    + = (| lhs -- new | dup float? [ self float+ ] [ drop /* TODO: handle this */ ] if ) .
-    - = (| lhs -- new | dup float? [ self float- ] [ drop /* TODO: handle this */ ] if ) .
-    * = (| lhs -- new | dup float? [ self float* ] [ drop /* TODO: handle this */ ] if ) .
-    / = (| lhs -- new | dup float? [ self float/ ] [ drop /* TODO: handle this */ ] if ) .
-    % = (| lhs -- new | dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ) .
-    ^ = (| lhs -- new | dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ) .
-    sqrt = (| -- sqrt | self floatSqrt ) .
-    e^ = (| -- new | self floate^ ) .
-    2^ = (| -- new | self float2^ ) .
-    neg = (| -- -self | self floatNeg ) .
-    sin  = (| -- res | self floatSin ) .
-    cos  = (| -- res | self floatCos ) .
-    tan  = (| -- res | self floatTan ) .
-    asin = (| -- res | self floatAsin ) .
-    acos = (| -- res | self floatAcos ) .
-    atan = (| -- res | self floatAtan ) .
-    = = (| lhs -- ? | self float= ) .
-    != = (| lhs -- ? | self float!= ) .
-    < = (| lhs -- ? | self float< ) .
-    > = (| lhs -- ? | self float> ) .
-    <= = (| lhs -- ? | self float<= ) .
-    >= = (| lhs -- ? | self float>= ) .
-    positive? = (| -- ? | self 0.0 > ) .
-    >string = (| -- str | self float>string ) .
-|) std traits float addTraitSlots
+
 
 (| 
+    name = "meow lol" .
     print = (| -- | self (print) ) .
     println = (| -- | self (println) ) . 
     size = (| -- | self (bytearraySize) ) .
@@ -113,6 +67,25 @@
         [ memcpyFull ] keep ) .
 |) std traits bytearray addTraitSlots
 
+
+(| addBoolAbilities = (| -- |
+    (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
+    (| parent* = (| parent* = std traits boolean |) |) f addTraitSlots
+    
+    (| 
+        not = (| -- ? | f ) .
+        && = (| other -- ? | ) . 
+        >string = "t" .
+    |) t parent* addTraitSlots
+
+    (| 
+        not = (| -- ? | t ) .
+        && = (| other -- ? | drop self ) .
+        >string = "f" .
+    |) f parent* addTraitSlots 
+    "added bool" println
+) |)  addBoolAbilities
+
 (| 
     call = f  .
     if =  
@@ -120,9 +93,9 @@
     when = (| ? -- ... | self [ ] if ) .
     unless = (| ? -- ... | [ ] self if ) .
     dip = // takes x, calls self, puts back x 
-        (| x -- . x | [ self call ] dip ) .
+        (| x -- ..a . x | [ self call ] dip ) .
     keep = // calls self with x, then puts back x
-        (| x -- . x | dup [ self call ] dip ) .
+        (| x -- ..a . x | dup [ self call ] dip ) .
     bi = // applies p to x, then self to x 
         (| x . p -- ..a | keep self call ) .
     bi* = // appplies p to x, then self to y
@@ -130,28 +103,12 @@
     bi@ = // applies self to x, then y
         (| x . y -- ..a | self dup bi* ) .
     2dip = // removes x and y from stack then call self
-        (| . x . y -- . x . y | [ self dip ] dip ) .
+        (| ..a . x . y -- ..b . x . y | [ self dip ] dip ) .
     2keep = // calls self with x and y then put x and y back
-        (| . x . y -- . x . y | 2dup self 2dip ) .
+        (| ..a . x . y -- ..b . x . y | 2dup self 2dip ) .
     2bi = // applies p to x and y then self to x and y
         (| x . y . p -- | 2keep self call ) .
 |) std traits callable addTraitSlots
-
-
-(| 
-    curried = (| 
-        parent* = std traits clonable .
-        callable* = std traits callable .
-        obj . callable .
-        call = (| ... -- ... | self obj self callable call ) .
-    |) . 
-    composed = (|
-        parent* = std traits clonable .
-        callable* = std traits callable .
-        callable1 . callable2 .
-        call = (| ... -- ... | self callable1 call self callable2 call ) .
-    |) .
-|) std addTraitSlots 
 
 (|
     callable* = std traits callable .
@@ -160,4 +117,11 @@
     compose = (| quot -- curried | self std composed clone! ) .
 |) std traits quotation addTraitSlots
 
-
+(| 
+    curried = (| 
+        name = "---WOW---" .
+        obj . callable .
+        parent* = std traits clonable .
+        callable* = std traits callable .
+    |) . 
+|) std addTraitSlots 

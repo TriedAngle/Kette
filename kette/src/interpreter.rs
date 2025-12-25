@@ -1,8 +1,8 @@
 use crate::{
     Activation, ActivationStack, ActivationType, Allocator, ExecutionState,
-    Handle, HeapProxy, Instruction, LookupResult, PrimitiveMessageIndex,
-    Quotation, Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value,
-    get_primitive, transmute,
+    Handle, HeapProxy, Instruction, LookupResult,
+    PrimitiveMessageIndex, Quotation, Selector, SlotObject, SlotTags,
+    ThreadProxy, VMProxy, Value, get_primitive, transmute,
 };
 
 pub struct Interpreter {
@@ -190,16 +190,17 @@ impl Interpreter {
                 self.state.push(value);
                 ExecutionResult::Normal
             }
-            Instruction::AllocateSlotObject { map } => {
-                tracing::trace!("allocate_slot_object: {:?}", map);
+            Instruction::CreateSlotObject { mut map } => {
                 self.heap.safepoint_poll();
-                let slot_count = map.assignable_slots_count();
+                let slot_count = map.data_slots();
 
                 // SAFETY: not safe yet, TODO: depth check
                 let slots =
                     unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
 
-                let obj = self.heap.allocate_slots(map, slots);
+                // TODO: sort in place
+                let slots = map.collect_values(slots);
+                let obj = self.heap.allocate_slots(map, &slots);
                 self.state.push(obj.into());
                 self.record_depth();
                 ExecutionResult::Normal
@@ -351,10 +352,7 @@ impl Interpreter {
             return ExecutionResult::Normal;
         }
 
-        if slot
-            .tags()
-            .contains(SlotTags::EXECUTABLE | SlotTags::PRIMITIVE)
-        {
+        if slot.tags().contains(SlotTags::PRIMITIVE) {
             let id = slot
                 .value
                 .as_tagged_fixnum::<usize>()
@@ -366,17 +364,26 @@ impl Interpreter {
             return self.primitive_send(receiver, message_idx);
         }
 
-        if !slot.tags().contains(SlotTags::EXECUTABLE) {
+        if slot.value.is_fixnum() {
             self.state.push(slot.value);
             return ExecutionResult::Normal;
         }
 
-        // SAFETY: must by protocol
-        let method =
-            unsafe { slot.value.as_handle_unchecked().cast::<SlotObject>() };
+        let heap_val = unsafe { slot.value.as_heap_handle_unchecked() };
+        if let Some(obj) = heap_val.downcast_ref::<SlotObject>() {
+            if unsafe { obj.map.as_ref().has_code() } {
+                // SAFETY: must by protocol
+                let method = unsafe {
+                    slot.value.as_handle_unchecked().cast::<SlotObject>()
+                };
 
-        self.add_method(receiver, method);
+                self.add_method(receiver, method);
 
-        ExecutionResult::ActivationChanged
+                return ExecutionResult::ActivationChanged;
+            }
+        }
+
+        self.state.push(slot.value);
+        return ExecutionResult::Normal;
     }
 }

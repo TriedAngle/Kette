@@ -18,7 +18,6 @@ bitflags! {
         const PARENT = 1 << 0;
         const ASSIGNABLE = 1 << 1;
         const PRIMITIVE = 1 << 2;
-        const EXECUTABLE = 1 << 3;
         const ASSIGNMENT = 1 << 4;
     }
 }
@@ -54,6 +53,7 @@ pub struct SlotMap {
     pub code: Tagged<usize>,
     pub effect: Tagged<u64>,
     pub assignable_slots: Tagged<usize>,
+    pub data_slots: Tagged<usize>,
     pub total_slots: Tagged<usize>,
     pub slots: [SlotDescriptor; 0],
 }
@@ -82,9 +82,37 @@ impl SlotDescriptor {
         let raw: u8 = (value & 0xFF) as u8; // cutting off
         SlotTags::from_bits(raw).expect("must have valid tags")
     }
+
+    #[inline]
+    pub fn is_data_consumer(&self) -> bool {
+        let tags = self.tags();
+        !tags.contains(SlotTags::ASSIGNMENT)
+            && !tags.contains(SlotTags::PRIMITIVE)
+    }
 }
 
 impl SlotMap {
+    pub fn collect_values(&mut self, values: &[Value]) -> Vec<Value> {
+        let assignable_count = self.assignable_slots_count();
+        let mut object_storage = Vec::with_capacity(assignable_count);
+
+        let mut val_iter = values.iter().cloned();
+
+        for slot in unsafe { self.slots_mut() } {
+            if slot.is_data_consumer() {
+                let val = val_iter.next().expect("Stack values count mismatch");
+
+                if slot.tags().contains(SlotTags::ASSIGNABLE) {
+                    object_storage.push(val);
+                } else {
+                    slot.value = val;
+                }
+            }
+        }
+
+        object_storage
+    }
+
     /// initialize slot map with data
     pub fn init_with_data(
         &mut self,
@@ -92,26 +120,7 @@ impl SlotMap {
         code_ptr: Tagged<usize>,
         effect: Tagged<u64>,
     ) {
-        let mut slots = slots.to_vec();
-
-        #[inline(always)]
-        fn rank(tags: SlotTags) -> u8 {
-            // lowest rank = earliest in array
-            if tags.contains(SlotTags::ASSIGNABLE) {
-                0
-            } else if tags.contains(SlotTags::ASSIGNMENT) {
-                1
-            } else {
-                2
-            }
-        }
-
-        // stable: preserves definition order within equal ranks
-        slots.sort_by(|a, b| {
-            let ra = rank(a.tags());
-            let rb = rank(b.tags());
-            ra.cmp(&rb)
-        });
+        let data_slots = slots.iter().filter(|s| s.is_data_consumer()).count();
 
         let assignable_slots = slots
             .iter()
@@ -130,7 +139,15 @@ impl SlotMap {
         };
 
         // SAFETY: we calculate correctly
-        unsafe { self.init(assignable_slots, total_slots, code_ptr, effect) };
+        unsafe {
+            self.init(
+                assignable_slots,
+                data_slots,
+                total_slots,
+                code_ptr,
+                effect,
+            )
+        };
     }
 
     /// Initialize a slot map
@@ -141,11 +158,13 @@ impl SlotMap {
     pub unsafe fn init(
         &mut self,
         assignable_slots: usize,
+        data_slots: usize,
         total_slots: usize,
         code_ptr: Tagged<usize>,
         effect: Tagged<u64>,
     ) {
         self.assignable_slots = assignable_slots.into();
+        self.data_slots = data_slots.into();
         self.total_slots = total_slots.into();
         // SAFETY: safe if contract holds
         self.map.init(MapType::Slot);
@@ -161,6 +180,11 @@ impl SlotMap {
     #[inline]
     pub fn slot_count(&self) -> usize {
         self.total_slots.into()
+    }
+
+    #[inline]
+    pub fn data_slots(&self) -> usize {
+        self.data_slots.into()
     }
 
     /// calculate the layout of a map with n slots
@@ -192,17 +216,6 @@ impl SlotMap {
         }
     }
 
-    /// Returns a slice containing only the assignable slot descriptors
-    /// Relies on the invariant that slots are sorted such that assignable
-    /// slots always appear at the start of the array (indices `0..assignable_count`).
-    #[inline]
-    pub fn assignable_slots(&self) -> &[SlotDescriptor] {
-        let count = self.assignable_slots_count();
-        // SAFETY: this is safe
-        // 2. The sorting invariant ensures the first `n` slots are the assignable ones.
-        unsafe { std::slice::from_raw_parts(self.slots.as_ptr(), count) }
-    }
-
     #[inline]
     pub fn input_count(&self) -> usize {
         let encoded: u64 = self.effect.into();
@@ -216,6 +229,13 @@ impl SlotMap {
     pub fn output_count(&self) -> usize {
         let encoded: u64 = self.effect.into();
         (encoded & 0xFFFF_FFFF) as usize
+    }
+
+    #[inline]
+    pub fn has_code(&self) -> bool {
+        // Assuming 0 or Nil indicates no code. Adjust if your type differs.
+        let val: usize = self.code.into();
+        val != 0
     }
 
     /// Returns the raw pointer to the executable Block.
@@ -481,7 +501,7 @@ impl<'a> SlotHelper<'a> {
 
     #[inline]
     pub fn primitive_message(name: &'a str, tags: SlotTags) -> Self {
-        let tags = tags | SlotTags::PRIMITIVE | SlotTags::EXECUTABLE;
+        let tags = tags | SlotTags::PRIMITIVE;
         let index = primitive_index(name);
         let value = index.as_raw();
         Self::new(name, value.into(), tags)
@@ -493,7 +513,7 @@ impl<'a> SlotHelper<'a> {
         primitive: &'a str,
         tags: SlotTags,
     ) -> Self {
-        let tags = tags | SlotTags::PRIMITIVE | SlotTags::EXECUTABLE;
+        let tags = tags | SlotTags::PRIMITIVE;
         let index = primitive_index(primitive);
         let value = index.as_raw();
         Self::new(name, value.into(), tags)
@@ -505,7 +525,7 @@ impl<'a> SlotHelper<'a> {
         method: Handle<SlotObject>,
         tags: SlotTags,
     ) -> Self {
-        let tags = tags | SlotTags::EXECUTABLE;
+        let tags = tags;
         let value = method.as_value();
         Self::new(name, value, tags)
     }

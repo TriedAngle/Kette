@@ -17,6 +17,7 @@ pub struct VisitedLink {
     pub value: Value,
 }
 
+#[derive(Debug)]
 pub enum LookupResult {
     None,
     Found {

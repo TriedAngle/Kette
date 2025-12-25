@@ -18,8 +18,6 @@ pub struct SpecialObjects {
     pub float_traits: Handle<HeapValue>,
     pub bignum_traits: Handle<HeapValue>,
     pub quotation_traits: Handle<HeapValue>,
-    pub effect_traits: Handle<HeapValue>,
-    pub method_traits: Handle<HeapValue>,
 
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
@@ -31,6 +29,7 @@ pub struct SpecialObjects {
     pub dip_quotation: Handle<Quotation>,
 
     pub message_self: Handle<Message>,
+    pub message_create_object: Handle<Message>,
 }
 
 // TODO: the code heap should be removed.
@@ -224,17 +223,6 @@ impl VM {
         ]);
 
         #[rustfmt::skip]
-        let method_map = heap.allocate_slot_map_helper(strings, &[
-            // SlotHelper::primitive_message("(call-method)", SlotTags::empty()),
-        ]);
-
-        #[rustfmt::skip]
-        let effect_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::assignable("inputs", Value::from_u64(0), SlotTags::empty()),
-            SlotHelper::assignable("outputs", Value::from_u64(1), SlotTags::empty()),
-        ]);
-
-        #[rustfmt::skip]
         let parsers_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("[", SlotTags::empty()),
             SlotHelper::primitive_message("(|", SlotTags::empty()),
@@ -273,19 +261,10 @@ impl VM {
             let quotation_traits =
                 heap.allocate_slots(quotation_map, &[]).cast();
 
-            let method_traits = heap.allocate_slots(method_map, &[]).cast();
-
             let true_object = heap.allocate_slots(empty_map, &[]).cast();
 
             let false_object =
                 heap.allocate_slots(empty_map, &[]).cast::<HeapValue>();
-
-            let effect_traits = heap
-                .allocate_slots(
-                    effect_map,
-                    &[false_object.as_value(), false_object.as_value()],
-                )
-                .cast();
 
             let universe =
                 heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
@@ -310,6 +289,8 @@ impl VM {
                 heap.allocate_quotation(dip_body, dip_code, 0, 0);
 
             let message_self = self.intern_string_message("self", &mut heap);
+            let message_create_object =
+                self.intern_string_message("(CreateObjectFromMap)", &mut heap);
 
             let specials = SpecialObjects {
                 universe,
@@ -321,13 +302,12 @@ impl VM {
                 float_traits,
                 bignum_traits,
                 quotation_traits,
-                effect_traits,
-                method_traits,
                 primitive_vector_map,
                 true_object,
                 false_object,
                 dip_quotation,
                 message_self,
+                message_create_object,
             };
 
             let inner = Arc::get_mut(&mut self.inner).expect("get inner");
@@ -418,13 +398,14 @@ impl SpecialObjects {
                 primitive_vector_map: Value::zero()
                     .as_heap_handle_unchecked()
                     .cast(),
-                effect_traits: Value::zero().as_heap_handle_unchecked(),
-                method_traits: Value::zero().as_heap_handle_unchecked(),
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),
                 dip_quotation: Value::zero().as_heap_handle_unchecked().cast(),
                 message_self: Value::zero().as_heap_handle_unchecked().cast(),
+                message_create_object: Value::zero()
+                    .as_heap_handle_unchecked()
+                    .cast(),
             }
         }
     }

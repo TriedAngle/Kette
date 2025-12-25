@@ -71,7 +71,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let end = ctx.vm.intern_string_message("]", ctx.heap);
 
-    let res = parse_until_inner(ctx, Some(end), body_accum);
+    let (res, _) = parse_until_inner(ctx, &[end], body_accum);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
@@ -106,381 +106,11 @@ impl Value {
     }
 }
 
-pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    // SAFETY: must exist by contract (outer accumulator)
-    let mut outer_accum = unsafe { ctx.inputs[0].cast::<Vector>() };
-
-    #[inline]
-    fn message_name<'a>(v: Value) -> Option<&'a str> {
-        if !v.is_object() {
-            return None;
-        }
-        let h = unsafe { v.as_heap_handle_unchecked() };
-        let ty = unsafe { h.header.object_type().unwrap_unchecked() };
-        if ty != ObjectType::Message {
-            return None;
-        }
-        let msg = unsafe { h.cast::<Message>() };
-        let ba = unsafe { msg.value.promote_to_handle() };
-        Some(unsafe {
-            mem::transmute::<&'_ str, &'a str>(
-                ba.as_utf8().expect("must exist"),
-            )
-        })
-    }
-
-    // Helper to check if a value matches a specific message handle
-    #[inline]
-    fn is_message(v: Value, msg: Handle<Message>) -> bool {
-        if !v.is_object() {
-            return false;
-        }
-        let h = unsafe { v.as_heap_handle_unchecked() };
-        if unsafe { h.header.object_type().unwrap_unchecked() }
-            != ObjectType::Message
-        {
-            return false;
-        }
-        unsafe { h.cast::<Message>() == msg }
-    }
-
-    let dot_msg = ctx.vm.intern_string_message(".", ctx.heap);
-    let pipe_msg = ctx.vm.intern_string_message("|", ctx.heap);
-    let dash_msg = ctx.vm.intern_string_message("--", ctx.heap);
-    let end_msg = ctx.vm.intern_string_message("|)", ctx.heap);
-
-    let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
-    let mut assignable_inits: Vec<Value> = Vec::new();
-    let mut assignable_offset: i64 = 0;
-
-    let mut inputs_count: u32 = 0;
-    let mut outputs_count: u32 = 0;
-    let mut reading_inputs = true;
-    let mut saw_separator = false;
-    let mut has_code = false;
-
-    // Expression Parser (Local Closure)
-    let mut parse_and_eval_slot = |ctx: &mut PrimitiveContext| -> Result<
-        (Value, Handle<Message>),
-        &'static str,
-    > {
-        let mut accum = Vector::new(ctx.heap, &ctx.vm.shared, 8);
-        let terminator_found: Handle<Message>;
-
-        loop {
-            // 1. Get Token
-            let res = parse_next(ctx);
-            if res != ExecutionResult::Normal {
-                return Err("Parsing Object: Internal parser error");
-            }
-            let next = unsafe { ctx.state.pop_unchecked() };
-
-            if next == ctx.vm.shared.specials.false_object.as_value() {
-                return Err("Parsing Object: Unexpected EOF in slot value");
-            }
-
-            // Check Terminator
-            if let Some(msg_handle) = next.as_message_handle() {
-                if msg_handle == dot_msg
-                    || msg_handle == pipe_msg
-                    || msg_handle == dash_msg
-                    || msg_handle == end_msg
-                {
-                    terminator_found = msg_handle;
-                    break;
-                }
-            }
-
-            if let Some(msg) = next.as_message_handle() {
-                let parsers = ctx.vm.specials().parsers;
-                let name = unsafe { msg.value.promote_to_handle() };
-                let selector = Selector::new(name, ctx.vm.shared.clone());
-
-                match selector.lookup_object(&parsers.as_value()) {
-                    LookupResult::Found { slot, .. } => {
-                        let tags = slot.tags();
-                        if tags.contains(SlotTags::EXECUTABLE) {
-                            // Execute parser word
-                            let exec_res = if tags.contains(SlotTags::PRIMITIVE)
-                            {
-                                let id = slot
-                                    .value
-                                    .as_tagged_fixnum::<usize>()
-                                    .unwrap();
-                                let idx = unsafe {
-                                    PrimitiveMessageIndex::from_usize(id.into())
-                                };
-                                ctx.state.push(accum.as_value());
-                                ctx.interpreter
-                                    .primitive_send(ctx.receiver, idx)
-                            } else {
-                                let method = unsafe {
-                                    slot.value.as_heap_handle_unchecked().cast()
-                                };
-                                ctx.state.push(accum.as_value());
-                                ctx.interpreter
-                                    .add_method(ctx.receiver, method);
-                                ctx.interpreter.execute_with_depth()
-                            };
-
-                            if exec_res != ExecutionResult::Normal {
-                                return Err(
-                                    "Parsing Object: Error executing parser word",
-                                );
-                            }
-
-                            // Restore accum from stack (parser protocol: accum -- accum)
-                            let new_accum_val =
-                                unsafe { ctx.state.pop().unwrap() };
-                            // SAFETY: assume parser kept the type correct
-                            let new_accum = unsafe {
-                                new_accum_val
-                                    .as_handle_unchecked()
-                                    .cast::<Vector>()
-                            };
-                            accum = new_accum;
-                        } else {
-                            // Non-executable in parser namespace -> treat as data
-                            accum.push(slot.value, ctx.heap, &ctx.vm.shared);
-                        }
-                    }
-                    LookupResult::None => {
-                        accum.push(next, ctx.heap, &ctx.vm.shared);
-                    }
-                }
-            } else {
-                // Not a message, just push
-                accum.push(next, ctx.heap, &ctx.vm.shared);
-            }
-        }
-
-        // Compile & Execute the collected tokens
-        let expr_slice = accum.as_slice();
-        if expr_slice.is_empty() {
-            return Err("Parsing Object: Empty slot initializer");
-        }
-
-        let arr = ctx.heap.allocate_array(expr_slice);
-        let block = BytecodeCompiler::compile(&ctx.vm.shared, arr);
-        let code = ctx.vm.shared.code_heap.push(block);
-        let quot = ctx.heap.allocate_quotation(arr, code, 0, 0);
-
-        let depth_before = ctx.state.depth;
-        ctx.interpreter.add_quotation(quot);
-        let exec_res = ctx.interpreter.execute_with_depth();
-
-        if exec_res != ExecutionResult::Normal {
-            return Err("Parsing Object: Slot initializer execution failed");
-        }
-
-        let depth_after = ctx.state.depth;
-        if depth_after != depth_before + 1 {
-            return Err(
-                "Parsing Object: Slot initializer must yield exactly one value",
-            );
-        }
-
-        Ok((unsafe { ctx.state.pop_unchecked() }, terminator_found))
-    };
-
-    // Main Parsing Loop
-    loop {
-        // --- 1. Parse Slot Name ---
-        let _ = parse_next(ctx);
-        let token_val = unsafe { ctx.state.pop_unchecked() };
-
-        if token_val == ctx.vm.shared.specials.false_object.as_value() {
-            return parser_error(ctx, "Unterminated object (EOF)");
-        }
-
-        if let Some(msg) = token_val.as_message_handle() {
-            if msg == end_msg {
-                break;
-            }
-            if msg == pipe_msg {
-                has_code = true;
-                break;
-            }
-            if msg == dash_msg {
-                if saw_separator {
-                    if saw_separator {
-                        return parser_error(ctx, "Duplicate separator '--'");
-                    }
-                }
-                saw_separator = true;
-                reading_inputs = false;
-                continue;
-            }
-        }
-
-        // It's a real slot name
-        let Some(token_str) = message_name(token_val) else {
-            return parser_error(ctx, "Expected slot name or terminator");
-        };
-
-        let raw_name = token_str;
-        let is_potential_parent = raw_name.ends_with('*');
-        let name_ba = ctx.vm.intern_string(raw_name, ctx.heap);
-        let name_tagged: Tagged<ByteArray> = name_ba.into();
-        let mut tags = SlotTags::empty();
-
-        let _ = parse_next(ctx);
-        let op_val = unsafe { ctx.state.pop_unchecked() };
-
-        let Some(op_str) = message_name(op_val) else {
-            return parser_error(ctx, "Expected operator after slot name");
-        };
-
-        // Determine type of declaration
-        let op_msg = op_val.as_message_handle().unwrap(); // safe because message_name verified it
-
-        let is_terminator_op = op_msg == dot_msg
-            || op_msg == end_msg
-            || op_msg == pipe_msg
-            || op_msg == dash_msg;
-
-        let init_val: Value;
-        let terminator: Handle<Message>;
-        let is_assignable: bool;
-
-        if is_terminator_op {
-            is_assignable = true;
-            init_val = ctx.vm.shared.specials.false_object.as_value();
-            terminator = op_msg;
-        } else {
-            is_assignable = match op_str {
-                ":=" => true,
-                "=" => false,
-                _ => {
-                    return parser_error(
-                        ctx,
-                        &format!("Invalid operator '{}'", op_str),
-                    );
-                }
-            };
-
-            match parse_and_eval_slot(ctx) {
-                Ok((val, term)) => {
-                    init_val = val;
-                    terminator = term;
-                }
-                Err(e) => return parser_error(ctx, e),
-            }
-        }
-
-        // Register Slot
-        if is_assignable {
-            tags |= SlotTags::ASSIGNABLE;
-            if is_potential_parent {
-                tags |= SlotTags::PARENT;
-            }
-
-            let offset_val = Value::from_fixnum(assignable_offset);
-            assignable_offset += 1;
-
-            slot_descs.push(SlotDescriptor::new(name_tagged, tags, offset_val));
-            assignable_inits.push(init_val);
-
-            // Setter `name<<`
-            let mut s = String::with_capacity(raw_name.len() + 2);
-            s.push_str(raw_name);
-            s.push_str("<<");
-            let setter_ba = ctx.vm.intern_string(&s, ctx.heap);
-            slot_descs.push(SlotDescriptor::new(
-                setter_ba.into(),
-                SlotTags::ASSIGNMENT,
-                offset_val,
-            ));
-
-            if reading_inputs {
-                inputs_count += 1;
-            } else {
-                outputs_count += 1;
-            }
-        } else {
-            // Constant Slot
-            if init_val.is_object() {
-                let h = unsafe { init_val.as_heap_handle_unchecked() };
-                if let Some(slot) = h.downcast_ref::<SlotObject>() {
-                    let map = unsafe { slot.map.promote_to_handle() };
-                    let ptr: usize = map.code.into();
-                    if ptr != 0 {
-                        tags |= SlotTags::EXECUTABLE;
-                    };
-                    if is_potential_parent {
-                        tags |= SlotTags::PARENT;
-                    }
-                }
-            } else if is_potential_parent {
-                tags |= SlotTags::PARENT;
-            }
-            slot_descs.push(SlotDescriptor::new(name_tagged, tags, init_val));
-        }
-
-        // Terminators
-        if terminator == dot_msg {
-            continue;
-        } else if terminator == end_msg {
-            break;
-        } else if terminator == pipe_msg {
-            has_code = true;
-            break;
-        } else if terminator == dash_msg {
-            if saw_separator {
-                return parser_error(ctx, "Duplicate separator '--'");
-            }
-            saw_separator = true;
-            reading_inputs = false;
-            continue;
-        }
-    }
-
-    // Parse Code Body if existant
-    let code_ptr: usize = if has_code {
-        let code_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
-        // We use parse_until_inner logic here looking for `)`
-        // Note: The previous loop stopped at `|`.
-        let closing_paren = ctx.vm.intern_string_message(")", ctx.heap);
-
-        let res = parse_until_inner(ctx, Some(closing_paren), code_accum);
-        if res != ExecutionResult::Normal {
-            return parser_error(ctx, "Failed to parse code body");
-        }
-
-        let body_arr =
-            unsafe { ctx.heap.allocate_array(code_accum.as_slice()) };
-        let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
-        let code_handle = ctx.vm.shared.code_heap.push(block);
-        code_handle as *const Block as usize
-    } else {
-        0
-    };
-
-    // Construct Object
-    let effect: u64 = if saw_separator || has_code {
-        ((inputs_count as u64) << 32) | (outputs_count as u64)
-    } else {
-        0
-    };
-
-    let map = ctx.heap.allocate_slots_map(
-        &slot_descs,
-        code_ptr.into(),
-        effect.into(),
-    );
-    let obj = ctx.heap.allocate_slots(map, assignable_inits.as_slice());
-
-    outer_accum.push(obj.into(), ctx.heap, &ctx.vm.shared);
-    ctx.outputs[0] = outer_accum.into();
-
-    ExecutionResult::Normal
-}
-
 // -- array
 pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let accumulator = Vector::new(ctx.heap, &ctx.vm.shared, 100);
 
-    let res = parse_until_inner(ctx, None, accumulator);
+    let (res, _) = parse_until_inner(ctx, &[], accumulator);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
@@ -502,7 +132,7 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: TODO: maybe check in future but input expects this
     let end = unsafe { end.as_handle_unchecked().cast::<Message>() };
 
-    let res = parse_until_inner(ctx, Some(end), accumulator);
+    let (res, _) = parse_until_inner(ctx, &[end], accumulator);
     if res != ExecutionResult::Normal {
         return ExecutionResult::Panic("Parsing failed!");
     }
@@ -515,13 +145,11 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-// parser --
 fn parse_until_inner<'m, 'ex, 'arg>(
     ctx: &'m mut PrimitiveContext<'ex, 'arg>,
-    end: Option<Handle<Message>>,
+    ends: &[Handle<Message>],
     mut accum: Handle<Vector>,
-) -> ExecutionResult {
-    // SAFETY: must be parser, can't be called otherwise
+) -> (ExecutionResult, Option<Handle<Message>>) {
     let parser = unsafe { ctx.receiver.cast::<Parser>() };
 
     loop {
@@ -556,49 +184,37 @@ fn parse_until_inner<'m, 'ex, 'arg>(
         // SAFETY: checked
         let message = unsafe { handle.cast::<Message>() };
 
-        if Some(message) == end {
-            break;
+        if ends.contains(&message) {
+            return (ExecutionResult::Normal, Some(message));
         }
 
         let parsers = ctx.vm.specials().parsers;
-        // SAFETY: must be valid
+
         let name = unsafe { message.value.promote_to_handle() };
         let selector = Selector::new(name, ctx.vm.shared.clone());
         let lookup = selector.lookup_object(&parsers.as_value());
+
         match lookup {
             LookupResult::Found {
-                object,
+                object: _,
                 slot,
-                slot_index,
+                slot_index: _,
             } => {
                 let tags = slot.tags();
-                if tags.contains(SlotTags::EXECUTABLE) {
-                    let res = if tags.contains(SlotTags::PRIMITIVE) {
-                        let id = slot
-                            .value
-                            .as_tagged_fixnum::<usize>()
-                            .expect("primitive must have fixnum");
-                        // SAFETY: must store valid primitive idx if primitive executable
-                        let message_idx = unsafe {
-                            PrimitiveMessageIndex::from_usize(id.into())
-                        };
-                        ctx.state.push(accum.as_value());
-                        ctx.interpreter
-                            .primitive_send(ctx.receiver, message_idx)
-                    } else {
-                        // SAFETY: must be
-                        let method = unsafe {
-                            slot.value
-                                .as_heap_handle_unchecked()
-                                .cast::<SlotObject>()
-                        };
-                        ctx.state.push(accum.as_value());
-                        ctx.interpreter.add_method(ctx.receiver, method);
-                        ctx.interpreter.execute_with_depth()
-                    };
 
-                    // SAFETY: safe if adhere to protocol
-                    // all parsers do: self = parser ( accum -- accum )
+                if tags.contains(SlotTags::PRIMITIVE) {
+                    let id = slot
+                        .value
+                        .as_tagged_fixnum::<usize>()
+                        .expect("primitive must have fixnum");
+
+                    // SAFETY: must store valid primitive idx if primitive executable
+                    let message_idx =
+                        unsafe { PrimitiveMessageIndex::from_usize(id.into()) };
+
+                    ctx.state.push(accum.as_value());
+                    ctx.interpreter.primitive_send(ctx.receiver, message_idx);
+
                     accum = unsafe {
                         ctx.state
                             .pop()
@@ -606,14 +222,277 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                             .as_handle_unchecked()
                             .cast()
                     };
+                    continue;
                 } else {
-                    accum.push(slot.value, ctx.heap, &ctx.vm.shared);
+                    let should_execute_method = if slot.value.is_object() {
+                        let h =
+                            unsafe { slot.value.as_heap_handle_unchecked() };
+                        if let Some(slot_obj) =
+                            unsafe { h.downcast_ref::<SlotObject>() }
+                        {
+                            let map =
+                                unsafe { slot_obj.map.promote_to_handle() };
+                            let ptr: usize = map.code.into();
+                            ptr != 0
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if should_execute_method {
+                        let method = unsafe {
+                            slot.value
+                                .as_heap_handle_unchecked()
+                                .cast::<SlotObject>()
+                        };
+
+                        ctx.state.push(accum.as_value());
+                        ctx.interpreter.add_method(ctx.receiver, method);
+
+                        let exec_res = ctx.interpreter.execute_with_depth();
+
+                        if exec_res != ExecutionResult::Normal {
+                            return (exec_res, None);
+                        }
+
+                        accum = unsafe {
+                            ctx.state
+                                .pop()
+                                .expect("must exist")
+                                .as_handle_unchecked()
+                                .cast()
+                        };
+                    } else {
+                        accum.push(slot.value, ctx.heap, &ctx.vm.shared);
+                    }
                 }
             }
             LookupResult::None => accum.push(next, ctx.heap, &ctx.vm.shared),
         }
     }
 
+    if !ends.is_empty() {
+        return (ExecutionResult::Panic("not found"), None);
+    }
+    (ExecutionResult::Normal, None)
+}
+
+pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: must exist by contract (outer accumulator)
+    let mut outer_accum = unsafe { ctx.inputs[0].cast::<Vector>() };
+    let heap = &mut ctx.heap;
+
+    // --- Intern Common Messages ---
+    let dot_msg = ctx.vm.intern_string_message(".", heap);
+    let pipe_msg = ctx.vm.intern_string_message("|", heap);
+    let dash_msg = ctx.vm.intern_string_message("--", heap);
+    let close_paren_msg = ctx.vm.intern_string_message(")", heap);
+    let close_bar_msg = ctx.vm.intern_string_message("|)", heap);
+    let create_obj_msg = ctx.vm.specials().message_create_object;
+
+    // Default value for implicit slots (e.g. `x .` or `x |`)
+    let false_val = ctx.vm.shared.specials.false_object.as_value();
+
+    // Terminators for the value parser
+    let value_terminators = [dot_msg, dash_msg, pipe_msg, close_bar_msg];
+    // Terminators for the code body parser
+    let body_terminators = [close_bar_msg, close_paren_msg];
+
+    // --- State ---
+    let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
+    let mut assignable_offset: i64 = 0;
+
+    let mut has_code = false;
+    let mut saw_separator = false;
+    let mut reading_inputs = true;
+    let mut inputs_count: u32 = 0;
+    let mut outputs_count: u32 = 0;
+
+    // --- Main Parsing Loop (Slots) ---
+    loop {
+        // 1. Peek/Parse next token (Name or Terminator)
+        let res = parse_next(ctx);
+        if res != ExecutionResult::Normal {
+            return res;
+        }
+
+        let token_val = unsafe { ctx.state.pop_unchecked() };
+
+        // Handle EOF
+        if token_val == false_val {
+            return parser_error(ctx, "Unterminated object (EOF)");
+        }
+
+        // Check for Object Terminators/Separators at the start of a slot definition
+        if let Some(msg) = token_val.as_message_handle() {
+            if msg == close_bar_msg || msg == close_paren_msg {
+                break;
+            }
+            if msg == pipe_msg {
+                has_code = true;
+                break;
+            }
+            if msg == dash_msg {
+                if saw_separator {
+                    return parser_error(ctx, "Duplicate separator '--'");
+                }
+                saw_separator = true;
+                reading_inputs = false;
+                continue;
+            }
+            if msg == dot_msg {
+                continue; // Skip stray dots
+            }
+        }
+
+        // 2. Parse Slot Name
+        let name_msg = match token_val.as_message_handle() {
+            Some(m) => m,
+            None => return parser_error(ctx, "Expected slot name"),
+        };
+
+        // SAFETY: Message value guaranteed to be valid UTF8 ByteArray by VM invariants
+        let raw_name_str =
+            unsafe { name_msg.value.as_ref().as_utf8().expect("valid utf8") };
+
+        let is_parent = raw_name_str.ends_with('*');
+        // Intern name (stripping * if needed usually handled here or we just intern raw)
+        // Assuming we keep strict name correspondence:
+        let name_ba = ctx.vm.intern_string(raw_name_str, ctx.heap);
+        let name_tagged: Tagged<ByteArray> = name_ba.into();
+
+        // 3. Parse Operator OR Implicit Terminator
+        let res = parse_next(ctx);
+        if res != ExecutionResult::Normal {
+            return res;
+        }
+        let op_val = unsafe { ctx.state.pop_unchecked() };
+
+        let op_msg = op_val
+            .as_message_handle()
+            .ok_or("Expected operator or terminator after slot name")
+            .or_else(|e| Err(parser_error(ctx, e)))
+            .unwrap();
+
+        let terminator: Handle<Message>;
+        let is_assignable: bool;
+
+        // Check if the "operator" is actually a terminator (Implicit Assignment)
+        // Covers: `name .`, `name --`, `name |`, `name |)`
+        if value_terminators.contains(&op_msg) {
+            // Implicit: name := false
+            outer_accum.push(false_val, ctx.heap, &ctx.vm.shared);
+            terminator = op_msg;
+            is_assignable = true; // Implicit slots are assignable
+        } else {
+            // Explicit: name = val ... or name := val ...
+            let op_str =
+                unsafe { op_msg.value.as_ref().as_utf8().expect("valid utf8") };
+
+            is_assignable = match op_str {
+                "=" => false,
+                ":=" => true,
+                _ => {
+                    return parser_error(
+                        ctx,
+                        &format!("Unknown operator {}", op_str),
+                    );
+                }
+            };
+
+            // Parse Value Stream
+            let (res, term_opt) =
+                parse_until_inner(ctx, &value_terminators, outer_accum);
+            if res != ExecutionResult::Normal {
+                return res;
+            }
+
+            // parse_until_inner panics if no terminator found, so unwrap is safe
+            terminator = term_opt.unwrap();
+        }
+
+        // 4. Register Descriptor
+        let mut tags = SlotTags::empty();
+        if is_parent {
+            tags |= SlotTags::PARENT;
+        }
+
+        if is_assignable {
+            tags |= SlotTags::ASSIGNABLE;
+            let offset_val = Value::from_fixnum(assignable_offset);
+            assignable_offset += 1;
+
+            slot_descs.push(SlotDescriptor::new(name_tagged, tags, offset_val));
+
+            // Generate Setter: name<<
+            let mut s = String::with_capacity(raw_name_str.len() + 2);
+            s.push_str(raw_name_str);
+            s.push_str("<<");
+            let setter_ba = ctx.vm.intern_string(&s, ctx.heap);
+
+            slot_descs.push(SlotDescriptor::new(
+                setter_ba.into(),
+                SlotTags::ASSIGNMENT,
+                offset_val,
+            ));
+
+            if reading_inputs {
+                inputs_count += 1;
+            } else {
+                outputs_count += 1;
+            }
+        } else {
+            slot_descs.push(SlotDescriptor::new(name_tagged, tags, false_val));
+        }
+
+        if terminator == dot_msg {
+            continue;
+        } else if terminator == dash_msg {
+            if saw_separator {
+                return parser_error(ctx, "Duplicate separator '--'");
+            }
+            saw_separator = true;
+            reading_inputs = false;
+            continue;
+        } else if terminator == pipe_msg {
+            has_code = true;
+            break;
+        } else if terminator == close_bar_msg {
+            break;
+        }
+    }
+
+    let code_ptr: usize = if has_code {
+        let code_accum = Vector::new(ctx.heap, &ctx.vm.shared, 64);
+
+        let (res, _) = parse_until_inner(ctx, &body_terminators, code_accum);
+        if res != ExecutionResult::Normal {
+            return parser_error(ctx, "Failed to parse code body");
+        }
+
+        let body_arr =
+            unsafe { ctx.heap.allocate_array(code_accum.as_slice()) };
+        let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
+        let code_handle = ctx.vm.shared.code_heap.push(block);
+        code_handle as *const Block as usize
+    } else {
+        0
+    };
+
+    let effect = ((inputs_count as u64) << 32) | (outputs_count as u64);
+
+    let map = ctx.heap.allocate_slots_map(
+        &slot_descs,
+        code_ptr.into(),
+        effect.into(),
+    );
+
+    outer_accum.push(map.into(), ctx.heap, &ctx.vm.shared);
+    outer_accum.push(create_obj_msg.as_value(), ctx.heap, &ctx.vm.shared);
+
+    ctx.outputs[0] = outer_accum.into();
     ExecutionResult::Normal
 }
 

@@ -13,7 +13,7 @@
        "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ) .
 |) |) universe addTraitSlots
 
-6.7 11.3 vec2 clone! 
+6.7 11.3 vec2 clone!
 30.0 70.0 vec2 clone! 
 + [ >string println ] keep
 "magnitude: " print mag >string println

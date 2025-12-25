@@ -31,7 +31,7 @@ pub enum Instruction {
     SuperSendNamed { message: &'static str },
     DelegatSendeNamed { message: &'static str },
 
-    AllocateSlotObject { map: Handle<SlotMap> },
+    CreateSlotObject { map: Handle<SlotMap> },
 }
 
 // TODO: replace instructions to actual byte instructions

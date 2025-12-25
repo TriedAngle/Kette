@@ -33,9 +33,9 @@ TODO: write more
 see `tests/` for small snippets and their output
 most of them also run already, you can run `run_tests.py` to validate that.
 
-### Fizzbuss
+### Fizzbuzz
 ```
-(| fizzbuzz = : ( count -- )
+(| fizzbuzz = (| count -- |
     dup [ 3 % 0 = ] [ 5 % 0 = ] bi && [ 
         "fizzbuzz" println
     ] [ 
@@ -43,28 +43,28 @@ most of them also run already, you can run `run_tests.py` to validate that.
         dup 5 % 0 = [ "buzz" println ] [
         dup >string println
     ] if ] if ] if
-    1 - dup 0 > [ self fizzbuzz ] [ drop ] if ;
+    1 - dup 0 > [ self fizzbuzz ] [ drop ] if )
 |) 15 swap fizzbuzz
 ```
 
 ### Vec2
 ```
-// this snippet will print
+// expect:
 // vec2[x: 36.7, y: 81.3]
 // magnitude: 89.199663676496
 
 (| vec2 = (|  
     parent* = std traits clonable .
     x := 0.0 . y := 0.0 .
-    + = : ( other -- new ) 
-        self [ [ x ] bi@ + ] [ [ y ] bi@ + ] 2bi self clone! ; .
-    mag = : ( -- magnitude )
-        self [ x ] [ y ] bi  [ 2.0 ^ ] bi@ + sqrt ; .
-    >string = : ( -- string ) 
-       "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ; .
+    + = (| other -- new | 
+        self [ [ x ] bi@ + ] [ [ y ] bi@ + ] 2bi self clone! ) .
+    mag = (| -- magnitude |
+        self [ x ] [ y ] bi  [ 2.0 ^ ] bi@ + sqrt ) .
+    >string = (| -- string | 
+       "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ) .
 |) |) universe addTraitSlots
 
-6.7 11.3 vec2 clone! 
+6.7 11.3 vec2 clone!
 30.0 70.0 vec2 clone! 
 + [ >string println ] keep
 "magnitude: " print mag >string println
