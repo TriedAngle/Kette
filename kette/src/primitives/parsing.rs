@@ -4,12 +4,25 @@
 use std::{mem, ops::Deref};
 
 use crate::{
-    Allocator, Array, ByteArray, BytecodeCompiler, ExecutionResult, Handle,
-    LookupResult, Message, Method, Object, ObjectType, ParsedToken, Parser,
+    Allocator, Array, Block, ByteArray, BytecodeCompiler, ExecutionResult,
+    Handle, LookupResult, Message, Object, ObjectType, ParsedToken, Parser,
     PrimitiveContext, PrimitiveMessageIndex, Quotation, Selector,
-    SlotDescriptor, SlotTags, Tagged, Value, Vector, get_primitive,
+    SlotDescriptor, SlotObject, SlotTags, Tagged, Value, Vector, get_primitive,
     primitive_index,
 };
+
+fn parser_error(ctx: &PrimitiveContext, msg: &str) -> ExecutionResult {
+    let parser = unsafe { ctx.receiver.cast::<Parser>() };
+
+    let error_msg = format!(
+        "Parsing Error: {} (line {}, col {})",
+        msg, parser.line, parser.column
+    );
+
+    // TODO: heap alloc this
+    let leaked = Box::leak(error_msg.into_boxed_str());
+    ExecutionResult::Panic(leaked)
+}
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let heap = &mut ctx.heap;
@@ -25,11 +38,11 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
     };
 
     match token {
-        ParsedToken::Float(float) => {
+        ParsedToken::Float((float, _)) => {
             let float = heap.allocate_float(float);
             state.push(float.into());
         }
-        ParsedToken::Fixnum(num) => {
+        ParsedToken::Fixnum((num, _)) => {
             state.push(Value::from_fixnum(num));
         }
         ParsedToken::String(token) => {
@@ -76,8 +89,25 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
+impl Value {
+    #[inline]
+    pub fn as_message_handle(self) -> Option<Handle<Message>> {
+        if !self.is_object() {
+            return None;
+        }
+        let h = unsafe { self.as_heap_handle_unchecked() };
+        if unsafe { h.header.object_type().unwrap_unchecked() }
+            == ObjectType::Message
+        {
+            Some(unsafe { h.cast::<Message>() })
+        } else {
+            None
+        }
+    }
+}
+
 pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    // SAFETY: must exist by contract (outer accumulator from parse_until_inner protocol)
+    // SAFETY: must exist by contract (outer accumulator)
     let mut outer_accum = unsafe { ctx.inputs[0].cast::<Vector>() };
 
     #[inline]
@@ -85,18 +115,13 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         if !v.is_object() {
             return None;
         }
-        // SAFETY: checked is_object
         let h = unsafe { v.as_heap_handle_unchecked() };
-        // SAFETY: object_type exists for objects
         let ty = unsafe { h.header.object_type().unwrap_unchecked() };
         if ty != ObjectType::Message {
             return None;
         }
-        // SAFETY: ty checked
         let msg = unsafe { h.cast::<Message>() };
-        // SAFETY: message.value is an interned ByteArray
         let ba = unsafe { msg.value.promote_to_handle() };
-        // SAFETY: lifetime valid here
         Some(unsafe {
             mem::transmute::<&'_ str, &'a str>(
                 ba.as_utf8().expect("must exist"),
@@ -104,51 +129,143 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         })
     }
 
+    // Helper to check if a value matches a specific message handle
     #[inline]
-    fn next_value(ctx: &mut PrimitiveContext) -> Value {
-        let _ = parse_next(ctx);
-        // SAFETY: parse_next always pushes something (token or false)
-        unsafe { ctx.state.pop_unchecked() }
-    }
-
-    #[inline]
-    fn as_method(v: Value) -> Option<Handle<Method>> {
+    fn is_message(v: Value, msg: Handle<Message>) -> bool {
         if !v.is_object() {
-            return None;
+            return false;
         }
-        // SAFETY: checked is_object
         let h = unsafe { v.as_heap_handle_unchecked() };
-        // SAFETY: message.value is an interned ByteArray
-        let ty = unsafe { h.header.object_type().unwrap_unchecked() };
-        if ty != ObjectType::Method {
-            return None;
+        if unsafe { h.header.object_type().unwrap_unchecked() }
+            != ObjectType::Message
+        {
+            return false;
         }
-        // SAFETY: ty checked
-        Some(unsafe { h.cast::<Method>() })
+        unsafe { h.cast::<Message>() == msg }
     }
 
-    // NOTE: this assumes Method has a `map` field pointing to a map that has a `name: Tagged<ByteArray>`.
-    // Adjust field names here if your structs differ.
-    #[inline]
-    fn method_name_tagged(method: Handle<Method>) -> Tagged<ByteArray> {
-        // SAFETY: method/map must be valid by construction
-        let map = unsafe { method.map.as_ref() };
-        map.name
-    }
+    let dot_msg = ctx.vm.intern_string_message(".", ctx.heap);
+    let pipe_msg = ctx.vm.intern_string_message("|", ctx.heap);
+    let dash_msg = ctx.vm.intern_string_message("--", ctx.heap);
+    let end_msg = ctx.vm.intern_string_message("|)", ctx.heap);
 
-    fn eval_expr(
-        ctx: &mut PrimitiveContext,
-        expr: &[Value],
-    ) -> Result<Value, &'static str> {
-        if expr.is_empty() {
+    let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
+    let mut assignable_inits: Vec<Value> = Vec::new();
+    let mut assignable_offset: i64 = 0;
+
+    let mut inputs_count: u32 = 0;
+    let mut outputs_count: u32 = 0;
+    let mut reading_inputs = true;
+    let mut saw_separator = false;
+    let mut has_code = false;
+
+    // Expression Parser (Local Closure)
+    let mut parse_and_eval_slot = |ctx: &mut PrimitiveContext| -> Result<
+        (Value, Handle<Message>),
+        &'static str,
+    > {
+        let mut accum = Vector::new(ctx.heap, &ctx.vm.shared, 8);
+        let terminator_found: Handle<Message>;
+
+        loop {
+            // 1. Get Token
+            let res = parse_next(ctx);
+            if res != ExecutionResult::Normal {
+                return Err("Parsing Object: Internal parser error");
+            }
+            let next = unsafe { ctx.state.pop_unchecked() };
+
+            if next == ctx.vm.shared.specials.false_object.as_value() {
+                return Err("Parsing Object: Unexpected EOF in slot value");
+            }
+
+            // Check Terminator
+            if let Some(msg_handle) = next.as_message_handle() {
+                if msg_handle == dot_msg
+                    || msg_handle == pipe_msg
+                    || msg_handle == dash_msg
+                    || msg_handle == end_msg
+                {
+                    terminator_found = msg_handle;
+                    break;
+                }
+            }
+
+            if let Some(msg) = next.as_message_handle() {
+                let parsers = ctx.vm.specials().parsers;
+                let name = unsafe { msg.value.promote_to_handle() };
+                let selector = Selector::new(name, ctx.vm.shared.clone());
+
+                match selector.lookup_object(&parsers.as_value()) {
+                    LookupResult::Found { slot, .. } => {
+                        let tags = slot.tags();
+                        if tags.contains(SlotTags::EXECUTABLE) {
+                            // Execute parser word
+                            let exec_res = if tags.contains(SlotTags::PRIMITIVE)
+                            {
+                                let id = slot
+                                    .value
+                                    .as_tagged_fixnum::<usize>()
+                                    .unwrap();
+                                let idx = unsafe {
+                                    PrimitiveMessageIndex::from_usize(id.into())
+                                };
+                                ctx.state.push(accum.as_value());
+                                ctx.interpreter
+                                    .primitive_send(ctx.receiver, idx)
+                            } else {
+                                let method = unsafe {
+                                    slot.value.as_heap_handle_unchecked().cast()
+                                };
+                                ctx.state.push(accum.as_value());
+                                ctx.interpreter
+                                    .add_method(ctx.receiver, method);
+                                ctx.interpreter.execute_with_depth()
+                            };
+
+                            if exec_res != ExecutionResult::Normal {
+                                return Err(
+                                    "Parsing Object: Error executing parser word",
+                                );
+                            }
+
+                            // Restore accum from stack (parser protocol: accum -- accum)
+                            let new_accum_val =
+                                unsafe { ctx.state.pop().unwrap() };
+                            // SAFETY: assume parser kept the type correct
+                            let new_accum = unsafe {
+                                new_accum_val
+                                    .as_handle_unchecked()
+                                    .cast::<Vector>()
+                            };
+                            accum = new_accum;
+                        } else {
+                            // Non-executable in parser namespace -> treat as data
+                            accum.push(slot.value, ctx.heap, &ctx.vm.shared);
+                        }
+                    }
+                    LookupResult::None => {
+                        accum.push(next, ctx.heap, &ctx.vm.shared);
+                    }
+                }
+            } else {
+                // Not a message, just push
+                accum.push(next, ctx.heap, &ctx.vm.shared);
+            }
+        }
+
+        // Compile & Execute the collected tokens
+        let expr_slice = accum.as_slice();
+        if expr_slice.is_empty() {
             return Err("Parsing Object: Empty slot initializer");
         }
-        let arr = ctx.heap.allocate_array(expr);
+
+        let arr = ctx.heap.allocate_array(expr_slice);
         let block = BytecodeCompiler::compile(&ctx.vm.shared, arr);
         let code = ctx.vm.shared.code_heap.push(block);
         let quot = ctx.heap.allocate_quotation(arr, code, 0, 0);
 
-        let before = ctx.state.depth;
+        let depth_before = ctx.state.depth;
         ctx.interpreter.add_quotation(quot);
         let exec_res = ctx.interpreter.execute_with_depth();
 
@@ -156,441 +273,205 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             return Err("Parsing Object: Slot initializer execution failed");
         }
 
-        let after = ctx.state.depth;
-        if after != before + 1 {
+        let depth_after = ctx.state.depth;
+        if depth_after != depth_before + 1 {
             return Err(
-                "Parsing Object: Slot initializer must leave exactly one value on stack",
+                "Parsing Object: Slot initializer must yield exactly one value",
             );
         }
-        // SAFETY: after == before + 1 implies at least one value exists
-        Ok(unsafe { ctx.state.pop_unchecked() })
-    }
 
-    enum InitEnd {
-        Dot,
-        ObjEnd,
-    }
+        Ok((unsafe { ctx.state.pop_unchecked() }, terminator_found))
+    };
 
-    // Parse initializer into `accum` until '.' OR '|)' ('.' optional at end).
-    fn parse_until_dot_or_end<'m, 'ex, 'arg>(
-        ctx: &'m mut PrimitiveContext<'ex, 'arg>,
-        dot: Handle<Message>,
-        obj_end: Handle<Message>,
-        mut accum: Handle<Vector>,
-    ) -> Result<(Handle<Vector>, InitEnd), &'static str> {
-        loop {
-            let res = parse_next(ctx);
-            if res != ExecutionResult::Normal {
-                return Err("Parsing Object: Parsing initializer failed");
+    // Main Parsing Loop
+    loop {
+        // --- 1. Parse Slot Name ---
+        let _ = parse_next(ctx);
+        let token_val = unsafe { ctx.state.pop_unchecked() };
+
+        if token_val == ctx.vm.shared.specials.false_object.as_value() {
+            return parser_error(ctx, "Unterminated object (EOF)");
+        }
+
+        if let Some(msg) = token_val.as_message_handle() {
+            if msg == end_msg {
+                break;
             }
-            // SAFETY: parse_next must return
-            let next = unsafe { ctx.state.pop_unchecked() };
-            if next == ctx.vm.shared.specials.false_object.as_value() {
-                return Err(
-                    "Parsing Object: Unterminated initializer (missing '.' or '|)')",
-                );
+            if msg == pipe_msg {
+                has_code = true;
+                break;
             }
-
-            if !next.is_object() {
-                accum.push(next, ctx.heap, &ctx.vm.shared);
-                continue;
-            }
-
-            // SAFETY: heap deletion paused while parsing
-            let handle = unsafe { next.as_heap_handle_unchecked() };
-            // SAFETY: object has object_type
-            let ty = unsafe { handle.header.object_type().unwrap_unchecked() };
-
-            if ty != ObjectType::Message {
-                accum.push(next, ctx.heap, &ctx.vm.shared);
-                continue;
-            }
-
-            // SAFETY: ty checked
-            let message = unsafe { handle.cast::<Message>() };
-
-            if message == dot {
-                return Ok((accum, InitEnd::Dot));
-            }
-            if message == obj_end {
-                return Ok((accum, InitEnd::ObjEnd));
-            }
-
-            // Allow parser-words inside initializer
-            let parsers = ctx.vm.specials().parsers;
-            // SAFETY: no gc
-            let name = unsafe { message.value.promote_to_handle() };
-            let selector = Selector::new(name, ctx.vm.shared.clone());
-            let lookup = selector.lookup_object(&parsers.as_value());
-
-            match lookup {
-                LookupResult::Found { slot, .. } => {
-                    let tags = slot.tags();
-                    if tags.contains(SlotTags::EXECUTABLE) {
-                        let res = if tags.contains(SlotTags::PRIMITIVE) {
-                            let id = slot
-                                .value
-                                .as_tagged_fixnum::<usize>()
-                                .expect("primitive must have fixnum");
-                            // SAFETY: must store idx
-                            let msg_idx = unsafe {
-                                PrimitiveMessageIndex::from_usize(id.into())
-                            };
-                            ctx.state.push(accum.as_value());
-                            ctx.interpreter
-                                .primitive_send(ctx.receiver, msg_idx)
-                        } else {
-                            // SAFETY: must be method if not primitive
-                            let method = unsafe {
-                                slot.value
-                                    .as_heap_handle_unchecked()
-                                    .cast::<Method>()
-                            };
-                            ctx.state.push(accum.as_value());
-                            ctx.interpreter.add_method(ctx.receiver, method);
-                            ctx.interpreter.execute_with_depth()
-                        };
-
-                        if res != ExecutionResult::Normal {
-                            return Err(
-                                "Parsing Object: Parsing initializer failed",
-                            );
-                        }
-
-                        // SAFETY: parser protocol (accum -- accum)
-                        accum = unsafe {
-                            ctx.state
-                                .pop()
-                                .expect("must exist")
-                                .as_handle_unchecked()
-                                .cast()
-                        };
-                    } else {
-                        accum.push(slot.value, ctx.heap, &ctx.vm.shared);
+            if msg == dash_msg {
+                if saw_separator {
+                    if saw_separator {
+                        return parser_error(ctx, "Duplicate separator '--'");
                     }
                 }
-                LookupResult::None => {
-                    accum.push(next, ctx.heap, &ctx.vm.shared)
-                }
+                saw_separator = true;
+                reading_inputs = false;
+                continue;
             }
         }
-    }
 
-    let dot = ctx.vm.intern_string_message(".", ctx.heap);
-    let obj_end = ctx.vm.intern_string_message("|)", ctx.heap);
-
-    let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
-    let mut assignable_inits: Vec<Value> = Vec::new();
-    let mut assignable_offset: i64 = 0;
-
-    loop {
-        let v = next_value(ctx);
-        if v == ctx.vm.shared.specials.false_object.as_value() {
-            return ExecutionResult::Panic(
-                "Parsing Object: Unterminated object (missing '|)')",
-            );
-        }
-
-        let Some(head) = message_name(v) else {
-            return ExecutionResult::Panic(
-                "Parsing Object: Expected slot name, ':', or '|)'",
-            );
+        // It's a real slot name
+        let Some(token_str) = message_name(token_val) else {
+            return parser_error(ctx, "Expected slot name or terminator");
         };
 
-        if head == "|)" {
-            break;
-        }
-
+        let raw_name = token_str;
+        let is_potential_parent = raw_name.ends_with('*');
+        let name_ba = ctx.vm.intern_string(raw_name, ctx.heap);
+        let name_tagged: Tagged<ByteArray> = name_ba.into();
         let mut tags = SlotTags::empty();
 
-        // Don't strip the suffix, but note it for potential parent tagging
-        let is_potential_parent = head.ends_with('*');
+        let _ = parse_next(ctx);
+        let op_val = unsafe { ctx.state.pop_unchecked() };
 
-        // Read the next token to decide what kind of descriptor this is.
-        let peek = next_value(ctx);
-        if peek == ctx.vm.shared.specials.false_object.as_value() {
-            return ExecutionResult::Panic(
-                "Parsing Object: Unterminated object (missing '|)')",
-            );
-        }
-        let Some(peek_str) = message_name(peek) else {
-            return ExecutionResult::Panic(
-                "Parsing Object: Expected '<-', '=', '.', or '|)' after slot name",
-            );
+        let Some(op_str) = message_name(op_val) else {
+            return parser_error(ctx, "Expected operator after slot name");
         };
 
-        // Intern slot name now (raw name including *)
-        let name_ba = ctx.vm.intern_string(head, ctx.heap);
-        let name_tagged: Tagged<ByteArray> = name_ba.into();
+        // Determine type of declaration
+        let op_msg = op_val.as_message_handle().unwrap(); // safe because message_name verified it
 
-        // Shorthand: `<name> .` => assignable false
-        if peek_str == "." {
-            tags |= SlotTags::ASSIGNABLE;
-            // Shorthands are always data slots, so check parent flag
-            if is_potential_parent {
-                tags |= SlotTags::PARENT;
-            }
-            let offset_value = Value::from_fixnum(assignable_offset);
-            assignable_offset += 1;
-            slot_descs.push(SlotDescriptor::new(
-                name_tagged,
-                tags,
-                offset_value,
-            ));
-            assignable_inits
-                .push(ctx.vm.shared.specials.false_object.as_value());
-            continue;
-        }
+        let is_terminator_op = op_msg == dot_msg
+            || op_msg == end_msg
+            || op_msg == pipe_msg
+            || op_msg == dash_msg;
 
-        // Shorthand: `<name>` as last before `|)` => assignable false
-        if peek_str == "|)" {
-            tags |= SlotTags::ASSIGNABLE;
-            // Shorthands are always data slots, so check parent flag
-            if is_potential_parent {
-                tags |= SlotTags::PARENT;
-            }
-            let offset_value = Value::from_fixnum(assignable_offset);
-            assignable_offset += 1;
-            slot_descs.push(SlotDescriptor::new(
-                name_tagged,
-                tags,
-                offset_value,
-            ));
-            assignable_inits
-                .push(ctx.vm.shared.specials.false_object.as_value());
-            break;
-        }
+        let init_val: Value;
+        let terminator: Handle<Message>;
+        let is_assignable: bool;
 
-        // Operator: "<-" or "="
-        let is_assignable = match peek_str {
-            ":=" => true,
-            "=" => false,
-            _ => {
-                return ExecutionResult::Panic(
-                    "Parsing Object: Expected '=', ':=', '.', or '|)' after slot name",
-                );
-            }
-        };
-
-        // Parse initializer until '.' OR '|)' (dot optional if ends at |))
-        let expr_accum = Vector::new(ctx.heap, &ctx.vm.shared, 8);
-        let (expr_accum, ended_by) =
-            match parse_until_dot_or_end(ctx, dot, obj_end, expr_accum) {
-                Ok(v) => v,
-                Err(e) => return ExecutionResult::Panic(e),
+        if is_terminator_op {
+            is_assignable = true;
+            init_val = ctx.vm.shared.specials.false_object.as_value();
+            terminator = op_msg;
+        } else {
+            is_assignable = match op_str {
+                ":=" => true,
+                "=" => false,
+                _ => {
+                    return parser_error(
+                        ctx,
+                        &format!("Invalid operator '{}'", op_str),
+                    );
+                }
             };
 
-        let init_value = match eval_expr(ctx, expr_accum.as_slice()) {
-            Ok(v) => v,
-            Err(e) => return ExecutionResult::Panic(e),
-        };
-
-        // If initializer evaluates to a Method, mark slot EXECUTABLE.
-        let is_method = as_method(init_value).is_some();
-        if is_method {
-            tags |= SlotTags::EXECUTABLE;
+            match parse_and_eval_slot(ctx) {
+                Ok((val, term)) => {
+                    init_val = val;
+                    terminator = term;
+                }
+                Err(e) => return parser_error(ctx, e),
+            }
         }
 
-        // Only mark as PARENT if it has the * suffix AND it is NOT a method.
-        if !is_method && is_potential_parent {
-            tags |= SlotTags::PARENT;
-        }
-
+        // Register Slot
         if is_assignable {
             tags |= SlotTags::ASSIGNABLE;
-            let offset_value = Value::from_fixnum(assignable_offset);
+            if is_potential_parent {
+                tags |= SlotTags::PARENT;
+            }
+
+            let offset_val = Value::from_fixnum(assignable_offset);
             assignable_offset += 1;
+
+            slot_descs.push(SlotDescriptor::new(name_tagged, tags, offset_val));
+            assignable_inits.push(init_val);
+
+            // Setter `name<<`
+            let mut s = String::with_capacity(raw_name.len() + 2);
+            s.push_str(raw_name);
+            s.push_str("<<");
+            let setter_ba = ctx.vm.intern_string(&s, ctx.heap);
             slot_descs.push(SlotDescriptor::new(
-                name_tagged,
-                tags,
-                offset_value,
-            ));
-            assignable_inits.push(init_value);
-            let setter_name = {
-                // Keep the suffix in the setter name as well
-                let mut s = String::with_capacity(head.len() + 2);
-                s.push_str(head);
-                s.push_str("<<");
-                s
-            };
-            let setter_ba =
-                ctx.vm.intern_string(setter_name.as_str(), ctx.heap);
-            let setter_tagged: Tagged<ByteArray> = setter_ba.into();
-            slot_descs.push(SlotDescriptor::new(
-                setter_tagged,
+                setter_ba.into(),
                 SlotTags::ASSIGNMENT,
-                offset_value,
+                offset_val,
             ));
+
+            if reading_inputs {
+                inputs_count += 1;
+            } else {
+                outputs_count += 1;
+            }
         } else {
-            slot_descs.push(SlotDescriptor::new(name_tagged, tags, init_value));
+            // Constant Slot
+            if init_val.is_object() {
+                let h = unsafe { init_val.as_heap_handle_unchecked() };
+                if let Some(slot) = h.downcast_ref::<SlotObject>() {
+                    let map = unsafe { slot.map.promote_to_handle() };
+                    let ptr: usize = map.code.into();
+                    if ptr != 0 {
+                        tags |= SlotTags::EXECUTABLE;
+                    };
+                    if is_potential_parent {
+                        tags |= SlotTags::PARENT;
+                    }
+                }
+            } else if is_potential_parent {
+                tags |= SlotTags::PARENT;
+            }
+            slot_descs.push(SlotDescriptor::new(name_tagged, tags, init_val));
         }
 
-        if matches!(ended_by, InitEnd::ObjEnd) {
+        // Terminators
+        if terminator == dot_msg {
+            continue;
+        } else if terminator == end_msg {
             break;
+        } else if terminator == pipe_msg {
+            has_code = true;
+            break;
+        } else if terminator == dash_msg {
+            if saw_separator {
+                return parser_error(ctx, "Duplicate separator '--'");
+            }
+            saw_separator = true;
+            reading_inputs = false;
+            continue;
         }
     }
 
-    let map = ctx.heap.allocate_slots_map(&slot_descs);
+    // Parse Code Body if existant
+    let code_ptr: usize = if has_code {
+        let code_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
+        // We use parse_until_inner logic here looking for `)`
+        // Note: The previous loop stopped at `|`.
+        let closing_paren = ctx.vm.intern_string_message(")", ctx.heap);
+
+        let res = parse_until_inner(ctx, Some(closing_paren), code_accum);
+        if res != ExecutionResult::Normal {
+            return parser_error(ctx, "Failed to parse code body");
+        }
+
+        let body_arr =
+            unsafe { ctx.heap.allocate_array(code_accum.as_slice()) };
+        let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
+        let code_handle = ctx.vm.shared.code_heap.push(block);
+        code_handle as *const Block as usize
+    } else {
+        0
+    };
+
+    // Construct Object
+    let effect: u64 = if saw_separator || has_code {
+        ((inputs_count as u64) << 32) | (outputs_count as u64)
+    } else {
+        0
+    };
+
+    let map = ctx.heap.allocate_slots_map(
+        &slot_descs,
+        code_ptr.into(),
+        effect.into(),
+    );
     let obj = ctx.heap.allocate_slots(map, assignable_inits.as_slice());
+
     outer_accum.push(obj.into(), ctx.heap, &ctx.vm.shared);
     ctx.outputs[0] = outer_accum.into();
-    ExecutionResult::Normal
-}
-
-fn parse_effect_inner(
-    ctx: &mut PrimitiveContext,
-) -> Result<(Handle<Vector>, Handle<Vector>), &'static str> {
-    // SAFETY: must be parser, can't be called otherwise
-    let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
-
-    // Expect "("
-    let open = parser.parse_next().ok_or("Parsing Effect: Missing '('")?;
-    match open {
-        ParsedToken::Identifier(t) if parser.get_token_string(t) == "(" => {}
-        _ => return Err("Parsing Effect: Expected '('"),
-    }
-
-    let mut inputs = Vector::new(ctx.heap, &ctx.vm.shared, 0);
-
-    let mut outputs = Vector::new(ctx.heap, &ctx.vm.shared, 0);
-
-    let mut reading_inputs = true;
-    let mut saw_separator = false;
-
-    loop {
-        let tok = parser
-            .parse_next()
-            .ok_or("Parsing Effect: Unterminated effect (missing ')')")?;
-
-        match tok {
-            ParsedToken::Identifier(t) => {
-                let s = parser.get_token_string(t);
-
-                if s == "--" {
-                    if !reading_inputs {
-                        return Err("Parsing Effect: Duplicate '--'");
-                    }
-                    reading_inputs = false;
-                    saw_separator = true;
-                    continue;
-                }
-
-                if s == ")" {
-                    if !saw_separator {
-                        return Err("Parsing Effect: Missing '--'");
-                    }
-                    break;
-                }
-
-                // Treat every other identifier as a stack-name; store as Message.
-                let msg = ctx.vm.intern_string_message(s, ctx.heap);
-                if reading_inputs {
-                    inputs.push(msg.as_value(), ctx.heap, &ctx.vm.shared);
-                } else {
-                    outputs.push(msg.as_value(), ctx.heap, &ctx.vm.shared);
-                }
-            }
-
-            ParsedToken::String(_) => {
-                return Err(
-                    "Parsing Effect: Strings are not allowed inside effect",
-                );
-            }
-            ParsedToken::Fixnum(_) => {
-                return Err(
-                    "Parsing Effect: Numbers are not allowed inside effect",
-                );
-            }
-            ParsedToken::Float(_) => {
-                return Err(
-                    "Parsing Effect: Floats are not allowed inside effect",
-                );
-            }
-        }
-    }
-
-    Ok((inputs, outputs))
-}
-
-/// should parse: `: <name> <effect> <body> ;`
-/// ( `:` is ignored, its already "parsed" when this function is called)
-pub fn parse_method(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    // SAFETY: must be parser, can't be called otherwise
-    let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
-    // SAFETY: must exist by contract
-    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
-
-    // --- Parse optional name, but ALWAYS require an effect "( ... )"
-    // Peek one token to decide if a name is present.
-    let saved_offset = parser.offset;
-    let next_tok = match parser.parse_next() {
-        Some(t) => t,
-        None => {
-            return ExecutionResult::Panic(
-                "Parsing Method: Missing effect '(...)'",
-            );
-        }
-    };
-
-    let name = match next_tok {
-        ParsedToken::Identifier(t) => {
-            let s = parser.get_token_string(t);
-            if s == "(" {
-                // Name omitted. Rewind so parse_effect_inner sees '('.
-                parser.offset = saved_offset;
-                ctx.vm.intern_string("", ctx.heap)
-            } else {
-                // Name present.
-                ctx.vm.intern_string(s, ctx.heap)
-            }
-        }
-        _ => {
-            return ExecutionResult::Panic(
-                "Parsing Method: Expected method name identifier or '(' to start effect",
-            );
-        }
-    };
-
-    // --- Parse effect (always required)
-    let (inputs_vec, outputs_vec) = match parse_effect_inner(ctx) {
-        Ok(v) => v,
-        Err(e) => return ExecutionResult::Panic(e),
-    };
-
-    // Convert Vectors to Arrays for Method storage
-    // SAFETY: allocating this here
-    let inputs_arr = unsafe { ctx.heap.allocate_array(inputs_vec.as_slice()) };
-    // SAFETY: allocating this here
-    let outputs_arr =
-        unsafe { ctx.heap.allocate_array(outputs_vec.as_slice()) };
-
-    // Parse body until ';'
-    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
-    // SAFETY: just created
-
-    let end = ctx.vm.intern_string_message(";", ctx.heap);
-
-    let res = parse_until_inner(ctx, Some(end), body_accum);
-    if res != ExecutionResult::Normal {
-        return ExecutionResult::Panic("Parsing Method: Parsing body failed!");
-    }
-
-    // Compile into a quotation (with effect counts)
-    // SAFETY: allocating here
-    let body_arr = unsafe { ctx.heap.allocate_array(body_accum.as_slice()) };
-    let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
-    let code = ctx.vm.shared.code_heap.push(block);
-
-    let effect = ctx
-        .heap
-        .allocate_effect(inputs_arr.into(), outputs_arr.into());
-    let method_map =
-        ctx.heap.allocate_method_map(name, code, &[], effect.into());
-    let method = ctx.heap.allocate_method_object(method_map);
-
-    accumulator.push(method.into(), ctx.heap, &ctx.vm.shared);
-
-    ctx.outputs[0] = accumulator.into();
 
     ExecutionResult::Normal
 }
@@ -709,7 +590,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         let method = unsafe {
                             slot.value
                                 .as_heap_handle_unchecked()
-                                .cast::<Method>()
+                                .cast::<SlotObject>()
                         };
                         ctx.state.push(accum.as_value());
                         ctx.interpreter.add_method(ctx.receiver, method);

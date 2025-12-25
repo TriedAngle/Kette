@@ -1,8 +1,8 @@
 use crate::{
     Activation, ActivationStack, ActivationType, Allocator, ExecutionState,
-    Handle, HeapProxy, Instruction, LookupResult, Method,
-    PrimitiveMessageIndex, Quotation, Selector, SlotObject, SlotTags,
-    ThreadProxy, VMProxy, Value, get_primitive, transmute,
+    Handle, HeapProxy, Instruction, LookupResult, PrimitiveMessageIndex,
+    Quotation, Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value,
+    get_primitive, transmute,
 };
 
 pub struct Interpreter {
@@ -89,12 +89,12 @@ impl Interpreter {
     pub fn add_method(
         &mut self,
         receiver: Handle<Value>,
-        method: Handle<Method>,
+        method: Handle<SlotObject>,
     ) {
         // SAFETY: this is safe, method must exist
         let map = unsafe { method.map.promote_to_handle() };
 
-        let slot_count = map.slot_count();
+        let slot_count = map.input_count();
 
         // idea: peek here, this saves the inputs,
         // now just continue with normal stack
@@ -296,6 +296,7 @@ impl Interpreter {
                 unsafe { self.state.stack_push_slice_unchecked(outputs) };
             }
             ExecutionResult::ActivationChanged => {}
+            ExecutionResult::Panic(msg) => panic!("Panic: {:?}", msg),
             _ => unimplemented!(
                 "TODO: implement the different ExecutionResult handling"
             ),
@@ -343,7 +344,8 @@ impl Interpreter {
             };
             let recv_ptr = recv_obj.as_ptr();
             // SAFETY: must be valid by protocol
-            let dst_ptr = unsafe { (*recv_ptr).slots_mut_ptr().add(offset.into()) }; 
+            let dst_ptr =
+                unsafe { (*recv_ptr).slots_mut_ptr().add(offset.into()) };
             self.heap.heap.write_barrier(dst_ptr as _);
             unsafe { (*recv_ptr).set_slot_unchecked(offset.into(), new_value) };
             return ExecutionResult::Normal;
@@ -371,7 +373,7 @@ impl Interpreter {
 
         // SAFETY: must by protocol
         let method =
-            unsafe { slot.value.as_handle_unchecked().cast::<Method>() };
+            unsafe { slot.value.as_handle_unchecked().cast::<SlotObject>() };
 
         self.add_method(receiver, method);
 

@@ -5,12 +5,12 @@
 (| vec2 = (|  
     parent* = std traits clonable .
     x := 0.0 . y := 0.0 .
-    + = : ( other -- new ) 
-        self [ [ x ] bi@ + ] [ [ y ] bi@ + ] 2bi self clone! ; .
-    mag = : ( -- magnitude )
-        self [ x ] [ y ] bi  [ 2.0 ^ ] bi@ + sqrt ; .
-    >string = : ( -- string ) 
-       "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ; .
+    + = (| other -- new | 
+        self [ [ x ] bi@ + ] [ [ y ] bi@ + ] 2bi self clone! ) .
+    mag = (| -- magnitude |
+        self [ x ] [ y ] bi  [ 2.0 ^ ] bi@ + sqrt ) .
+    >string = (| -- string | 
+       "vec2[x: " self [ x ] [ y ] bi [ >string ] bi@ ", y: " swap "]" + + + + ) .
 |) |) universe addTraitSlots
 
 6.7 11.3 vec2 clone! 

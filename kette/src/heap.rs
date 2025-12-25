@@ -765,10 +765,7 @@ impl HeapImpl {
     /// this write barrier dirties if the destion is in a boxed immix page
     /// keeps src_obj_addr if internal code changes later
     #[inline]
-    pub fn write_barrier(
-        &self,
-        dst_slot_addr: *mut u8,
-    ) {
+    pub fn write_barrier(&self, dst_slot_addr: *mut u8) {
         let dst = dst_slot_addr as usize;
 
         let immix_base = self.immix_start.as_ptr() as usize;
@@ -897,7 +894,10 @@ impl HeapProxy {
 
     /// Call this before a blocking but gc safe code
     pub fn enter_blocking_region(&mut self) {
-        debug_assert!(self.no_gc_count == 0, "cannot park mutator while in NoGcScope");
+        debug_assert!(
+            self.no_gc_count == 0,
+            "cannot park mutator while in NoGcScope"
+        );
         self.state.status.store(MUTATOR_PARKED, Ordering::Release);
     }
 

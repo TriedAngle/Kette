@@ -5,6 +5,6 @@
 // takes an ipnut and first multiplies by two and then add 30
 // essentially this: [ 2 * 30 + ]
 2 [ * ] curry [ 30 + ] compose
-(| x = 10 . doSomething = : ( quot -- ... ) self x swap call ; |) 
+(| x = 10 . doSomething = (| quot -- ... | self x swap call ) |) 
 doSomething >string println
 

@@ -15,7 +15,7 @@
 // 2
 // 1
 
-(| fizzbuzz = : ( count -- )
+(| fizzbuzz = (| count -- |
     dup [ 3 % 0 = ] [ 5 % 0 = ] bi && [ 
         "fizzbuzz" println
     ] [ 
@@ -23,6 +23,6 @@
         dup 5 % 0 = [ "buzz" println ] [
         dup >string println
     ] if ] if ] if
-    1 - dup 0 > [ self fizzbuzz ] [ drop ] if ;
+    1 - dup 0 > [ self fizzbuzz ] [ drop ] if )
 |) 15 swap fizzbuzz
 

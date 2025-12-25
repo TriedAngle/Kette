@@ -69,7 +69,11 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     // Allocate new map and patch ONLY this object
-    let new_map = ctx.heap.allocate_slots_map(&new_slots);
+    let new_map = ctx.heap.allocate_slots_map(
+        &new_slots,
+        target_map.code,
+        target_map.effect,
+    );
 
     // SAFETY: we have exclusive access; patch map pointer
     unsafe {
@@ -123,7 +127,11 @@ pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     // Allocate new map and patch ONLY this object
-    let new_map = ctx.heap.allocate_slots_map(&new_slots);
+    let new_map = ctx.heap.allocate_slots_map(
+        &new_slots,
+        target_map.code,
+        target_map.effect,
+    );
 
     // SAFETY: we have exclusive access; patch map pointer
     unsafe {

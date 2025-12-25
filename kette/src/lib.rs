@@ -26,11 +26,10 @@ pub use objects::activation::{
 };
 pub use objects::arrays::Array;
 pub use objects::bytearrays::ByteArray;
-pub use objects::executable::{ExecutableMap, Method, MethodMap, StackEffect};
 pub use objects::floats::Float;
 pub use objects::message::Message;
 pub use objects::parser::{ParsedToken, Parser, Token};
-pub use objects::quotations::{Quotation, QuotationMap};
+pub use objects::quotations::Quotation;
 pub use objects::slots::{
     SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags,
 };

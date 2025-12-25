@@ -225,7 +225,7 @@ impl VM {
 
         #[rustfmt::skip]
         let method_map = heap.allocate_slot_map_helper(strings, &[
-            SlotHelper::primitive_message("(call-method)", SlotTags::empty()),
+            // SlotHelper::primitive_message("(call-method)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -237,7 +237,6 @@ impl VM {
         #[rustfmt::skip]
         let parsers_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("[", SlotTags::empty()),
-            SlotHelper::primitive_message(":", SlotTags::empty()),
             SlotHelper::primitive_message("(|", SlotTags::empty()),
             SlotHelper::primitive_message("//", SlotTags::empty()),
             SlotHelper::primitive_message("/*", SlotTags::empty()),
@@ -307,7 +306,8 @@ impl VM {
             let dip_body = heap.allocate_array(&[]);
 
             let dip_quotation =
-                heap.allocate_quotation(dip_body, dip_code, 2, 1);
+                // TODO: give input output
+                heap.allocate_quotation(dip_body, dip_code, 0, 0);
 
             let message_self = self.intern_string_message("self", &mut heap);
 
@@ -368,6 +368,7 @@ impl VMProxy {
         }
     }
 
+    // TODO: the intern function should immix allocate and pin
     pub fn intern_string(
         &self,
         s: &str,

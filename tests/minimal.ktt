@@ -1,0 +1,22 @@
+(| 
+    counter := 10 2 fixnum+ .
+    inc = (| -- | self counter 1 fixnum+ self counter<< ) .
+    fetchInc = (| -- current . | self counter self inc ) .
+|) 
+
+
+dup fetchInc fixnum>string (println)
+fetchInc fixnum>string (println)
+
+(| 
+    counter := 10 26 fixnum+ .
+    inc = (| -- | self counter 1 fixnum+ self counter<< ) .
+    fetchInc = (| -- current | self counter self inc )
+|) 
+
+dup fetchInc fixnum>string (println)
+fetchInc fixnum>string (println)
+
+(| x . y := 1 . |) y fixnum>string (println)
+(| x . y := 1 |)
+(| x . y |)

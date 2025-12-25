@@ -273,12 +273,11 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("parse", 0, 1, parsing::parse_complete),
     // Parse Time
     PrimitiveMessage::new("[", 1, 1, parsing::parse_quotation),
-    PrimitiveMessage::new(":", 1, 1, parsing::parse_method),
     PrimitiveMessage::new("(|", 1, 1, parsing::parse_object),
     PrimitiveMessage::new("//", 1, 1, parsing::parse_line_comment),
     PrimitiveMessage::new("/*", 1, 1, parsing::parse_block_comment),
     // Method
-    PrimitiveMessage::new("(call-method)", 1, 0, method::call),
+    // PrimitiveMessage::new("(call-method)", 1, 0, method::call),
     // Primitive Vector
     PrimitiveMessage::new("vectorPush", 1, 0, vector::push),
     // General

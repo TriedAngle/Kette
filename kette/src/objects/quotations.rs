@@ -1,74 +1,22 @@
-use std::{alloc::Layout, mem};
+use std::mem;
 
 use crate::{
-    Array, Block, ExecutableMap, Header, HeapObject, LookupResult, MapType,
-    Object, ObjectKind, ObjectType, Selector, Tagged, Visitable, VisitedLink,
+    Array, Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType,
+    Selector, SlotMap, Tagged, Visitable, VisitedLink,
 };
-
-/// TODO: once we have variables we want to store parent scope pointer
-/// we must also handle escaping qutoations then.
-#[repr(C)]
-#[derive(Debug)]
-pub struct QuotationMap {
-    pub map: ExecutableMap,
-}
-
-impl QuotationMap {
-    pub fn infer_effect(&self) -> u64 {
-        // TODO: infer stack effect
-        // this is a bit challenging as we do not know the calls inside
-        // the idea I have is interpreting it the first time and compiling it after the call
-        // for the next calls
-        // a guard can be put in place for that, if the guard matches good
-        // if the guard doesn't match, create a new guard.
-        // quotations can also be called with explicit effect
-        // effect information can also be gathered from outside e.g. explicit effect or calls on
-        // quotations that require explicit effects.
-        unimplemented!("TODO")
-    }
-
-    pub fn init(&mut self, code: *const Block, input: usize, output: usize) {
-        self.map.init_quotation(code as _, input, output);
-    }
-
-    pub fn required_layout() -> Layout {
-        Layout::new::<Self>()
-    }
-}
-
-impl Object for QuotationMap {}
-impl HeapObject for QuotationMap {
-    const KIND: ObjectKind = ObjectKind::Map;
-    const TYPE_BITS: u8 = MapType::Quotation as u8;
-    fn heap_size(&self) -> usize {
-        mem::size_of::<Self>()
-    }
-}
-
-impl Visitable for QuotationMap {
-    #[inline]
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {
-        // No heap edges in a quotation map (code/effect are immediates/raw pointers).
-    }
-
-    #[inline]
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {
-        // No heap edges.
-    }
-}
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Quotation {
     pub header: Header,
-    pub map: Tagged<QuotationMap>,
+    pub map: Tagged<SlotMap>,
     pub body: Tagged<Array>,
 }
 
 impl Quotation {
     /// # Safety
     /// must be allocated with corretc size
-    pub fn init(&mut self, body: Tagged<Array>, map: Tagged<QuotationMap>) {
+    pub fn init(&mut self, body: Tagged<Array>, map: Tagged<SlotMap>) {
         self.header = Header::new_object(ObjectType::Quotation);
         self.map = map;
         self.body = body;

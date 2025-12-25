@@ -4,12 +4,12 @@
     std = (|
         traits = (| 
             clonable = (| 
-                clone = : ( -- new ) self (clone) ; .
-                clone! = : ( -- new ) self (cloneBoa) ; .
-                copy = : ( -- copy ) self clone ; .
+                clone = (| -- new | self (clone) ) .
+                clone! = (| -- new | self (cloneBoa) ) .
+                copy = (| -- copy | self clone ) .
             |) .
             oddball = (| 
-                copy = : ( -- self ) self ; .
+                copy = (| -- self | self ) .
             |) .
             fixnum = 0 parent* .
             float = 0.0 parent* .
@@ -24,120 +24,118 @@
     f = 0 1 fixnum= .
 |) dup universe addTraitSlots |) drop
 
-(| comptime = (| addBoolAbilities = : ( -- )
+(| comptime = (| addBoolAbilities = (| -- |
     (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
     (| parent* = (| parent* = std traits boolean |) |) f addTraitSlots
     
     (| 
-        not = : ( -- ? ) f ; .
-        && = : ( other -- ? ) ; . 
+        not = (| -- ? | f ) .
+        && = (| other -- ? | ) . 
         >string = "t" .
     |) t parent* addTraitSlots
 
     (| 
-        not = : ( -- ? ) t ; .
-        && = : ( other -- ? ) drop self ; .
+        not = (| -- ? | t ) .
+        && = (| other -- ? | drop self ) .
         >string = "f" .
     |) f parent* addTraitSlots 
-; . |) dup addBoolAbilities |) drop
+) . |) dup addBoolAbilities |) drop
 
 
 (|  parent* = std traits clonable .
-    abs = : ( -- new ) self positive? [ self ] [ self neg ] ; .
+    abs = (| -- new | self positive? [ self ] [ self neg ] if ) .
 |) std traits number addTraitSlots
 
 (|
     clonable* = std traits clonable .
     number* = std traits number .
-    + = : ( lhs -- new ) dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ; .
-    - = : ( lhs -- new ) dup fixnum? [ self fixnum- ] [ drop /* TODO: handle this */ ] if ; .
-    * = : ( lhs -- new ) dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ; .
-    / = : ( lhs -- new ) dup fixnum? [ self fixnum/ ] [ drop /* TODO: handle this */ ] if ; .
-    % = : ( lhs -- new ) dup fixnum? [ self fixnum% ] [ drop /* TODO: handle this */ ] if ; .
-    neg = : ( -- -self ) self fixnumNeg ; .
-    bit& = : ( lhs -- ? ) self fixnumBitAnd ; .
-    bit| = : ( lhs -- ? ) self fixnumBitOr ; .
-    = = : ( lhs -- ? ) self fixnum= ; .
-    != = : ( lhs -- ? ) self fixnum!= ; .
-    < = : ( lhs -- ? ) self fixnum< ; .
-    > = : ( lhs -- ? ) self fixnum> ; .
-    <= = : ( lhs -- ? ) self fixnum<= ; .
-    >= = : ( lhs -- ? ) self fixnum>= ; .
-    positive? = : ( -- ? ) self 0 > ; .
-    >string = : ( -- str ) self fixnum>string ; .
+    + = (| lhs -- new | dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ) .
+    - = (| lhs -- new | dup fixnum? [ self fixnum- ] [ drop /* TODO: handle this */ ] if ) .
+    * = (| lhs -- new | dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ) .
+    / = (| lhs -- new | dup fixnum? [ self fixnum/ ] [ drop /* TODO: handle this */ ] if ) .
+    % = (| lhs -- new | dup fixnum? [ self fixnum% ] [ drop /* TODO: handle this */ ] if ) .
+    neg = (| -- -self | self fixnumNeg ) .
+    bit& = (| lhs -- ? | self fixnumBitAnd ) .
+    bit| = (| lhs -- ? | self fixnumBitOr ) .
+    = = (| lhs -- ? | self fixnum= ) .
+    != = (| lhs -- ? | self fixnum!= ) .
+    < = (| lhs -- ? | self fixnum< ) .
+    > = (| lhs -- ? | self fixnum> ) .
+    <= = (| lhs -- ? | self fixnum<= ) .
+    >= = (| lhs -- ? | self fixnum>= ) .
+    positive? = (| -- ? | self 0 > ) .
+    >string = (| -- str | self fixnum>string ) .
 |) std traits fixnum addTraitSlots
 
 (|
     clonable* = std traits clonable .
     number* = std traits number .
-    + = : ( lhs -- new ) dup float? [ self float+ ] [ drop /* TODO: handle this */ ] if ; .
-    - = : ( lhs -- new ) dup float? [ self float- ] [ drop /* TODO: handle this */ ] if ; .
-    * = : ( lhs -- new ) dup float? [ self float* ] [ drop /* TODO: handle this */ ] if ; .
-    / = : ( lhs -- new ) dup float? [ self float/ ] [ drop /* TODO: handle this */ ] if ; .
-    % = : ( lhs -- new ) dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ; .
-    ^ = : ( lhs -- new ) dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ; .
-    sqrt = : ( -- sqrt ) self floatSqrt ; .
-    e^ = : ( -- new ) self floate^ ; .
-    2^ = : ( -- new ) self float2^ ; .
-    neg = : ( -- -self ) self floatNeg ; .
-    sin  = : ( -- res ) self floatSin ; .
-    cos  = : ( -- res ) self floatCos ; .
-    tan  = : ( -- res ) self floatTan ; .
-    asin = : ( -- res ) self floatAsin ; .
-    acos = : ( -- res ) self floatAcos ; .
-    atan = : ( -- res ) self floatAtan ; .
-    = = : ( lhs -- ? ) self float= ; .
-    != = : ( lhs -- ? ) self float!= ; .
-    < = : ( lhs -- ? ) self float< ; .
-    > = : ( lhs -- ? ) self float> ; .
-    <= = : ( lhs -- ? ) self float<= ; .
-    >= = : ( lhs -- ? ) self float>= ; .
-    positive? = : ( -- ? ) self 0.0 > ; .
-    >string = : ( -- str ) self float>string ; .
+    + = (| lhs -- new | dup float? [ self float+ ] [ drop /* TODO: handle this */ ] if ) .
+    - = (| lhs -- new | dup float? [ self float- ] [ drop /* TODO: handle this */ ] if ) .
+    * = (| lhs -- new | dup float? [ self float* ] [ drop /* TODO: handle this */ ] if ) .
+    / = (| lhs -- new | dup float? [ self float/ ] [ drop /* TODO: handle this */ ] if ) .
+    % = (| lhs -- new | dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ) .
+    ^ = (| lhs -- new | dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ) .
+    sqrt = (| -- sqrt | self floatSqrt ) .
+    e^ = (| -- new | self floate^ ) .
+    2^ = (| -- new | self float2^ ) .
+    neg = (| -- -self | self floatNeg ) .
+    sin  = (| -- res | self floatSin ) .
+    cos  = (| -- res | self floatCos ) .
+    tan  = (| -- res | self floatTan ) .
+    asin = (| -- res | self floatAsin ) .
+    acos = (| -- res | self floatAcos ) .
+    atan = (| -- res | self floatAtan ) .
+    = = (| lhs -- ? | self float= ) .
+    != = (| lhs -- ? | self float!= ) .
+    < = (| lhs -- ? | self float< ) .
+    > = (| lhs -- ? | self float> ) .
+    <= = (| lhs -- ? | self float<= ) .
+    >= = (| lhs -- ? | self float>= ) .
+    positive? = (| -- ? | self 0.0 > ) .
+    >string = (| -- str | self float>string ) .
 |) std traits float addTraitSlots
 
 (| 
-    print = : ( -- ) self (print) ; .
-    println = : ( -- ) self (println) ; . 
-    size = : ( -- ) self (bytearraySize) ; .
-    newWithSize = : ( size -- new ) self (bytearrayNew) ; .
-    nth = : ( idx -- value ) self (bytearrayAt) ; .
-    set-nth = : ( vale idx -- ) self (bytearrayAtPut) ; .
-    memset = : ( offset count value -- ) self (bytearrayMemset) ; .
-    memcpy = : ( offset src srcOffset count -- ) self (bytearrayMemcpy) ; .
-    memcpyFull = : ( offset src -- ) 0 over size self memcpy ; .  
-    + = : ( lhs -- new ) 
+    print = (| -- | self (print) ) .
+    println = (| -- | self (println) ) . 
+    size = (| -- | self (bytearraySize) ) .
+    newWithSize = (| size -- new | self (bytearrayNew) ) .
+    nth = (| idx -- value | self (bytearrayAt) ) .
+    set-nth = (| vale . idx -- | self (bytearrayAtPut) ) .
+    memset = (| offset . count . value -- | self (bytearrayMemset) ) .
+    memcpy = (| offset . src . srcOffset . count -- | self (bytearrayMemcpy) ) .
+    memcpyFull = (| offset . src -- | 0 over size self memcpy ) .  
+    + = (| lhs -- new | 
         dup self [ size ] bi@ + // lhs ns 
         std traits bytearray newWithSize // lhs new 
         [ 0 -rot memcpyFull ] 2keep // lhs new
         [ size self ] dip 
-        [ memcpyFull ] keep
-    ; .
-
+        [ memcpyFull ] keep ) .
 |) std traits bytearray addTraitSlots
 
 (| comptime = (| 
     call = f  .
     if = // takes ? then execute either trueBranch or falseBranch (self) 
-        : ( ? trueBranch -- ... ) swap [ call ] [ drop self call ] if ; .
-    when = : ( ? -- ... ) self [ ] if ; .
-    unless = : ( ? -- ... ) [ ] self if ; .
+        (| ? . trueBranch -- ... | swap [ call ] [ drop self call ] if ) .
+    when = (| ? -- ... | self [ ] if ) .
+    unless = (| ? -- ... | [ ] self if ) .
     dip = // takes x, calls self, puts back x 
-        : ( x -- ..a x ) [ self call ] dip ; .
+        (| x -- ..a . x | [ self call ] dip ) .
     keep = // calls self with x, then puts back x
-        : ( x -- ..a x ) dup [ self call ] dip ; .
+        (| x -- ..a . x | dup [ self call ] dip ) .
     bi = // applies p to x, then self to x 
-        : ( x p -- ..a ) keep self call ; .
+        (| x . p -- ..a | keep self call ) .
     bi* = // appplies p to x, then self to y
-        : ( x y p -- ..a ) dip self call ; .
+        (| x . y . p -- ..a | dip self call ) .
     bi@ = // applies self to x, then y
-        : ( x y -- ..a ) self dup bi* ; .
+        (| x . y -- ..a | self dup bi* ) .
     2dip = // removes x and y from stack then call self
-        : ( ..a x y -- ..b x y ) [ self dip ] dip ; .
+        (| ..a . x . y -- ..b . x . y | [ self dip ] dip ) .
     2keep = // calls self with x and y then put x and y back
-        : ( ..a x y -- ..b x y ) 2dup self 2dip ; .
+        (| ..a . x . y -- ..b . x . y | 2dup self 2dip ) .
     2bi = // applies p to x and y then self to x and y
-        : ( x y p -- ) 2keep self call ; .
+        (| x . y . p -- | 2keep self call ) .
 |) dup std traits callable addTraitSlots |) drop
 
 (| comptime = 
@@ -146,19 +144,19 @@
         parent* = std traits clonable .
         callable* = std traits callable .
         obj . callable .
-        call = : ( ... -- ... ) self obj self callable call ; .
+        call = (| ... -- ... | self obj self callable call ) .
     |) . 
     composed = (|
         parent* = std traits clonable .
         callable* = std traits callable .
         callable1 . callable2 .
-        call = : ( ... -- ... ) self callable1 call self callable2 call ; .
+        call = (| ... -- ... | self callable1 call self callable2 call ) .
     |)
 |) dup std addTraitSlots |) drop
 
 (|
     callable* = std traits callable .
-    call = : ( -- ... ) self (call) ; .
-    curry = : ( obj -- curried ) self std curried clone! ; .
-    compose = : ( quot -- curried ) self std composed clone! ; .
+    call = (| -- ... | self (call) ) .
+    curry = (| obj -- curried | self std curried clone! ) .
+    compose = (| quot -- curried | self std composed clone! ) .
 |) std traits quotation addTraitSlots

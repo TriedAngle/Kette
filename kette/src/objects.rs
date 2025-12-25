@@ -15,10 +15,9 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Float, LookupResult, Message, Method,
-    MethodMap, Quotation, QuotationMap, Selector, SlotMap, SlotObject,
-    StackEffect, ThreadObject, Value, ValueTag, Visitable, VisitedLink,
-    Visitor,
+    ActivationObject, Array, ByteArray, Float, LookupResult, Message,
+    Quotation, Selector, SlotMap, SlotObject, ThreadObject, Value, ValueTag,
+    Visitable, VisitedLink, Visitor,
 };
 
 #[repr(u8)]
@@ -36,8 +35,6 @@ pub enum ObjectType {
     Array       = 0b00010,
     ByteArray   = 0b00011,
     Activation  = 0b00100,
-    Method      = 0b00101,
-    Effect      = 0b00110,
     Quotation   = 0b00111,
     Message     = 0b01000,
     Float       = 0b01001,
@@ -52,8 +49,6 @@ pub enum ObjectType {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MapType {
     Slot = 0b000,
-    Method = 0b101,
-    Quotation = 0b110,
     Max = 0b11111,
 }
 
@@ -229,8 +224,6 @@ impl Header {
             0b00010 => ObjectType::Array,
             0b00011 => ObjectType::ByteArray,
             0b00100 => ObjectType::Activation,
-            0b00101 => ObjectType::Method,
-            0b00110 => ObjectType::Effect,
             0b00111 => ObjectType::Quotation,
             0b01000 => ObjectType::Message,
             0b01001 => ObjectType::Float,
@@ -247,8 +240,6 @@ impl Header {
         }
         Some(match self.type_bits() {
             0b000 => MapType::Slot,
-            0b101 => MapType::Method,
-            0b110 => MapType::Quotation,
             _ => unreachable!("map type doesn't exist"),
         })
     }
@@ -426,8 +417,6 @@ impl Object for HeapValue {
             ObjectType::Slot        => self.downcast_ref_match::<SlotObject>().lookup(selector, link),
             ObjectType::Array       => self.downcast_ref_match::<Array>().lookup(selector, link),
             ObjectType::ByteArray   => self.downcast_ref_match::<ByteArray>().lookup(selector, link),
-            ObjectType::Method      => self.downcast_ref_match::<Method>().lookup(selector, link),
-            ObjectType::Effect      => self.downcast_ref_match::<StackEffect>().lookup(selector, link),
             ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
             ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().lookup(selector, link),
             ObjectType::Float       => self.downcast_ref_match::<Float>().lookup(selector, link),
@@ -454,8 +443,6 @@ impl HeapObject for HeapValue {
                     ObjectType::ByteArray  => self.downcast_ref_match::<ByteArray>().heap_size(),
                     ObjectType::Activation => self.downcast_ref_match::<ActivationObject>().heap_size(),
                     ObjectType::Quotation  => self.downcast_ref_match::<Quotation>().heap_size(),
-                    ObjectType::Method     => self.downcast_ref_match::<Method>().heap_size(),
-                    ObjectType::Effect     => self.downcast_ref_match::<StackEffect>().heap_size(),
                     ObjectType::Message    => self.downcast_ref_match::<Message>().heap_size(),
                     ObjectType::Float      => self.downcast_ref_match::<Float>().heap_size(),
                     ObjectType::BigNum     => unimplemented!(),
@@ -467,8 +454,6 @@ impl HeapObject for HeapValue {
                 // SAFETY: matched to this 
                 match unsafe { self.header.map_type().unwrap_unchecked() } {
                     MapType::Slot      => self.downcast_ref_match::<SlotMap>().heap_size(),
-                    MapType::Method    => self.downcast_ref_match::<MethodMap>().heap_size(),
-                    MapType::Quotation => self.downcast_ref_match::<QuotationMap>().heap_size(),
                     MapType::Max => unreachable!(),
                 }
             }
@@ -506,8 +491,6 @@ impl Visitable for HeapValue {
                 // SAFETY: matched to this
                 match unsafe { self.header.map_type().unwrap_unchecked() } {
                     MapType::Slot       => self.downcast_mut_match::<SlotMap>().visit_edges_mut(visitor),
-                    MapType::Method     => self.downcast_mut_match::<MethodMap>().visit_edges_mut(visitor),
-                    MapType::Quotation  => self.downcast_mut_match::<QuotationMap>().visit_edges_mut(visitor),
                     MapType::Max        => unreachable!(),
                 }
             }
@@ -518,8 +501,6 @@ impl Visitable for HeapValue {
                     ObjectType::Array       => self.downcast_mut_match::<Array>().visit_edges_mut(visitor),
                     ObjectType::Activation  => self.downcast_mut_match::<ActivationObject>().visit_edges_mut(visitor),
                     ObjectType::Quotation   => self.downcast_mut_match::<Quotation>().visit_edges_mut(visitor),
-                    ObjectType::Method      => self.downcast_mut_match::<Method>().visit_edges_mut(visitor),
-                    ObjectType::Effect      => self.downcast_mut_match::<StackEffect>().visit_edges_mut(visitor),
                     ObjectType::Message     => self.downcast_mut_match::<Message>().visit_edges_mut(visitor),
                     ObjectType::Thread      => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
                     ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
@@ -537,8 +518,6 @@ impl Visitable for HeapValue {
                 // SAFETY: matched to this
                 match unsafe { self.header.map_type().unwrap_unchecked() } {
                     MapType::Slot       => self.downcast_ref_match::<SlotMap>().visit_edges(visitor),
-                    MapType::Method     => self.downcast_ref_match::<MethodMap>().visit_edges(visitor),
-                    MapType::Quotation  => self.downcast_ref_match::<QuotationMap>().visit_edges(visitor),
                     MapType::Max        => unreachable!(),
                 }
             }
@@ -549,8 +528,6 @@ impl Visitable for HeapValue {
                     ObjectType::Array       => self.downcast_ref_match::<Array>().visit_edges(visitor),
                     ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().visit_edges(visitor),
                     ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().visit_edges(visitor),
-                    ObjectType::Method      => self.downcast_ref_match::<Method>().visit_edges(visitor),
-                    ObjectType::Effect      => self.downcast_ref_match::<StackEffect>().visit_edges(visitor),
                     ObjectType::Message     => self.downcast_ref_match::<Message>().visit_edges(visitor),
                     ObjectType::Thread      => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
                     ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
@@ -572,8 +549,6 @@ impl HeapObject for Map {
         // SAFETY: this is a map
         match unsafe { self.header.map_type().unwrap_unchecked() } {
             MapType::Slot       => self.downcast_ref_match::<SlotMap>().heap_size(),
-            MapType::Method     => self.downcast_ref_match::<MethodMap>().heap_size(),
-            MapType::Quotation  => self.downcast_ref_match::<QuotationMap>().heap_size(),
             MapType::Max        => unreachable!()
         }
     }
@@ -586,8 +561,6 @@ impl Visitable for Map {
         // SAFETY: this is a map
         match unsafe { self.header.map_type().unwrap_unchecked() } {
             MapType::Slot       => self.downcast_mut_match::<SlotMap>().visit_edges_mut(visitor),
-            MapType::Method     => self.downcast_mut_match::<MethodMap>().visit_edges_mut(visitor),
-            MapType::Quotation  => self.downcast_mut_match::<QuotationMap>().visit_edges_mut(visitor),
             MapType::Max        => unreachable!()
         }
     }
@@ -597,8 +570,6 @@ impl Visitable for Map {
         // SAFETY: this is a map
         match unsafe { self.header.map_type().unwrap_unchecked() } {
             MapType::Slot       => self.downcast_ref_match::<SlotMap>().visit_edges(visitor),
-            MapType::Method     => self.downcast_ref_match::<MethodMap>().visit_edges(visitor),
-            MapType::Quotation  => self.downcast_ref_match::<QuotationMap>().visit_edges(visitor),
             MapType::Max        => unreachable!()
         }
     }

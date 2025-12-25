@@ -3,7 +3,7 @@ use std::{alloc::Layout, mem, ptr};
 use bitflags::bitflags;
 
 use crate::{
-    ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType, Method,
+    Block, ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType,
     Object, ObjectKind, ObjectType, Selector, Tagged, Value, Visitable,
     VisitedLink, Visitor, primitive_index,
 };
@@ -51,6 +51,8 @@ pub struct SlotDescriptor {
 #[derive(Debug)]
 pub struct SlotMap {
     pub map: Map,
+    pub code: Tagged<usize>,
+    pub effect: Tagged<u64>,
     pub assignable_slots: Tagged<usize>,
     pub total_slots: Tagged<usize>,
     pub slots: [SlotDescriptor; 0],
@@ -84,7 +86,12 @@ impl SlotDescriptor {
 
 impl SlotMap {
     /// initialize slot map with data
-    pub fn init_with_data(&mut self, slots: &[SlotDescriptor]) {
+    pub fn init_with_data(
+        &mut self,
+        slots: &[SlotDescriptor],
+        code_ptr: Tagged<usize>,
+        effect: Tagged<u64>,
+    ) {
         let mut slots = slots.to_vec();
 
         #[inline(always)]
@@ -123,7 +130,7 @@ impl SlotMap {
         };
 
         // SAFETY: we calculate correctly
-        unsafe { self.init(assignable_slots, total_slots) };
+        unsafe { self.init(assignable_slots, total_slots, code_ptr, effect) };
     }
 
     /// Initialize a slot map
@@ -131,11 +138,19 @@ impl SlotMap {
     /// # Safety
     /// the reference must be valid and assignable slots < total slots
     #[inline]
-    pub unsafe fn init(&mut self, assignable_slots: usize, total_slots: usize) {
+    pub unsafe fn init(
+        &mut self,
+        assignable_slots: usize,
+        total_slots: usize,
+        code_ptr: Tagged<usize>,
+        effect: Tagged<u64>,
+    ) {
         self.assignable_slots = assignable_slots.into();
         self.total_slots = total_slots.into();
         // SAFETY: safe if contract holds
         self.map.init(MapType::Slot);
+        self.code = code_ptr;
+        self.effect = effect;
     }
 
     #[inline]
@@ -186,6 +201,28 @@ impl SlotMap {
         // SAFETY: this is safe
         // 2. The sorting invariant ensures the first `n` slots are the assignable ones.
         unsafe { std::slice::from_raw_parts(self.slots.as_ptr(), count) }
+    }
+
+    #[inline]
+    pub fn input_count(&self) -> usize {
+        let encoded: u64 = self.effect.into();
+        (encoded >> 32) as usize
+    }
+
+    /// Extracts the number of outputs from the effect field.
+    /// The effect is encoded as: ((inputs << 32) | outputs) tagged (shifted left 1).
+    /// `self.effect.into()` performs the untagging.
+    #[inline]
+    pub fn output_count(&self) -> usize {
+        let encoded: u64 = self.effect.into();
+        (encoded & 0xFFFF_FFFF) as usize
+    }
+
+    /// Returns the raw pointer to the executable Block.
+    #[inline]
+    pub fn code(&self) -> *const Block {
+        let raw: usize = self.code.into();
+        raw as *const Block
     }
 }
 
@@ -465,7 +502,7 @@ impl<'a> SlotHelper<'a> {
     #[inline]
     pub fn message(
         name: &'a str,
-        method: Handle<Method>,
+        method: Handle<SlotObject>,
         tags: SlotTags,
     ) -> Self {
         let tags = tags | SlotTags::EXECUTABLE;

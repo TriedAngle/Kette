@@ -26,8 +26,6 @@ impl BytecodeCompiler {
                     ObjectType::Slot
                     | ObjectType::Array
                     | ObjectType::ByteArray
-                    | ObjectType::Method
-                    | ObjectType::Effect
                     | ObjectType::Float
                     | ObjectType::Thread
                     | ObjectType::BigNum => {

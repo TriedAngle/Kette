@@ -1,8 +1,8 @@
-use std::{alloc::Layout, mem};
+use std::alloc::Layout;
 
 use crate::{
-    Block, ExecutableMap, Handle, Header, HeapObject, LookupResult, Object,
-    ObjectKind, ObjectType, Selector, Value, Visitable, VisitedLink, Visitor,
+    Block, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
+    ObjectType, Selector, SlotMap, Value, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]
@@ -26,7 +26,7 @@ pub struct Activation {
 #[derive(Debug)]
 pub struct ActivationObject {
     pub header: Header,
-    pub map: Handle<ExecutableMap>,
+    pub map: Handle<SlotMap>,
     pub receiver: Handle<Value>,
     // either the parent or false. implement this with scope
     // lambdas must probably be handled special, because they can escape their creation scope
@@ -51,16 +51,17 @@ impl ActivationObject {
     pub fn init(
         &mut self,
         receiver: Handle<Value>,
-        map: Handle<ExecutableMap>,
+        map: Handle<SlotMap>,
         arguments: &[Handle<Value>],
     ) {
         self.header = Header::new_object(ObjectType::Activation);
         self.map = map;
         self.receiver = receiver;
 
+        // TODO: must be fixed for quotations
         // Safety: map is valid here
         assert_eq!(
-            map.slot_count(),
+            map.input_count(),
             arguments.len(),
             "map and arguments must be same length"
         );
@@ -203,15 +204,16 @@ impl HeapObject for ActivationObject {
     const TYPE_BITS: u8 = ObjectType::Activation as u8;
 
     fn heap_size(&self) -> usize {
-        if let Some(method) = self.map.as_method_map() {
-            let slot_count = method.slot_count();
-            return mem::size_of::<Self>()
-                + slot_count * mem::size_of::<Value>();
-        }
-
-        if let Some(_quotation) = self.map.as_quotation_map() {
-            return mem::size_of::<Self>();
-        }
+        // TODO: fix this asap
+        // if let Some(method) = self.map.as_method_map() {
+        //     let slot_count = method.slot_count();
+        //     return mem::size_of::<Self>()
+        //         + slot_count * mem::size_of::<Value>();
+        // }
+        //
+        // if let Some(_quotation) = self.map.as_quotation_map() {
+        //     return mem::size_of::<Self>();
+        // }
 
         unreachable!("all map types should be covered")
     }

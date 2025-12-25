@@ -14,20 +14,24 @@ pub struct Parser {
     pub code: Arc<[u8]>,
     pub end: usize,
     pub offset: usize,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
 pub struct Token {
     start: usize,
     len: usize,
+    line: usize,
+    column: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
 pub enum ParsedToken {
     Identifier(Token),
     String(Token),
-    Fixnum(i64),
-    Float(f64),
+    Fixnum((i64, Token)),
+    Float((f64, Token)),
 }
 
 impl Parser {
@@ -43,6 +47,8 @@ impl Parser {
             code: Arc::from(code),
             end,
             offset: 0,
+            line: 1,
+            column: 1,
         }
     }
 
@@ -66,12 +72,27 @@ impl Parser {
             code: Arc::from(code),
             end,
             offset: 0,
+            line: 1,
+            column: 1,
         }
     }
 
     #[inline]
     pub fn is_done(&self) -> bool {
         self.offset == self.end
+    }
+
+    #[inline]
+    fn advance_char(&mut self) {
+        if self.offset < self.end {
+            if self.code[self.offset] == b'\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
+            self.offset += 1;
+        }
     }
 
     #[inline]
@@ -87,7 +108,7 @@ impl Parser {
     #[inline]
     pub fn skip_whitespace(&mut self) {
         while !self.is_done() && self.is_at_whitespace() {
-            self.offset += 1;
+            self.advance_char();
         }
     }
 
@@ -99,37 +120,51 @@ impl Parser {
         }
 
         let start = self.offset;
+        let line = self.line;
+        let column = self.column;
 
         if self.is_at_quotes() {
-            self.offset += 1;
+            // Consume opening quote
+            self.advance_char();
+
             while !self.is_done() && !self.is_at_quotes() {
-                self.offset += 1;
+                // Determine if escaped? For now just simple consume
+                // Note: advance_char handles newlines in multi-line strings
+                self.advance_char();
             }
-            self.offset += 1;
+
+            // Consume closing quote if not EOF
+            if !self.is_done() {
+                self.advance_char();
+            }
 
             let len = self.offset - start;
-
-            let token = Token { start, len };
-
-            return Some(token);
+            return Some(Token {
+                start,
+                len,
+                line,
+                column,
+            });
         }
 
         while !self.is_done() && !self.is_at_whitespace() {
-            self.offset += 1;
+            self.advance_char();
         }
 
         let len = self.offset - start;
-
-        let token = Token { start, len };
-
-        Some(token)
+        Some(Token {
+            start,
+            len,
+            line,
+            column,
+        })
     }
 
     #[inline]
     pub fn get_token_string(&self, token: Token) -> &str {
         let end = token.start + token.len;
-        let ident_bytes = &self.code[token.start..end];
-        str::from_utf8(ident_bytes).expect("Code must be utf8")
+        let bytes = &self.code[token.start..end];
+        str::from_utf8(bytes).unwrap_or("<invalid utf8>")
     }
 
     #[inline]
@@ -152,47 +187,56 @@ impl Parser {
 
     pub fn parse_next(&mut self) -> Option<ParsedToken> {
         let token = self.next_token()?;
-
         let string = self.get_token_string(token);
 
         if string.starts_with('"') && string.ends_with('"') {
+            // Trim quotes for the ParsedToken payload
             let token = Token {
                 start: token.start + 1,
-                len: token.len - 2,
+                len: token.len.saturating_sub(2),
+                line: token.line,
+                column: token.column,
             };
             return Some(ParsedToken::String(token));
         }
 
-        // TODO: handle bignum promotion
-        let parsed = if let Ok(fixnum) = self.fixnum_token(string) {
-            ParsedToken::Fixnum(fixnum as i64)
+        if let Ok(fixnum) = self.fixnum_token(string) {
+            Some(ParsedToken::Fixnum((fixnum as i64, token)))
         } else if let Some(float) = self.float_token(string) {
-            ParsedToken::Float(float)
+            Some(ParsedToken::Float((float, token)))
         } else {
-            ParsedToken::Identifier(token)
-        };
-
-        Some(parsed)
+            Some(ParsedToken::Identifier(token))
+        }
     }
 
     pub fn read_until(&mut self, end: &str) -> Option<Token> {
-        let start = self.offset;
-
         if self.is_done() {
             return None;
         }
+
+        let start = self.offset;
+        let line = self.line;
+        let column = self.column;
 
         let remaining_bytes = &self.code[start..];
         let remaining_str = std::str::from_utf8(remaining_bytes).ok()?;
 
         match remaining_str.find(end) {
             Some(relative_index) => {
+                // valid token found
                 let token = Token {
                     start,
                     len: relative_index,
+                    line,
+                    column,
                 };
 
-                self.offset += relative_index + end.len();
+                // We must advance char-by-char (or carefully count newlines)
+                // to update line/col correctly for the skipped block.
+                let advance_amount = relative_index + end.len();
+                for _ in 0..advance_amount {
+                    self.advance_char();
+                }
 
                 Some(token)
             }
@@ -203,13 +247,13 @@ impl Parser {
 
 impl Visitable for Parser {
     #[inline]
-    fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        visitor.visit(self.map.into());
+    fn visit_edges(&self, _visitor: &impl crate::Visitor) {
+        // visitor.visit(self.map.into());
     }
 
     #[inline]
-    fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
-        visitor.visit_mut(self.map.into());
+    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {
+        // visitor.visit_mut(self.map.into());
     }
 }
 impl Object for Parser {
@@ -270,7 +314,7 @@ mod tests {
     fn test_fixnum_token() {
         let (_p, v) = parse_all("123");
         match v[0] {
-            ParsedToken::Fixnum(n) => assert_eq!(n, 123),
+            ParsedToken::Fixnum((n, _)) => assert_eq!(n, 123),
             _ => panic!("Expected Fixnum"),
         }
     }
@@ -279,7 +323,7 @@ mod tests {
     fn test_float_token() {
         let (_p, v) = parse_all("3.14");
         match v[0] {
-            ParsedToken::Float(f) => assert!((f - 3.14).abs() < 1e-12),
+            ParsedToken::Float((f, _)) => assert!((f - 3.14).abs() < 1e-12),
             _ => panic!("Expected Float"),
         }
     }
@@ -336,7 +380,7 @@ mod tests {
             _ => panic!("Expected identifier"),
         }
         match v[1] {
-            ParsedToken::Fixnum(n) => assert_eq!(n, 123),
+            ParsedToken::Fixnum((n, _)) => assert_eq!(n, 123),
             _ => panic!("Expected Fixnum"),
         }
         match v[2] {
@@ -352,7 +396,7 @@ mod tests {
             _ => panic!("Expected identifier"),
         }
         match v[4] {
-            ParsedToken::Float(f) => assert!((f - 7.5).abs() < 1e-12),
+            ParsedToken::Float((f, _)) => assert!((f - 7.5).abs() < 1e-12),
             _ => panic!("Expected Float"),
         }
     }

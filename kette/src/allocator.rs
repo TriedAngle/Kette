@@ -1,10 +1,9 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, Block, ByteArray, ExecutableMap, Float, Handle,
-    HeapObject, Message, Method, MethodMap, Quotation, QuotationMap,
-    SlotDescriptor, SlotHelper, SlotMap, SlotObject, StackEffect, Strings,
-    Tagged, Value,
+    ActivationObject, Array, Block, ByteArray, Float, Handle, HeapObject,
+    Message, Quotation, SlotDescriptor, SlotHelper, SlotMap, SlotObject,
+    Strings, Tagged, Value,
 };
 
 #[repr(u8)]
@@ -98,7 +97,7 @@ pub trait Allocator: Sized {
         &mut self,
         interned: Handle<ByteArray>,
     ) -> Handle<Message> {
-        let layout = Layout::new::<StackEffect>();
+        let layout = Layout::new::<Message>();
         let search = Search::boxed(layout.size());
 
         // SAFETY: this is safe
@@ -147,25 +146,45 @@ pub trait Allocator: Sized {
             })
             .collect::<Vec<_>>();
 
-        self.allocate_slots_map(&slots)
+        self.allocate_slots_map(&slots, 0usize.into(), 0u64.into())
+    }
+
+    fn allocate_slot_map_helper2(
+        &mut self,
+        strings: &Strings,
+        slots: &[SlotHelper],
+        code_ptr: Tagged<usize>,
+        effect: Tagged<u64>,
+    ) -> Handle<SlotMap> {
+        let slots = slots
+            .iter()
+            .map(|slot| {
+                let interned = strings.get(slot.name, self);
+                SlotDescriptor::new(interned.into(), slot.tags, slot.value)
+            })
+            .collect::<Vec<_>>();
+
+        self.allocate_slots_map(&slots, code_ptr, effect)
     }
 
     fn allocate_slots_map(
         &mut self,
         slots: &[SlotDescriptor],
+        code_ptr: Tagged<usize>,
+        effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let layout = SlotMap::required_layout(slots.len());
         let search = Search::boxed(layout.size());
 
         // SAFETY: initialize after
         let mut map = unsafe { self.allocate_handle::<SlotMap>(search) };
-        map.init_with_data(slots);
+        map.init_with_data(slots, code_ptr, effect);
 
         map
     }
 
     fn allocate_empty_map(&mut self) -> Handle<SlotMap> {
-        self.allocate_slots_map(&[])
+        self.allocate_slots_map(&[], 0usize.into(), 0u64.into())
     }
 
     fn allocate_slots(
@@ -183,78 +202,16 @@ pub trait Allocator: Sized {
         obj
     }
 
-    fn allocate_effect(
-        &mut self,
-        inputs: Tagged<Array>,
-        outputs: Tagged<Array>,
-    ) -> Handle<StackEffect> {
-        let layout = Layout::new::<StackEffect>();
-        let search = Search::boxed(layout.size());
-
-        // SAFETY: initialize after
-        let mut obj = unsafe { self.allocate_handle::<StackEffect>(search) };
-
-        obj.init(inputs, outputs);
-        obj
-    }
-
-    /// name must be interned !
-    fn allocate_method_map(
-        &mut self,
-        name: Handle<ByteArray>,
-        code: &Block,
-        slots: &[SlotDescriptor],
-        effect: Tagged<StackEffect>,
-    ) -> Handle<MethodMap> {
-        let layout = MethodMap::required_layout(slots.len());
-        let search = Search::boxed(layout.size());
-
-        // SAFETY: this is safe
-        let mut obj = unsafe { self.allocate_handle::<MethodMap>(search) };
-
-        obj.init_with_data(name, effect, code as *const _ as _, slots);
-        obj
-    }
-
-    fn allocate_method_object(
-        &mut self,
-        map: Handle<MethodMap>,
-    ) -> Handle<Method> {
-        let layout = Layout::new::<Method>();
-        let search = Search::boxed(layout.size());
-
-        // SAFETY: initialize after
-        let mut obj = unsafe { self.allocate_handle::<Method>(search) };
-
-        obj.init(map.as_tagged());
-        obj
-    }
-
-    fn allocate_quotation_map(
-        &mut self,
-        code: &Block,
-        input: usize,
-        output: usize,
-    ) -> Handle<QuotationMap> {
-        let layout = QuotationMap::required_layout();
-        let search = Search::boxed(layout.size());
-
-        // SAFETY: this is safe
-        let mut obj = unsafe { self.allocate_handle::<QuotationMap>(search) };
-
-        obj.init(code, input, output);
-
-        obj
-    }
-
     fn allocate_quotation(
         &mut self,
         body: Handle<Array>,
         bytecode: &Block,
-        input: usize,
-        output: usize,
+        input: u64,
+        output: u64,
     ) -> Handle<Quotation> {
-        let map = self.allocate_quotation_map(bytecode, input, output);
+        let code_ptr = bytecode as *const Block as usize;
+        let effect = ((input as u64) << 32) | (output as u64);
+        let map = self.allocate_slots_map(&[], code_ptr.into(), effect.into());
         let layout = Layout::new::<Quotation>();
         let search = Search::boxed(layout.size());
 
@@ -270,7 +227,7 @@ pub trait Allocator: Sized {
     unsafe fn allocate_activation_raw(
         &mut self,
         receiver: Handle<Value>,
-        map: Handle<ExecutableMap>,
+        map: Handle<SlotMap>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         let layout = ActivationObject::required_layout(slots.len());
@@ -287,13 +244,11 @@ pub trait Allocator: Sized {
     fn allocate_method_activation(
         &mut self,
         receiver: Handle<Value>,
-        method: Handle<Method>,
+        method: Handle<SlotObject>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         // SAFETY: safe by contract
         let map = unsafe { method.map.promote_to_handle() };
-        // SAFETY: every method map is an executable map
-        let map = unsafe { map.cast::<ExecutableMap>() };
         // SAFETY: handles safe, slots must be same size as map wants
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
     }
@@ -305,9 +260,8 @@ pub trait Allocator: Sized {
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         // SAFETY: every method map is an executable map
-        let map = unsafe {
-            quotation.map.cast::<ExecutableMap>().promote_to_handle()
-        };
+        let map =
+            unsafe { quotation.map.cast::<SlotMap>().promote_to_handle() };
         // SAFETY: handles safe, slots must be same size as map wants
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
     }
