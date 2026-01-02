@@ -1,4 +1,4 @@
-use std::alloc::Layout;
+use std::{alloc::Layout, mem};
 
 use crate::{
     Block, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
@@ -161,6 +161,16 @@ impl ActivationStack {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Returns an iterator over the activations (stack frames).
+    pub fn iter(&self) -> std::slice::Iter<'_, Activation> {
+        self.0.iter()
+    }
+
+    /// Returns a mutable iterator over the activations.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Activation> {
+        self.0.iter_mut()
+    }
 }
 
 impl Default for ActivationStack {
@@ -204,17 +214,7 @@ impl HeapObject for ActivationObject {
     const TYPE_BITS: u8 = ObjectType::Activation as u8;
 
     fn heap_size(&self) -> usize {
-        // TODO: fix this asap
-        // if let Some(method) = self.map.as_method_map() {
-        //     let slot_count = method.slot_count();
-        //     return mem::size_of::<Self>()
-        //         + slot_count * mem::size_of::<Value>();
-        // }
-        //
-        // if let Some(_quotation) = self.map.as_quotation_map() {
-        //     return mem::size_of::<Self>();
-        // }
-
-        unreachable!("all map types should be covered")
+        let count = self.map.assignable_slots_count();
+        mem::size_of::<Self>() + count * mem::size_of::<Value>()
     }
 }

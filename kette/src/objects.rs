@@ -52,14 +52,7 @@ pub enum MapType {
     Max = 0b11111,
 }
 
-bitflags::bitflags! {
-    /// Header flags are intentionally tiny (currently only PINNED).
-    #[repr(transparent)]
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-    pub struct HeaderFlags: u8 {
-        const PINNED = 1 << 0;
-    }
-}
+pub const FLAG_REMEMBERED: u8 = 0b0000_0001;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -70,9 +63,9 @@ pub struct Header {
     /// [3..8) type (5 bits: ObjectType or MapType)
     pub ty: u8,
 
-    pub flags: HeaderFlags,
+    pub flags: AtomicU8,
     /// GC mark byte.
-    pub mark: AtomicU8,
+    pub age: AtomicU8,
     /// Padding / future use.
     pub _reserved: u8,
     /// General payload (formerly bits [32..64) of the packed header).
@@ -148,25 +141,21 @@ impl Header {
 
     #[inline]
     pub const fn new_object(ty: ObjectType) -> Self {
-        Self::new_raw(ObjectKind::Object, ty as u8, HeaderFlags::empty(), 0)
+        Self::new_raw(ObjectKind::Object, ty as u8, 0, 0)
     }
 
     #[inline]
     pub const fn new_map(ty: MapType) -> Self {
-        Self::new_raw(ObjectKind::Map, ty as u8, HeaderFlags::empty(), 0)
+        Self::new_raw(ObjectKind::Map, ty as u8, 0, 0)
     }
 
     #[inline]
-    pub const fn new_object2(
-        ty: ObjectType,
-        flags: HeaderFlags,
-        data: u32,
-    ) -> Self {
+    pub const fn new_object2(ty: ObjectType, flags: u8, data: u32) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, flags, data)
     }
 
     #[inline]
-    pub const fn new_map2(ty: MapType, flags: HeaderFlags, data: u32) -> Self {
+    pub const fn new_map2(ty: MapType, flags: u8, data: u32) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, flags, data)
     }
 
@@ -174,7 +163,7 @@ impl Header {
     const fn new_raw(
         kind: ObjectKind,
         type_bits: u8,
-        flags: HeaderFlags,
+        flags: u8,
         data: u32,
     ) -> Self {
         let ty = (Self::TAG_HEADER_BITS & Self::TAG_MASK)
@@ -183,8 +172,8 @@ impl Header {
 
         Header {
             ty,
-            flags,
-            mark: AtomicU8::new(0),
+            flags: AtomicU8::new(flags),
+            age: AtomicU8::new(0),
             _reserved: 0,
             data,
         }
@@ -250,39 +239,13 @@ impl Header {
     }
 
     #[inline]
-    pub fn new_free(size_bytes: u32) -> Self {
-        Header {
-            ty: Self::TY_FREE,
-            flags: HeaderFlags::empty(),
-            mark: AtomicU8::new(0),
-            _reserved: 0,
-            data: size_bytes,
-        }
+    pub fn set_age(&mut self, age: u8) {
+        self.age.store(age, Ordering::Relaxed);
     }
 
     #[inline]
-    pub fn is_pinned(&self) -> bool {
-        self.flags.contains(HeaderFlags::PINNED)
-    }
-
-    #[inline]
-    pub fn set_pinned(&mut self, pinned: bool) {
-        self.flags.set(HeaderFlags::PINNED, pinned);
-    }
-
-    #[inline]
-    pub fn is_marked(&self) -> bool {
-        self.mark.load(Ordering::Relaxed) != 0
-    }
-
-    #[inline]
-    pub fn mark(&self) {
-        self.mark.store(1, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn unmark(&self) {
-        self.mark.store(0, Ordering::Relaxed);
+    pub fn age(&self) -> u8 {
+        self.age.load(Ordering::Relaxed)
     }
 
     #[inline]

@@ -137,7 +137,6 @@
         (| x . y . p -- | 2keep self call ) .
 |) std traits callable addTraitSlots
 
-
 (| 
     curried = (| 
         parent* = std traits clonable .

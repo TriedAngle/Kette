@@ -1,8 +1,8 @@
 use crate::{
     Activation, ActivationStack, ActivationType, Allocator, ExecutionState,
-    Handle, HeapProxy, Instruction, LookupResult,
-    PrimitiveMessageIndex, Quotation, Selector, SlotObject, SlotTags,
-    ThreadProxy, VMProxy, Value, get_primitive, transmute,
+    Handle, HeapProxy, Instruction, LookupResult, PrimitiveMessageIndex,
+    Quotation, Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value,
+    get_primitive, transmute,
 };
 
 pub struct Interpreter {
@@ -43,6 +43,8 @@ impl Interpreter {
             activations: ActivationStack::new(),
         }
     }
+
+    pub fn init(&mut self) {}
 
     #[inline(always)]
     pub fn current_activation(&self) -> Option<&Activation> {

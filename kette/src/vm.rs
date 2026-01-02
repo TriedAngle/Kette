@@ -235,7 +235,7 @@ impl VM {
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::constant("stack*", stack_object.as_value(), SlotTags::PARENT),
-            SlotHelper::constant("parsers", parsers.as_value(), SlotTags::PARENT),
+            SlotHelper::constant("parsers*", parsers.as_value(), SlotTags::PARENT),
             SlotHelper::primitive_message2("universe", "(identity)", SlotTags::empty()),
             SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
             SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),

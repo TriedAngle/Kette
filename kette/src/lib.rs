@@ -10,6 +10,8 @@ mod objects;
 mod parker;
 mod primitives;
 
+mod barrier;
+pub mod heap2;
 mod stack;
 mod system;
 mod tagged;
@@ -19,6 +21,7 @@ mod vm;
 pub use allocator::{
     AllocationResult, AllocationType, Allocator, HeapSpace, Search,
 };
+pub use barrier::SenseBarrier;
 pub use heap::{Heap, HeapProxy, HeapSettings, Tlab};
 
 pub use objects::activation::{
@@ -38,7 +41,7 @@ pub use objects::threads::{
     ThreadState, VMThread,
 };
 pub use objects::{
-    Header, HeaderFlags, HeapObject, HeapValue, Map, MapType, Object,
+    FLAG_REMEMBERED, Header, HeapObject, HeapValue, Map, MapType, Object,
     ObjectKind, ObjectType, PtrSizedObject,
 };
 

@@ -232,8 +232,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         {
                             let map =
                                 unsafe { slot_obj.map.promote_to_handle() };
-                            let ptr: usize = map.code.into();
-                            ptr != 0
+                            map.has_code()
                         } else {
                             false
                         }
@@ -254,6 +253,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         let exec_res = ctx.interpreter.execute_with_depth();
 
                         if exec_res != ExecutionResult::Normal {
+                            println!("error");
                             return (exec_res, None);
                         }
 
@@ -310,7 +310,6 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let mut inputs_count: u32 = 0;
     let mut outputs_count: u32 = 0;
 
-    // --- Main Parsing Loop (Slots) ---
     loop {
         // 1. Peek/Parse next token (Name or Terminator)
         let res = parse_next(ctx);
