@@ -6,61 +6,26 @@ use crate::{
     Strings, Tagged, Value,
 };
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AllocationType {
-    Free = 0b00,
-    Boxed = 0b01,
-    Unboxed = 0b10,
-    Code = 0b11,
-}
-
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HeapSpace {
-    Nursery,
-    Immix,
-}
-
-impl HeapSpace {
-    pub const COUNT: usize = 2;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Search {
-    pub layout: Layout,
-    pub kind: AllocationType,
-    pub space: HeapSpace,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct AllocationResult {
-    pub page_index: usize,
-    pub ptr: NonNull<u8>,
-}
-
 pub trait Allocator: Sized {
-    fn allocate(&mut self, search: Search) -> AllocationResult;
+    fn allocate(&mut self, layout: Layout) -> NonNull<u8>;
 
     /// Allocate a new Object and return it as a typed Handle
     /// # Safety
     /// the caller must guarantee to not experience any GC throughout the result's whole lifetime.
     unsafe fn allocate_handle<T: HeapObject>(
         &mut self,
-        search: Search,
+        layout: Layout,
     ) -> Handle<T> {
-        let raw = self.allocate(search).ptr.cast::<T>();
+        let raw = self.allocate(layout);
         // SAFETY: by contract will be initialized after
-        unsafe { Handle::new_ptr(raw.as_ptr()) }
+        unsafe { Handle::new_ptr(raw.cast().as_ptr()) }
     }
 
     fn allocate_float(&mut self, value: f64) -> Handle<Float> {
         let layout = Layout::new::<Float>();
 
-        let search = Search::unboxed(layout);
-        // SAFETY: initialize after
-        let mut obj = unsafe { self.allocate_handle::<Float>(search) };
-
+        // SAFETY: this is safe
+        let mut obj = unsafe { self.allocate_handle::<Float>(layout) };
         obj.init(value);
         obj
     }
@@ -71,10 +36,8 @@ pub trait Allocator: Sized {
         align: usize,
     ) -> Handle<ByteArray> {
         let layout = ByteArray::required_layout_size_align(size, align);
-        let search = Search::unboxed(layout);
         // SAFETY: this is safe
-        let mut ba = unsafe { self.allocate_handle::<ByteArray>(search) };
-
+        let mut ba = unsafe { self.allocate_handle::<ByteArray>(layout) };
         ba.init_zeroed(size);
         ba
     }
@@ -85,10 +48,8 @@ pub trait Allocator: Sized {
         align: usize,
     ) -> Handle<ByteArray> {
         let layout = ByteArray::required_layout_size_align(data.len(), align);
-        let search = Search::unboxed(layout);
         // SAFETY: this is safe
-        let mut ba = unsafe { self.allocate_handle::<ByteArray>(search) };
-
+        let mut ba = unsafe { self.allocate_handle::<ByteArray>(layout) };
         ba.init_data(data);
         ba
     }
@@ -98,11 +59,8 @@ pub trait Allocator: Sized {
         interned: Handle<ByteArray>,
     ) -> Handle<Message> {
         let layout = Layout::new::<Message>();
-        let search = Search::boxed(layout.size());
-
         // SAFETY: this is safe
-        let mut obj = unsafe { self.allocate_handle::<Message>(search) };
-
+        let mut obj = unsafe { self.allocate_handle::<Message>(layout) };
         obj.init(interned.as_tagged());
         obj
     }
@@ -111,25 +69,17 @@ pub trait Allocator: Sized {
     /// user code must initialize this
     unsafe fn allocate_raw_array(&mut self, size: usize) -> Handle<Array> {
         let layout = Array::required_layout(size);
-        let search = Search::boxed(layout.size());
-
-        // SAFETY: initialize after
-        let mut array = unsafe { self.allocate_handle::<Array>(search) };
-
+        // SAFETY: this is safe
+        let mut array = unsafe { self.allocate_handle::<Array>(layout) };
         array.init(size);
-
         array
     }
 
     fn allocate_array(&mut self, data: &[Value]) -> Handle<Array> {
         let layout = Array::required_layout(data.len());
-        let search = Search::boxed(layout.size());
-
-        // SAFETY:
-        let mut array = unsafe { self.allocate_handle::<Array>(search) };
-
+        // SAFETY: this is safe
+        let mut array = unsafe { self.allocate_handle::<Array>(layout) };
         array.init_with_data(data);
-
         array
     }
 
@@ -174,12 +124,9 @@ pub trait Allocator: Sized {
         effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let layout = SlotMap::required_layout(slots.len());
-        let search = Search::boxed(layout.size());
-
         // SAFETY: initialize after
-        let mut map = unsafe { self.allocate_handle::<SlotMap>(search) };
+        let mut map = unsafe { self.allocate_handle::<SlotMap>(layout) };
         map.init_with_data(slots, code_ptr, effect);
-
         map
     }
 
@@ -194,11 +141,9 @@ pub trait Allocator: Sized {
     ) -> Handle<SlotObject> {
         let assignable_slots = map.assignable_slots_count();
         let layout = SlotObject::required_layout(assignable_slots);
-        let search = Search::boxed(layout.size());
         // SAFETY: this is safe
-        let mut obj = unsafe { self.allocate_handle::<SlotObject>(search) };
+        let mut obj = unsafe { self.allocate_handle::<SlotObject>(layout) };
         obj.init_with_data(map.as_tagged(), slots);
-
         obj
     }
 
@@ -213,11 +158,8 @@ pub trait Allocator: Sized {
         let effect = ((input as u64) << 32) | (output as u64);
         let map = self.allocate_slots_map(&[], code_ptr.into(), effect.into());
         let layout = Layout::new::<Quotation>();
-        let search = Search::boxed(layout.size());
-
         // SAFETY: this is safe
-        let mut obj = unsafe { self.allocate_handle::<Quotation>(search) };
-
+        let mut obj = unsafe { self.allocate_handle::<Quotation>(layout) };
         obj.init(body.as_tagged(), map.as_tagged());
         obj
     }
@@ -231,12 +173,9 @@ pub trait Allocator: Sized {
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         let layout = ActivationObject::required_layout(slots.len());
-        let search = Search::boxed(layout.size());
-
         // SAFETY: initialize after
         let mut obj =
-            unsafe { self.allocate_handle::<ActivationObject>(search) };
-
+            unsafe { self.allocate_handle::<ActivationObject>(layout) };
         obj.init(receiver, map, slots);
         obj
     }
@@ -264,43 +203,5 @@ pub trait Allocator: Sized {
             unsafe { quotation.map.cast::<SlotMap>().promote_to_handle() };
         // SAFETY: handles safe, slots must be same size as map wants
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
-    }
-}
-
-impl Search {
-    #[inline]
-    pub fn new(layout: Layout, kind: AllocationType, space: HeapSpace) -> Self {
-        Self {
-            layout,
-            kind,
-            space,
-        }
-    }
-
-    #[inline]
-    pub fn new_size_align(
-        size: usize,
-        align: usize,
-        kind: AllocationType,
-        space: HeapSpace,
-    ) -> Self {
-        let layout =
-            Layout::from_size_align(size, align).expect("valid layout");
-        Self {
-            layout,
-            kind,
-            space,
-        }
-    }
-
-    #[inline]
-    pub fn boxed(size: usize) -> Self {
-        let layout = Layout::from_size_align(size, 16).expect("valid layout");
-        Self::new(layout, AllocationType::Boxed, HeapSpace::Nursery)
-    }
-
-    #[inline]
-    pub fn unboxed(layout: Layout) -> Self {
-        Self::new(layout, AllocationType::Unboxed, HeapSpace::Nursery)
     }
 }

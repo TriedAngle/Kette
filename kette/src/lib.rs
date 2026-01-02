@@ -2,7 +2,7 @@ mod bytecode;
 mod compiler;
 
 mod allocator;
-mod heap;
+// mod heap;
 mod interning;
 mod interpreter;
 mod lookup;
@@ -11,18 +11,16 @@ mod parker;
 mod primitives;
 
 mod barrier;
-pub mod heap2;
+mod heap;
 mod stack;
 mod system;
 mod tagged;
 mod visitor;
 mod vm;
 
-pub use allocator::{
-    AllocationResult, AllocationType, Allocator, HeapSpace, Search,
-};
+pub use allocator::Allocator;
 pub use barrier::SenseBarrier;
-pub use heap::{Heap, HeapProxy, HeapSettings, Tlab};
+pub use heap::{Heap, HeapProxy, HeapSettings};
 
 pub use objects::activation::{
     Activation, ActivationObject, ActivationStack, ActivationType,

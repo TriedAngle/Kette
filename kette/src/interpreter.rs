@@ -193,7 +193,7 @@ impl Interpreter {
                 ExecutionResult::Normal
             }
             Instruction::CreateSlotObject { mut map } => {
-                self.heap.safepoint_poll();
+                self.heap.safepoint();
                 let slot_count = map.data_slots();
 
                 // SAFETY: not safe yet, TODO: depth check
@@ -208,7 +208,7 @@ impl Interpreter {
                 ExecutionResult::Normal
             }
             Instruction::SendPrimitive { id } => {
-                self.heap.safepoint_poll();
+                self.heap.safepoint();
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
@@ -220,7 +220,7 @@ impl Interpreter {
                 let selector =
                     Selector::new_message(message, self.vm.shared.clone());
 
-                self.heap.safepoint_poll();
+                self.heap.safepoint();
 
                 let universe = self.vm.specials().universe;
 
@@ -248,7 +248,7 @@ impl Interpreter {
                 let message = self.vm.intern_string(message, &mut self.heap);
                 let selector = Selector::new(message, self.vm.shared.clone());
 
-                self.heap.safepoint_poll();
+                self.heap.safepoint();
                 // SAFETY: after depth check, this is safe
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
@@ -342,15 +342,15 @@ impl Interpreter {
 
             let recv_val = receiver.inner();
             // SAFETY: must be valid by protocol
-            let recv_obj = unsafe {
+            let mut recv_obj = unsafe {
                 recv_val.as_heap_handle_unchecked().cast::<SlotObject>()
             };
-            let recv_ptr = recv_obj.as_ptr();
             // SAFETY: must be valid by protocol
-            let dst_ptr =
-                unsafe { (*recv_ptr).slots_mut_ptr().add(offset.into()) };
-            self.heap.heap.write_barrier(dst_ptr as _);
-            unsafe { (*recv_ptr).set_slot_unchecked(offset.into(), new_value) };
+            let val_obj = unsafe { new_value.as_heap_handle_unchecked() };
+            self.heap
+                .write_barrier(recv_obj.as_heap_value_handle(), val_obj);
+            // SAFETY: this is safe
+            unsafe { recv_obj.set_slot_unchecked(offset.into(), new_value) };
             return ExecutionResult::Normal;
         }
 
