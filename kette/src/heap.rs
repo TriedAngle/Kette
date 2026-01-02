@@ -160,7 +160,9 @@ pub struct HeapInner {
     pub lines: Box<[AtomicU8]>,
 }
 
+// SAFETY: this is safe
 unsafe impl Send for HeapInner {}
+// SAFETY: this is safe
 unsafe impl Sync for HeapInner {}
 
 #[derive(Debug, Clone)]
@@ -185,7 +187,9 @@ pub struct HeapProxy {
     pub end: *mut u8,
 }
 
+// SAFETY: this is safe
 unsafe impl Send for HeapProxy {}
+// SAFETY: this is safe
 unsafe impl Sync for HeapProxy {}
 
 #[derive(Debug, Default)]
@@ -254,7 +258,7 @@ impl HeapProxy {
             if new_cur <= end {
                 // Successful bump allocation
                 self.bump = new_cur as *mut u8;
-                // aligned is within the window, so NonNull is safe
+                // SAFETY: aligned is within the window, so NonNull is safe
                 return Some(unsafe {
                     NonNull::new_unchecked(aligned as *mut u8)
                 });
@@ -269,6 +273,7 @@ impl HeapProxy {
             // Recycled block: Scan for the next hole (skip unavailable lines).
             if self.block_status == BLOCK_RECYCLED {
                 self.bump = self.end;
+                // SAFETY: safe invariant
                 unsafe {
                     if !self.find_next_hole() {
                         // No more holes in this block.
@@ -315,13 +320,16 @@ impl HeapProxy {
         // Calculate absolute address
         let block_size = self.heap.settings.block_size;
         let heap_start = self.heap.heap_start;
+        // SAFETY: safe invariant
         let block_addr = unsafe { heap_start.add(self.block * block_size) };
 
         // Initialize alloc window
         if status == BLOCK_FREE {
             self.bump = block_addr;
+            // SAFETY: safe invariant
             self.end = unsafe { block_addr.add(block_size) };
         } else if status == BLOCK_RECYCLED {
+            // SAFETY: safe invariant
             unsafe {
                 if !self.find_next_hole() {
                     panic!("Recycled block returned with no holes");
@@ -350,6 +358,7 @@ impl HeapProxy {
         let payload = (raw + header + (align - 1)) & !(align - 1);
         let alloc = (payload - header) as *mut LargeAllocation;
         let payload_ptr = payload as *mut u8;
+        // SAFETY: safe invariant
         unsafe {
             // Initialize Header
             ptr::write(
@@ -362,7 +371,11 @@ impl HeapProxy {
                 },
             );
 
-            let mut lo_list = self.heap.large_objects.lock().unwrap();
+            let mut lo_list = self
+                .heap
+                .large_objects
+                .lock()
+                .expect("TODO: handle poisioning");
             lo_list.push(NonNull::new_unchecked(alloc));
 
             // we skip this here
@@ -372,9 +385,13 @@ impl HeapProxy {
         }
     }
 
+    /// get the pointer on the heap this block is pointing to
+    /// # Safety
+    /// must be initialized correctly
     #[inline(always)]
     unsafe fn current_block_start(&self) -> *mut u8 {
         let block_size = self.heap.settings.block_size;
+        // SAFETY: safe if initialized correctly
         unsafe { self.heap.heap_start.add(self.block * block_size) }
     }
 
@@ -384,15 +401,20 @@ impl HeapProxy {
     #[inline(always)]
     unsafe fn ptr_from_line(&self, line_idx: usize) -> *mut u8 {
         let line_size = self.heap.settings.line_size;
+        // SAFETY: must be a valid line in the heap
         unsafe { self.current_block_start().add(line_idx * line_size) }
     }
 
+    /// get line from pointer
+    /// # Safety
+    /// must be a valid heap pointer
     #[inline(always)]
     unsafe fn line_from_ptr(&self, ptr: *mut u8) -> usize {
         if ptr.is_null() {
             return 0;
         }
         let offset =
+            // SAFETY: caller must take pointer that is inside the heap
             unsafe { ptr.offset_from(self.current_block_start()) as usize };
         offset / self.heap.settings.line_size
     }
@@ -410,11 +432,13 @@ impl HeapProxy {
     /// Updates `self.bump` (cursor) and `self.end` (limit).
     unsafe fn find_next_hole(&mut self) -> bool {
         let lines_per_block = self.heap.info.lines_per_block;
+        // SAFETY: safe invariant
         let start_search_idx = unsafe { self.line_from_ptr(self.bump) };
 
         // 1. Scan for START of hole (skip live lines, mark >= epoch)
         let mut hole_start = start_search_idx;
         while hole_start < lines_per_block {
+            // SAFETY: safe invariant
             if unsafe { self.get_line_status(hole_start) < self.epoch } {
                 break;
             }
@@ -428,14 +452,16 @@ impl HeapProxy {
         // 2. Scan for END of hole (stop at live line)
         let mut hole_end = hole_start + 1;
         while hole_end < lines_per_block {
+            // SAFETY: safe invariant
             if unsafe { self.get_line_status(hole_end) >= self.epoch } {
                 break;
             }
             hole_end += 1;
         }
 
+        // SAFETY: safe invariant
         self.bump = unsafe { self.ptr_from_line(hole_start) };
-        // SAFETY:
+        // SAFETY: safe invariant
         self.end = unsafe { self.ptr_from_line(hole_end) };
         true
     }

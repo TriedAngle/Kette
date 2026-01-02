@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
     Allocator, Array, ByteArray, ExecutionResult, Handle, ObjectType,
-    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, Tagged, Value,
+    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, Value,
     primitives::inputs,
 };
 
@@ -12,7 +12,7 @@ fn is_constant_slot(tags: SlotTags) -> bool {
 }
 
 #[inline]
-fn name_key(name: Tagged<ByteArray>) -> usize {
+fn name_key(name: Handle<ByteArray>) -> usize {
     name.as_ptr() as usize
 }
 
@@ -21,24 +21,14 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [traits_v, target_v] = inputs(ctx);
 
     // SAFETY: caller ensures these are slot objects
-    let target = unsafe { target_v.cast::<SlotObject>() };
+    let mut target = unsafe { target_v.cast::<SlotObject>() };
     // SAFETY: caller ensures these are slot objects
     let traits = unsafe { traits_v.cast::<SlotObject>() };
 
-    // SAFETY: handles are valid
-    let target_ptr = target.as_ptr();
-    // SAFETY: handles are valid
-    let traits_ptr = traits.as_ptr();
-
     // SAFETY: valid pointers
-    let target_map_tagged = unsafe { (*target_ptr).map };
+    let target_map = target.map;
     // SAFETY: valid pointers
-    let traits_map_tagged = unsafe { (*traits_ptr).map };
-
-    // SAFETY: map pointers valid
-    let target_map = unsafe { target_map_tagged.as_ref() };
-    // SAFETY: map pointers valid
-    let traits_map = unsafe { traits_map_tagged.as_ref() };
+    let traits_map = traits.map;
 
     // Start with all existing slots from target
     let mut new_slots: Vec<SlotDescriptor> = target_map.slots().to_vec();
@@ -75,10 +65,7 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
         target_map.effect,
     );
 
-    // SAFETY: we have exclusive access; patch map pointer
-    unsafe {
-        (*target_ptr).map = new_map.into();
-    }
+    target.map = new_map;
 
     ExecutionResult::Normal
 }
@@ -88,23 +75,14 @@ pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [target_v, traits_v] = inputs(ctx);
 
     // SAFETY: caller ensures these are slot objects
-    let target = unsafe { target_v.cast::<SlotObject>() };
+    let mut target = unsafe { target_v.cast::<SlotObject>() };
     // SAFETY: caller ensures these are slot objects
     let traits = unsafe { traits_v.cast::<SlotObject>() };
 
-    // SAFETY: handles are valid
-    let target_ptr = target.as_ptr();
-    let traits_ptr = traits.as_ptr();
-
     // SAFETY: valid pointers
-    let target_map_tagged = unsafe { (*target_ptr).map };
+    let target_map = target.map;
     // SAFETY: valid pointers
-    let traits_map_tagged = unsafe { (*traits_ptr).map };
-
-    // SAFETY: map pointers valid
-    let target_map = unsafe { target_map_tagged.as_ref() };
-    // SAFETY: map pointers valid
-    let traits_map = unsafe { traits_map_tagged.as_ref() };
+    let traits_map = traits.map;
 
     // Names to remove (only constant slots from traits)
     let mut remove: HashSet<usize> = HashSet::new();
@@ -133,10 +111,7 @@ pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
         target_map.effect,
     );
 
-    // SAFETY: we have exclusive access; patch map pointer
-    unsafe {
-        (*target_ptr).map = new_map.into();
-    }
+    target.map = new_map;
 
     ExecutionResult::Normal
 }
@@ -162,11 +137,9 @@ pub fn clone_obj(ctx: &mut PrimitiveContext) -> ExecutionResult {
         Some(ObjectType::Slot) => {
             // SAFETY: Type checked via header
             let slot_obj = unsafe { obj.cast::<SlotObject>() };
-            // SAFETY: this is safe
-            let map = unsafe { slot_obj.map.promote_to_handle() };
             let slots = slot_obj.inner().slots();
 
-            let res = ctx.heap.allocate_slots(map, slots);
+            let res = ctx.heap.allocate_slots(slot_obj.map, slots);
             res.into()
         }
         Some(ObjectType::Array) => {
@@ -218,10 +191,9 @@ pub fn clone_obj_boa(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: checked
     let prototype = unsafe { obj.cast::<SlotObject>() };
 
-    // SAFETY: this is safe
-    let map = unsafe { prototype.map.promote_to_handle() };
+    let map = prototype.map;
 
-    let count = map.assignable_slots_count();
+    let count = prototype.map.assignable_slots_count();
 
     // SAFETY: We assume the interpreter ensures stack depth before calling,
     // or pop_slice_unchecked handles bounds implicitly/unsafe.

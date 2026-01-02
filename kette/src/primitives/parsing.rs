@@ -1,17 +1,12 @@
-// TODO: remove this unused
-#![allow(unused)]
-
-use std::{mem, ops::Deref};
-
 use crate::{
-    Allocator, Array, Block, ByteArray, BytecodeCompiler, ExecutionResult,
-    Handle, LookupResult, Message, Object, ObjectType, ParsedToken, Parser,
-    PrimitiveContext, PrimitiveMessageIndex, Quotation, Selector,
-    SlotDescriptor, SlotObject, SlotTags, Tagged, Value, Vector, get_primitive,
-    primitive_index,
+    Allocator, Block, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
+    Message, ObjectType, ParsedToken, Parser, PrimitiveContext,
+    PrimitiveMessageIndex, Selector, SlotDescriptor, SlotObject, SlotTags,
+    Value, Vector,
 };
 
 fn parser_error(ctx: &PrimitiveContext, msg: &str) -> ExecutionResult {
+    // SAFETY: must be parser
     let parser = unsafe { ctx.receiver.cast::<Parser>() };
 
     let error_msg = format!(
@@ -76,8 +71,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
         return ExecutionResult::Panic("Parsing failed!");
     }
 
-    // SAFETY: TODO: must be added to handleset
-    let body = unsafe { ctx.heap.allocate_array(body_accum.as_slice()) };
+    let body = ctx.heap.allocate_array(body_accum.as_slice());
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
     let code = ctx.vm.shared.code_heap.push(block);
     // TODO: this must be updated
@@ -95,10 +89,13 @@ impl Value {
         if !self.is_object() {
             return None;
         }
+        // SAFETY: checked
         let h = unsafe { self.as_heap_handle_unchecked() };
+        // SAFETY: checked
         if unsafe { h.header.object_type().unwrap_unchecked() }
             == ObjectType::Message
         {
+            // SAFETY: checked
             Some(unsafe { h.cast::<Message>() })
         } else {
             None
@@ -139,8 +136,7 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     // trimming
     let accumulated = ctx.heap.allocate_array(accumulator.as_slice());
-    // SAFETY: just created, will become handle there anyways
-    ctx.outputs[0] = unsafe { accumulated.into() };
+    ctx.outputs[0] = accumulated.into();
 
     ExecutionResult::Normal
 }
@@ -150,7 +146,8 @@ fn parse_until_inner<'m, 'ex, 'arg>(
     ends: &[Handle<Message>],
     mut accum: Handle<Vector>,
 ) -> (ExecutionResult, Option<Handle<Message>>) {
-    let parser = unsafe { ctx.receiver.cast::<Parser>() };
+    // SAFETY: this is safe
+    let _parser = unsafe { ctx.receiver.cast::<Parser>() };
 
     loop {
         let res = parse_next(ctx);
@@ -190,7 +187,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
 
         let parsers = ctx.vm.specials().parsers;
 
-        let name = unsafe { message.value.promote_to_handle() };
+        let name = message.value;
         let selector = Selector::new(name, ctx.vm.shared.clone());
         let lookup = selector.lookup_object(&parsers.as_value());
 
@@ -215,6 +212,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                     ctx.state.push(accum.as_value());
                     ctx.interpreter.primitive_send(ctx.receiver, message_idx);
 
+                    // SAFETY: this is safe
                     accum = unsafe {
                         ctx.state
                             .pop()
@@ -226,13 +224,10 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                 } else {
                     let should_execute_method = if slot.value.is_object() {
                         let h =
+                            // SAFETY: this is safe
                             unsafe { slot.value.as_heap_handle_unchecked() };
-                        if let Some(slot_obj) =
-                            unsafe { h.downcast_ref::<SlotObject>() }
-                        {
-                            let map =
-                                unsafe { slot_obj.map.promote_to_handle() };
-                            map.has_code()
+                        if let Some(slot_obj) = h.downcast_ref::<SlotObject>() {
+                            slot_obj.map.has_code()
                         } else {
                             false
                         }
@@ -241,6 +236,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                     };
 
                     if should_execute_method {
+                        // SAFETY: this is safe
                         let method = unsafe {
                             slot.value
                                 .as_heap_handle_unchecked()
@@ -257,6 +253,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                             return (exec_res, None);
                         }
 
+                        // SAFETY: this is safe
                         accum = unsafe {
                             ctx.state
                                 .pop()
@@ -317,6 +314,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             return res;
         }
 
+        // SAFETY: this is safe
         let token_val = unsafe { ctx.state.pop_unchecked() };
 
         // Handle EOF
@@ -353,27 +351,26 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         };
 
         // SAFETY: Message value guaranteed to be valid UTF8 ByteArray by VM invariants
-        let raw_name_str =
-            unsafe { name_msg.value.as_ref().as_utf8().expect("valid utf8") };
+        let raw_name_str = name_msg.value.as_utf8().expect("valid utf8");
 
         let is_parent = raw_name_str.ends_with('*');
         // Intern name (stripping * if needed usually handled here or we just intern raw)
         // Assuming we keep strict name correspondence:
         let name_ba = ctx.vm.intern_string(raw_name_str, ctx.heap);
-        let name_tagged: Tagged<ByteArray> = name_ba.into();
 
         // 3. Parse Operator OR Implicit Terminator
         let res = parse_next(ctx);
         if res != ExecutionResult::Normal {
             return res;
         }
+        // SAFETY: this is safe
         let op_val = unsafe { ctx.state.pop_unchecked() };
 
         let op_msg = op_val
             .as_message_handle()
             .ok_or("Expected operator or terminator after slot name")
-            .or_else(|e| Err(parser_error(ctx, e)))
-            .unwrap();
+            .map_err(|e| parser_error(ctx, e))
+            .expect("get message");
 
         let terminator: Handle<Message>;
         let is_assignable: bool;
@@ -387,8 +384,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             is_assignable = true; // Implicit slots are assignable
         } else {
             // Explicit: name = val ... or name := val ...
-            let op_str =
-                unsafe { op_msg.value.as_ref().as_utf8().expect("valid utf8") };
+            let op_str = op_msg.value.as_utf8().expect("valid utf8");
 
             is_assignable = match op_str {
                 "=" => false,
@@ -409,7 +405,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             }
 
             // parse_until_inner panics if no terminator found, so unwrap is safe
-            terminator = term_opt.unwrap();
+            terminator = term_opt.expect("get terminator");
         }
 
         // 4. Register Descriptor
@@ -423,7 +419,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             let offset_val = Value::from_fixnum(assignable_offset);
             assignable_offset += 1;
 
-            slot_descs.push(SlotDescriptor::new(name_tagged, tags, offset_val));
+            slot_descs.push(SlotDescriptor::new(name_ba, tags, offset_val));
 
             // Generate Setter: name<<
             let mut s = String::with_capacity(raw_name_str.len() + 2);
@@ -432,7 +428,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             let setter_ba = ctx.vm.intern_string(&s, ctx.heap);
 
             slot_descs.push(SlotDescriptor::new(
-                setter_ba.into(),
+                setter_ba,
                 SlotTags::ASSIGNMENT,
                 offset_val,
             ));
@@ -443,7 +439,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
                 outputs_count += 1;
             }
         } else {
-            slot_descs.push(SlotDescriptor::new(name_tagged, tags, false_val));
+            slot_descs.push(SlotDescriptor::new(name_ba, tags, false_val));
         }
 
         if terminator == dot_msg {
@@ -471,8 +467,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             return parser_error(ctx, "Failed to parse code body");
         }
 
-        let body_arr =
-            unsafe { ctx.heap.allocate_array(code_accum.as_slice()) };
+        let body_arr = ctx.heap.allocate_array(code_accum.as_slice());
         let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
         let code_handle = ctx.vm.shared.code_heap.push(block);
         code_handle as *const Block as usize
@@ -500,7 +495,7 @@ pub fn parse_line_comment(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: must be parser, can't be called otherwise
     let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
     // SAFETY: must exist by contract
-    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+    let accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
 
     // Try to read until the next newline
     if parser.read_until("\n").is_none() {

@@ -32,8 +32,7 @@ impl Selector {
         Self { name, vm }
     }
     pub fn new_message(message: Handle<Message>, vm: Arc<VMShared>) -> Self {
-        // SAFETY: must be safe here
-        let name = unsafe { message.value.promote_to_handle() };
+        let name = message.value;
         Self { name, vm }
     }
 

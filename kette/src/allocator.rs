@@ -61,7 +61,7 @@ pub trait Allocator: Sized {
         let layout = Layout::new::<Message>();
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<Message>(layout) };
-        obj.init(interned.as_tagged());
+        obj.init(interned);
         obj
     }
 
@@ -92,7 +92,7 @@ pub trait Allocator: Sized {
             .iter()
             .map(|slot| {
                 let interned = strings.get(slot.name, self);
-                SlotDescriptor::new(interned.into(), slot.tags, slot.value)
+                SlotDescriptor::new(interned, slot.tags, slot.value)
             })
             .collect::<Vec<_>>();
 
@@ -103,14 +103,14 @@ pub trait Allocator: Sized {
         &mut self,
         strings: &Strings,
         slots: &[SlotHelper],
-        code_ptr: Tagged<usize>,
+        code_ptr: Handle<usize>,
         effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let slots = slots
             .iter()
             .map(|slot| {
                 let interned = strings.get(slot.name, self);
-                SlotDescriptor::new(interned.into(), slot.tags, slot.value)
+                SlotDescriptor::new(interned, slot.tags, slot.value)
             })
             .collect::<Vec<_>>();
 
@@ -120,7 +120,7 @@ pub trait Allocator: Sized {
     fn allocate_slots_map(
         &mut self,
         slots: &[SlotDescriptor],
-        code_ptr: Tagged<usize>,
+        code_ptr: Handle<usize>,
         effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let layout = SlotMap::required_layout(slots.len());
@@ -143,7 +143,7 @@ pub trait Allocator: Sized {
         let layout = SlotObject::required_layout(assignable_slots);
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<SlotObject>(layout) };
-        obj.init_with_data(map.as_tagged(), slots);
+        obj.init_with_data(map, slots);
         obj
     }
 
@@ -155,7 +155,7 @@ pub trait Allocator: Sized {
         output: u64,
     ) -> Handle<Quotation> {
         let code_ptr = bytecode as *const Block as usize;
-        let effect = ((input as u64) << 32) | (output as u64);
+        let effect = (input << 32) | output;
         let map = self.allocate_slots_map(&[], code_ptr.into(), effect.into());
         let layout = Layout::new::<Quotation>();
         // SAFETY: this is safe
@@ -186,10 +186,8 @@ pub trait Allocator: Sized {
         method: Handle<SlotObject>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
-        // SAFETY: safe by contract
-        let map = unsafe { method.map.promote_to_handle() };
         // SAFETY: handles safe, slots must be same size as map wants
-        unsafe { self.allocate_activation_raw(receiver, map, slots) }
+        unsafe { self.allocate_activation_raw(receiver, method.map, slots) }
     }
 
     fn allocate_quotation_activation(

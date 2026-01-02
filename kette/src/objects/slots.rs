@@ -38,7 +38,7 @@ pub struct SlotHelper<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct SlotDescriptor {
     /// guaranteed to be interned
-    pub name: Tagged<ByteArray>,
+    pub name: Handle<ByteArray>,
     pub metadata: Tagged<usize>,
     pub value: Value,
 }
@@ -50,7 +50,7 @@ pub struct SlotDescriptor {
 #[derive(Debug)]
 pub struct SlotMap {
     pub map: Map,
-    pub code: Tagged<usize>,
+    pub code: Handle<usize>,
     pub effect: Tagged<u64>,
     pub assignable_slots: Tagged<usize>,
     pub data_slots: Tagged<usize>,
@@ -62,12 +62,12 @@ pub struct SlotMap {
 #[derive(Debug)]
 pub struct SlotObject {
     pub header: Header,
-    pub map: Tagged<SlotMap>,
+    pub map: Handle<SlotMap>,
     pub slots: [Value; 0],
 }
 
 impl SlotDescriptor {
-    pub fn new(name: Tagged<ByteArray>, tags: SlotTags, value: Value) -> Self {
+    pub fn new(name: Handle<ByteArray>, tags: SlotTags, value: Value) -> Self {
         let tags_raw = tags.bits();
         let metadata = Tagged::new_value(tags_raw as usize);
         Self {
@@ -98,6 +98,7 @@ impl SlotMap {
 
         let mut val_iter = values.iter().cloned();
 
+        // SAFETY: this must exist here
         for slot in unsafe { self.slots_mut() } {
             if slot.is_data_consumer() {
                 let val = val_iter.next().expect("Stack values count mismatch");
@@ -117,7 +118,7 @@ impl SlotMap {
     pub fn init_with_data(
         &mut self,
         slots: &[SlotDescriptor],
-        code_ptr: Tagged<usize>,
+        code_ptr: Handle<usize>,
         effect: Tagged<u64>,
     ) {
         let data_slots = slots.iter().filter(|s| s.is_data_consumer()).count();
@@ -160,7 +161,7 @@ impl SlotMap {
         assignable_slots: usize,
         data_slots: usize,
         total_slots: usize,
-        code_ptr: Tagged<usize>,
+        code_ptr: Handle<usize>,
         effect: Tagged<u64>,
     ) {
         self.assignable_slots = assignable_slots.into();
@@ -249,9 +250,8 @@ impl SlotMap {
 impl SlotObject {
     /// # Panics
     /// data length must match assignable slot count of map
-    pub fn init_with_data(&mut self, map: Tagged<SlotMap>, data: &[Value]) {
-        // SAFETY: map must be valid here
-        let map_slot_count = unsafe { map.as_ref().assignable_slots_count() };
+    pub fn init_with_data(&mut self, map: Handle<SlotMap>, data: &[Value]) {
+        let map_slot_count = map.assignable_slots_count();
         assert_eq!(map_slot_count, data.len());
         // SAFETY: length checked and slot object correctly sized
         unsafe {
@@ -268,7 +268,7 @@ impl SlotObject {
     /// # Safety
     /// the reference must be valid and assignable slots < total slots
     /// must set the data
-    pub unsafe fn init(&mut self, map: Tagged<SlotMap>) {
+    pub unsafe fn init(&mut self, map: Handle<SlotMap>) {
         self.map = map;
         self.header = Header::new_object(ObjectType::Slot);
     }
@@ -300,9 +300,7 @@ impl SlotObject {
 
     #[inline]
     pub fn assignable_slots(&self) -> usize {
-        // SAFETY: every object MUST have a map object
-        let map = unsafe { self.map.as_ref() };
-        map.assignable_slots_count()
+        self.map.assignable_slots_count()
     }
 
     #[inline]
@@ -371,9 +369,7 @@ impl Object for SlotObject {
             return LookupResult::None;
         }
 
-        // SAFETY: map must be valid
-        let map = unsafe { self.map.as_ref() };
-        let slots = map.slots();
+        let slots = self.map.slots();
 
         // Local Lookup
         let local_match = slots
@@ -525,7 +521,6 @@ impl<'a> SlotHelper<'a> {
         method: Handle<SlotObject>,
         tags: SlotTags,
     ) -> Self {
-        let tags = tags;
         let value = method.as_value();
         Self::new(name, value, tags)
     }

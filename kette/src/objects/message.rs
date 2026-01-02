@@ -2,26 +2,21 @@ use std::mem;
 
 use crate::{
     ByteArray, Handle, Header, HeapObject, Object, ObjectKind, ObjectType,
-    Tagged, Visitable,
+    Visitable,
 };
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Message {
     pub header: Header,
-    pub value: Tagged<ByteArray>,
+    pub value: Handle<ByteArray>,
 }
 
 impl Message {
     /// initialize message
-    pub fn init(&mut self, value: Tagged<ByteArray>) {
+    pub fn init(&mut self, value: Handle<ByteArray>) {
         self.header = Header::new_object(ObjectType::Message);
         self.value = value;
-    }
-
-    pub fn bytearray_handle(&self) -> Handle<ByteArray> {
-        // SAFETY: messages exist safely
-        unsafe { self.value.promote_to_handle() }
     }
 }
 

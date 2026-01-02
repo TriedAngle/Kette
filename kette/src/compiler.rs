@@ -66,9 +66,11 @@ impl BytecodeCompiler {
             if message == vm.specials.message_create_object {
                 let prior = words[idx - 1];
 
-                let obj = unsafe { prior.as_heap_handle_unchecked() };
-                if let Some(_map) = obj.downcast_ref::<SlotMap>() {
+                // SAFETY: must be by definition
+                let mut obj = unsafe { prior.as_heap_handle_unchecked() };
+                if let Some(_map) = obj.downcast_mut::<SlotMap>() {
                     let map =
+                        // SAFETY: checked 
                         unsafe { prior.as_heap_handle_unchecked().cast() };
                     instructions.push(Instruction::CreateSlotObject { map });
                 } else {

@@ -318,6 +318,26 @@ impl<T: PtrSizedObject> From<T> for Tagged<T> {
     }
 }
 
+impl<T: PtrSizedObject> From<T> for Handle<T> {
+    #[inline]
+    fn from(value: T) -> Self {
+        Self::new_value(value)
+    }
+}
+
+impl<T: PtrSizedObject> Handle<T> {
+    #[inline]
+    pub fn new_value(value: T) -> Self {
+        let value = value.to_ptr_sized();
+        let tagged = value << 1;
+        // SAFETY: this is safe, this is guaranted to be correctly tagged
+        Self {
+            data: tagged,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T: Object> Handle<T> {
     /// Cast a Handle<T> to a Handle<U>
     /// # Safety
@@ -568,27 +588,6 @@ impl From<usize> for Value {
     }
 }
 
-// this is safe, ptr sized are always valid handles
-impl From<i64> for Handle<i64> {
-    fn from(value: i64) -> Self {
-        let casted = value.cast_unsigned();
-        let tagged = casted << 1;
-        Handle {
-            data: tagged,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl From<Handle<i64>> for Handle<Value> {
-    fn from(value: Handle<i64>) -> Handle<Value> {
-        Handle {
-            data: value.data,
-            _marker: PhantomData,
-        }
-    }
-}
-
 impl<T: PtrSizedObject> From<Tagged<T>> for usize {
     #[inline]
     fn from(value: Tagged<T>) -> Self {
@@ -609,6 +608,31 @@ impl<T: PtrSizedObject> From<Tagged<T>> for i64 {
     #[inline]
     fn from(value: Tagged<T>) -> Self {
         let raw = value.raw();
+        let untagged = (raw as i64) >> 1;
+        Self::from_ptr_sized(untagged as u64)
+    }
+}
+
+impl<T: PtrSizedObject> From<Handle<T>> for usize {
+    #[inline]
+    fn from(value: Handle<T>) -> Self {
+        let raw = value.data;
+        let untagged = raw >> 1;
+        Self::from_ptr_sized(untagged)
+    }
+}
+impl<T: PtrSizedObject> From<Handle<T>> for u64 {
+    #[inline]
+    fn from(value: Handle<T>) -> Self {
+        let raw = value.data;
+        let untagged = raw >> 1;
+        Self::from_ptr_sized(untagged)
+    }
+}
+impl<T: PtrSizedObject> From<Handle<T>> for i64 {
+    #[inline]
+    fn from(value: Handle<T>) -> Self {
+        let raw = value.data;
         let untagged = (raw as i64) >> 1;
         Self::from_ptr_sized(untagged as u64)
     }
@@ -991,7 +1015,7 @@ mod value_tests {
         // Create an i64 handle
         let h_i: Handle<i64> = Handle::from(321i64);
         // Cast to Value handle
-        let h_v: Handle<Value> = h_i.into();
+        let h_v: Handle<Value> = h_i.as_value_handle();
 
         // The handle data should look like a fixnum (tag 0)
         assert!(h_v.is_fixnum());
@@ -1049,7 +1073,8 @@ mod value_tests {
         let h1: Handle<i64> = Handle::from(1i64);
         let h2: Handle<i64> = Handle::from(2i64);
 
-        let handles: [Handle<Value>; 2] = [h1.into(), h2.into()];
+        let handles: [Handle<Value>; 2] =
+            [h1.as_value_handle(), h2.as_value_handle()];
 
         let values = transmute::handles_as_values(&handles);
         assert!(values[0].is_fixnum());

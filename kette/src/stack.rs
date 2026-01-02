@@ -135,14 +135,14 @@ impl ExecutionState {
     pub unsafe fn pop_unchecked(&mut self) -> Value {
         self.depth -= 1;
         // SAFETY: caller guarantees depth > 0, so index is valid
-        unsafe { self.stack.get_unchecked(self.depth).clone() }
+        unsafe { *self.stack.get_unchecked(self.depth) }
     }
 
     /// # Safety
     /// caller must make sure that at least one element is in the stack
     pub unsafe fn peek_unchecked(&mut self) -> Value {
         // SAFETY: caller guarantees depth > 0, so index is valid
-        unsafe { self.stack.get_unchecked(self.depth - 1).clone() }
+        unsafe { *self.stack.get_unchecked(self.depth - 1) }
     }
 
     /// get the n from the top of the stack
@@ -152,7 +152,7 @@ impl ExecutionState {
         let top_idx = self.depth - 1;
         let idx = top_idx - n;
         // SAFETY: caller guarantees depth > n, so index is valid
-        unsafe { self.stack.get_unchecked(idx).clone() }
+        unsafe { *self.stack.get_unchecked(idx) }
     }
 
     /// set the value at n from the top of the stack
@@ -172,7 +172,7 @@ impl ExecutionState {
     pub unsafe fn pop_return_unchecked(&mut self) -> Value {
         self.return_depth -= 1;
         // SAFETY: caller guarantees return_depth > 0, so index is valid
-        unsafe { self.return_stack.get_unchecked(self.return_depth).clone() }
+        unsafe { *self.return_stack.get_unchecked(self.return_depth) }
     }
 
     /// stack pop -> return push

@@ -2,7 +2,6 @@ mod bytecode;
 mod compiler;
 
 mod allocator;
-// mod heap;
 mod interning;
 mod interpreter;
 mod lookup;

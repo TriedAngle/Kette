@@ -6,7 +6,6 @@ use std::{
 pub mod activation;
 pub mod arrays;
 pub mod bytearrays;
-pub mod executable;
 pub mod floats;
 pub mod message;
 pub mod parser;

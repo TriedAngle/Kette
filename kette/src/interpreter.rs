@@ -93,8 +93,7 @@ impl Interpreter {
         receiver: Handle<Value>,
         method: Handle<SlotObject>,
     ) {
-        // SAFETY: this is safe, method must exist
-        let map = unsafe { method.map.promote_to_handle() };
+        let map = method.map;
 
         let slot_count = map.input_count();
 
@@ -371,21 +370,22 @@ impl Interpreter {
             return ExecutionResult::Normal;
         }
 
+        // SAFETY: must by protocol
         let heap_val = unsafe { slot.value.as_heap_handle_unchecked() };
-        if let Some(obj) = heap_val.downcast_ref::<SlotObject>() {
-            if unsafe { obj.map.as_ref().has_code() } {
-                // SAFETY: must by protocol
-                let method = unsafe {
-                    slot.value.as_handle_unchecked().cast::<SlotObject>()
-                };
+        if let Some(obj) = heap_val.downcast_ref::<SlotObject>()
+            && obj.map.has_code()
+        {
+            // SAFETY: must by protocol
+            let method = unsafe {
+                slot.value.as_handle_unchecked().cast::<SlotObject>()
+            };
 
-                self.add_method(receiver, method);
+            self.add_method(receiver, method);
 
-                return ExecutionResult::ActivationChanged;
-            }
+            return ExecutionResult::ActivationChanged;
         }
 
         self.state.push(slot.value);
-        return ExecutionResult::Normal;
+        ExecutionResult::Normal
     }
 }
