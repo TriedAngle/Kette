@@ -1,23 +1,13 @@
 use crate::{
-    ActivationType, Allocator, ExecutionResult, Handle, PrimitiveContext, Quotation, primitives::{bool_object, inputs, outputs}
+    Allocator, ExecutionResult, PrimitiveContext, Quotation,
+    primitives::{bool_object, inputs, outputs},
 };
 
 pub fn call(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: this is safe
     let quotation = unsafe { ctx.receiver.cast::<Quotation>() };
 
-    let receiver = ctx
-        .interpreter
-        .current_activation()
-        .map(|a| a.object.receiver)
-        .unwrap_or(ctx.vm.specials().false_object.as_value_handle());
-
-    let activation_object =
-        ctx.heap
-            .allocate_quotation_activation(receiver, quotation, &[]);
-    ctx.interpreter
-        .activations
-        .new_activation(activation_object, ActivationType::Quotation);
+    ctx.interpreter.add_quotation(quotation);
     ExecutionResult::ActivationChanged
 }
 
@@ -31,22 +21,12 @@ pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ctx.state.push(q.into());
     outputs(ctx, [x]);
 
-
     let map = ctx.vm.shared.specials.dip_map;
-    let quot = ctx.heap.allocate_quotation(map, unsafe { Handle::null() });
+    // SAFETY: this is safe
+    let parent = unsafe { ctx.interpreter.context_unchecked().activation };
+    let quotation = ctx.heap.allocate_quotation(map, parent);
 
-    let receiver = ctx
-        .interpreter
-        .current_activation()
-        .map(|a| a.object.receiver)
-        .unwrap_or(ctx.vm.specials().false_object.as_value_handle());
-
-    let activation_object =
-        ctx.heap.allocate_quotation_activation(receiver, quot, &[]);
-
-    ctx.interpreter
-        .activations
-        .new_activation(activation_object, ActivationType::Quotation);
+    ctx.interpreter.add_quotation(quotation);
 
     ExecutionResult::ActivationChanged
 }
@@ -60,20 +40,11 @@ pub fn conditional_branch(ctx: &mut PrimitiveContext) -> ExecutionResult {
     } else {
         true_branch
     };
-    let receiver = ctx
-        .interpreter
-        .current_activation()
-        .map(|a| a.object.receiver)
-        .unwrap_or(ctx.vm.specials().false_object.as_value_handle());
 
     // SAFETY: safe
     let branch = unsafe { branch.cast::<Quotation>() };
-    let activation_object =
-        ctx.heap
-            .allocate_quotation_activation(receiver, branch, &[]);
-    ctx.interpreter
-        .activations
-        .new_activation(activation_object, ActivationType::Quotation);
+
+    ctx.interpreter.add_quotation(branch);
     ExecutionResult::ActivationChanged
 }
 

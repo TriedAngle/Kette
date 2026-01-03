@@ -1,5 +1,8 @@
 use crate::{
-    Activation, ActivationObject, ActivationStack, ActivationType, Allocator, ExecutionState, Handle, HeapProxy, Instruction, LookupResult, Message, OpCode, PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject, SlotTags, ThreadProxy, VMProxy, Value, get_primitive, transmute
+    Activation, ActivationObject, ActivationStack, ActivationType, Allocator,
+    ExecutionState, Handle, HeapProxy, Instruction, LookupResult, Message,
+    OpCode, PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject,
+    SlotTags, ThreadProxy, VMProxy, Value, get_primitive, transmute,
 };
 
 #[derive(Debug, Clone)]
@@ -154,16 +157,11 @@ impl Interpreter {
     }
 
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
-        let receiver = self
-            .current_activation()
-            .map(|a| a.object.receiver)
-            .unwrap_or(self.vm.specials().false_object.as_value_handle());
+        let activation_object =
+            self.heap.allocate_quotation_activation(quotation, &[]);
 
-        let new =
-            self.heap
-                .allocate_quotation_activation(receiver, quotation, &[]);
         self.activations
-            .new_activation(new, ActivationType::Quotation);
+            .new_activation(activation_object, ActivationType::Quotation);
     }
 
     pub fn add_method(
@@ -384,7 +382,7 @@ impl Interpreter {
             OpCode::CreateQuotation => {
                 self.heap.safepoint();
 
-                // SAFETY: correctly setup by runtime 
+                // SAFETY: correctly setup by runtime
                 let ctx = unsafe { self.context_unchecked() };
 
                 let map_val = ctx.fetch_constant(operand);

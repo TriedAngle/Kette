@@ -23,6 +23,6 @@
         dup 5 % 0 = [ "buzz" println ] [
         dup >string println
     ] if ] if ] if
-    1 - dup 0 > [ self fizzbuzz ] [ drop ] if )
+    1 - dup 0 > [ self fizzbuzz ] when )
 |) 15 swap fizzbuzz
 

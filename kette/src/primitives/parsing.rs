@@ -76,7 +76,11 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let exe_map = ctx.heap.allocate_executable_map(code, 0, 0);
 
     accumulator.push(exe_map.into(), ctx.heap, &ctx.vm.shared);
-    accumulator.push(ctx.vm.specials().message_create_quotation.as_value(), ctx.heap, &ctx.vm.shared);
+    accumulator.push(
+        ctx.vm.specials().message_create_quotation.as_value(),
+        ctx.heap,
+        &ctx.vm.shared,
+    );
 
     ctx.outputs[0] = accumulator.into();
 

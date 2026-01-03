@@ -2,8 +2,8 @@ use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
     Allocator, ByteArray, Handle, Heap, HeapProxy, HeapSettings, HeapValue,
-    Instruction, Message, OpCode, Quotation, SlotHelper, SlotMap, SlotTags,
-    Strings, Value, interning::Messages, primitive_index, primitives::Vector,
+    Instruction, Message, OpCode, SlotHelper, SlotMap, SlotTags, Strings,
+    Value, interning::Messages, primitive_index, primitives::Vector,
 };
 
 #[derive(Debug)]
@@ -288,8 +288,8 @@ impl VM {
             let message_self = self.intern_string_message("self", &mut heap);
             let message_create_object =
                 self.intern_string_message("(CreateObjectFromMap)", &mut heap);
-            let message_create_quotation =
-                self.intern_string_message("(CreateQuotationFromMap)", &mut heap);
+            let message_create_quotation = self
+                .intern_string_message("(CreateQuotationFromMap)", &mut heap);
 
             let specials = SpecialObjects {
                 universe,

@@ -1,4 +1,4 @@
-use std::{alloc::Layout, ptr::NonNull};
+use std::{alloc::Layout, ops::Deref, ptr::NonNull};
 
 use crate::{
     ActivationObject, Array, ByteArray, Code, Float, Handle, HeapObject,
@@ -214,14 +214,17 @@ pub trait Allocator: Sized {
 
     fn allocate_quotation_activation(
         &mut self,
-        receiver: Handle<Value>,
         quotation: Handle<Quotation>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         // SAFETY: every method map is an executable map
-        let map =
-            unsafe { quotation.map.cast::<SlotMap>() };
+        let map = unsafe { quotation.map.cast::<SlotMap>() };
         // SAFETY: handles safe, slots must be same size as map wants
+        let receiver = if quotation.parent.as_ptr().is_null() {
+            Handle::<Value>::zero()
+        } else {
+            quotation.parent.receiver
+        };
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
     }
 }

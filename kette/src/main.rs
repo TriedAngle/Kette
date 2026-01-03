@@ -1,6 +1,8 @@
 use clap::Parser as ClapParser;
 use kette::{
-    Allocator, Array, BytecodeCompiler, ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Instruction, Interpreter, OpCode, Parser, Tagged, ThreadProxy, VM, VMCreateInfo, VMThread
+    Allocator, Array, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
+    Handle, HeapSettings, Instruction, Interpreter, OpCode, Parser, Tagged,
+    ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 use std::{fs, process};
 
@@ -86,11 +88,13 @@ fn main() {
             dummy_body,
         );
 
-        let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
+        let boot_map =
+            interpreter.heap.allocate_executable_map(boot_code, 0, 0);
 
         // Create the Bootstrap Quotation
-        let boot_quotation =
-            interpreter.heap.allocate_quotation(boot_map, unsafe { Handle::null() });
+        let boot_quotation = interpreter
+            .heap
+            .allocate_quotation(boot_map, unsafe { Handle::null() });
 
         // 3. Execute the Parser
         interpreter.add_quotation(boot_quotation);
@@ -114,7 +118,9 @@ fn main() {
 
         let code_map = interpreter.heap.allocate_executable_map(code, 0, 0);
 
-        let quotation = interpreter.heap.allocate_quotation(code_map, unsafe { Handle::null() });
+        let quotation = interpreter
+            .heap
+            .allocate_quotation(code_map, unsafe { Handle::null() });
 
         interpreter.add_quotation(quotation);
 
