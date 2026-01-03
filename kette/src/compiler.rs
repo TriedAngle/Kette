@@ -1,12 +1,12 @@
 use crate::{
-    Array, Block, Handle, Instruction, Message, ObjectType, Quotation, SlotMap,
+    Array, Handle, Instruction, Message, ObjectType, Quotation, SlotMap,
     VMShared,
 };
 
 pub struct BytecodeCompiler {}
 
 impl BytecodeCompiler {
-    pub fn compile(vm: &VMShared, body: Handle<Array>) -> Block {
+    pub fn compile(vm: &VMShared, body: Handle<Array>) -> Vec<Instruction> {
         let _span =
             tracing::span!(tracing::Level::DEBUG, "compile", body = ?body )
                 .entered();
@@ -52,7 +52,9 @@ impl BytecodeCompiler {
                     }
                     // SAFETY: checked
                     ObjectType::Message => unsafe { obj.cast::<Message>() },
-                    ObjectType::Max | ObjectType::Activation => {
+                    ObjectType::Max
+                    | ObjectType::Activation
+                    | ObjectType::Code => {
                         unreachable!("object {:?} is invalid here", word)
                     }
                 };
@@ -86,6 +88,6 @@ impl BytecodeCompiler {
 
         instructions.push(Instruction::Return);
 
-        Block { instructions }
+        instructions
     }
 }

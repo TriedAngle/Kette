@@ -1,8 +1,8 @@
 use clap::Parser as ClapParser;
 use kette::{
-    Allocator, Array, Block, BytecodeCompiler, ExecutionState,
-    ExecutionStateInfo, HeapSettings, Instruction, Interpreter, Parser, Tagged,
-    ThreadProxy, VM, VMCreateInfo, VMThread, Value,
+    Allocator, Array, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
+    HeapSettings, Instruction, Interpreter, Parser, Tagged, ThreadProxy, VM,
+    VMCreateInfo, VMThread, Value,
 };
 use std::{fs, process};
 
@@ -14,13 +14,11 @@ struct Cli {
     files: Vec<String>,
 }
 
-fn execute_parser_code(parser: Value) -> Block {
-    let instructions = vec![
+fn execute_parser_code(parser: Value) -> Vec<Instruction> {
+    vec![
         Instruction::PushValue { value: parser },
         Instruction::SendNamed { message: "parse" },
-    ];
-
-    Block { instructions }
+    ]
 }
 
 fn main() {
@@ -75,7 +73,7 @@ fn main() {
         let parser_obj = Tagged::new_ptr(parser.as_mut());
         let parser_code = execute_parser_code(parser_obj.into());
 
-        for instruction in parser_code.instructions {
+        for instruction in parser_code {
             interpreter.execute_single_bytecode(instruction);
         }
 
@@ -90,9 +88,9 @@ fn main() {
         };
 
         let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, body);
+        let code = interpreter.heap.allocate_code(&compiled);
 
-        let quotation =
-            interpreter.heap.allocate_quotation(body, &compiled, 0, 0);
+        let quotation = interpreter.heap.allocate_quotation(body, code, 0, 0);
 
         interpreter.add_quotation(quotation);
 

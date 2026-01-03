@@ -1,10 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    Allocator, Block, ByteArray, Handle, Heap, HeapProxy, HeapSettings,
-    HeapValue, Instruction, Message, Quotation, SlotHelper, SlotMap, SlotTags,
-    Strings, Value, bytecode::CodeHeap, interning::Messages, primitive_index,
-    primitives::Vector,
+    Allocator, ByteArray, Handle, Heap, HeapProxy, HeapSettings, HeapValue,
+    Instruction, Message, Quotation, SlotHelper, SlotMap, SlotTags, Strings,
+    Value, interning::Messages, primitive_index, primitives::Vector,
 };
 
 #[derive(Debug)]
@@ -40,7 +39,6 @@ pub struct VMShared {
     pub heap: Heap,
     pub strings: Strings,
     pub messages: Messages,
-    pub code_heap: CodeHeap,
 }
 
 // Safety: VMProxy is never mutably shared / has internal locking
@@ -81,7 +79,6 @@ impl VM {
             heap,
             strings: Strings::new(),
             messages: Messages::new(),
-            code_heap: CodeHeap::new(),
         };
 
         let mut new = Self {
@@ -269,17 +266,14 @@ impl VM {
             let universe =
                 heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
 
-            let dip_code = self.inner.code_heap.push(Block {
-                instructions: [
-                    Instruction::StackToReturn,
-                    Instruction::SendPrimitive {
-                        id: primitive_index("(call)"),
-                    },
-                    Instruction::ReturnToStack,
-                    Instruction::Return,
-                ]
-                .into(),
-            });
+            let dip_code = heap.allocate_code(&[
+                Instruction::StackToReturn,
+                Instruction::SendPrimitive {
+                    id: primitive_index("(call)"),
+                },
+                Instruction::ReturnToStack,
+                Instruction::Return,
+            ]);
 
             // SAFETY: just allocated
             let dip_body = heap.allocate_array(&[]);

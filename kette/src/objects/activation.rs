@@ -1,7 +1,7 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Block, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
+    Code, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
     ObjectType, Selector, SlotMap, Value, Visitable, VisitedLink, Visitor,
 };
 
@@ -39,9 +39,8 @@ pub struct ActivationStack(Vec<Activation>);
 
 impl Activation {
     #[inline]
-    pub fn code(&self) -> *const Block {
-        let object = self.object;
-        object.code()
+    pub fn code(&self) -> &Code {
+        self.object.code()
     }
 }
 
@@ -101,10 +100,14 @@ impl ActivationObject {
     }
 
     #[inline]
-    pub fn code(&self) -> *const Block {
+    pub fn code(&self) -> &Code {
         // SAFETY: safe by contract
-        let code_value: usize = self.map.code.into();
-        code_value as *const Block
+        debug_assert!(self.map.has_code());
+
+        let Some(code) = self.map.code() else {
+            unreachable!("map must have code at this point")
+        };
+        code
     }
 
     /// calculate the layout of an Activation with inputs amount slots

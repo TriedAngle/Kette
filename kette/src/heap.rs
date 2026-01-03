@@ -635,10 +635,9 @@ impl Drop for HeapProxy {
         //
         // (We enforce this by doing the CAS ourselves here rather than calling
         // deregister_thread() which asserts status==None.)
-        use std::sync::atomic::Ordering::{AcqRel, Acquire as Acq};
         loop {
             let (status, generation, threads, cur) =
-                self.heap.sync.state.load(Acq);
+                self.heap.sync.state.load(Ordering::Acquire);
             if status != GcStatus::None {
                 // GC started between our observation and now → join then retry
                 self.heap.rendezvous(false, RootSet::default());
@@ -652,7 +651,12 @@ impl Drop for HeapProxy {
                 .sync
                 .state
                 .0
-                .compare_exchange(cur, next, AcqRel, Acquire)
+                .compare_exchange(
+                    cur,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
                 .is_ok()
             {
                 break;

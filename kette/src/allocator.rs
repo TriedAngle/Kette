@@ -1,9 +1,9 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, Block, ByteArray, Float, Handle, HeapObject,
-    Message, Quotation, SlotDescriptor, SlotHelper, SlotMap, SlotObject,
-    Strings, Tagged, Value,
+    ActivationObject, Array, ByteArray, Code, Float, Handle, HeapObject,
+    Instruction, Message, Quotation, SlotDescriptor, SlotHelper, SlotMap,
+    SlotObject, Strings, Tagged, Value,
 };
 
 pub trait Allocator: Sized {
@@ -83,6 +83,14 @@ pub trait Allocator: Sized {
         array
     }
 
+    fn allocate_code(&mut self, instructions: &[Instruction]) -> Handle<Code> {
+        let layout = Code::required_layout(instructions.len());
+        // SAFETY: safe, init called immediately
+        let mut code = unsafe { self.allocate_handle::<Code>(layout) };
+        code.init_with_data(instructions);
+        code
+    }
+
     fn allocate_slot_map_helper(
         &mut self,
         strings: &Strings,
@@ -96,14 +104,16 @@ pub trait Allocator: Sized {
             })
             .collect::<Vec<_>>();
 
-        self.allocate_slots_map(&slots, 0usize.into(), 0u64.into())
+        // SAFETY: safe because this means no code exist
+        let code = unsafe { Handle::null() };
+        self.allocate_slots_map(&slots, code, 0u64.into())
     }
 
     fn allocate_slot_map_helper2(
         &mut self,
         strings: &Strings,
         slots: &[SlotHelper],
-        code_ptr: Handle<usize>,
+        code: Handle<Code>,
         effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let slots = slots
@@ -114,24 +124,26 @@ pub trait Allocator: Sized {
             })
             .collect::<Vec<_>>();
 
-        self.allocate_slots_map(&slots, code_ptr, effect)
+        self.allocate_slots_map(&slots, code, effect)
     }
 
     fn allocate_slots_map(
         &mut self,
         slots: &[SlotDescriptor],
-        code_ptr: Handle<usize>,
+        code: Handle<Code>,
         effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let layout = SlotMap::required_layout(slots.len());
         // SAFETY: initialize after
         let mut map = unsafe { self.allocate_handle::<SlotMap>(layout) };
-        map.init_with_data(slots, code_ptr, effect);
+        map.init_with_data(slots, code, effect);
         map
     }
 
     fn allocate_empty_map(&mut self) -> Handle<SlotMap> {
-        self.allocate_slots_map(&[], 0usize.into(), 0u64.into())
+        // SAFETY: safe because this means no code exist
+        let code = unsafe { Handle::null() };
+        self.allocate_slots_map(&[], code, 0u64.into())
     }
 
     fn allocate_slots(
@@ -150,13 +162,12 @@ pub trait Allocator: Sized {
     fn allocate_quotation(
         &mut self,
         body: Handle<Array>,
-        bytecode: &Block,
+        code: Handle<Code>,
         input: u64,
         output: u64,
     ) -> Handle<Quotation> {
-        let code_ptr = bytecode as *const Block as usize;
         let effect = (input << 32) | output;
-        let map = self.allocate_slots_map(&[], code_ptr.into(), effect.into());
+        let map = self.allocate_slots_map(&[], code, effect.into());
         let layout = Layout::new::<Quotation>();
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<Quotation>(layout) };

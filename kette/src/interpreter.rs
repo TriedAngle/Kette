@@ -69,7 +69,7 @@ impl Interpreter {
             let index = activation.index;
             let code = activation.code();
             // SAFETY: this is safe
-            let instructions = unsafe { &(*code).instructions };
+            let instructions = code.instructions();
             return Some(instructions[index]);
         }
         None

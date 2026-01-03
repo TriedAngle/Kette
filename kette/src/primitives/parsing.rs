@@ -1,5 +1,5 @@
 use crate::{
-    Allocator, Block, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
+    Allocator, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
     Message, ObjectType, ParsedToken, Parser, PrimitiveContext,
     PrimitiveMessageIndex, Selector, SlotDescriptor, SlotObject, SlotTags,
     Value, Vector,
@@ -73,7 +73,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let body = ctx.heap.allocate_array(body_accum.as_slice());
     let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
-    let code = ctx.vm.shared.code_heap.push(block);
+    let code = ctx.heap.allocate_code(&block);
     // TODO: this must be updated
     let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
     accumulator.push(quotation.into(), ctx.heap, &ctx.vm.shared);
@@ -459,7 +459,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
     }
 
-    let code_ptr: usize = if has_code {
+    let code = if has_code {
         let code_accum = Vector::new(ctx.heap, &ctx.vm.shared, 64);
 
         let (res, _) = parse_until_inner(ctx, &body_terminators, code_accum);
@@ -467,21 +467,19 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
             return parser_error(ctx, "Failed to parse code body");
         }
 
-        let body_arr = ctx.heap.allocate_array(code_accum.as_slice());
-        let block = BytecodeCompiler::compile(&ctx.vm.shared, body_arr);
-        let code_handle = ctx.vm.shared.code_heap.push(block);
-        code_handle as *const Block as usize
+        let body = ctx.heap.allocate_array(code_accum.as_slice());
+        let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
+        ctx.heap.allocate_code(&block)
     } else {
-        0
+        // SAFETY: this is safe by the protocol
+        unsafe { Handle::null() }
     };
 
     let effect = ((inputs_count as u64) << 32) | (outputs_count as u64);
 
-    let map = ctx.heap.allocate_slots_map(
-        &slot_descs,
-        code_ptr.into(),
-        effect.into(),
-    );
+    let map = ctx
+        .heap
+        .allocate_slots_map(&slot_descs, code, effect.into());
 
     outer_accum.push(map.into(), ctx.heap, &ctx.vm.shared);
     outer_accum.push(create_obj_msg.as_value(), ctx.heap, &ctx.vm.shared);

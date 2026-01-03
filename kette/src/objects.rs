@@ -14,7 +14,7 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Float, LookupResult, Message,
+    ActivationObject, Array, ByteArray, Code, Float, LookupResult, Message,
     Quotation, Selector, SlotMap, SlotObject, ThreadObject, Value, ValueTag,
     Visitable, VisitedLink, Visitor,
 };
@@ -39,6 +39,7 @@ pub enum ObjectType {
     Float       = 0b01001,
     BigNum      = 0b01010,
     Thread      = 0b01011,
+    Code        = 0b11110,
     Max         = 0b11111,
 }
 
@@ -384,6 +385,7 @@ impl Object for HeapValue {
             ObjectType::Float       => self.downcast_ref_match::<Float>().lookup(selector, link),
             ObjectType::BigNum      => unimplemented!(),
             ObjectType::Thread      => unimplemented!(),
+            ObjectType::Code        => unreachable!("code cannot be looked up yet (or should it be maybe?)"),
             ObjectType::Message | ObjectType::Max => {
                 unreachable!("illegal object type for lookup")
             }
@@ -409,6 +411,7 @@ impl HeapObject for HeapValue {
                     ObjectType::Float      => self.downcast_ref_match::<Float>().heap_size(),
                     ObjectType::BigNum     => unimplemented!(),
                     ObjectType::Thread     => unimplemented!(),
+                    ObjectType::Code      => self.downcast_ref_match::<Code>().heap_size(),
                     ObjectType::Max        => unreachable!(),
                 }
             }
@@ -467,6 +470,7 @@ impl Visitable for HeapValue {
                     ObjectType::Thread      => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
                     ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
 
+                    ObjectType::Code      => self.downcast_mut_match::<Code>().visit_edges_mut(visitor),
                     ObjectType::Max => unreachable!(),
                 }
             }
@@ -494,6 +498,7 @@ impl Visitable for HeapValue {
                     ObjectType::Thread      => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
                     ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
 
+                    ObjectType::Code      => self.downcast_ref_match::<Code>().visit_edges(visitor),
                     ObjectType::Max => unreachable!(),
                 }
             }

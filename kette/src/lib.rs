@@ -19,6 +19,7 @@ mod vm;
 
 pub use allocator::Allocator;
 pub use barrier::SenseBarrier;
+pub use bytecode::{Code, Instruction};
 pub use heap::{Heap, HeapProxy, HeapSettings};
 
 pub use objects::activation::{
@@ -44,7 +45,6 @@ pub use objects::{
 
 pub use primitives::Vector;
 
-pub use bytecode::{Block, Instruction};
 pub use compiler::BytecodeCompiler;
 pub use interning::Strings;
 pub use interpreter::{ExecutionResult, Interpreter, NumberError};

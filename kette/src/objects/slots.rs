@@ -1,9 +1,9 @@
-use std::{alloc::Layout, mem, ptr};
+use std::{alloc::Layout, mem, ops::Deref, ptr};
 
 use bitflags::bitflags;
 
 use crate::{
-    Block, ByteArray, Handle, Header, HeapObject, LookupResult, Map, MapType,
+    ByteArray, Code, Handle, Header, HeapObject, LookupResult, Map, MapType,
     Object, ObjectKind, ObjectType, Selector, Tagged, Value, Visitable,
     VisitedLink, Visitor, primitive_index,
 };
@@ -50,7 +50,7 @@ pub struct SlotDescriptor {
 #[derive(Debug)]
 pub struct SlotMap {
     pub map: Map,
-    pub code: Handle<usize>,
+    pub code: Handle<Code>,
     pub effect: Tagged<u64>,
     pub assignable_slots: Tagged<usize>,
     pub data_slots: Tagged<usize>,
@@ -118,7 +118,7 @@ impl SlotMap {
     pub fn init_with_data(
         &mut self,
         slots: &[SlotDescriptor],
-        code_ptr: Handle<usize>,
+        code_ptr: Handle<Code>,
         effect: Tagged<u64>,
     ) {
         let data_slots = slots.iter().filter(|s| s.is_data_consumer()).count();
@@ -161,7 +161,7 @@ impl SlotMap {
         assignable_slots: usize,
         data_slots: usize,
         total_slots: usize,
-        code_ptr: Handle<usize>,
+        code_ptr: Handle<Code>,
         effect: Tagged<u64>,
     ) {
         self.assignable_slots = assignable_slots.into();
@@ -235,15 +235,16 @@ impl SlotMap {
     #[inline]
     pub fn has_code(&self) -> bool {
         // Assuming 0 or Nil indicates no code. Adjust if your type differs.
-        let val: usize = self.code.into();
-        val != 0
+        !self.code.as_ptr().is_null()
     }
 
     /// Returns the raw pointer to the executable Block.
     #[inline]
-    pub fn code(&self) -> *const Block {
-        let raw: usize = self.code.into();
-        raw as *const Block
+    pub fn code(&self) -> Option<&Code> {
+        if self.has_code() {
+            return Some(self.code.deref());
+        }
+        None
     }
 }
 
@@ -452,6 +453,9 @@ impl Visitable for SlotMap {
     // TODO: update this once we actually use stuff here
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        if self.has_code() {
+            visitor.visit_mut(self.code.as_value());
+        }
         self.slots().iter().for_each(|desc| {
             visitor.visit_mut(desc.name.into());
             visitor.visit_mut(desc.value);
@@ -460,6 +464,9 @@ impl Visitable for SlotMap {
 
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
+        if self.has_code() {
+            visitor.visit(self.code.as_value());
+        }
         self.slots().iter().for_each(|desc| {
             visitor.visit(desc.name.into());
             visitor.visit(desc.value);

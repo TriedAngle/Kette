@@ -1,7 +1,9 @@
-use parking_lot::RwLock;
+use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Handle, Message, PrimitiveMessageIndex, Quotation, SlotMap, Value,
+    Handle, Header, HeapObject, Message, Object, ObjectKind, ObjectType,
+    PrimitiveMessageIndex, Quotation, SlotMap, Tagged, Value, Visitable,
+    Visitor,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -35,38 +37,116 @@ pub enum Instruction {
 }
 
 // TODO: replace instructions to actual byte instructions
-// use a design similar to arm, 8 byte opcode + 24 byte data?
-// we can also do it like riscV and add additional compressed instructions
-// but at least for high level "parsing", we should keep something like the current instructions
-// we can also optimize this further and inline the instructions into the Block itself
+#[repr(C)]
 #[derive(Debug)]
-pub struct Block {
-    pub instructions: Vec<Instruction>,
+pub struct Code {
+    pub header: Header,
+    pub size: Tagged<usize>,
+    pub instructions: [Instruction; 0],
 }
 
-// TODO: make this faster and more cache friendly
-// the Block -> Vec is also bad, it should be inlined
-// TODO: current thing will break on resize
-#[derive(Debug, Default)]
-pub struct CodeHeap {
-    blocks: RwLock<Vec<Block>>,
-}
+impl Code {
+    /// Initialize with instructions
+    pub fn init_with_data(&mut self, instructions: &[Instruction]) {
+        self.header = Header::new_object(ObjectType::Code);
+        self.size = instructions.len().into();
 
-impl CodeHeap {
-    pub fn new() -> Self {
-        Self {
-            blocks: RwLock::new(Vec::with_capacity(1024)),
+        // SAFETY: safe if allocation is correct size (guaranteed by Allocator)
+        unsafe {
+            ptr::copy_nonoverlapping(
+                instructions.as_ptr(),
+                self.instructions.as_mut_ptr(),
+                instructions.len(),
+            )
+        };
+    }
+
+    #[inline]
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.size.into()
+    }
+
+    #[inline]
+    pub fn instructions(&self) -> &[Instruction] {
+        let len = self.len();
+        // SAFETY: header guarantees length
+        unsafe { std::slice::from_raw_parts(self.instructions.as_ptr(), len) }
+    }
+
+    #[inline]
+    pub fn instructions_mut(&mut self) -> &mut [Instruction] {
+        let len = self.len();
+        // SAFETY: header guarantees length
+        unsafe {
+            std::slice::from_raw_parts_mut(self.instructions.as_mut_ptr(), len)
         }
     }
 
-    pub fn push(&self, block: Block) -> &Block {
-        let mut blocks = self.blocks.write();
-        blocks.push(block);
-        // SAFETY: this is mostly safe, about the unwrap_unchecked, it must exist we just pushed it
-        unsafe {
-            (blocks.last().unwrap_unchecked() as *const Block)
-                .as_ref()
-                .unwrap_unchecked()
+    pub fn required_layout(count: usize) -> Layout {
+        let head = Layout::new::<Code>();
+        let instructions_layout =
+            Layout::array::<Instruction>(count).expect("create valid layout");
+        let (layout, _) = head
+            .extend(instructions_layout)
+            .expect("create valid layout");
+        layout
+    }
+}
+
+impl HeapObject for Code {
+    const KIND: ObjectKind = ObjectKind::Object;
+    const TYPE_BITS: u8 = ObjectType::Code as u8;
+
+    fn heap_size(&self) -> usize {
+        mem::size_of::<Self>() + self.len() * mem::size_of::<Instruction>()
+    }
+}
+
+impl Object for Code {}
+
+impl Visitable for Code {
+    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
+        // We must visit instructions because they contain Handles and Values!
+        for instr in self.instructions_mut() {
+            match instr {
+                Instruction::Send { message }
+                | Instruction::SuperSend { message }
+                | Instruction::DelegateSend { message } => {
+                    visitor.visit_mut(message.as_value())
+                }
+                Instruction::PushValue { value } => visitor.visit_mut(*value),
+                Instruction::PushQuotaton { value } => {
+                    visitor.visit_mut(value.as_value())
+                }
+                Instruction::CreateSlotObject { map } => {
+                    visitor.visit_mut(map.as_value())
+                }
+                // Primitives/Fixnums/ControlFlow do not hold heap references
+                _ => {}
+            }
+        }
+    }
+
+    fn visit_edges(&self, visitor: &impl Visitor) {
+        for instr in self.instructions() {
+            match instr {
+                Instruction::Send { message }
+                | Instruction::SuperSend { message }
+                | Instruction::DelegateSend { message } => {
+                    visitor.visit(message.as_value())
+                }
+
+                Instruction::PushValue { value } => visitor.visit(*value),
+                Instruction::PushQuotaton { value } => {
+                    visitor.visit(value.as_value())
+                }
+                Instruction::CreateSlotObject { map } => {
+                    visitor.visit(map.as_value())
+                }
+                // Primitives/Fixnums/ControlFlow do not hold heap references
+                _ => {}
+            }
         }
     }
 }
