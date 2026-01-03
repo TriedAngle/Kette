@@ -200,67 +200,49 @@ impl Interpreter {
 
     /// The Main Execution Loop
     pub fn execute(&mut self) -> ExecutionResult {
-        // Initial load
-        self.reload_context();
-
-        // Check if we actually have something to run
-        if self.activations.is_empty() {
-            return ExecutionResult::Normal;
-        }
-
-        loop {
-            // 1. Run a single instruction
-            // SAFETY: We checked is_empty() above, and reload_context() ensures validity.
-            let res = unsafe { self.execute_bytecode() };
-
-            // 2. Handle the result
-            match res {
-                ExecutionResult::Normal => {
-                    // Fast path: Just continue looping.
-                    // IP was already updated in execute_single_bytecode.
-                }
-                ExecutionResult::ActivationChanged => {
-                    // Method call or Return happened. Pointers are invalid.
-                    self.reload_context();
-                    // If stack is empty (after main returns), we are done
-                    if self.activations.is_empty() {
-                        return ExecutionResult::Normal;
-                    }
-                }
-                // Yield, Panic, etc.
-                _ => return res,
-            }
-        }
+        // Run until depth < 1 (aka 0)
+        self.execute_until_depth(1)
     }
 
-    /// Same as execute but breaks at depth
-    pub fn execute_with_depth(&mut self) -> ExecutionResult {
+    pub fn execute_current_activation(&mut self) -> ExecutionResult {
+        let depth = self.activations.depth();
+        self.execute_until_depth(depth)
+    }
+
+    /// Executes the interpreter loop until the stack depth drops below `target_depth`.
+    pub fn execute_until_depth(
+        &mut self,
+        target_depth: usize,
+    ) -> ExecutionResult {
+        // Initialize Cache
         self.reload_context();
 
-        // Check if we actually have something to run
-        if self.activations.is_empty() {
+        if self.activations.depth() < target_depth {
             return ExecutionResult::Normal;
         }
-        let depth = self.activations.depth();
 
         loop {
-            // 1. Run a single instruction
-            // SAFETY: We checked is_empty() above, and reload_context() ensures validity.
-            let res = unsafe { self.execute_bytecode() };
+            let instruction = {
+                // SAFETY: context is initializd
+                let ctx = unsafe { self.context_unchecked_mut() };
+                ctx.fetch_next_instruction()
+            };
+            // SAFETY: context just initalized
+            let res = unsafe { self.execute_bytecode(instruction) };
 
-            // 2. Handle the result
             match res {
                 ExecutionResult::Normal => {
-                    // Fast path: Just continue looping.
-                    // IP was already updated in execute_single_bytecode.
+                    // Continue looping.
+                    // Depth cannot change in Normal result, so no check needed.
                 }
                 ExecutionResult::ActivationChanged => {
-                    // Method call or Return happened. Pointers are invalid.
                     self.reload_context();
-                    // If stack is empty (after main returns), we are done
-                    if self.activations.depth() == depth
-                        || self.activations.is_empty()
-                    {
+
+                    if self.activations.depth() < target_depth {
+                        return ExecutionResult::Normal;
+                    }
+
+                    if self.activations.is_empty() {
                         return ExecutionResult::Normal;
                     }
                 }
@@ -272,14 +254,10 @@ impl Interpreter {
     /// # Safety
     /// context must be correctly initialized before
     #[inline(always)]
-    pub unsafe fn execute_bytecode(&mut self) -> ExecutionResult {
-        // 1. Fetch & Advance
-        let instruction = {
-            // SAFETY: context is initializd
-            let ctx = unsafe { self.context_unchecked_mut() };
-            ctx.fetch_next_instruction()
-        };
-
+    pub unsafe fn execute_bytecode(
+        &mut self,
+        instruction: Instruction,
+    ) -> ExecutionResult {
         let op = instruction.opcode();
 
         // --- FAST PATHS ---

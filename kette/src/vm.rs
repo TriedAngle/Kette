@@ -265,6 +265,9 @@ impl VM {
             let universe =
                 heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
 
+            // SAFETY: just allocated
+            let dip_body = heap.allocate_array(&[]);
+
             let dip_code = heap.allocate_code(
                 &[],
                 &[
@@ -276,14 +279,12 @@ impl VM {
                     Instruction::new(OpCode::PopReturn),
                     Instruction::new(OpCode::Return),
                 ],
+                dip_body,
             );
-
-            // SAFETY: just allocated
-            let dip_body = heap.allocate_array(&[]);
 
             let dip_quotation =
                 // TODO: give input output
-                heap.allocate_quotation(dip_body, dip_code, 0, 0);
+                heap.allocate_quotation(dip_code, 0, 0);
 
             let message_self = self.intern_string_message("self", &mut heap);
             let message_create_object =

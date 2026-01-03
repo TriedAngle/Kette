@@ -7,7 +7,7 @@ pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let array = unsafe { ctx.receiver.cast::<Array>() };
     let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, array);
     // TODO: update this with inferred
-    let quotation = ctx.heap.allocate_quotation(array, code, 0, 0);
+    let quotation = ctx.heap.allocate_quotation(code, 0, 0);
 
     ctx.outputs[0] = quotation.into();
     ExecutionResult::Normal

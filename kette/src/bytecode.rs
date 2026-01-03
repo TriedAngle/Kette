@@ -1,8 +1,8 @@
 use std::{alloc::Layout, mem, ptr};
 
 use crate::{
-    Header, HeapObject, Object, ObjectKind, ObjectType, Value, Visitable,
-    Visitor,
+    Array, Handle, Header, HeapObject, Object, ObjectKind, ObjectType, Value,
+    Visitable, Visitor,
 };
 
 #[repr(u8)]
@@ -102,6 +102,8 @@ pub struct Code {
     pub header: Header,
     pub const_count: u32,
     pub inst_count: u32,
+    /// the original source code body parse result
+    pub body: Handle<Array>,
     // Memory Layout:
     // 1. [Value; const_count]
     // 2. [Instruction; inst_count]
@@ -126,10 +128,12 @@ impl Code {
         &mut self,
         constants: &[Value],
         instructions: &[Instruction],
+        body: Handle<Array>,
     ) {
         self.header = Header::new_object(ObjectType::Code);
         self.const_count = constants.len() as u32;
         self.inst_count = instructions.len() as u32;
+        self.body = body;
 
         // SAFETY: this is safe
         unsafe {

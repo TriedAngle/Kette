@@ -78,17 +78,19 @@ fn main() {
             Instruction::new(OpCode::Return),
         ];
 
-        // Allocate the Code object
-        let boot_code =
-            interpreter.heap.allocate_code(&constants, &instructions);
-
         // Allocate a dummy body (empty array) just to satisfy the Quotation
         let dummy_body = interpreter.heap.allocate_array(&[]);
 
+        // Allocate the Code object
+        let boot_code = interpreter.heap.allocate_code(
+            &constants,
+            &instructions,
+            dummy_body,
+        );
+
         // Create the Bootstrap Quotation
-        let boot_quotation = interpreter
-            .heap
-            .allocate_quotation(dummy_body, boot_code, 0, 0);
+        let boot_quotation =
+            interpreter.heap.allocate_quotation(boot_code, 0, 0);
 
         // 3. Execute the Parser
         interpreter.add_quotation(boot_quotation);
@@ -110,7 +112,7 @@ fn main() {
             body,
         );
 
-        let quotation = interpreter.heap.allocate_quotation(body, code, 0, 0);
+        let quotation = interpreter.heap.allocate_quotation(code, 0, 0);
 
         interpreter.add_quotation(quotation);
 

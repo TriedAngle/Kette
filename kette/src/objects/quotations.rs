@@ -1,8 +1,8 @@
 use std::mem;
 
 use crate::{
-    Array, Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType,
-    Selector, SlotMap, Tagged, Visitable, VisitedLink,
+    Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType, Selector,
+    SlotMap, Tagged, Visitable, VisitedLink,
 };
 
 #[repr(C)]
@@ -10,16 +10,14 @@ use crate::{
 pub struct Quotation {
     pub header: Header,
     pub map: Tagged<SlotMap>,
-    pub body: Tagged<Array>,
 }
 
 impl Quotation {
     /// # Safety
     /// must be allocated with corretc size
-    pub fn init(&mut self, body: Tagged<Array>, map: Tagged<SlotMap>) {
+    pub fn init(&mut self, map: Tagged<SlotMap>) {
         self.header = Header::new_object(ObjectType::Quotation);
         self.map = map;
-        self.body = body;
     }
 }
 
@@ -45,11 +43,9 @@ impl HeapObject for Quotation {
 impl Visitable for Quotation {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
         visitor.visit(self.map.into());
-        visitor.visit(self.body.into());
     }
 
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
         visitor.visit_mut(self.map.into());
-        visitor.visit_mut(self.body.into());
     }
 }

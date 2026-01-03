@@ -87,11 +87,12 @@ pub trait Allocator: Sized {
         &mut self,
         constants: &[Value],
         instructions: &[Instruction],
+        body: Handle<Array>,
     ) -> Handle<Code> {
         let layout = Code::required_layout(constants.len(), instructions.len());
         // SAFETY: init is called immediately
         let mut code = unsafe { self.allocate_handle::<Code>(layout) };
-        code.init_with_data(constants, instructions);
+        code.init_with_data(constants, instructions, body);
         code
     }
 
@@ -165,7 +166,6 @@ pub trait Allocator: Sized {
 
     fn allocate_quotation(
         &mut self,
-        body: Handle<Array>,
         code: Handle<Code>,
         input: u64,
         output: u64,
@@ -175,7 +175,7 @@ pub trait Allocator: Sized {
         let layout = Layout::new::<Quotation>();
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<Quotation>(layout) };
-        obj.init(body.as_tagged(), map.as_tagged());
+        obj.init(map.as_tagged());
         obj
     }
 

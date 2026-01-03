@@ -74,7 +74,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let body = ctx.heap.allocate_array(body_accum.as_slice());
     let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body);
     // TODO: this must be updated
-    let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
+    let quotation = ctx.heap.allocate_quotation(code, 0, 0);
     accumulator.push(quotation.into(), ctx.heap, &ctx.vm.shared);
 
     ctx.outputs[0] = accumulator.into();
@@ -245,7 +245,8 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         ctx.state.push(accum.as_value());
                         ctx.interpreter.add_method(ctx.receiver, method);
 
-                        let exec_res = ctx.interpreter.execute_with_depth();
+                        let exec_res =
+                            ctx.interpreter.execute_current_activation();
 
                         if exec_res != ExecutionResult::Normal {
                             println!("error");

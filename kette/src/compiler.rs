@@ -140,6 +140,6 @@ impl BytecodeCompiler {
 
         instructions.push(Instruction::new(OpCode::Return));
 
-        heap.allocate_code(&constants, &instructions)
+        heap.allocate_code(&constants, &instructions, body)
     }
 }
