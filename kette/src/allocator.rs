@@ -145,6 +145,16 @@ pub trait Allocator: Sized {
         map
     }
 
+    fn allocate_executable_map(
+        &mut self,
+        code: Handle<Code>,
+        input: u64,
+        output: u64,
+    ) -> Handle<SlotMap> {
+        let effect = (input << 32) | output;
+        self.allocate_slots_map(&[], code, effect.into())
+    }
+
     fn allocate_empty_map(&mut self) -> Handle<SlotMap> {
         // SAFETY: safe because this means no code exist
         let code = unsafe { Handle::null() };
@@ -166,16 +176,13 @@ pub trait Allocator: Sized {
 
     fn allocate_quotation(
         &mut self,
-        code: Handle<Code>,
-        input: u64,
-        output: u64,
+        map: Handle<SlotMap>,
+        parent: Handle<ActivationObject>,
     ) -> Handle<Quotation> {
-        let effect = (input << 32) | output;
-        let map = self.allocate_slots_map(&[], code, effect.into());
         let layout = Layout::new::<Quotation>();
         // SAFETY: this is safe
         let mut obj = unsafe { self.allocate_handle::<Quotation>(layout) };
-        obj.init(map.as_tagged());
+        obj.init(map, parent);
         obj
     }
 
@@ -213,7 +220,7 @@ pub trait Allocator: Sized {
     ) -> Handle<ActivationObject> {
         // SAFETY: every method map is an executable map
         let map =
-            unsafe { quotation.map.cast::<SlotMap>().promote_to_handle() };
+            unsafe { quotation.map.cast::<SlotMap>() };
         // SAFETY: handles safe, slots must be same size as map wants
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
     }

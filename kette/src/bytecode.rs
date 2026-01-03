@@ -32,10 +32,14 @@ pub enum OpCode {
     /// Payload: Index of the SlotMap in the constant pool.
     CreateSlotObject = 0x06,
 
+    /// Creates a quotation object from a map
+    /// Payload: Index of the Map in the constant pool.
+    CreateQuotation = 0x07,
+
     /// Move top of stack to return stack
-    PushReturn = 0x07,
+    PushReturn = 0x08,
     /// Move top of return stack to stack
-    PopReturn = 0x08,
+    PopReturn = 0x09,
 }
 
 impl OpCode {

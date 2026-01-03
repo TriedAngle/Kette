@@ -1,12 +1,11 @@
 use crate::{
-    Activation, ActivationStack, ActivationType, Allocator, ExecutionState,
-    Handle, HeapProxy, Instruction, LookupResult, Message, OpCode,
-    PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject, SlotTags,
-    ThreadProxy, VMProxy, Value, get_primitive, transmute,
+    Activation, ActivationObject, ActivationStack, ActivationType, Allocator, ExecutionState, Handle, HeapProxy, Instruction, LookupResult, Message, OpCode, PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject, SlotTags, ThreadProxy, VMProxy, Value, get_primitive, transmute
 };
 
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
+    /// the activation we are woking on right now
+    pub activation: Handle<ActivationObject>,
     /// Pointer to the *next* instruction to execute
     pub ip: *const Instruction,
     /// Pointer to the start of the constant pool
@@ -126,6 +125,7 @@ impl Interpreter {
         unsafe {
             let base = inst_slice.as_ptr();
             self.cache = Some(ExecutionContext {
+                activation: activation.object,
                 inst_base: base,
                 // Resume from where the activation says we are
                 ip: base.add(activation.index),
@@ -139,7 +139,7 @@ impl Interpreter {
     /// # Safety
     /// Caller guarantees `reload_context` was called and stack is not empty.
     #[inline(always)]
-    unsafe fn context_unchecked(&self) -> &ExecutionContext {
+    pub unsafe fn context_unchecked(&self) -> &ExecutionContext {
         // SAFETY: safe if contract holds
         unsafe { self.cache.as_ref().unwrap_unchecked() }
     }
@@ -148,7 +148,7 @@ impl Interpreter {
     /// # Safety
     /// Caller guarantees `reload_context` was called and stack is not empty.
     #[inline(always)]
-    unsafe fn context_unchecked_mut(&mut self) -> &mut ExecutionContext {
+    pub unsafe fn context_unchecked_mut(&mut self) -> &mut ExecutionContext {
         // SAFETY: safe if contract holds
         unsafe { self.cache.as_mut().unwrap_unchecked() }
     }
@@ -361,14 +361,14 @@ impl Interpreter {
                 res
             }
             OpCode::CreateSlotObject => {
+                self.heap.safepoint();
+
                 // SAFETY: correctly setup by compiler
                 let map_val =
                     unsafe { self.context_unchecked().fetch_constant(operand) };
                 // SAFETY: correctly setup by compiler
                 let mut map =
                     unsafe { map_val.as_handle_unchecked().cast::<SlotMap>() };
-
-                self.heap.safepoint();
 
                 let slot_count = map.data_slots();
                 // SAFETY: correctly setup by compiler
@@ -380,6 +380,24 @@ impl Interpreter {
                 self.state.push(obj.into());
 
                 ExecutionResult::ActivationChanged
+            }
+            OpCode::CreateQuotation => {
+                self.heap.safepoint();
+
+                // SAFETY: correctly setup by runtime 
+                let ctx = unsafe { self.context_unchecked() };
+
+                let map_val = ctx.fetch_constant(operand);
+                // SAFETY: correctly setup by compiler
+                let map =
+                    unsafe { map_val.as_handle_unchecked().cast::<SlotMap>() };
+
+                let activation = ctx.activation;
+
+                let quotation = self.heap.allocate_quotation(map, activation);
+                self.state.push(quotation.into());
+
+                ExecutionResult::Normal
             }
             OpCode::Return => {
                 let _ = self.activations.pop();

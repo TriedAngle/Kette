@@ -118,7 +118,6 @@ impl BytecodeCompiler {
                 let obj_handle = unsafe { prior.as_heap_handle_unchecked() };
 
                 if let Some(_map) = obj_handle.downcast_ref::<SlotMap>() {
-                    // We treat the Map as a constant here
                     let map_idx = add_constant(prior);
                     instructions.push(Instruction::new_data(
                         OpCode::CreateSlotObject,
@@ -126,7 +125,30 @@ impl BytecodeCompiler {
                     ));
                 } else {
                     panic!(
-                        "CreateSlotObject requires a SlotMap immediately before it"
+                        "CreateSlotObject requires a Map immediately before it"
+                    );
+                }
+                continue;
+            }
+
+            if message == vm.specials.message_create_quotation {
+                // Lookback for the Map
+                if idx == 0 {
+                    panic!("CreateQuotation cannot be the first instruction");
+                }
+                let prior = words[idx - 1];
+                // SAFETY: this is safe
+                let obj_handle = unsafe { prior.as_heap_handle_unchecked() };
+
+                if let Some(_map) = obj_handle.downcast_ref::<SlotMap>() {
+                    let map_idx = add_constant(prior);
+                    instructions.push(Instruction::new_data(
+                        OpCode::CreateQuotation,
+                        map_idx,
+                    ));
+                } else {
+                    panic!(
+                        "CreateQuotation requires a Map immediately before it"
                     );
                 }
                 continue;

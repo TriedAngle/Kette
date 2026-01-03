@@ -1,6 +1,5 @@
 use crate::{
-    ActivationType, Allocator, ExecutionResult, PrimitiveContext, Quotation,
-    primitives::{bool_object, inputs, outputs},
+    ActivationType, Allocator, ExecutionResult, Handle, PrimitiveContext, Quotation, primitives::{bool_object, inputs, outputs}
 };
 
 pub fn call(ctx: &mut PrimitiveContext) -> ExecutionResult {
@@ -31,7 +30,10 @@ pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let q = ctx.receiver;
     ctx.state.push(q.into());
     outputs(ctx, [x]);
-    let quot = ctx.vm.shared.specials.dip_quotation;
+
+
+    let map = ctx.vm.shared.specials.dip_map;
+    let quot = ctx.heap.allocate_quotation(map, unsafe { Handle::null() });
 
     let receiver = ctx
         .interpreter
@@ -41,9 +43,11 @@ pub fn dip(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let activation_object =
         ctx.heap.allocate_quotation_activation(receiver, quot, &[]);
+
     ctx.interpreter
         .activations
         .new_activation(activation_object, ActivationType::Quotation);
+
     ExecutionResult::ActivationChanged
 }
 

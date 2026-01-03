@@ -25,10 +25,11 @@ pub struct SpecialObjects {
 
     pub primitive_vector_map: Handle<SlotMap>,
 
-    pub dip_quotation: Handle<Quotation>,
+    pub dip_map: Handle<SlotMap>,
 
     pub message_self: Handle<Message>,
     pub message_create_object: Handle<Message>,
+    pub message_create_quotation: Handle<Message>,
 }
 
 // TODO: the code heap should be removed.
@@ -282,13 +283,13 @@ impl VM {
                 dip_body,
             );
 
-            let dip_quotation =
-                // TODO: give input output
-                heap.allocate_quotation(dip_code, 0, 0);
+            let dip_map = heap.allocate_executable_map(dip_code, 0, 0);
 
             let message_self = self.intern_string_message("self", &mut heap);
             let message_create_object =
                 self.intern_string_message("(CreateObjectFromMap)", &mut heap);
+            let message_create_quotation =
+                self.intern_string_message("(CreateQuotationFromMap)", &mut heap);
 
             let specials = SpecialObjects {
                 universe,
@@ -303,9 +304,10 @@ impl VM {
                 primitive_vector_map,
                 true_object,
                 false_object,
-                dip_quotation,
+                dip_map,
                 message_self,
                 message_create_object,
+                message_create_quotation,
             };
 
             let inner = Arc::get_mut(&mut self.inner).expect("get inner");
@@ -399,9 +401,12 @@ impl SpecialObjects {
                 true_object: Value::zero().as_heap_handle_unchecked(),
                 false_object: Value::zero().as_heap_handle_unchecked(),
                 stack_object: Value::zero().as_heap_handle_unchecked(),
-                dip_quotation: Value::zero().as_heap_handle_unchecked().cast(),
+                dip_map: Value::zero().as_heap_handle_unchecked().cast(),
                 message_self: Value::zero().as_heap_handle_unchecked().cast(),
                 message_create_object: Value::zero()
+                    .as_heap_handle_unchecked()
+                    .cast(),
+                message_create_quotation: Value::zero()
                     .as_heap_handle_unchecked()
                     .cast(),
             }

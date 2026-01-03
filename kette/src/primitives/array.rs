@@ -6,8 +6,10 @@ pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: required by contract, will be eruntime checked
     let array = unsafe { ctx.receiver.cast::<Array>() };
     let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, array);
-    // TODO: update this with inferred
-    let quotation = ctx.heap.allocate_quotation(code, 0, 0);
+    let map = ctx.heap.allocate_executable_map(code, 0, 0);
+
+    let activation = unsafe { ctx.interpreter.context_unchecked().activation};
+    let quotation = ctx.heap.allocate_quotation(map, activation);
 
     ctx.outputs[0] = quotation.into();
     ExecutionResult::Normal

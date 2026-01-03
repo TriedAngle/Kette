@@ -73,9 +73,10 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let body = ctx.heap.allocate_array(body_accum.as_slice());
     let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body);
-    // TODO: this must be updated
-    let quotation = ctx.heap.allocate_quotation(code, 0, 0);
-    accumulator.push(quotation.into(), ctx.heap, &ctx.vm.shared);
+    let exe_map = ctx.heap.allocate_executable_map(code, 0, 0);
+
+    accumulator.push(exe_map.into(), ctx.heap, &ctx.vm.shared);
+    accumulator.push(ctx.vm.specials().message_create_quotation.as_value(), ctx.heap, &ctx.vm.shared);
 
     ctx.outputs[0] = accumulator.into();
 
