@@ -1,8 +1,8 @@
 use clap::Parser as ClapParser;
 use kette::{
     Allocator, Array, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
-    HeapSettings, Instruction, Interpreter, Parser, Tagged, ThreadProxy, VM,
-    VMCreateInfo, VMThread, Value,
+    HeapSettings, Instruction, Interpreter, OpCode, Parser, Tagged,
+    ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 use std::{fs, process};
 
@@ -12,13 +12,6 @@ struct Cli {
     /// Input kette source files to execute in order
     #[arg(required = true, help = "The .ktt files to execute")]
     files: Vec<String>,
-}
-
-fn execute_parser_code(parser: Value) -> Vec<Instruction> {
-    vec![
-        Instruction::PushValue { value: parser },
-        Instruction::SendNamed { message: "parse" },
-    ]
 }
 
 fn main() {
@@ -71,11 +64,35 @@ fn main() {
         ));
 
         let parser_obj = Tagged::new_ptr(parser.as_mut());
-        let parser_code = execute_parser_code(parser_obj.into());
 
-        for instruction in parser_code {
-            interpreter.execute_single_bytecode(instruction);
-        }
+        // Intern the "parse" message
+        let parse_msg = interpreter
+            .vm
+            .intern_string_message("parse", &mut interpreter.heap);
+
+        let constants = vec![parser_obj.as_value(), parse_msg.as_value()];
+
+        let instructions = vec![
+            Instruction::new_data(OpCode::PushConstant, 0),
+            Instruction::new_data(OpCode::Send, 1),
+            Instruction::new(OpCode::Return),
+        ];
+
+        // Allocate the Code object
+        let boot_code =
+            interpreter.heap.allocate_code(&constants, &instructions);
+
+        // Allocate a dummy body (empty array) just to satisfy the Quotation
+        let dummy_body = interpreter.heap.allocate_array(&[]);
+
+        // Create the Bootstrap Quotation
+        let boot_quotation = interpreter
+            .heap
+            .allocate_quotation(dummy_body, boot_code, 0, 0);
+
+        // 3. Execute the Parser
+        interpreter.add_quotation(boot_quotation);
+        interpreter.execute();
 
         // SAFETY: this is safe
         let body = unsafe {
@@ -87,8 +104,11 @@ fn main() {
                 .cast::<Array>()
         };
 
-        let compiled = BytecodeCompiler::compile(&interpreter.vm.shared, body);
-        let code = interpreter.heap.allocate_code(&compiled);
+        let code = BytecodeCompiler::compile(
+            &interpreter.vm.shared,
+            &mut interpreter.heap,
+            body,
+        );
 
         let quotation = interpreter.heap.allocate_quotation(body, code, 0, 0);
 

@@ -35,6 +35,7 @@ pub struct ActivationObject {
     pub slots: [Handle<Value>; 0],
 }
 
+#[derive(Debug)]
 pub struct ActivationStack(Vec<Activation>);
 
 impl Activation {

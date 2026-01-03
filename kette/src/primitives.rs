@@ -328,3 +328,9 @@ pub fn bool_object(ctx: &PrimitiveContext, cond: bool) -> Handle<Value> {
         false => ctx.vm.shared.specials.false_object.into(),
     }
 }
+
+impl From<PrimitiveMessageIndex> for u32 {
+    fn from(value: PrimitiveMessageIndex) -> Self {
+        value.as_raw() as u32
+    }
+}

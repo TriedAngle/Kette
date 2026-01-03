@@ -2,8 +2,8 @@ use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
     Allocator, ByteArray, Handle, Heap, HeapProxy, HeapSettings, HeapValue,
-    Instruction, Message, Quotation, SlotHelper, SlotMap, SlotTags, Strings,
-    Value, interning::Messages, primitive_index, primitives::Vector,
+    Instruction, Message, OpCode, Quotation, SlotHelper, SlotMap, SlotTags,
+    Strings, Value, interning::Messages, primitive_index, primitives::Vector,
 };
 
 #[derive(Debug)]
@@ -104,7 +104,6 @@ impl VM {
         unimplemented!("TODO: images are not implemented yet")
     }
 
-    // TODO: special objects should be allocated on the startup heap
     fn init_new(&mut self) {
         let mut heap = self.inner.heap.proxy();
         let strings = &self.inner.strings;
@@ -266,14 +265,18 @@ impl VM {
             let universe =
                 heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
 
-            let dip_code = heap.allocate_code(&[
-                Instruction::StackToReturn,
-                Instruction::SendPrimitive {
-                    id: primitive_index("(call)"),
-                },
-                Instruction::ReturnToStack,
-                Instruction::Return,
-            ]);
+            let dip_code = heap.allocate_code(
+                &[],
+                &[
+                    Instruction::new(OpCode::PushReturn),
+                    Instruction::new_data(
+                        OpCode::SendPrimitive,
+                        primitive_index("(call)").into(),
+                    ),
+                    Instruction::new(OpCode::PopReturn),
+                    Instruction::new(OpCode::Return),
+                ],
+            );
 
             // SAFETY: just allocated
             let dip_body = heap.allocate_array(&[]);

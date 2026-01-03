@@ -1,16 +1,30 @@
 use crate::{
     Activation, ActivationStack, ActivationType, Allocator, ExecutionState,
-    Handle, HeapProxy, Instruction, LookupResult, PrimitiveMessageIndex,
-    Quotation, Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value,
-    get_primitive, transmute,
+    Handle, HeapProxy, Instruction, LookupResult, Message, OpCode,
+    PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject, SlotTags,
+    ThreadProxy, VMProxy, Value, get_primitive, transmute,
 };
 
+#[derive(Debug, Clone)]
+pub struct ExecutionContext {
+    /// Pointer to the *next* instruction to execute
+    pub ip: *const Instruction,
+    /// Pointer to the start of the constant pool
+    pub cp: *const Value,
+    /// The 'self' value for the current frame
+    pub receiver: Value,
+    /// Pointer to the start of the instructions (needed to calculate index for sync)
+    pub inst_base: *const Instruction,
+}
+
+#[derive(Debug)]
 pub struct Interpreter {
     pub vm: VMProxy,
     pub thread: ThreadProxy,
     pub heap: HeapProxy,
     pub state: ExecutionState,
     pub activations: ActivationStack,
+    pub cache: Option<ExecutionContext>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -41,6 +55,7 @@ impl Interpreter {
             heap,
             state,
             activations: ActivationStack::new(),
+            cache: None,
         }
     }
 
@@ -73,6 +88,66 @@ impl Interpreter {
             return Some(instructions[index]);
         }
         None
+    }
+
+    #[inline(always)]
+    pub fn sync_context(&mut self) {
+        // We only sync if we have a valid cache
+        if let Some(ctx) = &self.cache {
+            // SAFETY: We assume activations.current() matches the cache.
+            // If cache exists, activation must exist.
+            if let Some(activation) = self.activations.current_mut() {
+                // Calculate the index based on pointer offset
+                // SAFETY: ip and inst_base are derived from the same Code object slice
+                let index = unsafe { ctx.ip.offset_from(ctx.inst_base) };
+                activation.index = index as usize;
+            }
+        }
+    }
+
+    /// Rebuilds the execution cache from the top of the ActivationStack.
+    /// Call this after pushing a new frame, returning, or after GC moves objects.
+    #[inline(always)]
+    pub fn reload_context(&mut self) {
+        let Some(activation) = self.activations.current() else {
+            self.cache = None;
+            return;
+        };
+
+        let code = activation.code();
+        let receiver = activation.object.receiver.as_value();
+
+        // SAFETY: We are taking raw pointers to the HeapObject data.
+        // These are valid until the next safepoint/allocation.
+        let inst_slice = code.instructions();
+        let const_slice = code.constants();
+
+        unsafe {
+            let base = inst_slice.as_ptr();
+            self.cache = Some(ExecutionContext {
+                inst_base: base,
+                // Resume from where the activation says we are
+                ip: base.add(activation.index),
+                cp: const_slice.as_ptr(),
+                receiver,
+            });
+        }
+    }
+
+    /// Helper to get the context in the inner loop without Option checks.
+    /// # Safety
+    /// Caller guarantees `reload_context` was called and stack is not empty.
+    #[inline(always)]
+    unsafe fn context_unchecked(&self) -> &ExecutionContext {
+        unsafe { self.cache.as_ref().unwrap_unchecked() }
+    }
+
+    /// Helper to get mutable reference to context in the inner loop.
+    /// # Safety
+    /// Caller guarantees `reload_context` was called and stack is not empty.
+    #[inline(always)]
+    unsafe fn context_unchecked_mut(&mut self) -> &mut ExecutionContext {
+        unsafe { self.cache.as_mut().unwrap_unchecked() }
     }
 
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
@@ -111,156 +186,226 @@ impl Interpreter {
         self.activations.new_activation(new, ActivationType::Method);
     }
 
-    pub fn execute(&mut self) -> ExecutionResult {
-        while let Some(instruction) = self.current_instruction() {
-            let res = self.execute_single_bytecode(instruction);
-            match res {
-                ExecutionResult::Normal => self.increment_instruction(),
-                ExecutionResult::ActivationChanged => (),
-                _ => unimplemented!("TODO"),
-            }
-        }
-
-        ExecutionResult::Normal
+    /// Helper to retrieve a value from the current code's constant pool
+    #[inline(always)]
+    pub fn get_constant(&self, index: u32) -> Value {
+        // SAFETY: The compiler guarantees the index is within bounds of the allocated Code object.
+        unsafe { self.current_activation().unwrap_unchecked() }
+            .code()
+            .constants()[index as usize]
     }
 
-    pub fn execute_with_depth(&mut self) -> ExecutionResult {
-        let depth = self.activations.depth();
-        while let Some(instruction) = self.current_instruction() {
-            let res = self.execute_single_bytecode(instruction);
+    /// The Main Execution Loop
+    pub fn execute(&mut self) -> ExecutionResult {
+        // Initial load
+        self.reload_context();
+
+        // Check if we actually have something to run
+        if self.activations.is_empty() {
+            return ExecutionResult::Normal;
+        }
+
+        loop {
+            // 1. Run a single instruction
+            // SAFETY: We checked is_empty() above, and reload_context() ensures validity.
+            let res = unsafe { self.execute_bytecode() };
+
+            // 2. Handle the result
             match res {
-                ExecutionResult::Normal => self.increment_instruction(),
+                ExecutionResult::Normal => {
+                    // Fast path: Just continue looping.
+                    // IP was already updated in execute_single_bytecode.
+                }
                 ExecutionResult::ActivationChanged => {
-                    if self.activations.depth() == depth {
-                        break;
+                    // Method call or Return happened. Pointers are invalid.
+                    self.reload_context();
+                    // If stack is empty (after main returns), we are done
+                    if self.activations.is_empty() {
+                        return ExecutionResult::Normal;
                     }
                 }
-                _ => unimplemented!("TODO"),
+                // Yield, Panic, etc.
+                _ => return res,
             }
         }
-
-        ExecutionResult::Normal
     }
 
-    pub fn execute_single_bytecode(
-        &mut self,
-        instruction: Instruction,
-    ) -> ExecutionResult {
-        match instruction {
-            Instruction::PushSelf => {
-                tracing::trace!("push_self");
-                let value = self
-                    .activations
-                    .current()
-                    .expect("must exist")
-                    .object
-                    .receiver;
-                self.state.push(value.into());
-                self.record_depth();
+    /// Same as execute but breaks at depth
+    pub fn execute_with_depth(&mut self) -> ExecutionResult {
+        self.reload_context();
+
+        // Check if we actually have something to run
+        if self.activations.is_empty() {
+            return ExecutionResult::Normal;
+        }
+        let depth = self.activations.depth();
+
+        loop {
+            // 1. Run a single instruction
+            // SAFETY: We checked is_empty() above, and reload_context() ensures validity.
+            let res = unsafe { self.execute_bytecode() };
+
+            // 2. Handle the result
+            match res {
+                ExecutionResult::Normal => {
+                    // Fast path: Just continue looping.
+                    // IP was already updated in execute_single_bytecode.
+                }
+                ExecutionResult::ActivationChanged => {
+                    // Method call or Return happened. Pointers are invalid.
+                    self.reload_context();
+                    // If stack is empty (after main returns), we are done
+                    if self.activations.depth() == depth
+                        || self.activations.is_empty()
+                    {
+                        return ExecutionResult::Normal;
+                    }
+                }
+                _ => return res,
+            }
+        }
+    }
+
+    /// # Safety
+    /// context must be correctly initialized before
+    #[inline(always)]
+    pub unsafe fn execute_bytecode(&mut self) -> ExecutionResult {
+        // 1. Fetch & Advance
+        let instruction = {
+            // SAFETY: context is initializd
+            let ctx = unsafe { self.context_unchecked_mut() };
+            ctx.fetch_next_instruction()
+        };
+
+        let op = instruction.opcode();
+
+        // --- FAST PATHS ---
+        match op {
+            OpCode::PushConstant => {
+                // SAFETY: setup correctly by compiler
+                let ctx = unsafe { self.context_unchecked() };
+                let val = ctx.fetch_constant(instruction.operand());
+                self.state.push(val);
                 ExecutionResult::Normal
             }
-            Instruction::PushFixnum { value } => {
-                tracing::trace!("push_fixnum: {:?}", value);
-                self.state.push(value.into());
-                self.record_depth();
+            OpCode::PushSelf => {
+                // SAFETY: setup correctly by compiler
+                let ctx = unsafe { self.context_unchecked() };
+                self.state.push(ctx.receiver);
                 ExecutionResult::Normal
             }
-            Instruction::PushValue { value } => {
-                tracing::trace!("push_value: {:?}", value);
-                self.state.push(value);
-                self.record_depth();
+            OpCode::PushSmallInteger => {
+                let val = instruction.signed_operand() as i64;
+                self.state.push(val.into());
                 ExecutionResult::Normal
             }
-            Instruction::PushQuotaton { value } => {
-                tracing::trace!("push_quot: {:?}", value);
-                self.state.push(value.as_value());
-                self.record_depth();
-                ExecutionResult::Normal
-            }
-            Instruction::StackToReturn => {
-                tracing::trace!("stack>return");
-                // SAFETY: compiler ensures safety
+            OpCode::PushReturn => {
+                // SAFETY: setup correctly by compiler
                 let value = unsafe { self.state.pop_unchecked() };
                 self.state.push_return(value);
                 ExecutionResult::Normal
             }
-            Instruction::ReturnToStack => {
-                tracing::trace!("return>stack");
-                // SAFETY: compiler ensures safety
+            OpCode::PopReturn => {
+                // SAFETY: setup correctly by compiler
                 let value = unsafe { self.state.pop_return_unchecked() };
                 self.state.push(value);
                 ExecutionResult::Normal
             }
-            Instruction::CreateSlotObject { mut map } => {
-                self.heap.safepoint();
-                let slot_count = map.data_slots();
 
-                // SAFETY: not safe yet, TODO: depth check
-                let slots =
-                    unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
+            // --- SLOW PATHS ---
+            // Pass instruction to slow handler.
+            // SAFETY: context is initialized
+            _ => unsafe { self.execute_bytecode_slow(instruction) },
+        }
+    }
 
-                // TODO: sort in place
-                let slots = map.collect_values(slots);
-                let obj = self.heap.allocate_slots(map, &slots);
-                self.state.push(obj.into());
-                self.record_depth();
-                ExecutionResult::Normal
-            }
-            Instruction::SendPrimitive { id } => {
-                self.heap.safepoint();
-                // SAFETY: after depth check, this is safe
-                let receiver =
-                    unsafe { self.state.pop_unchecked().as_handle_unchecked() };
-                let res = self.primitive_send(receiver, id);
-                self.record_depth();
-                res
-            }
-            Instruction::Send { message } => {
+    /// # Safety
+    /// context must be correctly initialized before
+    #[inline(never)]
+    unsafe fn execute_bytecode_slow(
+        &mut self,
+        instruction: Instruction,
+    ) -> ExecutionResult {
+        // Sync the local IP back to the heap object before doing anything dangerous
+        self.sync_context();
+
+        let op = instruction.opcode();
+        let operand = instruction.operand();
+
+        match op {
+            OpCode::Send => {
+                // We can use the context helper here too
+                let message_val =
+                    // SAFETY: correctly setup by compiler
+                    unsafe { self.context_unchecked().fetch_constant(operand) };
+                let message =
+                    // SAFETY: correctly setup by compiler
+                    unsafe { message_val.as_handle_unchecked().cast::<Message>() };
                 let selector =
                     Selector::new_message(message, self.vm.shared.clone());
 
                 self.heap.safepoint();
 
                 let universe = self.vm.specials().universe;
-
-                let receiver = match selector
+                let found_receiver = match selector
                     .clone()
                     .lookup_object(&universe.as_value())
                 {
                     LookupResult::Found { object, .. } => {
-                        // SAFETY: this is safe
+                        // SAFETY: correctly setup by compiler
                         unsafe { object.as_value().as_handle_unchecked() }
                     }
                     LookupResult::None => {
-                        // SAFETY: this is safe
+                        // SAFETY: correctly setup by compiler
                         unsafe {
                             self.state.pop_unchecked().as_handle_unchecked()
                         }
                     }
                 };
 
-                let res = self.send(receiver, selector);
+                let res = self.send(found_receiver, selector);
                 self.record_depth();
                 res
             }
-            Instruction::SendNamed { message } => {
-                let message = self.vm.intern_string(message, &mut self.heap);
-                let selector = Selector::new(message, self.vm.shared.clone());
-
+            OpCode::SendPrimitive => {
+                let prim_id =
+                    // SAFETY: correctly setup by compiler
+                    unsafe { PrimitiveMessageIndex::from_usize(operand as usize) };
                 self.heap.safepoint();
-                // SAFETY: after depth check, this is safe
+                // SAFETY: correctly setup by compiler
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
-                let res = self.send(receiver, selector);
+                let res = self.primitive_send(receiver, prim_id);
                 self.record_depth();
                 res
             }
-            Instruction::Return => {
-                let _last = self.activations.pop();
-                tracing::trace!(target: "interpreter", "callstack depth {}", self.activations.depth());
-                ExecutionResult::Normal
+            OpCode::CreateSlotObject => {
+                // SAFETY: correctly setup by compiler
+                let map_val =
+                    unsafe { self.context_unchecked().fetch_constant(operand) };
+                // SAFETY: correctly setup by compiler
+                let mut map =
+                    unsafe { map_val.as_handle_unchecked().cast::<SlotMap>() };
+
+                self.heap.safepoint();
+
+                let slot_count = map.data_slots();
+                // SAFETY: correctly setup by compiler
+                let slots =
+                    unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
+                let slots = map.collect_values(slots);
+
+                let obj = self.heap.allocate_slots(map, &slots);
+                self.state.push(obj.into());
+
+                ExecutionResult::ActivationChanged
             }
-            _ => unimplemented!("TODO: implement"),
+            OpCode::Return => {
+                let _ = self.activations.pop();
+                ExecutionResult::ActivationChanged
+            }
+            // we match others before already
+            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 
@@ -387,5 +532,23 @@ impl Interpreter {
 
         self.state.push(slot.value);
         ExecutionResult::Normal
+    }
+}
+
+impl ExecutionContext {
+    /// Reads the instruction at the current IP and advances the IP.
+    #[inline(always)]
+    pub fn fetch_next_instruction(&mut self) -> Instruction {
+        unsafe {
+            let inst = *self.ip;
+            self.ip = self.ip.add(1);
+            inst
+        }
+    }
+
+    /// Fetches a value from the constant pool.
+    #[inline(always)]
+    pub fn fetch_constant(&self, index: u32) -> Value {
+        unsafe { *self.cp.add(index as usize) }
     }
 }

@@ -5,8 +5,7 @@ use crate::{
 pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: required by contract, will be eruntime checked
     let array = unsafe { ctx.receiver.cast::<Array>() };
-    let block = BytecodeCompiler::compile(&ctx.vm.shared, array);
-    let code = ctx.heap.allocate_code(&block);
+    let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, array);
     // TODO: update this with inferred
     let quotation = ctx.heap.allocate_quotation(array, code, 0, 0);
 

@@ -72,8 +72,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     let body = ctx.heap.allocate_array(body_accum.as_slice());
-    let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
-    let code = ctx.heap.allocate_code(&block);
+    let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body);
     // TODO: this must be updated
     let quotation = ctx.heap.allocate_quotation(body, code, 0, 0);
     accumulator.push(quotation.into(), ctx.heap, &ctx.vm.shared);
@@ -468,8 +467,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
 
         let body = ctx.heap.allocate_array(code_accum.as_slice());
-        let block = BytecodeCompiler::compile(&ctx.vm.shared, body);
-        ctx.heap.allocate_code(&block)
+        BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body)
     } else {
         // SAFETY: this is safe by the protocol
         unsafe { Handle::null() }

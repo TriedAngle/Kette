@@ -171,6 +171,7 @@ pub struct Heap(Arc<HeapInner>);
 /// Thread-local allocator.
 ///
 /// Manages bump allocation within the current "hole" (cursor to limit).
+#[derive(Debug)]
 pub struct HeapProxy {
     pub heap: Heap,
     pub remember: Vec<Handle<HeapValue>>,

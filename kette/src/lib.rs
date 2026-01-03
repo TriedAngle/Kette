@@ -19,7 +19,7 @@ mod vm;
 
 pub use allocator::Allocator;
 pub use barrier::SenseBarrier;
-pub use bytecode::{Code, Instruction};
+pub use bytecode::{Code, Instruction, OpCode};
 pub use heap::{Heap, HeapProxy, HeapSettings};
 
 pub use objects::activation::{

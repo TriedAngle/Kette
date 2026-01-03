@@ -83,11 +83,15 @@ pub trait Allocator: Sized {
         array
     }
 
-    fn allocate_code(&mut self, instructions: &[Instruction]) -> Handle<Code> {
-        let layout = Code::required_layout(instructions.len());
-        // SAFETY: safe, init called immediately
+    fn allocate_code(
+        &mut self,
+        constants: &[Value],
+        instructions: &[Instruction],
+    ) -> Handle<Code> {
+        let layout = Code::required_layout(constants.len(), instructions.len());
+        // SAFETY: init is called immediately
         let mut code = unsafe { self.allocate_handle::<Code>(layout) };
-        code.init_with_data(instructions);
+        code.init_with_data(constants, instructions);
         code
     }
 
