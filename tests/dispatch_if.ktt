@@ -1,0 +1,24 @@
+// expect:
+// true
+// false
+// true
+// false
+
+(| 
+    dispatchIf = (| tb . fb -- | drop call )
+|) t parent* addTraitSlots
+
+(| 
+    dispatchIf = (| tb . fb -- | dropd call )
+|) f parent* addTraitSlots
+
+(|
+    dispatchIf = (| ? . tb -- | self rot dispatchIf )
+|) std traits quotation addTraitSlots
+
+[ "true" ] [ "false" ] 1 1 = dispatchIf println
+[ "true" ] [ "false" ] 1 2 = dispatchIf println
+
+
+1 1 = [ "true" ] [ "false" ] dispatchIf println
+1 2 = [ "true" ] [ "false" ] dispatchIf println
