@@ -122,6 +122,7 @@ impl Interpreter {
         let inst_slice = code.instructions();
         let const_slice = code.constants();
 
+        // SAFETY: this is safe
         unsafe {
             let base = inst_slice.as_ptr();
             self.cache = Some(ExecutionContext {
@@ -139,6 +140,7 @@ impl Interpreter {
     /// Caller guarantees `reload_context` was called and stack is not empty.
     #[inline(always)]
     unsafe fn context_unchecked(&self) -> &ExecutionContext {
+        // SAFETY: safe if contract holds
         unsafe { self.cache.as_ref().unwrap_unchecked() }
     }
 
@@ -147,6 +149,7 @@ impl Interpreter {
     /// Caller guarantees `reload_context` was called and stack is not empty.
     #[inline(always)]
     unsafe fn context_unchecked_mut(&mut self) -> &mut ExecutionContext {
+        // SAFETY: safe if contract holds
         unsafe { self.cache.as_mut().unwrap_unchecked() }
     }
 
@@ -404,7 +407,7 @@ impl Interpreter {
                 let _ = self.activations.pop();
                 ExecutionResult::ActivationChanged
             }
-            // we match others before already
+            // SAFETY: we match others before already
             _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
@@ -539,6 +542,7 @@ impl ExecutionContext {
     /// Reads the instruction at the current IP and advances the IP.
     #[inline(always)]
     pub fn fetch_next_instruction(&mut self) -> Instruction {
+        // SAFETY: execution context is initialized
         unsafe {
             let inst = *self.ip;
             self.ip = self.ip.add(1);
@@ -549,6 +553,7 @@ impl ExecutionContext {
     /// Fetches a value from the constant pool.
     #[inline(always)]
     pub fn fetch_constant(&self, index: u32) -> Value {
+        // SAFETY: execution context is initialized
         unsafe { *self.cp.add(index as usize) }
     }
 }

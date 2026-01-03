@@ -44,7 +44,7 @@ impl BytecodeCompiler {
             if let Some(tagged) = word.as_tagged_fixnum::<i64>() {
                 let val = tagged.as_i64();
 
-                if val >= MIN_I24 && val <= MAX_I24 {
+                if (MIN_I24..=MAX_I24).contains(&val) {
                     // Fits in 24 bits!
                     instructions.push(Instruction::new_data(
                         OpCode::PushSmallInteger,

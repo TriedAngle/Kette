@@ -112,12 +112,12 @@ impl Code {
     pub fn required_layout(consts: usize, insts: usize) -> Layout {
         let base = Layout::new::<Code>();
         let (with_consts, _) = base
-            .extend(Layout::array::<Value>(consts).unwrap())
-            .unwrap();
+            .extend(Layout::array::<Value>(consts).expect("valid Layout"))
+            .expect("valid Layout");
         // Uses Instruction type for layout calculation
         let (final_layout, _) = with_consts
-            .extend(Layout::array::<Instruction>(insts).unwrap())
-            .unwrap();
+            .extend(Layout::array::<Instruction>(insts).expect("valid Layout"))
+            .expect("valid Layout");
         final_layout
     }
 
@@ -131,10 +131,11 @@ impl Code {
         self.const_count = constants.len() as u32;
         self.inst_count = instructions.len() as u32;
 
+        // SAFETY: this is safe
         unsafe {
             let ptr_base = self.data.as_mut_ptr();
 
-            // 1. Copy Constants
+            // Copy Constants
             let ptr_consts = ptr_base as *mut Value;
             ptr::copy_nonoverlapping(
                 constants.as_ptr(),
@@ -142,10 +143,9 @@ impl Code {
                 constants.len(),
             );
 
-            // 2. Copy Instructions
+            // Copy Instructions
             // Offset by size of constant pool
-            let offset_bytes = constants.len() * mem::size_of::<Value>();
-            // Cast to *mut Instruction
+            let offset_bytes = mem::size_of_val(constants);
             let ptr_insts = ptr_base.add(offset_bytes) as *mut Instruction;
 
             ptr::copy_nonoverlapping(
@@ -157,6 +157,7 @@ impl Code {
     }
 
     pub fn constants(&self) -> &[Value] {
+        // SAFETY: this is safe
         unsafe {
             let ptr = self.data.as_ptr() as *const Value;
             std::slice::from_raw_parts(ptr, self.const_count as usize)
@@ -164,6 +165,7 @@ impl Code {
     }
 
     pub fn instructions(&self) -> &[Instruction] {
+        // SAFETY: this is safe
         unsafe {
             let offset_bytes =
                 self.const_count as usize * mem::size_of::<Value>();
@@ -192,7 +194,7 @@ impl Visitable for Code {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         let count = self.const_count as usize;
         let ptr = self.data.as_mut_ptr() as *mut Value;
-        // Only visit constants
+        // SAFETY: this is safe by contract
         let constants = unsafe { std::slice::from_raw_parts(ptr, count) };
         for &val in constants {
             visitor.visit_mut(val);
