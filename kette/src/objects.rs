@@ -383,10 +383,11 @@ impl Object for HeapValue {
             ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
             ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().lookup(selector, link),
             ObjectType::Float       => self.downcast_ref_match::<Float>().lookup(selector, link),
+            ObjectType::Message     => self.downcast_ref_match::<Message>().lookup(selector, link),
             ObjectType::BigNum      => unimplemented!(),
             ObjectType::Thread      => unimplemented!(),
             ObjectType::Code        => unreachable!("code cannot be looked up yet (or should it be maybe?)"),
-            ObjectType::Message | ObjectType::Max => {
+            ObjectType::Max => {
                 unreachable!("illegal object type for lookup")
             }
         }

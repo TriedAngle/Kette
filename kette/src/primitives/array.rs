@@ -8,6 +8,7 @@ pub fn array_to_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, array);
     let map = ctx.heap.allocate_executable_map(code, 0, 0);
 
+    // SAFETY: setup by runtime
     let activation = unsafe { ctx.interpreter.context_unchecked().activation };
     let quotation = ctx.heap.allocate_quotation(map, activation);
 
@@ -54,7 +55,7 @@ pub fn array_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
 // ( index -- value ) | rec: array
 pub fn array_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [index_val] = crate::primitives::inputs(ctx);
-    // SAFETY: safe if contract holds
+    // SAFETY: safe
     let arr = unsafe { ctx.receiver.cast::<Array>() };
 
     if !index_val.is_fixnum() {

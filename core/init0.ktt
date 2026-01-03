@@ -1,0 +1,6 @@
+
+(| 
+    \ = (| accum -- accum | self parseNext over push ) .
+    @^^ = (| accum -- accum | "helloooooo" (println) ) .
+|) parsers addTraitSlots
+

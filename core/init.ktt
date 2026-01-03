@@ -1,4 +1,4 @@
-(|
+$[ (|
     LanguageVersion = "0.1.0" .
     std = (|
         traits = (| 
@@ -6,6 +6,7 @@
                 clone = (| -- new | self (clone) ) .
                 clone! = (| -- new | self (cloneBoa) ) .
                 copy = (| -- copy | self clone ) .
+                copy! = (| -- copy | self cloneBoa ) .
             |) .
             oddball = (| 
                 copy = (| -- self | self ) .
@@ -18,10 +19,11 @@
             callable = (| |) .
             boolean = (| |) .
         |) .
+        collections = (| |) .
     |) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
-|) universe addTraitSlots
+|) universe addTraitSlots ]
 
 (| addBoolAbilities = (| -- |
     (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
@@ -159,4 +161,29 @@
     compose = (| quot -- curried | self std composed clone! ) .
 |) std traits quotation addTraitSlots
 
+$[ 
+(| box = (| 
+    parent* = std traits clonable . value . 
+    >box = (| value -- boxed | self clone! ) .
+    box> = (| -- inner | self value ) .
+|) |) std addTraitSlots
 
+(| 
+    \ = (| accum -- accum | self parseNext std box >box over push ) .
+|) parsers addTraitSlots 
+]
+
+$[
+(| 
+    { = (| accum -- accum | \ } box> self parseUntil over push ) . 
+|) parsers addTraitSlots 
+]
+
+(| array = { } parent* |) std traits addTraitSlots
+
+(| 
+    size = (| -- | self (arraySize) ) .
+    nth = (| idx -- value | self (arrayAt) ) .
+    set-nth = (| vale . idx -- | self (arrayAtPut) ) .
+    newWithSize = (| size -- new | self (arrayNew) ) .
+|) std traits array addTraitSlots

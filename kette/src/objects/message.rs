@@ -1,8 +1,8 @@
 use std::mem;
 
 use crate::{
-    ByteArray, Handle, Header, HeapObject, Object, ObjectKind, ObjectType,
-    Visitable,
+    ByteArray, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
+    ObjectType, Selector, Visitable, VisitedLink,
 };
 
 #[repr(C)]
@@ -29,7 +29,17 @@ impl Visitable for Message {
     }
 }
 
-impl Object for Message {}
+impl Object for Message {
+    fn lookup(
+        &self,
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        let traits = selector.vm.specials.message_traits;
+        traits.lookup(selector, link)
+    }
+}
+
 impl HeapObject for Message {
     const KIND: ObjectKind = ObjectKind::Object;
     const TYPE_BITS: u8 = ObjectType::Message as u8;

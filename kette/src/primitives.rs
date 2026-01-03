@@ -11,6 +11,7 @@ mod bytearray;
 mod fixnum;
 mod float;
 mod general;
+mod message;
 mod method;
 mod parsing;
 mod quotation;
@@ -251,7 +252,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(>quotation)", 0, 1, array::array_to_quotation),
     PrimitiveMessage::new("arrayParent", 0, 1, array::parent),
     PrimitiveMessage::new("(arraySize)",0 , 1, array::size),
-    PrimitiveMessage::new("(newArray)", 1, 1, array::array_new),
+    PrimitiveMessage::new("(arrayNew)", 1, 1, array::array_new),
     PrimitiveMessage::new("(arrayAt)", 1, 1, array::array_at),
     PrimitiveMessage::new("(arrayAtPut)", 2, 1, array::array_at_put),
     // Quotation
@@ -269,13 +270,16 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("unpark", 0, 0, threads::unpark),
     // parsing
     PrimitiveMessage::new("parseNext", 0, 1, parsing::parse_next),
-    PrimitiveMessage::new("parseUntil", 2, 1, parsing::parse_until),
+    PrimitiveMessage::new("parseUntil", 1, 1, parsing::parse_until),
     PrimitiveMessage::new("parse", 0, 1, parsing::parse_complete),
+    PrimitiveMessage::new("messageParent", 0, 1, message::parent),
+    PrimitiveMessage::new("messageName", 0, 1, message::name),
     // Parse Time
     PrimitiveMessage::new("[", 1, 1, parsing::parse_quotation),
     PrimitiveMessage::new("(|", 1, 1, parsing::parse_object),
     PrimitiveMessage::new("//", 1, 1, parsing::parse_line_comment),
     PrimitiveMessage::new("/*", 1, 1, parsing::parse_block_comment),
+    PrimitiveMessage::new("$[", 1, 1, parsing::parse_execute),
     // Method
     // PrimitiveMessage::new("(call-method)", 1, 0, method::call),
     // Primitive Vector

@@ -17,6 +17,7 @@ pub struct SpecialObjects {
     pub float_traits: Handle<HeapValue>,
     pub bignum_traits: Handle<HeapValue>,
     pub quotation_traits: Handle<HeapValue>,
+    pub message_traits: Handle<HeapValue>,
 
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
@@ -205,18 +206,23 @@ impl VM {
             SlotHelper::primitive_message("(>quotation)", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "arrayParent", SlotTags::empty()),
             SlotHelper::primitive_message("(arraySize)", SlotTags::empty()),
-            SlotHelper::primitive_message("(newArray)", SlotTags::empty()),
+            SlotHelper::primitive_message("(arrayNew)", SlotTags::empty()),
             SlotHelper::primitive_message("(arrayAt)", SlotTags::empty()),
             SlotHelper::primitive_message("(arrayAtPut)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
         let quotation_map = heap.allocate_slot_map_helper(strings, &[
-            // SlotHelper::constant("", value, tags)
             SlotHelper::primitive_message("(call)", SlotTags::empty()),
             SlotHelper::primitive_message("dip", SlotTags::empty()),
             SlotHelper::primitive_message("if", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "quotationParent", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let message_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message2("parent*", "messageParent", SlotTags::empty()),
+            SlotHelper::primitive_message2("name", "messageName", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -225,6 +231,7 @@ impl VM {
             SlotHelper::primitive_message("(|", SlotTags::empty()),
             SlotHelper::primitive_message("//", SlotTags::empty()),
             SlotHelper::primitive_message("/*", SlotTags::empty()),
+            SlotHelper::primitive_message("$[", SlotTags::empty()),
         ]);
 
         let parsers = heap.allocate_slots(parsers_map, &[]);
@@ -232,7 +239,7 @@ impl VM {
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::constant("stack*", stack_object.as_value(), SlotTags::PARENT),
-            SlotHelper::constant("parsers*", parsers.as_value(), SlotTags::PARENT),
+            SlotHelper::constant("parsers", parsers.as_value(), SlotTags::empty()),
             SlotHelper::primitive_message2("universe", "(identity)", SlotTags::empty()),
             SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
             SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
@@ -259,6 +266,8 @@ impl VM {
                 heap.allocate_slots(quotation_map, &[]).cast();
 
             let true_object = heap.allocate_slots(empty_map, &[]).cast();
+
+            let message_traits = heap.allocate_slots(message_map, &[]).cast();
 
             let false_object =
                 heap.allocate_slots(empty_map, &[]).cast::<HeapValue>();
@@ -301,6 +310,7 @@ impl VM {
                 float_traits,
                 bignum_traits,
                 quotation_traits,
+                message_traits,
                 primitive_vector_map,
                 true_object,
                 false_object,
@@ -395,6 +405,7 @@ impl SpecialObjects {
                 float_traits: Value::zero().as_heap_handle_unchecked(),
                 bignum_traits: Value::zero().as_heap_handle_unchecked(),
                 quotation_traits: Value::zero().as_heap_handle_unchecked(),
+                message_traits: Value::zero().as_heap_handle_unchecked(),
                 primitive_vector_map: Value::zero()
                     .as_heap_handle_unchecked()
                     .cast(),

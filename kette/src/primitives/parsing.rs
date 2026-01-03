@@ -21,36 +21,36 @@ fn parser_error(ctx: &PrimitiveContext, msg: &str) -> ExecutionResult {
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let heap = &mut ctx.heap;
-    let state = &mut ctx.state;
 
     // SAFETY: must be parser, can't be called otherwise
     let mut parser = unsafe { ctx.receiver.cast::<Parser>() };
 
     let Some(token) = parser.parse_next() else {
-        ctx.state
-            .push(ctx.vm.shared.specials.false_object.as_value());
+        ctx.outputs[0] = ctx.vm.shared.specials.false_object.into();
         return ExecutionResult::Normal;
     };
 
     match token {
         ParsedToken::Float((float, _)) => {
             let float = heap.allocate_float(float);
-            state.push(float.into());
+            ctx.outputs[0] = float.into();
         }
         ParsedToken::Fixnum((num, _)) => {
-            state.push(Value::from_fixnum(num));
+            // SAFETY: fixnum
+            ctx.outputs[0] =
+                unsafe { Value::from_fixnum(num).as_handle_unchecked() };
         }
         ParsedToken::String(token) => {
             let s = parser.get_token_string(token);
             let ba = ctx.vm.intern_string(s, heap);
-            state.push(ba.as_value());
+            ctx.outputs[0] = ba.into();
         }
         ParsedToken::Identifier(token) => {
             let s = parser.get_token_string(token);
 
             let ba = ctx.vm.intern_string(s, heap);
             let message = ctx.vm.intern_message(ba, heap);
-            state.push(message.as_value());
+            ctx.outputs[0] = message.into();
         }
     }
 
@@ -123,15 +123,12 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-// TODO: this is not correct, use parse_complete as correct example
 // end -- array
 pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let accumulator = Vector::new(ctx.heap, &ctx.vm.shared, 10);
 
     // SAFETY: must exist
-    let end = unsafe { ctx.state.pop_unchecked() };
-    // SAFETY: TODO: maybe check in future but input expects this
-    let end = unsafe { end.as_handle_unchecked().cast::<Message>() };
+    let end = unsafe { ctx.inputs[0].cast::<Message>() };
 
     let (res, _) = parse_until_inner(ctx, &[end], accumulator);
     if res != ExecutionResult::Normal {
@@ -154,13 +151,17 @@ fn parse_until_inner<'m, 'ex, 'arg>(
     let _parser = unsafe { ctx.receiver.cast::<Parser>() };
 
     loop {
-        let res = parse_next(ctx);
+        // 1. Peek/Parse next token (Name or Terminator)
+        let mut output = [Handle::<Value>::zero()];
+        let res =
+            parse_next(&mut ctx.new_invoke(ctx.receiver, &[], &mut output));
+
         if res != ExecutionResult::Normal {
             break;
         }
 
         // SAFETY: parse_next must return
-        let next = unsafe { ctx.state.pop_unchecked() };
+        let next = output[0].as_value();
 
         if next == ctx.vm.shared.specials.false_object.as_value() {
             break;
@@ -254,7 +255,6 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                             ctx.interpreter.execute_current_activation();
 
                         if exec_res != ExecutionResult::Normal {
-                            println!("error");
                             return (exec_res, None);
                         }
 
@@ -314,13 +314,17 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     loop {
         // 1. Peek/Parse next token (Name or Terminator)
-        let res = parse_next(ctx);
+        let mut output = [Handle::<Value>::zero()];
+        let res =
+            parse_next(&mut ctx.new_invoke(ctx.receiver, &[], &mut output));
+
+        // 1. Peek/Parse next token (Name or Terminator)
         if res != ExecutionResult::Normal {
             return res;
         }
 
         // SAFETY: this is safe
-        let token_val = unsafe { ctx.state.pop_unchecked() };
+        let token_val = output[0].as_value();
 
         // Handle EOF
         if token_val == false_val {
@@ -363,13 +367,17 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         // Assuming we keep strict name correspondence:
         let name_ba = ctx.vm.intern_string(raw_name_str, ctx.heap);
 
-        // 3. Parse Operator OR Implicit Terminator
-        let res = parse_next(ctx);
+        let mut output = [Handle::<Value>::zero()];
+        let res =
+            parse_next(&mut ctx.new_invoke(ctx.receiver, &[], &mut output));
+
+        //  Peek/Parse next token (Name or Terminator)
         if res != ExecutionResult::Normal {
             return res;
         }
+
         // SAFETY: this is safe
-        let op_val = unsafe { ctx.state.pop_unchecked() };
+        let op_val = output[0].as_value();
 
         let op_msg = op_val
             .as_message_handle()
@@ -550,4 +558,58 @@ pub fn parse_block_comment(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Panic(
         "Parsing Error: Unterminated block comment (missing '*/')",
     )
+}
+
+pub fn parse_execute(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: must exist
+    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+
+    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 64);
+
+    let end = ctx.vm.intern_string_message("]", ctx.heap);
+
+    let (res, _) = parse_until_inner(ctx, &[end], body_accum);
+    if res != ExecutionResult::Normal {
+        return res;
+    }
+
+    let body_array = ctx.heap.allocate_array(body_accum.as_slice());
+    let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body_array);
+
+    let exe_map = ctx.heap.allocate_executable_map(code, 0, 0);
+
+    // SAFETY: must exist
+    let current_activation = unsafe {
+        ctx.interpreter
+            .current_activation()
+            .unwrap_unchecked()
+            .object
+    };
+    let quotation = ctx.heap.allocate_quotation(exe_map, current_activation);
+
+    let start_depth = ctx.state.depth;
+
+    ctx.interpreter.add_quotation(quotation);
+    let exec_res = ctx.interpreter.execute_current_activation();
+
+    if exec_res != ExecutionResult::Normal {
+        return exec_res;
+    }
+
+    let end_depth = ctx.state.depth;
+
+    if end_depth > start_depth {
+        let count = end_depth - start_depth;
+
+        // SAFETY: must exist
+        let results = unsafe { ctx.state.stack_pop_slice_unchecked(count) };
+
+        for &val in results {
+            accumulator.push(val, ctx.heap, &ctx.vm.shared);
+        }
+    }
+
+    ctx.outputs[0] = accumulator.into();
+
+    ExecutionResult::Normal
 }

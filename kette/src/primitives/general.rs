@@ -16,7 +16,7 @@ fn name_key(name: Handle<ByteArray>) -> usize {
     name.as_ptr() as usize
 }
 
-/// ( target traits -- target )
+/// ( target traits -- )
 pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [traits_v, target_v] = inputs(ctx);
 
@@ -70,9 +70,9 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-/// ( target traits -- target )
+/// ( target traits -- )
 pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let [target_v, traits_v] = inputs(ctx);
+    let [traits_v, target_v] = inputs(ctx);
 
     // SAFETY: caller ensures these are slot objects
     let mut target = unsafe { target_v.cast::<SlotObject>() };

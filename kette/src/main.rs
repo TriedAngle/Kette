@@ -94,6 +94,7 @@ fn main() {
         // Create the Bootstrap Quotation
         let boot_quotation = interpreter
             .heap
+            // SAFETY: this is safe
             .allocate_quotation(boot_map, unsafe { Handle::null() });
 
         // 3. Execute the Parser
@@ -120,6 +121,7 @@ fn main() {
 
         let quotation = interpreter
             .heap
+            // SAFETY: this is safe
             .allocate_quotation(code_map, unsafe { Handle::null() });
 
         interpreter.add_quotation(quotation);
