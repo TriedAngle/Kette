@@ -1,0 +1,61 @@
+// [ val -- ] 
+// [ val -- val ] 
+(| collection = (| 
+    parent* = std traits clonable .
+    size = f /* TODO: unimplemented error */ .
+    copyRemoveAll = f /* TODO: unimplemented error */ .
+    each = f /* TODO: unimplemented error */ .
+
+    map = (| mapping -- new | 
+        self copyRemoveAll self mapInto ) .
+    mapInto = (| mapping . into -- new | 
+        [ add ] curry compose each ) .
+|) |) std traits addTraitSlots
+
+(| indexableCollection = (|
+    size = f /* TODO: unimplemented error */ .
+    nthUnchecked = f /* TODO: unimplemented error */ . 
+    bounds? = (| i -- ? | [ 0 >= ] [ self size < ] bi && ) .
+
+    nth = (| i -- e | dup bounds? [ self nthUnchecked ] 
+        [ drop /* TODO: bounds error */ ] if ) .
+    ?nth = (| i -- e/f | dup bounds? [ self nthUnchecked ] [ drop f ] if ) .
+
+    withElement = (| q -- from . to . q' | 
+        [ 0 self size [ self nthUnchecked ] ] dip compose ) .
+
+    withIndexElement = (| q -- from . to . q' | 
+        [ 0 self size [ dup self nthUnchecked ] ] dip compose ) .
+
+    each = (| q -- | 
+        self withElement each[a..b) ) . 
+
+    eachWithIndex = (| q -- | 
+        self withIndexElement each[a..b) ) . 
+
+|) |) std traits addTraitSlots
+
+(| mutableIndexableCollection = (|
+    indexable* = std traits indexableCollection .
+    setNthUnchecked = f /* TODO: bounds error */ . 
+   
+    mutateEach = (| mapping -- new | 
+        self withIndexElement [ swap self setNthUnchecked ] compose each[a..b) self ) .
+
+    setNth = (| e . i -- | dup bounds? [ self setNthUnchecked ] 
+        [ 2drop /* TODO: unimplemented error */ ] if ) .
+    ?setNth = (| e . i -- | dup bounds? [ self setNthUnchecked ] [ 2drop ] if ) .
+|) |) std traits addTraitSlots
+
+(| 
+    indexable* = std traits mutableIndexableCollection .
+    collection* = std traits collection .
+|) std traits array addTraitSlots
+
+{ 6.7 "nice" 420 t $[ (| >string = "amazing" |) 1 neg ] f "hehe" }
+[ [ >string print ". " print ] dip >string println ] 
+over eachWithIndex 
+
+{ 1 3 6 $[ 1 neg ] } [ 1 + ] over mutateEach [ >string println ] over each 
+
+

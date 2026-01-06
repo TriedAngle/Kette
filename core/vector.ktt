@@ -1,0 +1,16 @@
+(| vector = (| 
+    indexable* = std traits mutableIndexableCollection .
+    collection* = std traits collection .
+    items = f /* TODO: unimplemented error */ .
+    size = f /* TODO: unimplemented error */ .
+
+    nthUnchecked = (| n -- nth | self items nthUnchecked ) .
+    setNthUnchecked = (| e . n -- | self items setNthUnchecked ) .
+
+|) |) std traits addTraitSlots
+
+(| vector = (|
+    parent* = std traits vector .
+    items := std array .
+    size := 0 .
+|) |) std addTraitSlots

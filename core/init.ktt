@@ -113,6 +113,7 @@ $[ (|
         [ 0 -rot memcpyFull ] 2keep // lhs new
         [ size self ] dip 
         [ memcpyFull ] keep ) .
+    >string = (| -- str | self ) .
 |) std traits bytearray addTraitSlots
 
 (| 
@@ -137,6 +138,9 @@ $[ (|
         (| . x . y -- . x . y | 2dup self 2dip ) .
     2bi = // applies p to x and y then self to x and y
         (| x . y . p -- | 2keep self call ) .
+    tri = (| x . q . p -- | [ keep ] dip keep self call ) .
+    each[a..b) = (| from . to -- |  // call self from->to
+       2dup < [ [ drop self call ] 2keep [ 1 + ] dip self each[a..b) ] [ 2drop ] if ) .
 |) std traits callable addTraitSlots
 
 (| 
@@ -170,6 +174,8 @@ $[
 
 (| 
     \ = (| accum -- accum | self parseNext std box >box over push ) .
+    t = (| accum -- accum | t over push ) .
+    f = (| accum -- accum | f over push ) .
 |) parsers addTraitSlots 
 ]
 
@@ -181,9 +187,11 @@ $[
 
 (| array = { } parent* |) std traits addTraitSlots
 
+(| array = { } |) std addTraitSlots
+
 (| 
     size = (| -- | self (arraySize) ) .
-    nth = (| idx -- value | self (arrayAt) ) .
-    set-nth = (| vale . idx -- | self (arrayAtPut) ) .
+    nthUnchecked = (| i -- e | self (arrayAt) ) .
+    setNthUnchecked = (| e . i -- | self (arrayAtPut) ) .
     newWithSize = (| size -- new | self (arrayNew) ) .
 |) std traits array addTraitSlots
