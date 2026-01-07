@@ -29,9 +29,10 @@ pub fn size(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-// ( size -- new ) | rec: array
+// ( size fill -- new ) | rec: array (or factory)
 pub fn array_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let [size_val] = crate::primitives::inputs(ctx);
+    // Expect two inputs: size and the fill value
+    let [size_val, fill_val] = crate::primitives::inputs(ctx);
 
     if !size_val.is_fixnum() {
         return ExecutionResult::Panic("arrayNew: size must be a fixnum");
@@ -40,12 +41,14 @@ pub fn array_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: safe by contract
     let size = unsafe { size_val.as_fixnum::<usize>() };
 
-    let default_val = ctx.vm.specials().false_object.as_value();
+    // Get the raw value to fill with (unwrapping the handle/object)
+    let raw_fill = fill_val.inner();
 
     // SAFETY: we initialize
     let mut arr = unsafe { ctx.heap.allocate_raw_array(size) };
 
-    arr.fields_mut().fill(default_val);
+    // Fill the mutable slice of the new array with the user-provided value
+    arr.fields_mut().fill(raw_fill);
 
     // SAFETY: object is now fully initialized
     ctx.outputs[0] = arr.into();
@@ -85,16 +88,8 @@ pub fn array_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: safe if contract holds
     let mut arr = unsafe { ctx.receiver.cast::<Array>() };
 
-    if !index_val.is_fixnum() {
-        return ExecutionResult::Panic("arrayAtPut: index must be a fixnum");
-    }
-
     // SAFETY: safe if contract holds
     let index = unsafe { index_val.as_fixnum::<usize>() };
-
-    if index >= arr.inner().size() {
-        return ExecutionResult::Panic("arrayAtPut: index out of bounds");
-    }
 
     // SAFETY: Bounds checked above
     unsafe {

@@ -123,6 +123,7 @@ impl VM {
                 SlotHelper::primitive_message("3drop", SlotTags::empty()),
                 SlotHelper::primitive_message("swap", SlotTags::empty()),
                 SlotHelper::primitive_message("over", SlotTags::empty()),
+                SlotHelper::primitive_message("pick", SlotTags::empty()),
                 SlotHelper::primitive_message("rot", SlotTags::empty()),
                 SlotHelper::primitive_message("-rot", SlotTags::empty()),
                 SlotHelper::primitive_message("spin", SlotTags::empty()),
@@ -245,6 +246,7 @@ impl VM {
             SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
             SlotHelper::primitive_message("(clone)", SlotTags::empty()),
             SlotHelper::primitive_message("(cloneBoa)", SlotTags::empty()),
+            SlotHelper::primitive_message("(throw)", SlotTags::empty()),
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized

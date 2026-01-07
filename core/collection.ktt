@@ -13,38 +13,52 @@
 |) |) std traits addTraitSlots
 
 (| indexableCollection = (|
-    size = f /* TODO: unimplemented error */ .
-    nthUnchecked = f /* TODO: unimplemented error */ . 
+    size = (| -- size | childMustImplement! ) .
+    nthUnchecked = (| n -- e | childMustImplement! ) . 
+
+    bounds = (| -- from . to | 0 self size ) .  
     bounds? = (| i -- ? | [ 0 >= ] [ self size < ] bi && ) .
 
-    nth = (| i -- e | dup bounds? [ self nthUnchecked ] 
-        [ drop /* TODO: bounds error */ ] if ) .
-    ?nth = (| i -- e/f | dup bounds? [ self nthUnchecked ] [ drop f ] if ) .
+    nth = (| i -- e | 
+        dup self bounds? [ self nthUnchecked ] [ drop "out of bounds" throw ] if ) .
 
-    withElement = (| q -- from . to . q' | 
-        [ 0 self size [ self nthUnchecked ] ] dip compose ) .
-
-    withIndexElement = (| q -- from . to . q' | 
-        [ 0 self size [ dup self nthUnchecked ] ] dip compose ) .
+    ?nth = (| i -- e/f | dup self bounds? [ self nthUnchecked ] [ drop f ] if ) .
 
     each = (| q -- | 
-        self withElement each[a..b) ) . 
-
-    eachWithIndex = (| q -- | 
-        self withIndexElement each[a..b) ) . 
+        [ self nthUnchecked ] swap compose [ self bounds ] dip each[a..b) ) . 
 
 |) |) std traits addTraitSlots
 
+(| 
+    printStack = (| -- | "stack: " print @vm-depth >string print "" println ) .
+    printStackMsg = (| msg -- | 
+        [ "stack: " print @vm-depth >string print " => " print ] dip print "" println ) .
+|) universe addTraitSlots
+
 (| mutableIndexableCollection = (|
     indexable* = std traits indexableCollection .
-    setNthUnchecked = f /* TODO: bounds error */ . 
-   
-    mutateEach = (| mapping -- new | 
-        self withIndexElement [ swap self setNthUnchecked ] compose each[a..b) self ) .
+    setNthUnchecked = (| e . n -- | childMustImplement! ) . 
+    copyRemoveAll = (| -- new | childMustImplement! ) .
 
-    setNth = (| e . i -- | dup bounds? [ self setNthUnchecked ] 
-        [ 2drop /* TODO: unimplemented error */ ] if ) .
-    ?setNth = (| e . i -- | dup bounds? [ self setNthUnchecked ] [ 2drop ] if ) .
+    setNth = (| e . i -- | 
+            dup self bounds? [ self setNthUnchecked ] [ 2drop "out of bounds" throw ] if ) .
+
+    ?setNth = (| e . i -- | 
+        dup self bounds? [ self setNthUnchecked ] [ 2drop ] if ) .
+
+    map = (| mapping -- new | self copyRemoveAll self mapInto ) .
+
+    mapInto = (| mapping . into -- new |  
+        [ 
+            [ [ self nthUnchecked ] swap compose [ keep ] curry ] dip
+            [ setNthUnchecked ] curry compose 
+            [ self bounds ] dip each[a..b)
+        ] keep ) .
+   
+    mutateEach = (| mapping -- |
+        [ self nthUnchecked ] swap compose
+        [ keep self setNthUnchecked ] curry 
+        [ self bounds ] dip each[a..b) ) .
 |) |) std traits addTraitSlots
 
 (| 
@@ -52,10 +66,7 @@
     collection* = std traits collection .
 |) std traits array addTraitSlots
 
-{ 6.7 "nice" 420 t $[ (| >string = "amazing" |) 1 neg ] f "hehe" }
-[ [ >string print ". " print ] dip >string println ] 
-over eachWithIndex 
+// [ 2 * ] { 1 2 3 4 } map [ >string println ] swap each
 
-{ 1 3 6 $[ 1 neg ] } [ 1 + ] over mutateEach [ >string println ] over each 
 
 

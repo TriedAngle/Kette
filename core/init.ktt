@@ -21,6 +21,8 @@ $[ (|
         |) .
         collections = (| |) .
     |) .
+    throw = (| val -- | self (throw) ) .
+    childMustImplement!! = (| -- | "child must implement this method" self throw ) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
 |) universe addTraitSlots ]
@@ -140,7 +142,9 @@ $[ (|
         (| x . y . p -- | 2keep self call ) .
     tri = (| x . q . p -- | [ keep ] dip keep self call ) .
     each[a..b) = (| from . to -- |  // call self from->to
-       2dup < [ [ drop self call ] 2keep [ 1 + ] dip self each[a..b) ] [ 2drop ] if ) .
+        2dup < [ [ drop self call ] 2keep [ 1 + ] dip self each[a..b) ] [ 2drop ] if ) .
+    curry = (| obj -- curried | self std curried clone! ) .
+    compose = (| quot -- curried | self std composed clone! ) .
 |) std traits callable addTraitSlots
 
 (| 
@@ -148,26 +152,25 @@ $[ (|
         parent* = std traits clonable .
         callable* = std traits callable .
         obj . callable .
-        call = (| ... -- ... | self obj self callable call ) .
+        call = (| -- | self obj self callable call ) .
     |) . 
     composed = (|
         parent* = std traits clonable .
         callable* = std traits callable .
         callable1 . callable2 .
-        call = (| ... -- ... | self callable1 call self callable2 call ) .
+        call = (| -- | self callable1 call self callable2 call ) .
     |) .
 |) std addTraitSlots 
 
 (|
     callable* = std traits callable .
     call = (| -- ... | self (call) ) .
-    curry = (| obj -- curried | self std curried clone! ) .
-    compose = (| quot -- curried | self std composed clone! ) .
 |) std traits quotation addTraitSlots
 
 $[ 
 (| box = (| 
-    parent* = std traits clonable . value . 
+    parent* = std traits clonable . 
+    value . 
     >box = (| value -- boxed | self clone! ) .
     box> = (| -- inner | self value ) .
 |) |) std addTraitSlots
@@ -190,8 +193,10 @@ $[
 (| array = { } |) std addTraitSlots
 
 (| 
+    clonable* = std traits clonable .
     size = (| -- | self (arraySize) ) .
     nthUnchecked = (| i -- e | self (arrayAt) ) .
     setNthUnchecked = (| e . i -- | self (arrayAtPut) ) .
-    newWithSize = (| size -- new | self (arrayNew) ) .
+    newWithSizeFill = (| size . fill -- new | self (arrayNew) ) .
+    copyRemoveAll = (| -- new | self size f self newWithSizeFill ) .
 |) std traits array addTraitSlots

@@ -41,6 +41,8 @@ shuffle! {
 
     over: x y -- x y x ;
 
+    pick: x y z -- x y z x ;
+
     /// rotates top three elements backwards
     rot: x y z -- y z x ;
 
@@ -56,4 +58,5 @@ shuffle! {
     dropd2: x y z -- z ;
 
     swapd: x y z -- y x z ;
+
 }

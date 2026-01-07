@@ -15,6 +15,7 @@ mod message;
 mod method;
 mod parsing;
 mod quotation;
+mod error;
 mod stack;
 mod threads;
 mod vector;
@@ -183,6 +184,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("3drop", 3, 0, stack::drop3),
     PrimitiveMessage::new("swap", 2, 2, stack::swap),
     PrimitiveMessage::new("over", 2, 3, stack::over),
+    PrimitiveMessage::new("pick", 3, 4, stack::pick),
     PrimitiveMessage::new("rot", 3, 3, stack::rot),
     PrimitiveMessage::new("-rot", 3, 3, stack::neg_rot),
     PrimitiveMessage::new("spin", 3, 3, stack::spin),
@@ -252,9 +254,9 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(>quotation)", 0, 1, array::array_to_quotation),
     PrimitiveMessage::new("arrayParent", 0, 1, array::parent),
     PrimitiveMessage::new("(arraySize)",0 , 1, array::size),
-    PrimitiveMessage::new("(arrayNew)", 1, 1, array::array_new),
+    PrimitiveMessage::new("(arrayNew)", 2, 1, array::array_new),
     PrimitiveMessage::new("(arrayAt)", 1, 1, array::array_at),
-    PrimitiveMessage::new("(arrayAtPut)", 2, 1, array::array_at_put),
+    PrimitiveMessage::new("(arrayAtPut)", 2, 0, array::array_at_put),
     // Quotation
     PrimitiveMessage::new("(call)", 0, 0, quotation::call),
     PrimitiveMessage::new("dip", 1, 1, quotation::dip),
@@ -290,6 +292,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(identity)", 0, 1, general::identity),
     PrimitiveMessage::new("(clone)", 1, 1, general::clone_obj),
     PrimitiveMessage::new("(cloneBoa)", 1, 1, general::clone_obj_boa),
+    PrimitiveMessage::new("(throw)", 1, 0,error::throw)
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
