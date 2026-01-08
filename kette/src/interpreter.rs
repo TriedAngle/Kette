@@ -187,6 +187,50 @@ impl Interpreter {
         self.activations.new_activation(new, ActivationType::Method);
     }
 
+    pub fn push_handler(&mut self, tag: Handle<Value>, handler: Handle<Value>) {
+        self.activations.push_handler(tag, handler);
+    }
+
+    /// Signals an exception. 
+    /// 1. Finds handler.
+    /// 2. Pushes `( activation exception )`.
+    /// 3. Calls handler.
+    pub fn signal_exception(&mut self, exception: Handle<Value>) -> ExecutionResult {
+        if let Some((activation, handler)) = self.activations.find_handler(exception) {
+            // Push arguments for the handler: ( activation error -- ... )
+            self.state.push(activation.as_value());
+            self.state.push(exception.into());
+
+            // Execute the handler (Quotation)
+            // SAFETY: Checked in primitive
+            let quotation = unsafe { handler.cast::<Quotation>() };
+            self.add_quotation(quotation);
+
+            return ExecutionResult::ActivationChanged;
+        }
+
+        ExecutionResult::Panic("Unhandled Exception")
+    }
+
+    /// unwinds to the target activation.
+    pub fn unwind_to(&mut self, target_activation: Handle<ActivationObject>) -> ExecutionResult {
+        // Read the index we stored as a fixnum
+        let index = target_activation.stack_index.into();
+        let current_depth = self.activations.depth();
+
+        // Safety checks
+        if index >= current_depth {
+            return ExecutionResult::Panic("Cannot unwind to a future or current frame");
+        }
+
+        tracing::debug!(target: "interpreter", "Unwinding from {} to {}", current_depth, index);
+
+        self.activations.unwind_to(index);
+        self.reload_context();
+
+        ExecutionResult::ActivationChanged
+    }
+
     /// Helper to retrieve a value from the current code's constant pool
     #[inline(always)]
     pub fn get_constant(&self, index: u32) -> Value {

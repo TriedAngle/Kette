@@ -33,7 +33,6 @@
         self mapInto ) .
 |) |) std addTraitSlots
 
-
 10 std vector newWithCapacity 
 1 over add 
 9 over add 
@@ -43,3 +42,5 @@
     "new:" println
     [ >string println ] swap each
 ] keep "original:" println [ >string println ] swap each
+
+

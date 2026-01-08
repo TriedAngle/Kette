@@ -41,7 +41,7 @@
     copyRemoveAll = (| -- new | childMustImplement! ) .
 
     setNth = (| e . i -- | 
-            dup self bounds? [ self setNthUnchecked ] [ 2drop "out of bounds" throw ] if ) .
+        dup self bounds? [ self setNthUnchecked ] [ 2drop "out of bounds" throw ] if ) .
 
     ?setNth = (| e . i -- | 
         dup self bounds? [ self setNthUnchecked ] [ 2drop ] if ) .

@@ -244,9 +244,12 @@ impl VM {
             SlotHelper::primitive_message2("universe", "(identity)", SlotTags::empty()),
             SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
             SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
+
             SlotHelper::primitive_message("(clone)", SlotTags::empty()),
             SlotHelper::primitive_message("(cloneBoa)", SlotTags::empty()),
-            SlotHelper::primitive_message("(throw)", SlotTags::empty()),
+            SlotHelper::primitive_message("(signal)", SlotTags::empty()),
+            SlotHelper::primitive_message("(withHandler)", SlotTags::empty()),
+            SlotHelper::primitive_message("(unwind)", SlotTags::empty()),
         ]);
 
         // SAFETY: this is safe, no gc can happen here and afterwards these are initialized

@@ -28,18 +28,25 @@ pub enum OpCode {
     /// Send a primitive message
     SendPrimitive = 0x05,
 
+    /// Send to any super
+    SendSuper = 0x06,
+
+    /// send to a specific parent 
+    /// Payload: Index of the Name of the parent in the constant pool. 
+    SendParent = 0x07,
+
     /// Creates a slot object from a map.
     /// Payload: Index of the SlotMap in the constant pool.
-    CreateSlotObject = 0x06,
+    CreateSlotObject = 0x08,
 
     /// Creates a quotation object from a map
     /// Payload: Index of the Map in the constant pool.
-    CreateQuotation = 0x07,
+    CreateQuotation = 0x09,
 
     /// Move top of stack to return stack
-    PushReturn = 0x08,
+    PushReturn = 0x0A,
     /// Move top of return stack to stack
-    PopReturn = 0x09,
+    PopReturn = 0x0B,
 }
 
 impl OpCode {

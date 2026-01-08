@@ -1,12 +1,13 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Code, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
-    ObjectType, Selector, SlotMap, Value, Visitable, VisitedLink, Visitor,
+    Code, Handle, Header, HeapObject, HeapValue, LookupResult, Object,
+    ObjectKind, ObjectType, Selector, SlotMap, SlotObject, Tagged, Value,
+    Visitable, VisitedLink, Visitor,
 };
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ActivationType {
     Method,
     Quotation,
@@ -19,6 +20,8 @@ pub struct Activation {
     pub ty: ActivationType,
     /// instruction index, combined with the code in ExecutableMap
     pub index: usize,
+    /// (any value, any callable)
+    pub handlers: Vec<(Handle<Value>, Handle<Value>)>,
 }
 
 // TODO: add scope
@@ -28,6 +31,9 @@ pub struct ActivationObject {
     pub header: Header,
     pub map: Handle<SlotMap>,
     pub receiver: Handle<Value>,
+    /// The absolute index of this activation in the ActivationStack.
+    /// Used for O(1) unwinding
+    pub stack_index: Tagged<usize>,
     // either the parent or false. implement this with scope
     // lambdas must probably be handled special, because they can escape their creation scope
     // pub parent: Tagged<ActivationObject>,
@@ -42,6 +48,13 @@ impl Activation {
     #[inline]
     pub fn code(&self) -> &Code {
         self.object.code()
+    }
+
+    /// Getter for the registered handlers in this activation.
+    /// Returns: Vec<(Type/Map, Handler)>
+    #[inline]
+    pub fn handlers(&self) -> &[(Handle<Value>, Handle<Value>)] {
+        &self.handlers
     }
 }
 
@@ -58,8 +71,6 @@ impl ActivationObject {
         self.map = map;
         self.receiver = receiver;
 
-        // TODO: must be fixed for quotations
-        // Safety: map is valid here
         assert_eq!(
             map.input_count(),
             arguments.len(),
@@ -149,14 +160,17 @@ impl ActivationStack {
 
     pub fn new_activation(
         &mut self,
-        object: Handle<ActivationObject>,
+        mut object: Handle<ActivationObject>,
         ty: ActivationType,
     ) {
+        object.stack_index = self.depth().into();
+
         // SAFETY: part of gc scan
         let activation = Activation {
             object,
             ty,
             index: 0,
+            handlers: Vec::new(),
         };
 
         self.0.push(activation);
@@ -174,6 +188,84 @@ impl ActivationStack {
     /// Returns a mutable iterator over the activations.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Activation> {
         self.0.iter_mut()
+    }
+
+    /// Pushes a new exception handler onto the *current* (top-most) activation.
+    ///
+    /// # Arguments
+    /// * `ty` - The object type (Map/Class) that this handler catches.
+    /// * `handler` - The callable (Block/Method) to execute.
+    ///
+    /// # Panics
+    /// Panics if the stack is empty.
+    pub fn push_handler(&mut self, ty: Handle<Value>, handler: Handle<Value>) {
+        self.current_mut()
+            .expect("cannot push handler to empty stack")
+            .handlers
+            .push((ty, handler));
+    }
+
+    /// Search for a handler that matches the provided exception object.
+    ///
+    /// Matching Logic:
+    /// 1. **Fixnum**: Matches by strict equality (value match).
+    /// 2. **SlotObject**: Matches if the object's `map` equals the `handler_tag`.
+    /// 3. **Other Objects**: Matches if the `ObjectType` (header tag) is identical.
+    pub fn find_handler(
+        &self,
+        exception_val: Handle<Value>,
+    ) -> Option<(Handle<ActivationObject>, Handle<Value>)> {
+        for activation in self.0.iter().rev() {
+            for &(guard, handler) in activation.handlers.iter().rev() {
+                if Self::matches_exception(exception_val, guard) {
+                    return Some((activation.object, handler));
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to check if an exception value matches a handler tag/type.
+    fn matches_exception(
+        exception: Handle<Value>,
+        guard: Handle<Value>,
+    ) -> bool {
+        if exception == guard {
+            return true;
+        }
+
+        if exception.is_fixnum() || guard.is_fixnum() {
+            return false;
+        }
+
+        let ex_obj = unsafe { exception.as_heap_value_handle() };
+        let handler_obj = unsafe { guard.as_heap_value_handle() };
+
+        if let Some(ex_slot) = ex_obj.downcast_ref::<SlotObject>() {
+            // TODO: parenting
+            if let Some(handler_slot) = handler_obj.downcast_ref::<SlotObject>()
+            {
+                return ex_slot.map == handler_slot.map;
+            } else {
+                return false;
+            }
+        }
+
+        ex_obj.header.kind() == handler_obj.header.kind()
+            && ex_obj.header.type_bits() == handler_obj.header.type_bits()
+    }
+
+    /// Unwinds the stack so that `index` becomes the new top of the stack.
+    ///
+    /// This drops all activations *above* `index`. The activation at `index`
+    /// remains alive (it contains the handler code we are about to run).
+    pub fn unwind_to(&mut self, index: usize) {
+        if index >= self.0.len() {
+            return;
+        }
+        // truncate keeps the first `len` elements.
+        // We want to keep indices 0..=index, so length is index + 1.
+        self.0.truncate(index + 1);
     }
 }
 

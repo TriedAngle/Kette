@@ -292,7 +292,10 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(identity)", 0, 1, general::identity),
     PrimitiveMessage::new("(clone)", 1, 1, general::clone_obj),
     PrimitiveMessage::new("(cloneBoa)", 1, 1, general::clone_obj_boa),
-    PrimitiveMessage::new("(throw)", 1, 0,error::throw)
+    // errors
+    PrimitiveMessage::new("(signal)", 0, 0,error::signal),
+    PrimitiveMessage::new("(withHandler)", 2, 0,error::signal),
+    PrimitiveMessage::new("(unwind)", 0, 0,error::signal),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
