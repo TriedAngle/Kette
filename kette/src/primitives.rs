@@ -293,9 +293,9 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(clone)", 1, 1, general::clone_obj),
     PrimitiveMessage::new("(cloneBoa)", 1, 1, general::clone_obj_boa),
     // errors
-    PrimitiveMessage::new("(signal)", 0, 0,error::signal),
-    PrimitiveMessage::new("(withHandler)", 2, 0,error::signal),
-    PrimitiveMessage::new("(unwind)", 0, 0,error::signal),
+    PrimitiveMessage::new("(signal)", 1, 0,error::signal),
+    PrimitiveMessage::new("(withHandler)", 2, 0,error::with_handler),
+    PrimitiveMessage::new("(unwind)", 1, 0,error::unwind),
 ];
 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {

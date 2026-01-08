@@ -263,9 +263,7 @@ impl ActivationStack {
         if index >= self.0.len() {
             return;
         }
-        // truncate keeps the first `len` elements.
-        // We want to keep indices 0..=index, so length is index + 1.
-        self.0.truncate(index + 1);
+        self.0.truncate(index);
     }
 }
 

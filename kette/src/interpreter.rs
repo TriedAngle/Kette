@@ -191,12 +191,17 @@ impl Interpreter {
         self.activations.push_handler(tag, handler);
     }
 
-    /// Signals an exception. 
+    /// Signals an exception.
     /// 1. Finds handler.
     /// 2. Pushes `( activation exception )`.
     /// 3. Calls handler.
-    pub fn signal_exception(&mut self, exception: Handle<Value>) -> ExecutionResult {
-        if let Some((activation, handler)) = self.activations.find_handler(exception) {
+    pub fn signal_exception(
+        &mut self,
+        exception: Handle<Value>,
+    ) -> ExecutionResult {
+        if let Some((activation, handler)) =
+            self.activations.find_handler(exception)
+        {
             // Push arguments for the handler: ( activation error -- ... )
             self.state.push(activation.as_value());
             self.state.push(exception.into());
@@ -213,20 +218,24 @@ impl Interpreter {
     }
 
     /// unwinds to the target activation.
-    pub fn unwind_to(&mut self, target_activation: Handle<ActivationObject>) -> ExecutionResult {
+    pub fn unwind_to(
+        &mut self,
+        target_activation: Handle<ActivationObject>,
+    ) -> ExecutionResult {
         // Read the index we stored as a fixnum
         let index = target_activation.stack_index.into();
         let current_depth = self.activations.depth();
 
         // Safety checks
         if index >= current_depth {
-            return ExecutionResult::Panic("Cannot unwind to a future or current frame");
+            return ExecutionResult::Panic(
+                "Cannot unwind to a future or current frame",
+            );
         }
 
         tracing::debug!(target: "interpreter", "Unwinding from {} to {}", current_depth, index);
 
         self.activations.unwind_to(index);
-        self.reload_context();
 
         ExecutionResult::ActivationChanged
     }

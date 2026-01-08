@@ -16,7 +16,7 @@
 
     newWithSizeFill = (| size . fill -- new | dupd std array newWithSizeFill self clone! ) .
     newWithCapacity = (| cap -- new | 0 swap f std array newWithSizeFill self clone! ) .
-    copyRemoveAll = (| -- new | 0 self items clone self clone! ) .
+    copyRemoveAll = (| -- new | 0 self items copyRemoveAll self clone! ) .
 
     add = (| value -- | 
         self size self items size <
@@ -33,14 +33,19 @@
         self mapInto ) .
 |) |) std addTraitSlots
 
-10 std vector newWithCapacity 
-1 over add 
-9 over add 
-64 over add 
-[
-    [ 4 * ] swap map 
-    "new:" println
-    [ >string println ] swap each
-] keep "original:" println [ >string println ] swap each
 
+"random code before ...." println
+
+(| dangerous = (| -- | 55 signal "lmfao we can just continue" println ) |)
+55 [ 2drop "we handle this by ignoring it hehe" println ] [
+    dangerous "this is following code" println
+] withHandler
+
+"--------------" println
+(| dangerous = (| -- | 55 signal "lmfao we can just continue" println ) |)
+55 [ "we can also unwind" println drop unwind ] [
+    dangerous "this is following code" println
+] withHandler
+
+"random code after ...." println
 

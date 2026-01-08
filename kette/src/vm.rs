@@ -218,6 +218,7 @@ impl VM {
             SlotHelper::primitive_message("dip", SlotTags::empty()),
             SlotHelper::primitive_message("if", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "quotationParent", SlotTags::empty()),
+            SlotHelper::primitive_message("(withHandler)", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -248,7 +249,6 @@ impl VM {
             SlotHelper::primitive_message("(clone)", SlotTags::empty()),
             SlotHelper::primitive_message("(cloneBoa)", SlotTags::empty()),
             SlotHelper::primitive_message("(signal)", SlotTags::empty()),
-            SlotHelper::primitive_message("(withHandler)", SlotTags::empty()),
             SlotHelper::primitive_message("(unwind)", SlotTags::empty()),
         ]);
 

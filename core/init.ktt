@@ -1,4 +1,5 @@
-$[ (|
+$[ 
+(|
     LanguageVersion = "0.1.0" .
     std = (|
         traits = (| 
@@ -21,11 +22,19 @@ $[ (|
         |) .
         collections = (| |) .
     |) .
-    throw = (| val -- | self (throw) ) .
-    childMustImplement!! = (| -- | "child must implement this method" self throw ) .
+    signal = (| value -- | (signal) ) .
+    unwind = (| activation -- | (unwind) ) .
     t = 0 0 fixnum= . 
     f = 0 1 fixnum= .
 |) universe addTraitSlots ]
+
+/*
+(| 
+    defaultBehavior* = (|
+        
+    |)
+|) dup std traits clonable addTraitSlots std traits oddball addTraitSlots
+*/
 
 (| addBoolAbilities = (| -- |
     (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
@@ -100,6 +109,7 @@ $[ (|
 |) std traits float addTraitSlots
 
 (| 
+    clonable* = std traits clonable .
     print = (| -- | self (print) ) .
     println = (| -- | self (println) ) . 
     size = (| -- | self (bytearraySize) ) .
@@ -163,8 +173,10 @@ $[ (|
 |) std addTraitSlots 
 
 (|
+    clonable* = std traits clonable .
     callable* = std traits callable .
     call = (| -- ... | self (call) ) .
+    withHandler = (| proto . handler -- | self (withHandler) ) .
 |) std traits quotation addTraitSlots
 
 $[ 
