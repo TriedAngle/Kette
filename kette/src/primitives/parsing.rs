@@ -14,9 +14,7 @@ fn parser_error(ctx: &PrimitiveContext, msg: &str) -> ExecutionResult {
         msg, parser.line, parser.column
     );
 
-    // TODO: heap alloc this
-    let leaked = Box::leak(error_msg.into_boxed_str());
-    ExecutionResult::Panic(leaked)
+    ExecutionResult::Panic(error_msg)
 }
 
 pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
@@ -68,7 +66,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let (res, _) = parse_until_inner(ctx, &[end], body_accum);
     if res != ExecutionResult::Normal {
-        return ExecutionResult::Panic("Parsing failed!");
+        return parser_error(ctx, "Failed parsing quotation");
     }
 
     let body = ctx.heap.allocate_array(body_accum.as_slice());
@@ -113,7 +111,7 @@ pub fn parse_complete(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let (res, _) = parse_until_inner(ctx, &[], accumulator);
     if res != ExecutionResult::Normal {
-        return ExecutionResult::Panic("Parsing failed!");
+        return res;
     }
 
     let accumulated = ctx.heap.allocate_array(accumulator.as_slice());
@@ -132,7 +130,7 @@ pub fn parse_until(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let (res, _) = parse_until_inner(ctx, &[end], accumulator);
     if res != ExecutionResult::Normal {
-        return ExecutionResult::Panic("Parsing failed!");
+        return res;
     }
 
     // trimming
@@ -249,7 +247,11 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         };
 
                         ctx.state.push(accum.as_value());
-                        ctx.interpreter.add_method(ctx.receiver, method);
+                        if let Err(e) =
+                            ctx.interpreter.add_method(ctx.receiver, method)
+                        {
+                            return (e, None);
+                        }
 
                         let exec_res =
                             ctx.interpreter.execute_current_activation();
@@ -276,7 +278,10 @@ fn parse_until_inner<'m, 'ex, 'arg>(
     }
 
     if !ends.is_empty() {
-        return (ExecutionResult::Panic("not found"), None);
+        return (
+            ExecutionResult::Panic(format!("End {:?} not found", ends)),
+            None,
+        );
     }
     (ExecutionResult::Normal, None)
 }
@@ -302,7 +307,6 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // Terminators for the code body parser
     let body_terminators = [close_bar_msg, close_paren_msg];
 
-    // --- State ---
     let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
     let mut assignable_offset: i64 = 0;
 
@@ -556,7 +560,7 @@ pub fn parse_block_comment(ctx: &mut PrimitiveContext) -> ExecutionResult {
     }
 
     ExecutionResult::Panic(
-        "Parsing Error: Unterminated block comment (missing '*/')",
+        "Parsing Error: Unterminated block comment (missing '*/')".to_string(),
     )
 }
 

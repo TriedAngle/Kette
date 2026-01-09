@@ -39,7 +39,7 @@ pub fn bytearray_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [size_val] = inputs(ctx);
 
     if !size_val.is_fixnum() {
-        return ExecutionResult::Panic("bytearrayNew: size must be a fixnum");
+        return ExecutionResult::Panic("bytearrayNew: size must be a fixnum".to_string());
     }
 
     // SAFETY: safe if contract holds
@@ -60,7 +60,7 @@ pub fn bytearray_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
 
     if !index_val.is_fixnum() {
-        return ExecutionResult::Panic("bytearrayAt: index must be a fixnum");
+        return ExecutionResult::Panic("bytearrayAt: index must be a fixnum".to_string());
     }
 
     // SAFETY: safe if contract holds
@@ -68,7 +68,7 @@ pub fn bytearray_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let slice = ba.inner().as_bytes();
 
     if index >= slice.len() {
-        return ExecutionResult::Panic("bytearrayAt: index out of bounds");
+        return ExecutionResult::Panic("bytearrayAt: index out of bounds".to_string());
     }
 
     let val = slice[index];
@@ -86,7 +86,7 @@ pub fn bytearray_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     if !index_val.is_fixnum() || !value_val.is_fixnum() {
         return ExecutionResult::Panic(
-            "bytearrayAtPut: index and value must be fixnums",
+            "bytearrayAtPut: index and value must be fixnums".to_string(),
         );
     }
 
@@ -98,7 +98,7 @@ pub fn bytearray_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let slice = ba.as_bytes_mut();
 
     if index >= slice.len() {
-        return ExecutionResult::Panic("bytearrayAtPut: index out of bounds");
+        return ExecutionResult::Panic("bytearrayAtPut: index out of bounds".to_string());
     }
 
     slice[index] = value;
@@ -113,7 +113,7 @@ pub fn bytearray_memset(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let mut ba = unsafe { ctx.receiver.cast::<ByteArray>() };
 
     if !index_v.is_fixnum() || !count_v.is_fixnum() || !value_v.is_fixnum() {
-        return ExecutionResult::Panic("bytearrayMemset: args must be fixnums");
+        return ExecutionResult::Panic("bytearrayMemset: args must be fixnums".to_string());
     }
 
     // SAFETY: safe if contract holds
@@ -126,7 +126,7 @@ pub fn bytearray_memset(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let slice = ba.as_bytes_mut();
 
     if start + count > slice.len() {
-        return ExecutionResult::Panic("bytearrayMemset: range out of bounds");
+        return ExecutionResult::Panic("bytearrayMemset: range out of bounds".to_string());
     }
 
     // SAFETY: checked
@@ -147,7 +147,7 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
     if !dest_idx_v.is_fixnum() || !src_idx_v.is_fixnum() || !count_v.is_fixnum()
     {
         return ExecutionResult::Panic(
-            "bytearrayMemcpy: indices/count must be fixnums",
+            "bytearrayMemcpy: indices/count must be fixnums".to_string(),
         );
     }
 
@@ -155,7 +155,7 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let src_handle = unsafe { src_obj_v.as_heap_value_handle() };
     if src_handle.header.object_type() != Some(ObjectType::ByteArray) {
         return ExecutionResult::Panic(
-            "bytearrayMemcpy: source must be a bytearray",
+            "bytearrayMemcpy: source must be a bytearray".to_string(),
         );
     }
     // SAFETY: safe if contract holds
@@ -174,7 +174,7 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
     if dest_start + count > dest_slice.len()
         || src_start + count > src_slice.len()
     {
-        return ExecutionResult::Panic("bytearrayMemcpy: range out of bounds");
+        return ExecutionResult::Panic("bytearrayMemcpy: range out of bounds".to_string());
     }
 
     // SAFETY: checked

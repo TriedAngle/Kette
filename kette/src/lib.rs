@@ -8,6 +8,7 @@ mod lookup;
 mod objects;
 mod parker;
 mod primitives;
+mod print;
 
 mod barrier;
 mod heap;

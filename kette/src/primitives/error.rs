@@ -13,21 +13,18 @@ pub fn with_handler(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let heap_val = unsafe { body.as_heap_value_handle() };
 
     if !heap_val.is::<Quotation>() {
-        return ExecutionResult::Panic("withHandler expects a quotation body");
+        return ExecutionResult::Panic("withHandler expects a quotation body".to_string());
     }
 
-    // We also require handler to be a quotation, enforced by logic later or here
     let handler_heap = unsafe { handler.as_heap_value_handle() };
     if !handler_heap.is::<Quotation>() {
-        return ExecutionResult::Panic("handler must be a quotation");
+        return ExecutionResult::Panic("handler must be a quotation".to_string());
     }
 
     let quotation = unsafe { body.cast::<Quotation>() };
 
-    // create a NEW activation and push it
     ctx.interpreter.add_quotation(quotation);
 
-    // Attach the handler to that NEW activation
     let top_activation = ctx.interpreter.activations.current_mut()
         .expect("Activation must exist after add_quotation");
     
@@ -51,7 +48,7 @@ pub fn unwind(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let heap_val = unsafe { activation_val.as_heap_value_handle() };
     let Some(_activation) = heap_val.downcast_ref::<ActivationObject>() else {
-        return ExecutionResult::Panic("unwind expects an Activation object");
+        return ExecutionResult::Panic("unwind expects an Activation object".to_string());
     };
 
     let handle = unsafe { activation_val.cast::<ActivationObject>() };

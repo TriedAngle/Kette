@@ -2,7 +2,7 @@ use crate::Value;
 
 // TODO: automate their construction and give them mostly fixed sizes
 // we don't need a full Vector in most cases, we often don't want bounds check in fast path
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExecutionState {
     pub stack: Vec<Value>,
     pub depth: usize,

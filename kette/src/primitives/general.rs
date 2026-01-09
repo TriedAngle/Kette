@@ -44,14 +44,14 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
         let tags = sd.tags();
         if !is_constant_slot(tags) {
             return ExecutionResult::Panic(
-                "addTraitSlots: only constant slots can be used",
+                "addTraitSlots: only constant slots can be used".to_string(),
             );
         }
 
         let k = name_key(sd.name);
         if existing.contains(&k) {
             return ExecutionResult::Panic(
-                "addTraitSlots: Duplicate slot name",
+                "addTraitSlots: Duplicate slot name".to_string(),
             );
         }
         existing.insert(k);
@@ -178,14 +178,14 @@ pub fn clone_obj_boa(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // CloneBoa mainly makes sense for SlotObjects (objects with assignable slots).
     // If passed a primitive or non-slot object, we panic or return error.
     if !obj.is_object() {
-        return ExecutionResult::Panic("cloneBoa: expected heap object");
+        return ExecutionResult::Panic("cloneBoa: expected heap object".to_string());
     }
 
     // SAFETY: checked
     let heap_obj = unsafe { obj.as_heap_value_handle() };
 
     if heap_obj.header.object_type() != Some(ObjectType::Slot) {
-        return ExecutionResult::Panic("cloneBoa: expected SlotObject");
+        return ExecutionResult::Panic("cloneBoa: expected SlotObject".to_string());
     }
 
     // SAFETY: checked

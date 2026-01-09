@@ -35,13 +35,13 @@ pub enum NumberError {
     DivisionByZero,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)] // Removed Copy
 pub enum ExecutionResult {
     Normal,
     ActivationChanged,
     NumberError(NumberError),
     Yield,
-    Panic(&'static str),
+    Panic(String),
 }
 
 impl Interpreter {
@@ -156,6 +156,17 @@ impl Interpreter {
         unsafe { self.cache.as_mut().unwrap_unchecked() }
     }
 
+    #[inline(always)]
+    pub fn check_min_stack(&self, count: usize) -> Result<(), ExecutionResult> {
+        if self.state.depth < count {
+            return Err(ExecutionResult::Panic(format!(
+                "Stack Underflow: required {}, got {}",
+                count, self.state.depth
+            )));
+        }
+        Ok(())
+    }
+
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
         let activation_object =
             self.heap.allocate_quotation_activation(quotation, &[]);
@@ -168,14 +179,17 @@ impl Interpreter {
         &mut self,
         receiver: Handle<Value>,
         method: Handle<SlotObject>,
-    ) {
+    ) -> Result<(), ExecutionResult> {
         let map = method.map;
 
         let slot_count = map.input_count();
 
+        if let Err(e) = self.check_min_stack(slot_count) {
+            return Err(e);
+        }
+
         // idea: peek here, this saves the inputs,
         // now just continue with normal stack
-        // SAFETY: TODO: stack depth check
         let slots =
             unsafe { self.state.stack_peek_slice_unchecked(slot_count) };
         // SAFETY: TODO: actually put them into handle set
@@ -185,6 +199,7 @@ impl Interpreter {
             .heap
             .allocate_method_activation(receiver, method, slots);
         self.activations.new_activation(new, ActivationType::Method);
+        Ok(())
     }
 
     pub fn push_handler(&mut self, tag: Handle<Value>, handler: Handle<Value>) {
@@ -214,7 +229,7 @@ impl Interpreter {
             return ExecutionResult::ActivationChanged;
         }
 
-        ExecutionResult::Panic("Unhandled Exception")
+        ExecutionResult::Panic("Unhandled Exception".to_string())
     }
 
     /// unwinds to the target activation.
@@ -229,7 +244,7 @@ impl Interpreter {
         // Safety checks
         if index >= current_depth {
             return ExecutionResult::Panic(
-                "Cannot unwind to a future or current frame",
+                "Cannot unwind to a future or current frame".to_string(),
             );
         }
 
@@ -388,6 +403,9 @@ impl Interpreter {
                         unsafe { object.as_value().as_handle_unchecked() }
                     }
                     LookupResult::None => {
+                        if let Err(e) = self.check_min_stack(1) {
+                            return e;
+                        }
                         // SAFETY: correctly setup by compiler
                         unsafe {
                             self.state.pop_unchecked().as_handle_unchecked()
@@ -404,6 +422,11 @@ impl Interpreter {
                     // SAFETY: correctly setup by compiler
                     unsafe { PrimitiveMessageIndex::from_usize(operand as usize) };
                 self.heap.safepoint();
+
+                if let Err(e) = self.check_min_stack(1) {
+                    return e;
+                }
+
                 // SAFETY: correctly setup by compiler
                 let receiver =
                     unsafe { self.state.pop_unchecked().as_handle_unchecked() };
@@ -422,6 +445,11 @@ impl Interpreter {
                     unsafe { map_val.as_handle_unchecked().cast::<SlotMap>() };
 
                 let slot_count = map.data_slots();
+
+                if let Err(e) = self.check_min_stack(slot_count) {
+                    return e;
+                }
+
                 // SAFETY: correctly setup by compiler
                 let slots =
                     unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
@@ -470,13 +498,18 @@ impl Interpreter {
     ) -> ExecutionResult {
         let message = get_primitive(id);
         let _span = tracing::span!(tracing::Level::TRACE, "primitive send", receiver = ?receiver, message = ?message.name).entered();
-        // SAFETY: not safe yet, TOOD: depth check
+
+        if let Err(e) = self.check_min_stack(message.inputs) {
+            return e;
+        }
+
         let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
         // the initialization is guaranted after the call
         let mut outputs = Vec::with_capacity(message.outputs);
 
         // SAFETY: gc not running
         let inputs = unsafe { transmute::values_as_handles(inputs.as_slice()) };
+
         // SAFETY: allocated with this size
         #[allow(clippy::uninit_vec)]
         unsafe {
@@ -493,17 +526,11 @@ impl Interpreter {
                 unsafe { self.state.stack_push_slice_unchecked(outputs) };
             }
             ExecutionResult::ActivationChanged => {}
-            ExecutionResult::Panic(msg) => panic!("Panic: {:?}", msg),
+            ExecutionResult::Panic(msg) => return ExecutionResult::Panic(msg),
             _ => unimplemented!(
                 "TODO: implement the different ExecutionResult handling"
             ),
         }
-        if res != ExecutionResult::Normal {
-            outputs
-                .into_iter()
-                .for_each(|out| self.state.push(out.into()));
-        }
-
         res
     }
 
@@ -512,7 +539,8 @@ impl Interpreter {
         receiver: Handle<Value>,
         selector: Selector,
     ) -> ExecutionResult {
-        let selector_name = selector.name.as_utf8();
+        let selector_name =
+            selector.name.as_utf8().expect("Selector must be string");
         let _span = tracing::span!(tracing::Level::TRACE, "send message", receiver = ?receiver, selector = ?selector_name).entered();
 
         let res = selector.clone().lookup_object(&receiver.inner());
@@ -520,7 +548,10 @@ impl Interpreter {
         let slot = match res {
             LookupResult::Found { slot, .. } => slot,
             LookupResult::None => {
-                panic!("Panic: {:?} not found", selector_name)
+                return ExecutionResult::Panic(format!(
+                    "Message not understood: '{}'",
+                    selector_name
+                ));
             }
         };
 
@@ -575,7 +606,9 @@ impl Interpreter {
                 slot.value.as_handle_unchecked().cast::<SlotObject>()
             };
 
-            self.add_method(receiver, method);
+            if let Err(e) = self.add_method(receiver, method) {
+                return e;
+            }
 
             return ExecutionResult::ActivationChanged;
         }

@@ -1,17 +1,25 @@
 use clap::Parser as ClapParser;
 use kette::{
-    Allocator, Array, BytecodeCompiler, ExecutionState, ExecutionStateInfo,
-    Handle, HeapSettings, Instruction, Interpreter, OpCode, Parser, Tagged,
-    ThreadProxy, VM, VMCreateInfo, VMThread,
+    Allocator, Array, BytecodeCompiler, ExecutionResult, ExecutionState,
+    ExecutionStateInfo, Handle, HeapSettings, Instruction, Interpreter, OpCode,
+    Parser, Tagged, ThreadProxy, VM, VMCreateInfo, VMThread,
 };
-use std::{fs, process};
+use std::{
+    fs,
+    io::{self, Write},
+    process,
+};
 
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Input kette source files to execute in order
-    #[arg(required = true, help = "The .ktt files to execute")]
+    #[arg(required = false, help = "The .ktt files to execute")]
     files: Vec<String>,
+
+    /// Start REPL after executing files (default behavior if no files provided)
+    #[arg(long, short, help = "Force REPL mode after file execution")]
+    repl: bool,
 }
 
 fn main() {
@@ -30,7 +38,6 @@ fn main() {
     });
 
     let main_proxy = vm.proxy();
-
     let heap = main_proxy.shared.heap.proxy();
 
     let state = ExecutionState::new(&ExecutionStateInfo {
@@ -44,6 +51,7 @@ fn main() {
 
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
 
+    // FILES:
     for filename in &cli.files {
         tracing::debug!("Loading file: {}", filename);
 
@@ -55,78 +63,158 @@ fn main() {
             }
         };
 
-        let parser_proxy = vm.proxy();
+        match execute_source(&mut interpreter, &source_code) {
+            Ok(_) => {
+                // Print stack after file execution
+                interpreter.print_stack();
+            }
+            Err(e) => {
+                eprintln!("Error executing {}: {}", filename, e);
+                process::exit(1);
+            }
+        }
+    }
 
-        let mut parser = Box::new(Parser::new_object(
-            &parser_proxy,
-            &mut interpreter.heap,
-            source_code.as_bytes(),
-        ));
+    // REPL:
+    if cli.repl || cli.files.is_empty() {
+        run_repl(&mut interpreter);
+    }
+}
 
-        let parser_obj = Tagged::new_ptr(parser.as_mut());
+fn run_repl(interpreter: &mut Interpreter) {
+    println!("Kette REPL");
+    println!("Type 'exit' to quit.");
 
-        // Intern the "parse" message
-        let parse_msg = interpreter
-            .vm
-            .intern_string_message("parse", &mut interpreter.heap);
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    let mut input_buffer = String::new();
 
-        let constants = vec![parser_obj.as_value(), parse_msg.as_value()];
+    loop {
+        print!("> ");
+        if let Err(e) = stdout.flush() {
+            eprintln!("Error flushing stdout: {}", e);
+            break;
+        }
 
-        let instructions = vec![
-            Instruction::new_data(OpCode::PushConstant, 0),
-            Instruction::new_data(OpCode::Send, 1),
-            Instruction::new(OpCode::Return),
-        ];
+        input_buffer.clear();
 
-        // Allocate a dummy body (empty array) just to satisfy the Quotation
-        let dummy_body = interpreter.heap.allocate_array(&[]);
+        match stdin.read_line(&mut input_buffer) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                let input = input_buffer.trim();
+                if input == "exit" {
+                    break;
+                }
+                if input.is_empty() {
+                    continue;
+                }
 
-        // Allocate the Code object
-        let boot_code = interpreter.heap.allocate_code(
-            &constants,
-            &instructions,
-            dummy_body,
-        );
+                // SNAPSHOT:
+                let saved_state = interpreter.state.clone();
+                let saved_activations = interpreter.activations.clone();
 
-        let boot_map =
-            interpreter.heap.allocate_executable_map(boot_code, 0, 0);
+                match execute_source(interpreter, &input_buffer) {
+                    Ok(_) => {
+                        interpreter.print_stack();
+                    }
+                    Err(msg) => {
+                        eprintln!("Error: {}", msg);
 
-        // Create the Bootstrap Quotation
-        let boot_quotation = interpreter
+                        interpreter.state = saved_state;
+                        interpreter.activations = saved_activations;
+                        interpreter.print_stack();
+                        interpreter.cache = None;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break;
+            }
+        }
+    }
+}
+
+/// Helper to Parse, Compile, and Execute a chunk of source code.
+fn execute_source(
+    interpreter: &mut Interpreter,
+    source: &str,
+) -> Result<(), String> {
+    let parser_proxy = interpreter.vm.create_proxy();
+
+    let mut parser = Box::new(Parser::new_object(
+        &parser_proxy,
+        &mut interpreter.heap,
+        source.as_bytes(),
+    ));
+
+    let parser_obj = Tagged::new_ptr(parser.as_mut());
+
+    let parse_msg = interpreter
+        .vm
+        .intern_string_message("parse", &mut interpreter.heap);
+
+    let constants = vec![parser_obj.as_value(), parse_msg.as_value()];
+
+    let instructions = vec![
+        Instruction::new_data(OpCode::PushConstant, 0),
+        Instruction::new_data(OpCode::Send, 1),
+        Instruction::new(OpCode::Return),
+    ];
+
+    let dummy_body = interpreter.heap.allocate_array(&[]);
+
+    let boot_code =
+        interpreter
             .heap
-            // SAFETY: this is safe
-            .allocate_quotation(boot_map, unsafe { Handle::null() });
+            .allocate_code(&constants, &instructions, dummy_body);
 
-        // 3. Execute the Parser
-        interpreter.add_quotation(boot_quotation);
-        interpreter.execute();
+    let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
 
-        // SAFETY: this is safe
-        let body = unsafe {
-            interpreter
-                .state
-                .pop()
-                .expect("Parser did not return a body")
-                .as_handle_unchecked()
-                .cast::<Array>()
-        };
+    let boot_quotation = interpreter
+        .heap
+        .allocate_quotation(boot_map, unsafe { Handle::null() });
 
-        let code = BytecodeCompiler::compile(
-            &interpreter.vm.shared,
-            &mut interpreter.heap,
-            body,
-        );
+    interpreter.add_quotation(boot_quotation);
 
-        let code_map = interpreter.heap.allocate_executable_map(code, 0, 0);
+    match interpreter.execute() {
+        ExecutionResult::Normal => {}
+        ExecutionResult::Panic(msg) => {
+            return Err(format!("Parser Panic: {}", msg));
+        }
+        res => return Err(format!("Parser abnormal exit: {:?}", res)),
+    }
 
-        let quotation = interpreter
-            .heap
-            // SAFETY: this is safe
-            .allocate_quotation(code_map, unsafe { Handle::null() });
+    let body_val = match interpreter.state.pop() {
+        Some(v) => v,
+        None => {
+            return Err("Parser did not return a value (Empty Stack)".into());
+        }
+    };
 
-        interpreter.add_quotation(quotation);
+    if body_val == interpreter.vm.shared.specials.false_object.as_value() {
+        return Err("Parsing failed (Syntax Error)".into());
+    }
 
-        tracing::debug!("Executing {}", filename);
-        interpreter.execute();
+    let body_array = unsafe { body_val.as_handle_unchecked().cast::<Array>() };
+
+    let code = BytecodeCompiler::compile(
+        &interpreter.vm.shared,
+        &mut interpreter.heap,
+        body_array,
+    );
+
+    let code_map = interpreter.heap.allocate_executable_map(code, 0, 0);
+
+    let quotation = interpreter
+        .heap
+        .allocate_quotation(code_map, unsafe { Handle::null() });
+
+    interpreter.add_quotation(quotation);
+
+    match interpreter.execute() {
+        ExecutionResult::Normal => Ok(()),
+        ExecutionResult::Panic(msg) => Err(format!("Panic: {}", msg)),
+        res => Err(format!("Abnormal exit: {:?}", res)),
     }
 }

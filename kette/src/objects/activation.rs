@@ -1,7 +1,7 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Code, Handle, Header, HeapObject, HeapValue, LookupResult, Object,
+    Code, Handle, Header, HeapObject, LookupResult, Object,
     ObjectKind, ObjectType, Selector, SlotMap, SlotObject, Tagged, Value,
     Visitable, VisitedLink, Visitor,
 };
@@ -14,7 +14,7 @@ pub enum ActivationType {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Activation {
     pub object: Handle<ActivationObject>,
     pub ty: ActivationType,
@@ -41,7 +41,7 @@ pub struct ActivationObject {
     pub slots: [Handle<Value>; 0],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ActivationStack(Vec<Activation>);
 
 impl Activation {
