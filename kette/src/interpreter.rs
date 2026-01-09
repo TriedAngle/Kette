@@ -1,3 +1,5 @@
+use std::{fmt, io::{self, Write}};
+
 use crate::{
     Activation, ActivationObject, ActivationStack, ActivationType, Allocator,
     ExecutionState, Handle, HeapProxy, Instruction, LookupResult, Message,
@@ -19,7 +21,6 @@ pub struct ExecutionContext {
     pub inst_base: *const Instruction,
 }
 
-#[derive(Debug)]
 pub struct Interpreter {
     pub vm: VMProxy,
     pub thread: ThreadProxy,
@@ -27,6 +28,21 @@ pub struct Interpreter {
     pub state: ExecutionState,
     pub activations: ActivationStack,
     pub cache: Option<ExecutionContext>,
+    pub output: Box<dyn Write>,
+}
+
+impl fmt::Debug for Interpreter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Interpreter")
+            .field("vm", &self.vm)
+            .field("thread", &self.thread)
+            .field("heap", &self.heap)
+            .field("state", &self.state)
+            .field("activations", &self.activations)
+            .field("cache", &self.cache)
+            .field("output", &"<output stream>") // Placeholder string
+            .finish()
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -58,10 +74,13 @@ impl Interpreter {
             state,
             activations: ActivationStack::new(),
             cache: None,
+            output: Box::new(io::stdout()),
         }
     }
 
-    pub fn init(&mut self) {}
+    pub fn set_output(&mut self, output: Box<dyn Write>) {
+        self.output = output;
+    }
 
     #[inline(always)]
     pub fn current_activation(&self) -> Option<&Activation> {

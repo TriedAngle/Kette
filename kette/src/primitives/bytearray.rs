@@ -8,8 +8,12 @@ pub fn bytearray_print(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: receiver must be valid Bytarray
     let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
     let data = ba.as_bytes();
-    let value = str::from_utf8(data).expect("valid utf8 encoding");
-    print!("{}", value);
+    let value = std::str::from_utf8(data).expect("valid utf8 encoding");
+    
+    if let Err(e) = write!(ctx.interpreter.output, "{}", value) {
+        return ExecutionResult::Panic(format!("IO Error: {}", e));
+    }
+    
     ExecutionResult::Normal
 }
 
@@ -17,8 +21,12 @@ pub fn bytearray_println(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: receiver must be valid bytearray
     let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
     let data = ba.as_bytes();
-    let value = str::from_utf8(data).expect("valid utf8 encoding");
-    println!("{}", value);
+    let value = std::str::from_utf8(data).expect("valid utf8 encoding");
+
+    if let Err(e) = writeln!(ctx.interpreter.output, "{}", value) {
+        return ExecutionResult::Panic(format!("IO Error: {}", e));
+    }
+
     ExecutionResult::Normal
 }
 
@@ -39,7 +47,9 @@ pub fn bytearray_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [size_val] = inputs(ctx);
 
     if !size_val.is_fixnum() {
-        return ExecutionResult::Panic("bytearrayNew: size must be a fixnum".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayNew: size must be a fixnum".to_string(),
+        );
     }
 
     // SAFETY: safe if contract holds
@@ -60,7 +70,9 @@ pub fn bytearray_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
 
     if !index_val.is_fixnum() {
-        return ExecutionResult::Panic("bytearrayAt: index must be a fixnum".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayAt: index must be a fixnum".to_string(),
+        );
     }
 
     // SAFETY: safe if contract holds
@@ -68,7 +80,9 @@ pub fn bytearray_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let slice = ba.inner().as_bytes();
 
     if index >= slice.len() {
-        return ExecutionResult::Panic("bytearrayAt: index out of bounds".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayAt: index out of bounds".to_string(),
+        );
     }
 
     let val = slice[index];
@@ -98,7 +112,9 @@ pub fn bytearray_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let slice = ba.as_bytes_mut();
 
     if index >= slice.len() {
-        return ExecutionResult::Panic("bytearrayAtPut: index out of bounds".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayAtPut: index out of bounds".to_string(),
+        );
     }
 
     slice[index] = value;
@@ -113,7 +129,9 @@ pub fn bytearray_memset(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let mut ba = unsafe { ctx.receiver.cast::<ByteArray>() };
 
     if !index_v.is_fixnum() || !count_v.is_fixnum() || !value_v.is_fixnum() {
-        return ExecutionResult::Panic("bytearrayMemset: args must be fixnums".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayMemset: args must be fixnums".to_string(),
+        );
     }
 
     // SAFETY: safe if contract holds
@@ -126,7 +144,9 @@ pub fn bytearray_memset(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let slice = ba.as_bytes_mut();
 
     if start + count > slice.len() {
-        return ExecutionResult::Panic("bytearrayMemset: range out of bounds".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayMemset: range out of bounds".to_string(),
+        );
     }
 
     // SAFETY: checked
@@ -174,7 +194,9 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
     if dest_start + count > dest_slice.len()
         || src_start + count > src_slice.len()
     {
-        return ExecutionResult::Panic("bytearrayMemcpy: range out of bounds".to_string());
+        return ExecutionResult::Panic(
+            "bytearrayMemcpy: range out of bounds".to_string(),
+        );
     }
 
     // SAFETY: checked

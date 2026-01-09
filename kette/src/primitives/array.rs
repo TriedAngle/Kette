@@ -35,7 +35,9 @@ pub fn array_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [size_val, fill_val] = crate::primitives::inputs(ctx);
 
     if !size_val.is_fixnum() {
-        return ExecutionResult::Panic("arrayNew: size must be a fixnum".to_string());
+        return ExecutionResult::Panic(
+            "arrayNew: size must be a fixnum".to_string(),
+        );
     }
 
     // SAFETY: safe by contract
@@ -62,14 +64,18 @@ pub fn array_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let arr = unsafe { ctx.receiver.cast::<Array>() };
 
     if !index_val.is_fixnum() {
-        return ExecutionResult::Panic("arrayAt: index must be a fixnum".to_string());
+        return ExecutionResult::Panic(
+            "arrayAt: index must be a fixnum".to_string(),
+        );
     }
 
     // SAFETY: safe if contract holds
     let index = unsafe { index_val.as_fixnum::<usize>() };
 
     if index >= arr.inner().size() {
-        return ExecutionResult::Panic("arrayAt: index out of bounds".to_string());
+        return ExecutionResult::Panic(
+            "arrayAt: index out of bounds".to_string(),
+        );
     }
 
     // SAFETY: Bounds checked above

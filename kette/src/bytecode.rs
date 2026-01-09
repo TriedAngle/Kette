@@ -31,8 +31,8 @@ pub enum OpCode {
     /// Send to any super
     SendSuper = 0x06,
 
-    /// send to a specific parent 
-    /// Payload: Index of the Name of the parent in the constant pool. 
+    /// send to a specific parent
+    /// Payload: Index of the Name of the parent in the constant pool.
     SendParent = 0x07,
 
     /// Creates a slot object from a map.

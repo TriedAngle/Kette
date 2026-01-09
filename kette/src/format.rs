@@ -23,10 +23,37 @@ impl Interpreter {
             let val = unsafe { self.state.stack_get_nth_unchecked(i) };
 
             // Use the default max depth for stack printing
-            let pretty = self.pretty_print_internal(val, 0, DEFAULT_MAX_DEPTH, &selector);
+            let pretty = self.pretty_print_internal(
+                val,
+                0,
+                DEFAULT_MAX_DEPTH,
+                &selector,
+            );
 
             println!("[{:02}] {}", depth - i - 1, pretty);
         }
+    }
+
+    pub fn stack_to_string(&mut self) -> String {
+        let depth = self.state.depth();
+        let sel_name = self.vm.intern_string(">string", &mut self.heap);
+        let selector = Selector::new(sel_name, self.vm.shared.clone());
+
+        let mut output = String::new();
+        for i in 0..depth {
+            let val = unsafe { self.state.stack_get_nth_unchecked(i) };
+
+            // Use the default max depth for stack printing
+            let pretty = self.pretty_print_internal(
+                val,
+                0,
+                DEFAULT_MAX_DEPTH,
+                &selector,
+            );
+
+            let _ = writeln!(&mut output, "[{:02}] {}", depth - i - 1, pretty);
+        }
+        output
     }
 
     /// Public API now accepts a max_depth argument
@@ -34,7 +61,7 @@ impl Interpreter {
         &mut self,
         value: Value,
         recursion_depth: usize,
-        max_depth: usize, 
+        max_depth: usize,
     ) -> String {
         let sel_name = self.vm.intern_string(">string", &mut self.heap);
 
@@ -75,10 +102,20 @@ impl Interpreter {
 
             match heap_obj.header.object_type() {
                 Some(ObjectType::Slot) => unsafe {
-                    self.format_slot_object(heap_obj.cast(), depth, max_depth, selector)
+                    self.format_slot_object(
+                        heap_obj.cast(),
+                        depth,
+                        max_depth,
+                        selector,
+                    )
                 },
                 Some(ObjectType::Array) => unsafe {
-                    self.format_array(heap_obj.cast(), depth, max_depth, selector)
+                    self.format_array(
+                        heap_obj.cast(),
+                        depth,
+                        max_depth,
+                        selector,
+                    )
                 },
                 Some(ObjectType::ByteArray) => unsafe {
                     self.format_byte_array(heap_obj.cast())
@@ -87,7 +124,12 @@ impl Interpreter {
                     self.format_float(heap_obj.cast())
                 },
                 Some(ObjectType::Quotation) => unsafe {
-                    self.format_quotation(heap_obj.cast(), depth, max_depth, selector)
+                    self.format_quotation(
+                        heap_obj.cast(),
+                        depth,
+                        max_depth,
+                        selector,
+                    )
                 },
                 Some(ObjectType::Message) => unsafe {
                     self.format_message(heap_obj.cast())
@@ -122,9 +164,14 @@ impl Interpreter {
 
         for i in 0..size {
             let val = unsafe { array.get_unchecked(i) };
-            
+
             // Pass max_depth through to the recursive call
-            out.push_str(&self.pretty_print_internal(val, depth + 1, max_depth, selector));
+            out.push_str(&self.pretty_print_internal(
+                val,
+                depth + 1,
+                max_depth,
+                selector,
+            ));
 
             if i < size - 1 {
                 out.push_str(" . ");
@@ -175,7 +222,12 @@ impl Interpreter {
             };
 
             // Pass max_depth through to the recursive call
-            out.push_str(&self.pretty_print_internal(val, depth + 1, max_depth, selector));
+            out.push_str(&self.pretty_print_internal(
+                val,
+                depth + 1,
+                max_depth,
+                selector,
+            ));
 
             if i < data_slots.len() - 1 {
                 out.push_str(" . ");
@@ -209,7 +261,7 @@ impl Interpreter {
         let name = m.value;
         let bytes = name.as_bytes();
         let s = std::str::from_utf8(bytes).unwrap_or("???");
-        format!("<Message: {}>", s)
+        format!("{}", s)
     }
 
     unsafe fn format_quotation(
@@ -244,7 +296,12 @@ impl Interpreter {
             let val = unsafe { body_array.get_unchecked(i) };
 
             // Recursively print the body element, passing max_depth
-            out.push_str(&self.pretty_print_internal(val, depth + 1, max_depth, selector));
+            out.push_str(&self.pretty_print_internal(
+                val,
+                depth + 1,
+                max_depth,
+                selector,
+            ));
 
             // Space separator (no dots or commas for quotations)
             if i < size - 1 {

@@ -1,9 +1,9 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Code, Handle, Header, HeapObject, LookupResult, Object,
-    ObjectKind, ObjectType, Selector, SlotMap, SlotObject, Tagged, Value,
-    Visitable, VisitedLink, Visitor,
+    Code, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
+    ObjectType, Selector, SlotMap, SlotObject, Tagged, Value, Visitable,
+    VisitedLink, Visitor,
 };
 
 #[repr(C)]

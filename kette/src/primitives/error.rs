@@ -1,5 +1,6 @@
 use crate::{
-    ActivationObject, ExecutionResult, PrimitiveContext, Quotation, primitives::inputs
+    ActivationObject, ExecutionResult, PrimitiveContext, Quotation,
+    primitives::inputs,
 };
 
 /// Primitive: `( tag handler body -- )`
@@ -13,21 +14,28 @@ pub fn with_handler(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let heap_val = unsafe { body.as_heap_value_handle() };
 
     if !heap_val.is::<Quotation>() {
-        return ExecutionResult::Panic("withHandler expects a quotation body".to_string());
+        return ExecutionResult::Panic(
+            "withHandler expects a quotation body".to_string(),
+        );
     }
 
     let handler_heap = unsafe { handler.as_heap_value_handle() };
     if !handler_heap.is::<Quotation>() {
-        return ExecutionResult::Panic("handler must be a quotation".to_string());
+        return ExecutionResult::Panic(
+            "handler must be a quotation".to_string(),
+        );
     }
 
     let quotation = unsafe { body.cast::<Quotation>() };
 
     ctx.interpreter.add_quotation(quotation);
 
-    let top_activation = ctx.interpreter.activations.current_mut()
+    let top_activation = ctx
+        .interpreter
+        .activations
+        .current_mut()
         .expect("Activation must exist after add_quotation");
-    
+
     top_activation.handlers.push((tag, handler));
 
     // 4. Run loop
@@ -48,7 +56,9 @@ pub fn unwind(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let heap_val = unsafe { activation_val.as_heap_value_handle() };
     let Some(_activation) = heap_val.downcast_ref::<ActivationObject>() else {
-        return ExecutionResult::Panic("unwind expects an Activation object".to_string());
+        return ExecutionResult::Panic(
+            "unwind expects an Activation object".to_string(),
+        );
     };
 
     let handle = unsafe { activation_val.cast::<ActivationObject>() };

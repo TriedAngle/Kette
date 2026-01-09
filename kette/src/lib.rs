@@ -2,13 +2,13 @@ mod bytecode;
 mod compiler;
 
 mod allocator;
+mod format;
 mod interning;
 mod interpreter;
 mod lookup;
 mod objects;
 mod parker;
 mod primitives;
-mod print;
 
 mod barrier;
 mod heap;

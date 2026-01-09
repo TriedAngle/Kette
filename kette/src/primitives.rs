@@ -8,6 +8,7 @@ use crate::{
 mod array;
 mod bignum;
 mod bytearray;
+mod error;
 mod fixnum;
 mod float;
 mod general;
@@ -15,7 +16,6 @@ mod message;
 mod method;
 mod parsing;
 mod quotation;
-mod error;
 mod stack;
 mod threads;
 mod vector;
