@@ -436,6 +436,11 @@ fn run_tui_repl(
                             PopupFocus::FileBrowser => PopupFocus::PathInput,
                         };
                     }
+                    KeyCode::Char('l')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        app.toggle_popup();
+                    }
                     KeyCode::Esc => app.toggle_popup(),
                     _ => match app.popup_focus {
                         PopupFocus::PathInput => match key.code {
