@@ -55,6 +55,7 @@ pub struct SlotMap {
     pub assignable_slots: Tagged<usize>,
     pub data_slots: Tagged<usize>,
     pub total_slots: Tagged<usize>,
+    pub hotness: Tagged<usize>,
     pub slots: [SlotDescriptor; 0],
 }
 
@@ -167,10 +168,24 @@ impl SlotMap {
         self.assignable_slots = assignable_slots.into();
         self.data_slots = data_slots.into();
         self.total_slots = total_slots.into();
+        self.hotness = 0usize.into();
         // SAFETY: safe if contract holds
         self.map.init(MapType::Slot);
         self.code = code_ptr;
         self.effect = effect;
+    }
+
+    #[inline]
+    pub fn increment_hotness(&mut self) {
+        let current: usize = self.hotness.into();
+        // Saturating add to avoid overflow panics, though strictly usize wrap might be intended behavior in some VMs.
+        // Saturating is safer.
+        self.hotness = current.saturating_add(1).into();
+    }
+
+    #[inline]
+    pub fn hotness(&self) -> usize {
+        self.hotness.into()
     }
 
     #[inline]

@@ -1,5 +1,7 @@
 mod bytecode;
+mod bytecode2;
 mod compiler;
+mod compiler2;
 
 mod allocator;
 mod format;
@@ -21,6 +23,7 @@ mod vm;
 pub use allocator::Allocator;
 pub use barrier::SenseBarrier;
 pub use bytecode::{Code, Instruction, OpCode};
+pub use bytecode2::{Code as Code2, OpCode as OpCode2};
 pub use heap::{Heap, HeapProxy, HeapSettings};
 
 pub use objects::activation::{
@@ -47,6 +50,7 @@ pub use objects::{
 pub use primitives::Vector;
 
 pub use compiler::BytecodeCompiler;
+pub use compiler2::BytecodeCompiler2;
 pub use interning::Strings;
 pub use interpreter::{ExecutionResult, Interpreter, NumberError};
 pub use lookup::{LookupResult, Selector, VisitedLink};

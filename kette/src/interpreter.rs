@@ -226,9 +226,6 @@ impl Interpreter {
     }
 
     /// Signals an exception.
-    /// 1. Finds handler.
-    /// 2. Pushes `( activation exception )`.
-    /// 3. Calls handler.
     pub fn signal_exception(
         &mut self,
         exception: Handle<Value>,
