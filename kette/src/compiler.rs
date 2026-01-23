@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    Allocator, Array, Code, Handle, HeapProxy, Message, ObjectType, Quotation,
-    SlotMap, VMShared, Value, bytecode::BytecodeWriter,
+    Allocator, Array, Code, Handle, HeapProxy, Map, Message, ObjectType,
+    Quotation, VMShared, Value, bytecode::BytecodeWriter,
 };
 
 pub struct BytecodeCompiler {}
@@ -59,7 +59,7 @@ impl BytecodeCompiler {
             let obj = unsafe { word.as_heap_handle_unchecked() };
 
             // Skip Map Definitions (handled by lookback later)
-            if let Some(_map) = obj.downcast_ref::<SlotMap>() {
+            if let Some(_map) = obj.downcast_ref::<Map>() {
                 continue;
             }
 
@@ -105,7 +105,7 @@ impl BytecodeCompiler {
                 // SAFETY: this is safe
                 let obj_handle = unsafe { prior.as_heap_handle_unchecked() };
 
-                if let Some(_map) = obj_handle.downcast_ref::<SlotMap>() {
+                if let Some(_map) = obj_handle.downcast_ref::<Map>() {
                     let map_idx = add_constant(prior);
                     writer.emit_create_slot_object(map_idx);
                 } else {
@@ -125,7 +125,7 @@ impl BytecodeCompiler {
                 // SAFETY: this is safe
                 let obj_handle = unsafe { prior.as_heap_handle_unchecked() };
 
-                if let Some(_map) = obj_handle.downcast_ref::<SlotMap>() {
+                if let Some(_map) = obj_handle.downcast_ref::<Map>() {
                     let map_idx = add_constant(prior);
                     writer.emit_create_quotation(map_idx);
                 } else {
@@ -152,6 +152,7 @@ impl BytecodeCompiler {
 
         writer.emit_return();
 
+        // SAFETY: null is valid state for feedback vectors, they are lazy afterall
         let feedback_vector = unsafe { Handle::null() };
 
         heap.allocate_code(

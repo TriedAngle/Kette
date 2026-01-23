@@ -1,9 +1,9 @@
 use std::{alloc::Layout, mem};
 
 use crate::{
-    Code, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
-    ObjectType, Selector, SlotMap, SlotObject, Tagged, Value, Visitable,
-    VisitedLink, Visitor,
+    Code, Handle, Header, HeapObject, LookupResult, Map, Object, ObjectKind,
+    ObjectType, Selector, SlotObject, Tagged, Value, Visitable, VisitedLink,
+    Visitor,
 };
 
 #[repr(C)]
@@ -29,7 +29,7 @@ pub struct Activation {
 #[derive(Debug)]
 pub struct ActivationObject {
     pub header: Header,
-    pub map: Handle<SlotMap>,
+    pub map: Handle<Map>,
     pub receiver: Handle<Value>,
     /// The absolute index of this activation in the ActivationStack.
     /// Used for O(1) unwinding
@@ -66,7 +66,7 @@ impl ActivationObject {
     pub fn init(
         &mut self,
         receiver: Handle<Value>,
-        map: Handle<SlotMap>,
+        map: Handle<Map>,
         arguments: &[Handle<Value>],
     ) {
         self.header = Header::new_object(ObjectType::Activation);

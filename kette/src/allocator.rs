@@ -1,9 +1,9 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, Float, Handle, HeapObject,
-    Message, Quotation, SlotDescriptor, SlotHelper, SlotMap, SlotObject,
-    Strings, Tagged, Value,
+    ActivationObject, Array, ByteArray, Code, Float, Handle, HeapObject, Map,
+    Message, Quotation, SlotDescriptor, SlotHelper, SlotObject, Strings,
+    Tagged, Value,
 };
 
 /// Heap allocation interface for creating VM objects.
@@ -103,7 +103,7 @@ pub trait Allocator: Sized {
         &mut self,
         strings: &Strings,
         slots: &[SlotHelper],
-    ) -> Handle<SlotMap> {
+    ) -> Handle<Map> {
         let slots = slots
             .iter()
             .map(|slot| {
@@ -123,7 +123,7 @@ pub trait Allocator: Sized {
         slots: &[SlotHelper],
         code: Handle<Code>,
         effect: Tagged<u64>,
-    ) -> Handle<SlotMap> {
+    ) -> Handle<Map> {
         let slots = slots
             .iter()
             .map(|slot| {
@@ -140,10 +140,10 @@ pub trait Allocator: Sized {
         slots: &[SlotDescriptor],
         code: Handle<Code>,
         effect: Tagged<u64>,
-    ) -> Handle<SlotMap> {
-        let layout = SlotMap::required_layout(slots.len());
+    ) -> Handle<Map> {
+        let layout = Map::required_layout(slots.len());
         // SAFETY: allocate_handle returns valid memory, init_with_data called immediately after.
-        let mut map = unsafe { self.allocate_handle::<SlotMap>(layout) };
+        let mut map = unsafe { self.allocate_handle::<Map>(layout) };
         map.init_with_data(slots, code, effect);
         map
     }
@@ -153,12 +153,12 @@ pub trait Allocator: Sized {
         code: Handle<Code>,
         input: u64,
         output: u64,
-    ) -> Handle<SlotMap> {
+    ) -> Handle<Map> {
         let effect = (input << 32) | output;
         self.allocate_slots_map(&[], code, effect.into())
     }
 
-    fn allocate_empty_map(&mut self) -> Handle<SlotMap> {
+    fn allocate_empty_map(&mut self) -> Handle<Map> {
         // SAFETY: Null code handle is valid for non-executable slot maps.
         let code = unsafe { Handle::null() };
         self.allocate_slots_map(&[], code, 0u64.into())
@@ -166,7 +166,7 @@ pub trait Allocator: Sized {
 
     fn allocate_slots(
         &mut self,
-        map: Handle<SlotMap>,
+        map: Handle<Map>,
         slots: &[Value],
     ) -> Handle<SlotObject> {
         let assignable_slots = map.assignable_slots_count();
@@ -179,7 +179,7 @@ pub trait Allocator: Sized {
 
     fn allocate_quotation(
         &mut self,
-        map: Handle<SlotMap>,
+        map: Handle<Map>,
         parent: Handle<ActivationObject>,
     ) -> Handle<Quotation> {
         let layout = Layout::new::<Quotation>();
@@ -194,7 +194,7 @@ pub trait Allocator: Sized {
     unsafe fn allocate_activation_raw(
         &mut self,
         receiver: Handle<Value>,
-        map: Handle<SlotMap>,
+        map: Handle<Map>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         let layout = ActivationObject::required_layout(slots.len());
@@ -220,8 +220,8 @@ pub trait Allocator: Sized {
         quotation: Handle<Quotation>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
-        // SAFETY: Quotation maps are always executable maps (SlotMap type).
-        let map = unsafe { quotation.map.cast::<SlotMap>() };
+        // SAFETY: Quotation maps are always executable maps (Map type).
+        let map = unsafe { quotation.map.cast::<Map>() };
         let receiver = if quotation.parent.as_ptr().is_null() {
             Handle::<Value>::zero()
         } else {

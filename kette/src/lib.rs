@@ -33,15 +33,15 @@ pub use objects::message::Message;
 pub use objects::parser::{ParsedToken, Parser, Token};
 pub use objects::quotations::Quotation;
 pub use objects::slots::{
-    SlotDescriptor, SlotHelper, SlotMap, SlotObject, SlotTags,
+    Map, SlotDescriptor, SlotHelper, SlotObject, SlotTags,
 };
 pub use objects::threads::{
     NativeThread, ThreadInfo, ThreadObject, ThreadProxy, ThreadShared,
     ThreadState, VMThread,
 };
 pub use objects::{
-    FLAG_REMEMBERED, Header, HeapObject, HeapValue, Map, MapType, Object,
-    ObjectKind, ObjectType, PtrSizedObject,
+    FLAG_REMEMBERED, Header, HeapObject, HeapValue, Object, ObjectKind,
+    ObjectType, PtrSizedObject,
 };
 
 pub use primitives::Vector;

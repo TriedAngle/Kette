@@ -1,6 +1,6 @@
 use crate::{
     Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy,
-    Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper, SlotMap,
+    Map, Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper,
     SlotTags, Strings, Tagged, VMShared, Value, Visitable,
 };
 
@@ -11,7 +11,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Vector {
     pub header: Header,
-    pub map: Tagged<SlotMap>,
+    pub map: Tagged<Map>,
     pub data: Tagged<Array>,
     pub length: Tagged<usize>,
 }
@@ -34,7 +34,7 @@ impl Vector {
     }
 
     #[rustfmt::skip]
-    pub fn new_map(heap: &mut HeapProxy, strings: &Strings) -> Handle<SlotMap> {
+    pub fn new_map(heap: &mut HeapProxy, strings: &Strings) -> Handle<Map> {
         heap.allocate_slot_map_helper(strings, &[
             SlotHelper::assignable("data", Value::from_usize(0), SlotTags::empty()),
             SlotHelper::assignable("length", Value::from_usize(1), SlotTags::empty()),

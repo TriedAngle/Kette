@@ -5,8 +5,8 @@ use std::{
 
 use crate::{
     Activation, ActivationObject, ActivationStack, ActivationType, Allocator,
-    ExecutionState, Handle, HeapProxy, LookupResult, Message, OpCode,
-    PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject, SlotTags,
+    ExecutionState, Handle, HeapProxy, LookupResult, Map, Message, OpCode,
+    PrimitiveMessageIndex, Quotation, Selector, SlotObject, SlotTags,
     ThreadProxy, VMProxy, Value, get_primitive, transmute,
 };
 
@@ -474,8 +474,7 @@ impl Interpreter {
                     let map_val =
                         self.context_unchecked().fetch_constant(map_idx);
                     // SAFETY: correctly setup by compiler
-                    let mut map =
-                        map_val.as_handle_unchecked().cast::<SlotMap>();
+                    let mut map = map_val.as_handle_unchecked().cast::<Map>();
 
                     let slot_count = map.data_slots();
 
@@ -504,7 +503,7 @@ impl Interpreter {
 
                     let map_val = ctx.fetch_constant(map_idx);
                     // SAFETY: correctly setup by compiler
-                    let map = map_val.as_handle_unchecked().cast::<SlotMap>();
+                    let map = map_val.as_handle_unchecked().cast::<Map>();
 
                     let activation = ctx.activation;
 

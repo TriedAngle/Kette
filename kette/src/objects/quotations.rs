@@ -1,26 +1,22 @@
 use std::mem;
 
 use crate::{
-    ActivationObject, Handle, Header, HeapObject, LookupResult, Object,
-    ObjectKind, ObjectType, Selector, SlotMap, Visitable, VisitedLink,
+    ActivationObject, Handle, Header, HeapObject, LookupResult, Map, Object,
+    ObjectKind, ObjectType, Selector, Visitable, VisitedLink,
 };
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Quotation {
     pub header: Header,
-    pub map: Handle<SlotMap>,
+    pub map: Handle<Map>,
     pub parent: Handle<ActivationObject>,
 }
 
 impl Quotation {
     /// # Safety
     /// must be allocated with corretc size
-    pub fn init(
-        &mut self,
-        map: Handle<SlotMap>,
-        parent: Handle<ActivationObject>,
-    ) {
+    pub fn init(&mut self, map: Handle<Map>, parent: Handle<ActivationObject>) {
         self.header = Header::new_object(ObjectType::Quotation);
         self.map = map;
         self.parent = parent;

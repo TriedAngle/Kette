@@ -14,8 +14,8 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, Float, LookupResult, Message,
-    Quotation, Selector, SlotMap, SlotObject, ThreadObject, Value, ValueTag,
+    ActivationObject, Array, ByteArray, Code, Float, LookupResult, Map,
+    Message, Quotation, Selector, SlotObject, ThreadObject, Value, ValueTag,
     Visitable, VisitedLink, Visitor,
 };
 
@@ -43,15 +43,6 @@ pub enum ObjectType {
     Max         = 0b11111,
 }
 
-/// What kind of map this is. Lives in the unified 5-bit TYPE field
-/// when `kind == Kind::Map`.
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MapType {
-    Slot = 0b000,
-    Max = 0b11111,
-}
-
 pub const FLAG_REMEMBERED: u8 = 0b0000_0001;
 
 #[repr(C)]
@@ -60,7 +51,7 @@ pub struct Header {
     /// Bits:
     /// [0..2) tag  (ValueTag: Number=0b00, Ref=0b01, Header=0b11)
     /// \[2\]    kind (0=Object, 1=Map)
-    /// [3..8) type (5 bits: ObjectType or MapType)
+    /// [3..8) type (5 bits: ObjectType, unused for Maps)
     pub ty: u8,
 
     pub flags: AtomicU8,
@@ -113,12 +104,6 @@ pub struct HeapValue {
     pub header: Header,
 }
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct Map {
-    pub header: Header,
-}
-
 impl Header {
     pub const FLAG_PINNED: u8 = 1 << 0;
 
@@ -147,8 +132,8 @@ impl Header {
 
     #[inline]
     #[must_use]
-    pub const fn new_map(ty: MapType) -> Self {
-        Self::new_raw(ObjectKind::Map, ty as u8, 0, 0)
+    pub const fn new_map() -> Self {
+        Self::new_raw(ObjectKind::Map, 0, 0, 0)
     }
 
     #[inline]
@@ -159,8 +144,8 @@ impl Header {
 
     #[inline]
     #[must_use]
-    pub const fn new_map2(ty: MapType, flags: u8, data: u32) -> Self {
-        Self::new_raw(ObjectKind::Map, ty as u8, flags, data)
+    pub const fn new_map2(flags: u8, data: u32) -> Self {
+        Self::new_raw(ObjectKind::Map, 0, flags, data)
     }
 
     #[inline]
@@ -227,17 +212,6 @@ impl Header {
     }
 
     #[inline]
-    pub fn map_type(&self) -> Option<MapType> {
-        if self.kind() != ObjectKind::Map {
-            return None;
-        }
-        Some(match self.type_bits() {
-            0b000 => MapType::Slot,
-            _ => unreachable!("map type doesn't exist"),
-        })
-    }
-
-    #[inline]
     pub fn is_free(&self) -> bool {
         self.ty == Self::TY_FREE
     }
@@ -260,46 +234,6 @@ impl Header {
     #[inline]
     pub fn set_data(&mut self, data: u32) {
         self.data = data;
-    }
-}
-
-impl Map {
-    #[inline]
-    pub fn init(&mut self, ty: MapType) {
-        self.header = Header::new_map(ty);
-    }
-
-    #[inline]
-    pub fn map_type(&self) -> Option<MapType> {
-        self.header.map_type()
-    }
-
-    #[inline(always)]
-    fn is<T: HeapObject>(&self) -> bool {
-        self.header.kind() == ObjectKind::Map
-            && self.header.type_bits() == T::TYPE_BITS
-    }
-
-    #[inline(always)]
-    pub fn downcast_ref_match<T: HeapObject>(&self) -> &T {
-        if self.is::<T>() {
-            // SAFETY: already matched in call site
-            unsafe { &*(self as *const Map as *const T) }
-        } else {
-            // SAFETY: already matched in call site
-            unsafe { std::hint::unreachable_unchecked() }
-        }
-    }
-
-    #[inline(always)]
-    pub fn downcast_mut_match<T: HeapObject>(&mut self) -> &mut T {
-        if self.is::<T>() {
-            // SAFETY: already matched in call site
-            unsafe { &mut *(self as *mut Map as *mut T) }
-        } else {
-            // SAFETY: already matched in call site
-            unsafe { std::hint::unreachable_unchecked() }
-        }
     }
 }
 
@@ -421,11 +355,7 @@ impl HeapObject for HeapValue {
                 }
             }
             ObjectKind::Map => {
-                // SAFETY: matched to this 
-                match unsafe { self.header.map_type().unwrap_unchecked() } {
-                    MapType::Slot      => self.downcast_ref_match::<SlotMap>().heap_size(),
-                    MapType::Max => unreachable!(),
-                }
+                self.downcast_ref_match::<Map>().heap_size()
             }
         }
     }
@@ -458,11 +388,7 @@ impl Visitable for HeapValue {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         match self.header.kind() {
             ObjectKind::Map => {
-                // SAFETY: matched to this
-                match unsafe { self.header.map_type().unwrap_unchecked() } {
-                    MapType::Slot       => self.downcast_mut_match::<SlotMap>().visit_edges_mut(visitor),
-                    MapType::Max        => unreachable!(),
-                }
+                self.downcast_mut_match::<Map>().visit_edges_mut(visitor)
             }
             ObjectKind::Object => {
                 // SAFETY: matched to this
@@ -486,11 +412,7 @@ impl Visitable for HeapValue {
     fn visit_edges(&self, visitor: &impl Visitor) {
         match self.header.kind() {
             ObjectKind::Map => {
-                // SAFETY: matched to this
-                match unsafe { self.header.map_type().unwrap_unchecked() } {
-                    MapType::Slot       => self.downcast_ref_match::<SlotMap>().visit_edges(visitor),
-                    MapType::Max        => unreachable!(),
-                }
+                self.downcast_ref_match::<Map>().visit_edges(visitor)
             }
             ObjectKind::Object => {
                 // SAFETY: matched to this
@@ -507,42 +429,6 @@ impl Visitable for HeapValue {
                     ObjectType::Max => unreachable!(),
                 }
             }
-        }
-    }
-}
-
-impl Object for Map {}
-impl HeapObject for Map {
-    const KIND: ObjectKind = ObjectKind::Map;
-    const TYPE_BITS: u8 = MapType::Max as u8;
-
-    #[rustfmt::skip]
-    fn heap_size(&self) -> usize {
-        // SAFETY: this is a map
-        match unsafe { self.header.map_type().unwrap_unchecked() } {
-            MapType::Slot       => self.downcast_ref_match::<SlotMap>().heap_size(),
-            MapType::Max        => unreachable!()
-        }
-    }
-}
-
-// just like object, we dispatch here.
-impl Visitable for Map {
-    #[rustfmt::skip]
-    fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        // SAFETY: this is a map
-        match unsafe { self.header.map_type().unwrap_unchecked() } {
-            MapType::Slot       => self.downcast_mut_match::<SlotMap>().visit_edges_mut(visitor),
-            MapType::Max        => unreachable!()
-        }
-    }
-
-    #[rustfmt::skip]
-    fn visit_edges(&self, visitor: &impl Visitor) {
-        // SAFETY: this is a map
-        match unsafe { self.header.map_type().unwrap_unchecked() } {
-            MapType::Slot       => self.downcast_ref_match::<SlotMap>().visit_edges(visitor),
-            MapType::Max        => unreachable!()
         }
     }
 }

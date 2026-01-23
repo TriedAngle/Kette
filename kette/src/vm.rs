@@ -2,7 +2,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
     Allocator, ByteArray, BytecodeWriter, Handle, Heap, HeapProxy,
-    HeapSettings, HeapValue, Message, SlotHelper, SlotMap, SlotTags, Strings,
+    HeapSettings, HeapValue, Map, Message, SlotHelper, SlotTags, Strings,
     Value, interning::Messages, primitive_index, primitives::Vector,
 };
 
@@ -25,9 +25,9 @@ pub struct SpecialObjects {
 
     pub stack_object: Handle<HeapValue>,
 
-    pub primitive_vector_map: Handle<SlotMap>,
+    pub primitive_vector_map: Handle<Map>,
 
-    pub dip_map: Handle<SlotMap>,
+    pub dip_map: Handle<Map>,
 
     pub message_self: Handle<Message>,
     pub message_create_object: Handle<Message>,

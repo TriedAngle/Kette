@@ -3,9 +3,9 @@ use std::{alloc::Layout, mem, ops::Deref, ptr};
 use bitflags::bitflags;
 
 use crate::{
-    ByteArray, Code, Handle, Header, HeapObject, LookupResult, Map, MapType,
-    Object, ObjectKind, ObjectType, Selector, Tagged, Value, Visitable,
-    VisitedLink, Visitor, primitive_index,
+    ByteArray, Code, Handle, Header, HeapObject, LookupResult, Object,
+    ObjectKind, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink,
+    Visitor, primitive_index,
 };
 
 bitflags! {
@@ -48,8 +48,8 @@ pub struct SlotDescriptor {
 /// for objects, its in assiginable in order of definition
 #[repr(C)]
 #[derive(Debug)]
-pub struct SlotMap {
-    pub map: Map,
+pub struct Map {
+    pub header: Header,
     pub code: Handle<Code>,
     pub effect: Tagged<u64>,
     pub assignable_slots: Tagged<usize>,
@@ -63,7 +63,7 @@ pub struct SlotMap {
 #[derive(Debug)]
 pub struct SlotObject {
     pub header: Header,
-    pub map: Handle<SlotMap>,
+    pub map: Handle<Map>,
     pub slots: [Value; 0],
 }
 
@@ -95,7 +95,7 @@ impl SlotDescriptor {
     }
 }
 
-impl SlotMap {
+impl Map {
     pub fn collect_values(&mut self, values: &[Value]) -> Vec<Value> {
         let assignable_count = self.assignable_slots_count();
         let mut object_storage = Vec::with_capacity(assignable_count);
@@ -173,7 +173,7 @@ impl SlotMap {
         self.total_slots = total_slots.into();
         self.hotness = 0usize.into();
         // SAFETY: safe if contract holds
-        self.map.init(MapType::Slot);
+        self.header = Header::new_map();
         self.code = code_ptr;
         self.effect = effect;
     }
@@ -270,7 +270,7 @@ impl SlotMap {
 impl SlotObject {
     /// # Panics
     /// data length must match assignable slot count of map
-    pub fn init_with_data(&mut self, map: Handle<SlotMap>, data: &[Value]) {
+    pub fn init_with_data(&mut self, map: Handle<Map>, data: &[Value]) {
         let map_slot_count = map.assignable_slots_count();
         assert_eq!(map_slot_count, data.len());
         // SAFETY: map_slot_count matches data.len() and object was allocated
@@ -289,7 +289,7 @@ impl SlotObject {
     /// # Safety
     /// the reference must be valid and assignable slots < total slots
     /// must set the data
-    pub unsafe fn init(&mut self, map: Handle<SlotMap>) {
+    pub unsafe fn init(&mut self, map: Handle<Map>) {
         self.map = map;
         self.header = Header::new_object(ObjectType::Slot);
     }
@@ -462,17 +462,17 @@ impl HeapObject for SlotObject {
     }
 }
 
-impl Object for SlotMap {}
-impl HeapObject for SlotMap {
+impl Object for Map {}
+impl HeapObject for Map {
     const KIND: ObjectKind = ObjectKind::Map;
-    const TYPE_BITS: u8 = MapType::Slot as u8;
+    const TYPE_BITS: u8 = 0;
     fn heap_size(&self) -> usize {
         mem::size_of::<Self>()
             + self.slot_count() * mem::size_of::<SlotDescriptor>()
     }
 }
 
-impl Visitable for SlotMap {
+impl Visitable for Map {
     // TODO: update this once we actually use stuff here
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {

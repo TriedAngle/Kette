@@ -1,8 +1,8 @@
 use std::{mem, num::IntErrorKind, sync::Arc};
 
 use crate::{
-    Allocator, Header, HeapObject, HeapProxy, LookupResult, Object, ObjectKind,
-    ObjectType, Selector, SlotHelper, SlotMap, SlotTags, Tagged, VMProxy,
+    Allocator, Header, HeapObject, HeapProxy, LookupResult, Map, Object,
+    ObjectKind, ObjectType, Selector, SlotHelper, SlotTags, Tagged, VMProxy,
     Visitable, VisitedLink,
 };
 
@@ -10,7 +10,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Parser {
     pub header: Header,
-    pub map: Tagged<SlotMap>,
+    pub map: Tagged<Map>,
     pub code: Arc<[u8]>,
     pub end: usize,
     pub offset: usize,

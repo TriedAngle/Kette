@@ -43,7 +43,7 @@ pub enum OpCode {
     SendParent = 0x07,
 
     /// Creates a slot object from a map.
-    /// Payload: Index of the SlotMap in the constant pool (u16).
+    /// Payload: Index of the Map in the constant pool (u16).
     CreateSlotObject = 0x08,
 
     /// Creates a quotation object from a map
