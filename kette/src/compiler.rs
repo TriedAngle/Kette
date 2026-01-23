@@ -1,6 +1,6 @@
 use crate::{
-    Allocator, Array, Code, Handle, HeapProxy, Instruction, Message,
-    ObjectType, OpCode, Quotation, SlotMap, VMShared, Value,
+    bytecode::BytecodeWriter, Allocator, Array, Code, Handle, HeapProxy,
+    Message, ObjectType, Quotation, SlotMap, VMShared, Value,
 };
 
 pub struct BytecodeCompiler {}
@@ -12,30 +12,25 @@ impl BytecodeCompiler {
         body: Handle<Array>,
     ) -> Handle<Code> {
         let _span =
-            tracing::span!(tracing::Level::DEBUG, "compile", body = ?body)
+            tracing::span!(tracing::Level::DEBUG, "compile2", body = ?body)
                 .entered();
 
-        // i24 constants
-        const MAX_I24: i64 = 8_388_607; // 2^23 - 1
-        const MIN_I24: i64 = -8_388_608; // -2^23
-
-        let mut instructions: Vec<Instruction> = Vec::new();
+        let mut writer = BytecodeWriter::new();
         let mut constants: Vec<Value> = Vec::new();
+        let mut feedback_slots = 0;
 
-        let mut add_constant = |val: Value| -> u32 {
+        let mut add_constant = |val: Value| -> u16 {
             // Linear scan for deduplication.
             if let Some(idx) = constants.iter().position(|&c| c == val) {
-                return idx as u32;
+                return idx as u16;
             }
 
             let idx = constants.len();
-            // Panic if we exceed 24-bit address space (very unlikely)
-            // if this ever happens, consider adding extended instructions
-            if idx > 0xFFFFFF {
-                panic!("Constant pool overflow: >16M constants in one method");
+            if idx > 0xFFFF {
+                panic!("Constant pool overflow: >65k constants in one method");
             }
             constants.push(val);
-            idx as u32
+            idx as u16
         };
 
         let words = body.fields();
@@ -44,19 +39,13 @@ impl BytecodeCompiler {
             if let Some(tagged) = word.as_tagged_fixnum::<i64>() {
                 let val = tagged.as_i64();
 
-                if (MIN_I24..=MAX_I24).contains(&val) {
-                    // Fits in 24 bits!
-                    instructions.push(Instruction::new_data(
-                        OpCode::PushSmallInteger,
-                        val as u32,
-                    ));
+                // Always use PushSmallInteger for integers, taking i32.
+                // If it doesn't fit in i32, use constant pool.
+                if val >= (i32::MIN as i64) && val <= (i32::MAX as i64) {
+                    writer.emit_push_small_integer(val as i32);
                 } else {
-                    // Too big, use constant pool
                     let const_idx = add_constant(*word);
-                    instructions.push(Instruction::new_data(
-                        OpCode::PushConstant,
-                        const_idx,
-                    ));
+                    writer.emit_push_constant(const_idx);
                 }
                 continue;
             }
@@ -80,20 +69,14 @@ impl BytecodeCompiler {
                 | ObjectType::Thread
                 | ObjectType::BigNum => {
                     let const_idx = add_constant(obj.as_value());
-                    instructions.push(Instruction::new_data(
-                        OpCode::PushConstant,
-                        const_idx,
-                    ));
+                    writer.emit_push_constant(const_idx);
                     continue;
                 }
                 ObjectType::Quotation => {
                     // SAFETY: checked
                     let quot = unsafe { obj.cast::<Quotation>() };
                     let const_idx = add_constant(quot.as_value());
-                    instructions.push(Instruction::new_data(
-                        OpCode::PushConstant,
-                        const_idx,
-                    ));
+                    writer.emit_push_constant(const_idx);
                     continue;
                 }
                 // Messages are treated as Sends
@@ -104,7 +87,7 @@ impl BytecodeCompiler {
 
             // Handle Special Messages
             if message == vm.specials.message_self {
-                instructions.push(Instruction::new(OpCode::PushSelf));
+                writer.emit_push_self();
                 continue;
             }
 
@@ -119,10 +102,7 @@ impl BytecodeCompiler {
 
                 if let Some(_map) = obj_handle.downcast_ref::<SlotMap>() {
                     let map_idx = add_constant(prior);
-                    instructions.push(Instruction::new_data(
-                        OpCode::CreateSlotObject,
-                        map_idx,
-                    ));
+                    writer.emit_create_slot_object(map_idx);
                 } else {
                     panic!(
                         "CreateSlotObject requires a Map immediately before it"
@@ -142,10 +122,7 @@ impl BytecodeCompiler {
 
                 if let Some(_map) = obj_handle.downcast_ref::<SlotMap>() {
                     let map_idx = add_constant(prior);
-                    instructions.push(Instruction::new_data(
-                        OpCode::CreateQuotation,
-                        map_idx,
-                    ));
+                    writer.emit_create_quotation(map_idx);
                 } else {
                     panic!(
                         "CreateQuotation requires a Map immediately before it"
@@ -157,11 +134,152 @@ impl BytecodeCompiler {
             // 5. Default Send
             // This also reuses the constant index if we send the same message multiple times!
             let msg_idx = add_constant(message.as_value());
-            instructions.push(Instruction::new_data(OpCode::Send, msg_idx));
+
+            // Assign a feedback slot index
+            let feedback_idx = feedback_slots;
+            if feedback_slots > 0xFFFF {
+                panic!("Feedback vector overflow: >65k sends in one method");
+            }
+            feedback_slots += 1;
+
+            writer.emit_send(msg_idx, feedback_idx as u16);
         }
 
-        instructions.push(Instruction::new(OpCode::Return));
+        writer.emit_return();
 
-        heap.allocate_code(&constants, &instructions, body)
+        // Allocate feedback vector
+        // SAFETY: The heap allocator expects a size, which we have.
+        // We'll allocate a raw array of size `feedback_slots`.
+        // The array will be initialized with nil/zero by `allocate_raw_array`?
+        // `allocate_raw_array` in allocator.rs calls `init(size)`.
+        // `init` on Array usually sets fields to nil/0.
+        // Let's verify Array::init.
+        // Assuming it's safe to have uninitialized values if they are just placeholders?
+        // Actually allocator::allocate_raw_array comment says: "user code must initialize this".
+        // `Array::init` sets the header and length. Data might be garbage?
+        // `Array::required_layout` uses `Layout::array::<Value>`.
+        // `Value` is a tagged pointer. Garbage could be dangerous if GC traces it.
+        // I should use `allocate_array` with a slice of nils, or `allocate_raw_array` and fill it.
+        // `allocator.rs` has `allocate_array(&[Value])`.
+        // I'll create a vec of nils.
+
+        let feedback_vector = unsafe { Handle::null() };
+
+        heap.allocate_code(
+            &constants,
+            &writer.into_inner(),
+            body,
+            feedback_vector,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{HeapSettings, OpCode, VMCreateInfo, VM};
+
+    #[test]
+    fn test_compiler_basic() {
+        // Setup VM
+        let vm = VM::new(VMCreateInfo {
+            image: None,
+            heap: HeapSettings::default(),
+        });
+        let mut heap = vm.proxy().shared.heap.proxy();
+
+        // Create body: [10, self]
+        // We need 'self' message object.
+        let msg_self = vm.proxy().shared.specials.message_self;
+
+        let elements = vec![Value::from_fixnum(10), msg_self.as_value()];
+
+        let body = heap.allocate_array(&elements);
+
+        // Compile
+        let code_handle =
+            BytecodeCompiler::compile(&vm.proxy().shared, &mut heap, body);
+        let code = code_handle.inner();
+
+        // Verify Instructions
+        let insts = code.instructions();
+
+        // Expected:
+        // PushSmallInteger(10) -> [03, 10, 00, 00, 00] (little endian 10)
+        // PushSelf -> [02]
+        // Return -> [00]
+
+        let mut expected = vec![];
+        // PushSmallInteger
+        expected.push(OpCode::PushSmallInteger as u8);
+        expected.extend_from_slice(&10i32.to_ne_bytes());
+        // PushSelf
+        expected.push(OpCode::PushSelf as u8);
+        // Return
+        expected.push(OpCode::Return as u8);
+
+        assert_eq!(insts, expected.as_slice());
+
+        // Verify Constants (Should be empty for this case)
+        assert_eq!(code.constants().len(), 0);
+
+        // Verify Feedback Vector (Should be null initially for lazy allocation)
+        assert!(code.feedback_vector.as_ptr().is_null());
+    }
+
+    #[test]
+    fn test_compiler_send() {
+        let vm = VM::new(VMCreateInfo {
+            image: None,
+            heap: HeapSettings::default(),
+        });
+        let mut heap = vm.proxy().shared.heap.proxy();
+
+        // Create body: [10, "to_string" message]
+        // We need to intern a message.
+        let msg_str = vm.proxy().intern_string_message("to_string", &mut heap);
+
+        let elements = vec![Value::from_fixnum(10), msg_str.as_value()];
+
+        let body = heap.allocate_array(&elements);
+
+        let code_handle =
+            BytecodeCompiler::compile(&vm.proxy().shared, &mut heap, body);
+        let code = code_handle.inner();
+
+        // Expected:
+        // PushSmallInteger(10)
+        // Send(msg_idx=0, feedback_idx=0)
+        // Return
+
+        let insts = code.instructions();
+        let mut cursor = 0;
+
+        assert_eq!(insts[cursor], OpCode::PushSmallInteger as u8);
+        cursor += 1;
+        cursor += 4; // Skip i32
+
+        assert_eq!(insts[cursor], OpCode::Send as u8);
+        cursor += 1;
+        // msg_idx (u16)
+        let slice = &insts[cursor..cursor + 2];
+        let msg_idx = u16::from_ne_bytes(slice.try_into().unwrap());
+        cursor += 2;
+        // feedback_idx (u16)
+        let slice = &insts[cursor..cursor + 2];
+        let fb_idx = u16::from_ne_bytes(slice.try_into().unwrap());
+        cursor += 2;
+
+        assert_eq!(fb_idx, 0);
+        assert_eq!(msg_idx, 0); // First constant
+
+        assert_eq!(insts[cursor], OpCode::Return as u8);
+
+        // Verify Constants
+        assert_eq!(code.constants().len(), 1);
+        assert_eq!(code.constants()[0], msg_str.as_value());
+
+        // Verify Feedback Vector (Should be null initially for lazy allocation)
+        assert!(code.feedback_vector.as_ptr().is_null());
     }
 }

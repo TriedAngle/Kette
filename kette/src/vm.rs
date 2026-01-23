@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    Allocator, ByteArray, Handle, Heap, HeapProxy, HeapSettings, HeapValue,
-    Instruction, Message, OpCode, SlotHelper, SlotMap, SlotTags, Strings,
-    Value, interning::Messages, primitive_index, primitives::Vector,
+    interning::Messages, primitive_index, primitives::Vector, Allocator,
+    ByteArray, BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings,
+    HeapValue, Message, SlotHelper, SlotMap, SlotTags, Strings, Value,
 };
 
 #[derive(Debug)]
@@ -283,18 +283,18 @@ impl VM {
             // SAFETY: just allocated
             let dip_body = heap.allocate_array(&[]);
 
+            let mut writer = BytecodeWriter::new();
+            writer.emit_push_return();
+            writer
+                .emit_send_primitive(primitive_index("(call)").as_raw() as u16);
+            writer.emit_pop_return();
+            writer.emit_return();
+
             let dip_code = heap.allocate_code(
                 &[],
-                &[
-                    Instruction::new(OpCode::PushReturn),
-                    Instruction::new_data(
-                        OpCode::SendPrimitive,
-                        primitive_index("(call)").into(),
-                    ),
-                    Instruction::new(OpCode::PopReturn),
-                    Instruction::new(OpCode::Return),
-                ],
+                &writer.into_inner(),
                 dip_body,
+                Handle::null(),
             );
 
             let dip_map = heap.allocate_executable_map(dip_code, 0, 0);

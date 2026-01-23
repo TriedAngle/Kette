@@ -1,10 +1,13 @@
-use std::{fmt, io::{self, Write}};
+use std::{
+    fmt,
+    io::{self, Write},
+};
 
 use crate::{
     Activation, ActivationObject, ActivationStack, ActivationType, Allocator,
-    ExecutionState, Handle, HeapProxy, Instruction, LookupResult, Message,
-    OpCode, PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject,
-    SlotTags, ThreadProxy, VMProxy, Value, get_primitive, transmute,
+    ExecutionState, Handle, HeapProxy, LookupResult, Message, OpCode,
+    PrimitiveMessageIndex, Quotation, Selector, SlotMap, SlotObject, SlotTags,
+    ThreadProxy, VMProxy, Value, get_primitive, transmute,
 };
 
 #[derive(Debug, Clone)]
@@ -12,13 +15,13 @@ pub struct ExecutionContext {
     /// the activation we are woking on right now
     pub activation: Handle<ActivationObject>,
     /// Pointer to the *next* instruction to execute
-    pub ip: *const Instruction,
+    pub ip: *const u8,
     /// Pointer to the start of the constant pool
     pub cp: *const Value,
     /// The 'self' value for the current frame
     pub receiver: Value,
     /// Pointer to the start of the instructions (needed to calculate index for sync)
-    pub inst_base: *const Instruction,
+    pub inst_base: *const u8,
 }
 
 pub struct Interpreter {
@@ -100,13 +103,16 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    pub fn current_instruction(&mut self) -> Option<Instruction> {
+    pub fn current_instruction(&mut self) -> Option<OpCode> {
         if let Some(activation) = self.current_activation() {
             let index = activation.index;
             let code = activation.code();
             // SAFETY: this is safe
             let instructions = code.instructions();
-            return Some(instructions[index]);
+            // This assumes index points to an opcode.
+            if index < instructions.len() {
+                return Some(OpCode::from_u8(instructions[index]));
+            }
         }
         None
     }
@@ -304,13 +310,13 @@ impl Interpreter {
         }
 
         loop {
-            let instruction = {
+            let opcode = {
                 // SAFETY: context is initializd
                 let ctx = unsafe { self.context_unchecked_mut() };
-                ctx.fetch_next_instruction()
+                ctx.fetch_opcode()
             };
             // SAFETY: context just initalized
-            let res = unsafe { self.execute_bytecode(instruction) };
+            let res = unsafe { self.execute_bytecode(opcode) };
 
             match res {
                 ExecutionResult::Normal => {
@@ -336,18 +342,14 @@ impl Interpreter {
     /// # Safety
     /// context must be correctly initialized before
     #[inline(always)]
-    pub unsafe fn execute_bytecode(
-        &mut self,
-        instruction: Instruction,
-    ) -> ExecutionResult {
-        let op = instruction.opcode();
-
+    pub unsafe fn execute_bytecode(&mut self, op: OpCode) -> ExecutionResult {
         // --- FAST PATHS ---
         match op {
             OpCode::PushConstant => {
                 // SAFETY: setup correctly by compiler
-                let ctx = unsafe { self.context_unchecked() };
-                let val = ctx.fetch_constant(instruction.operand());
+                let ctx = unsafe { self.context_unchecked_mut() };
+                let idx = ctx.read_u16();
+                let val = ctx.fetch_constant(idx);
                 self.state.push(val);
                 ExecutionResult::Normal
             }
@@ -358,8 +360,9 @@ impl Interpreter {
                 ExecutionResult::Normal
             }
             OpCode::PushSmallInteger => {
-                let val = instruction.signed_operand() as i64;
-                self.state.push(val.into());
+                let ctx = unsafe { self.context_unchecked_mut() };
+                let val = ctx.read_i32();
+                self.state.push((val as i64).into());
                 ExecutionResult::Normal
             }
             OpCode::PushReturn => {
@@ -378,128 +381,158 @@ impl Interpreter {
             // --- SLOW PATHS ---
             // Pass instruction to slow handler.
             // SAFETY: context is initialized
-            _ => unsafe { self.execute_bytecode_slow(instruction) },
+            _ => unsafe { self.execute_bytecode_slow(op) },
         }
     }
 
     /// # Safety
     /// context must be correctly initialized before
     #[inline(never)]
-    unsafe fn execute_bytecode_slow(
-        &mut self,
-        instruction: Instruction,
-    ) -> ExecutionResult {
+    unsafe fn execute_bytecode_slow(&mut self, op: OpCode) -> ExecutionResult {
         // Sync the local IP back to the heap object before doing anything dangerous
-        self.sync_context();
+        // self.sync_context(); // We don't need this yet as we are not interrupting within instruction fetch
+        // Actually, for sends causing GC/stack trace, we might need updated IP.
+        // But `read_*` updates `ip`. So syncing now sets `activation.index` to *after* the opcode.
+        // If we want it to point *at* the opcode or after operands, depends on convention.
+        // Usually, `activation.index` is the restart point or return point.
+        // Let's assume we advance IP fully as we read operands.
 
-        let op = instruction.opcode();
-        let operand = instruction.operand();
+        // SAFETY: caller guarantees context is correctly initialized
+        unsafe {
+            match op {
+                OpCode::Send => {
+                    // Read operands
+                    let selector_idx = self.context_unchecked_mut().read_u16();
+                    let _feedback_idx = self.context_unchecked_mut().read_u16();
 
-        match op {
-            OpCode::Send => {
-                // We can use the context helper here too
-                let message_val =
+                    // Now sync context so GC sees correct IP (after operands)
+                    self.sync_context();
+
                     // SAFETY: correctly setup by compiler
-                    unsafe { self.context_unchecked().fetch_constant(operand) };
-                let message =
+                    let message_val =
+                        self.context_unchecked().fetch_constant(selector_idx);
                     // SAFETY: correctly setup by compiler
-                    unsafe { message_val.as_handle_unchecked().cast::<Message>() };
-                let selector =
-                    Selector::new_message(message, self.vm.shared.clone());
+                    let message =
+                        message_val.as_handle_unchecked().cast::<Message>();
+                    let selector =
+                        Selector::new_message(message, self.vm.shared.clone());
 
-                self.heap.safepoint();
+                    self.heap.safepoint();
 
-                let universe = self.vm.specials().universe;
-                let found_receiver = match selector
-                    .clone()
-                    .lookup_object(&universe.as_value())
-                {
-                    LookupResult::Found { object, .. } => {
-                        // SAFETY: correctly setup by compiler
-                        unsafe { object.as_value().as_handle_unchecked() }
-                    }
-                    LookupResult::None => {
-                        if let Err(e) = self.check_min_stack(1) {
-                            return e;
+                    let universe = self.vm.specials().universe;
+                    let found_receiver = match selector
+                        .clone()
+                        .lookup_object(&universe.as_value())
+                    {
+                        LookupResult::Found { object, .. } => {
+                            // SAFETY: correctly setup by compiler
+                            object.as_value().as_handle_unchecked()
                         }
-                        // SAFETY: correctly setup by compiler
-                        unsafe {
+                        LookupResult::None => {
+                            if let Err(e) = self.check_min_stack(1) {
+                                return e;
+                            }
+                            // SAFETY: correctly setup by compiler
                             self.state.pop_unchecked().as_handle_unchecked()
                         }
-                    }
-                };
+                    };
 
-                let res = self.send(found_receiver, selector);
-                self.record_depth();
-                res
-            }
-            OpCode::SendPrimitive => {
-                let prim_id =
+                    let res = self.send(found_receiver, selector);
+                    self.record_depth();
+                    res
+                }
+                OpCode::SendPrimitive => {
+                    let prim_idx = self.context_unchecked_mut().read_u16();
+                    self.sync_context();
+
                     // SAFETY: correctly setup by compiler
-                    unsafe { PrimitiveMessageIndex::from_usize(operand as usize) };
-                self.heap.safepoint();
+                    let prim_id =
+                        PrimitiveMessageIndex::from_usize(prim_idx as usize);
+                    self.heap.safepoint();
 
-                if let Err(e) = self.check_min_stack(1) {
-                    return e;
+                    if let Err(e) = self.check_min_stack(1) {
+                        return e;
+                    }
+
+                    // SAFETY: correctly setup by compiler
+                    let receiver =
+                        self.state.pop_unchecked().as_handle_unchecked();
+                    let res = self.primitive_send(receiver, prim_id);
+                    self.record_depth();
+                    res
                 }
+                OpCode::CreateSlotObject => {
+                    let map_idx = self.context_unchecked_mut().read_u16();
+                    self.sync_context();
 
-                // SAFETY: correctly setup by compiler
-                let receiver =
-                    unsafe { self.state.pop_unchecked().as_handle_unchecked() };
-                let res = self.primitive_send(receiver, prim_id);
-                self.record_depth();
-                res
-            }
-            OpCode::CreateSlotObject => {
-                self.heap.safepoint();
+                    self.heap.safepoint();
 
-                // SAFETY: correctly setup by compiler
-                let map_val =
-                    unsafe { self.context_unchecked().fetch_constant(operand) };
-                // SAFETY: correctly setup by compiler
-                let mut map =
-                    unsafe { map_val.as_handle_unchecked().cast::<SlotMap>() };
+                    // SAFETY: correctly setup by compiler
+                    let map_val =
+                        self.context_unchecked().fetch_constant(map_idx);
+                    // SAFETY: correctly setup by compiler
+                    let mut map =
+                        map_val.as_handle_unchecked().cast::<SlotMap>();
 
-                let slot_count = map.data_slots();
+                    let slot_count = map.data_slots();
 
-                if let Err(e) = self.check_min_stack(slot_count) {
-                    return e;
+                    if let Err(e) = self.check_min_stack(slot_count) {
+                        return e;
+                    }
+
+                    // SAFETY: correctly setup by compiler
+                    let slots =
+                        self.state.stack_pop_slice_unchecked(slot_count);
+                    let slots = map.collect_values(slots);
+
+                    let obj = self.heap.allocate_slots(map, &slots);
+                    self.state.push(obj.into());
+
+                    ExecutionResult::ActivationChanged
                 }
+                OpCode::CreateQuotation => {
+                    let map_idx = self.context_unchecked_mut().read_u16();
+                    self.sync_context();
 
-                // SAFETY: correctly setup by compiler
-                let slots =
-                    unsafe { self.state.stack_pop_slice_unchecked(slot_count) };
-                let slots = map.collect_values(slots);
+                    self.heap.safepoint();
 
-                let obj = self.heap.allocate_slots(map, &slots);
-                self.state.push(obj.into());
+                    // SAFETY: correctly setup by runtime
+                    let ctx = self.context_unchecked();
 
-                ExecutionResult::ActivationChanged
+                    let map_val = ctx.fetch_constant(map_idx);
+                    // SAFETY: correctly setup by compiler
+                    let map = map_val.as_handle_unchecked().cast::<SlotMap>();
+
+                    let activation = ctx.activation;
+
+                    let quotation =
+                        self.heap.allocate_quotation(map, activation);
+                    self.state.push(quotation.into());
+
+                    ExecutionResult::Normal
+                }
+                OpCode::Return => {
+                    // Return has no operands
+                    // No need to sync context as we are popping the frame
+                    let _ = self.activations.pop();
+                    ExecutionResult::ActivationChanged
+                }
+                OpCode::SendSuper => {
+                    let _selector_idx = self.context_unchecked_mut().read_u16();
+                    let _feedback_idx = self.context_unchecked_mut().read_u16();
+                    self.sync_context();
+                    unimplemented!("SendSuper")
+                }
+                OpCode::SendParent => {
+                    let _parent_idx = self.context_unchecked_mut().read_u16();
+                    let _selector_idx = self.context_unchecked_mut().read_u16();
+                    let _feedback_idx = self.context_unchecked_mut().read_u16();
+                    self.sync_context();
+                    unimplemented!("SendParent")
+                }
+                // SAFETY: we match others before already
+                _ => std::hint::unreachable_unchecked(),
             }
-            OpCode::CreateQuotation => {
-                self.heap.safepoint();
-
-                // SAFETY: correctly setup by runtime
-                let ctx = unsafe { self.context_unchecked() };
-
-                let map_val = ctx.fetch_constant(operand);
-                // SAFETY: correctly setup by compiler
-                let map =
-                    unsafe { map_val.as_handle_unchecked().cast::<SlotMap>() };
-
-                let activation = ctx.activation;
-
-                let quotation = self.heap.allocate_quotation(map, activation);
-                self.state.push(quotation.into());
-
-                ExecutionResult::Normal
-            }
-            OpCode::Return => {
-                let _ = self.activations.pop();
-                ExecutionResult::ActivationChanged
-            }
-            // SAFETY: we match others before already
-            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 
@@ -637,18 +670,50 @@ impl Interpreter {
 impl ExecutionContext {
     /// Reads the instruction at the current IP and advances the IP.
     #[inline(always)]
-    pub fn fetch_next_instruction(&mut self) -> Instruction {
+    pub fn fetch_opcode(&mut self) -> OpCode {
         // SAFETY: execution context is initialized
         unsafe {
             let inst = *self.ip;
             self.ip = self.ip.add(1);
-            inst
+            OpCode::from_u8(inst)
+        }
+    }
+
+    /// Read u8 and advance
+    #[inline(always)]
+    pub fn read_u8(&mut self) -> u8 {
+        unsafe {
+            let val = *self.ip;
+            self.ip = self.ip.add(1);
+            val
+        }
+    }
+
+    /// Read u16 and advance
+    #[inline(always)]
+    pub fn read_u16(&mut self) -> u16 {
+        unsafe {
+            let ptr = self.ip as *const u16;
+            let val = ptr.read_unaligned();
+            self.ip = self.ip.add(2);
+            val
+        }
+    }
+
+    /// Read i32 and advance
+    #[inline(always)]
+    pub fn read_i32(&mut self) -> i32 {
+        unsafe {
+            let ptr = self.ip as *const i32;
+            let val = ptr.read_unaligned();
+            self.ip = self.ip.add(4);
+            val
         }
     }
 
     /// Fetches a value from the constant pool.
     #[inline(always)]
-    pub fn fetch_constant(&self, index: u32) -> Value {
+    pub fn fetch_constant(&self, index: u16) -> Value {
         // SAFETY: execution context is initialized
         unsafe { *self.cp.add(index as usize) }
     }

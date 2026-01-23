@@ -3,17 +3,16 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{
-        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-        enable_raw_mode,
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen,
+        LeaveAlternateScreen,
     },
 };
 use kette::{
-    Allocator, Array, BytecodeCompiler, ExecutionResult, ExecutionState,
-    ExecutionStateInfo, Handle, HeapSettings, Instruction, Interpreter, OpCode,
-    Parser, Tagged, ThreadProxy, VM, VMCreateInfo, VMThread,
+    Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
+    ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
+    Parser, Tagged, ThreadProxy, VMCreateInfo, VMThread, VM,
 };
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
@@ -21,6 +20,7 @@ use ratatui::{
     widgets::{
         Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
     },
+    Terminal,
 };
 use std::{
     env,
@@ -786,16 +786,21 @@ fn execute_source(
         .vm
         .intern_string_message("parse", &mut interpreter.heap);
     let constants = vec![parser_obj.as_value(), parse_msg.as_value()];
-    let instructions = vec![
-        Instruction::new_data(OpCode::PushConstant, 0),
-        Instruction::new_data(OpCode::Send, 1),
-        Instruction::new(OpCode::Return),
-    ];
+
+    let mut writer = BytecodeWriter::new();
+    // PushConstant(0) - parser object
+    writer.emit_push_constant(0);
+    // Send(1) - "parse" message
+    writer.emit_send(1, 0);
+    writer.emit_return();
+
     let dummy_body = interpreter.heap.allocate_array(&[]);
-    let boot_code =
-        interpreter
-            .heap
-            .allocate_code(&constants, &instructions, dummy_body);
+    let boot_code = interpreter.heap.allocate_code(
+        &constants,
+        &writer.into_inner(),
+        dummy_body,
+        unsafe { Handle::null() },
+    );
     let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
     let boot_quotation = interpreter
         .heap

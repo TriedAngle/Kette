@@ -1,9 +1,9 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, Code2, Float, Handle, HeapObject,
-    Instruction, Message, Quotation, SlotDescriptor, SlotHelper, SlotMap,
-    SlotObject, Strings, Tagged, Value,
+    ActivationObject, Array, ByteArray, Code, Float, Handle, HeapObject,
+    Message, Quotation, SlotDescriptor, SlotHelper, SlotMap, SlotObject,
+    Strings, Tagged, Value,
 };
 
 pub trait Allocator: Sized {
@@ -86,27 +86,13 @@ pub trait Allocator: Sized {
     fn allocate_code(
         &mut self,
         constants: &[Value],
-        instructions: &[Instruction],
+        instructions: &[u8],
         body: Handle<Array>,
+        feedback_vector: Handle<Array>,
     ) -> Handle<Code> {
         let layout = Code::required_layout(constants.len(), instructions.len());
         // SAFETY: init is called immediately
         let mut code = unsafe { self.allocate_handle::<Code>(layout) };
-        code.init_with_data(constants, instructions, body);
-        code
-    }
-
-    fn allocate_code2(
-        &mut self,
-        constants: &[Value],
-        instructions: &[u8],
-        body: Handle<Array>,
-        feedback_vector: Handle<Array>,
-    ) -> Handle<Code2> {
-        let layout =
-            Code2::required_layout(constants.len(), instructions.len());
-        // SAFETY: init is called immediately
-        let mut code = unsafe { self.allocate_handle::<Code2>(layout) };
         code.init_with_data(constants, instructions, body, feedback_vector);
         code
     }

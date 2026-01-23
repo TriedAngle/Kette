@@ -1,8 +1,8 @@
 use clap::Parser as ClapParser;
 use kette::{
-    Allocator, Array, BytecodeCompiler, ExecutionResult, ExecutionState,
-    ExecutionStateInfo, Handle, HeapSettings, Instruction, Interpreter, OpCode,
-    Parser, Tagged, ThreadProxy, VM, VMCreateInfo, VMThread,
+    Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
+    ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
+    Parser, Tagged, ThreadProxy, VMCreateInfo, VMThread, VM,
 };
 use std::{
     fs,
@@ -156,18 +156,21 @@ fn execute_source(
 
     let constants = vec![parser_obj.as_value(), parse_msg.as_value()];
 
-    let instructions = vec![
-        Instruction::new_data(OpCode::PushConstant, 0),
-        Instruction::new_data(OpCode::Send, 1),
-        Instruction::new(OpCode::Return),
-    ];
+    let mut writer = BytecodeWriter::new();
+    // PushConstant(0) - parser object
+    writer.emit_push_constant(0);
+    // Send(1) - "parse" message
+    writer.emit_send(1, 0);
+    writer.emit_return();
 
     let dummy_body = interpreter.heap.allocate_array(&[]);
 
-    let boot_code =
-        interpreter
-            .heap
-            .allocate_code(&constants, &instructions, dummy_body);
+    let boot_code = interpreter.heap.allocate_code(
+        &constants,
+        &writer.into_inner(),
+        dummy_body,
+        unsafe { Handle::null() },
+    );
 
     let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
 
