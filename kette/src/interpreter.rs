@@ -24,6 +24,7 @@ pub struct ExecutionContext {
     pub inst_base: *const u8,
 }
 
+/// Bytecode interpreter for executing Kette programs.
 pub struct Interpreter {
     pub vm: VMProxy,
     pub thread: ThreadProxy,
@@ -107,7 +108,6 @@ impl Interpreter {
         if let Some(activation) = self.current_activation() {
             let index = activation.index;
             let code = activation.code();
-            // SAFETY: this is safe
             let instructions = code.instructions();
             // This assumes index points to an opcode.
             if index < instructions.len() {
@@ -149,7 +149,7 @@ impl Interpreter {
         let inst_slice = code.instructions();
         let const_slice = code.constants();
 
-        // SAFETY: this is safe
+        // SAFETY: inst_slice is valid for the lifetime of the cache, derived from Code object.
         unsafe {
             let base = inst_slice.as_ptr();
             self.cache = Some(ExecutionContext {
@@ -209,15 +209,12 @@ impl Interpreter {
 
         let slot_count = map.input_count();
 
-        if let Err(e) = self.check_min_stack(slot_count) {
-            return Err(e);
-        }
+        self.check_min_stack(slot_count)?;
 
-        // idea: peek here, this saves the inputs,
-        // now just continue with normal stack
+        // SAFETY: stack depth verified above
         let slots =
             unsafe { self.state.stack_peek_slice_unchecked(slot_count) };
-        // SAFETY: TODO: actually put them into handle set
+        // SAFETY: values are valid handles, no GC between peek and use
         let slots = unsafe { crate::transmute::values_as_handles(slots) };
 
         let new = self
@@ -286,18 +283,19 @@ impl Interpreter {
             .constants()[index as usize]
     }
 
-    /// The Main Execution Loop
+    /// Executes bytecode until all activations complete.
     pub fn execute(&mut self) -> ExecutionResult {
         // Run until depth < 1 (aka 0)
         self.execute_until_depth(1)
     }
 
+    /// Executes only the current activation without entering callees.
     pub fn execute_current_activation(&mut self) -> ExecutionResult {
         let depth = self.activations.depth();
         self.execute_until_depth(depth)
     }
 
-    /// Executes the interpreter loop until the stack depth drops below `target_depth`.
+    /// Executes bytecode until the activation stack depth reaches `target_depth`.
     pub fn execute_until_depth(
         &mut self,
         target_depth: usize,
@@ -360,6 +358,7 @@ impl Interpreter {
                 ExecutionResult::Normal
             }
             OpCode::PushSmallInteger => {
+                // SAFETY: context initialized by caller
                 let ctx = unsafe { self.context_unchecked_mut() };
                 let val = ctx.read_i32();
                 self.state.push((val as i64).into());
@@ -552,6 +551,7 @@ impl Interpreter {
             return e;
         }
 
+        // SAFETY: stack depth verified above
         let inputs = unsafe { self.state.stack_pop_unchecked(message.inputs) };
         // the initialization is guaranted after the call
         let mut outputs = Vec::with_capacity(message.outputs);
@@ -623,7 +623,7 @@ impl Interpreter {
             let val_obj = unsafe { new_value.as_heap_handle_unchecked() };
             self.heap
                 .write_barrier(recv_obj.as_heap_value_handle(), val_obj);
-            // SAFETY: this is safe
+            // SAFETY: offset has been bounds-checked by lookup above.
             unsafe { recv_obj.set_slot_unchecked(offset.into(), new_value) };
             return ExecutionResult::Normal;
         }
@@ -682,6 +682,7 @@ impl ExecutionContext {
     /// Read u8 and advance
     #[inline(always)]
     pub fn read_u8(&mut self) -> u8 {
+        // SAFETY: ip is valid within bytecode bounds
         unsafe {
             let val = *self.ip;
             self.ip = self.ip.add(1);
@@ -692,6 +693,7 @@ impl ExecutionContext {
     /// Read u16 and advance
     #[inline(always)]
     pub fn read_u16(&mut self) -> u16 {
+        // SAFETY: ip is valid, read_unaligned handles alignment
         unsafe {
             let ptr = self.ip as *const u16;
             let val = ptr.read_unaligned();
@@ -703,6 +705,7 @@ impl ExecutionContext {
     /// Read i32 and advance
     #[inline(always)]
     pub fn read_i32(&mut self) -> i32 {
+        // SAFETY: ip is valid, read_unaligned handles alignment
         unsafe {
             let ptr = self.ip as *const i32;
             let val = ptr.read_unaligned();

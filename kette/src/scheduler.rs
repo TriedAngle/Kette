@@ -1,10 +1,14 @@
+//! Thread scheduler for managing actor-based concurrency.
+//!
+//! Supports both dedicated threads and a shared worker pool for executing actors.
+
 use crate::{Actor, ActorId, ActorState};
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -177,7 +181,9 @@ impl Scheduler {
         };
 
         if dedicated.is_some() {
-            let w = if let Some(w) = { self.dedicated.lock().get(&actor_id).cloned() } {
+            let w = if let Some(w) =
+                { self.dedicated.lock().get(&actor_id).cloned() }
+            {
                 w
             } else {
                 self.spawn_dedicated(actor_id)
@@ -286,7 +292,9 @@ impl Scheduler {
                 let _ = me.has_work.wait_for(&mut guard, timeout);
             }
 
-            if !dedicated && Instant::now().duration_since(last_work) >= retire_after {
+            if !dedicated
+                && Instant::now().duration_since(last_work) >= retire_after
+            {
                 let mut pool = self.pool.lock();
                 if let Some(pos) = pool.iter().position(|w| w.id == me.id) {
                     pool.swap_remove(pos);
@@ -340,10 +348,13 @@ impl Scheduler {
             }
         }
 
-        let total_backlog: usize = pool.iter().map(|w| w.local.lock().len()).sum();
+        let total_backlog: usize =
+            pool.iter().map(|w| w.local.lock().len()).sum();
         let avg = total_backlog / pool.len().max(1);
 
-        if avg >= self.scale.spawn_backlog_threshold && pool.len() < self.scale.max_pool_workers {
+        if avg >= self.scale.spawn_backlog_threshold
+            && pool.len() < self.scale.max_pool_workers
+        {
             drop(pool);
             return self.spawn_pool_worker();
         }
@@ -578,7 +589,8 @@ mod tests {
         assert!(!names.is_empty(), "actor should have run at least once");
         for n in names {
             assert!(
-                !n.starts_with("sched-worker-") && !n.starts_with("sched-dedicated-"),
+                !n.starts_with("sched-worker-")
+                    && !n.starts_with("sched-dedicated-"),
                 "found execution off main thread: {}",
                 n
             );
@@ -685,7 +697,8 @@ mod tests {
 
                 let thread_id = std::thread::current();
                 let name = thread_id.name().unwrap_or("<main>");
-                if let Some(id) = super::tests::parse_worker_id_from_name(name) {
+                if let Some(id) = super::tests::parse_worker_id_from_name(name)
+                {
                     if id == w1_id {
                         r1.fetch_add(1, Ordering::SeqCst);
                     } else if id == w2_id {

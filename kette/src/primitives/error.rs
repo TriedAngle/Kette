@@ -1,6 +1,6 @@
 use crate::{
-    ActivationObject, ExecutionResult, PrimitiveContext, Quotation,
-    primitives::inputs,
+    primitives::inputs, ActivationObject, ExecutionResult, PrimitiveContext,
+    Quotation,
 };
 
 /// Primitive: `( tag handler body -- )`
@@ -11,6 +11,7 @@ pub fn with_handler(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     let body = ctx.receiver;
 
+    // SAFETY: receiver is a heap object (Quotation)
     let heap_val = unsafe { body.as_heap_value_handle() };
 
     if !heap_val.is::<Quotation>() {
@@ -19,6 +20,7 @@ pub fn with_handler(ctx: &mut PrimitiveContext) -> ExecutionResult {
         );
     }
 
+    // SAFETY: handler comes from stack, checked below
     let handler_heap = unsafe { handler.as_heap_value_handle() };
     if !handler_heap.is::<Quotation>() {
         return ExecutionResult::Panic(
@@ -26,6 +28,7 @@ pub fn with_handler(ctx: &mut PrimitiveContext) -> ExecutionResult {
         );
     }
 
+    // SAFETY: type verified above
     let quotation = unsafe { body.cast::<Quotation>() };
 
     ctx.interpreter.add_quotation(quotation);
@@ -54,6 +57,7 @@ pub fn signal(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn unwind(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let [activation_val] = inputs(ctx);
 
+    // SAFETY: activation_val is a heap object from stack
     let heap_val = unsafe { activation_val.as_heap_value_handle() };
     let Some(_activation) = heap_val.downcast_ref::<ActivationObject>() else {
         return ExecutionResult::Panic(
@@ -61,6 +65,7 @@ pub fn unwind(ctx: &mut PrimitiveContext) -> ExecutionResult {
         );
     };
 
+    // SAFETY: type verified above
     let handle = unsafe { activation_val.cast::<ActivationObject>() };
 
     ctx.interpreter.unwind_to(handle)

@@ -20,6 +20,7 @@ impl Interpreter {
         let selector = Selector::new(sel_name, self.vm.shared.clone());
 
         for i in 0..depth {
+            // SAFETY: i < depth, bounds checked by loop
             let val = unsafe { self.state.stack_get_nth_unchecked(i) };
 
             // Use the default max depth for stack printing
@@ -41,6 +42,7 @@ impl Interpreter {
 
         let mut output = String::new();
         for i in 0..depth {
+            // SAFETY: i < depth, bounds checked by loop
             let val = unsafe { self.state.stack_get_nth_unchecked(i) };
 
             // Use the default max depth for stack printing
@@ -98,9 +100,11 @@ impl Interpreter {
         }
 
         if let Some(handle) = value.as_tagged_object::<HeapValue>() {
+            // SAFETY: value is a valid heap object (checked above)
             let heap_obj = unsafe { handle.promote_to_handle() };
 
             match heap_obj.header.object_type() {
+                // SAFETY: object_type confirmed by header
                 Some(ObjectType::Slot) => unsafe {
                     self.format_slot_object(
                         heap_obj.cast(),
@@ -109,6 +113,7 @@ impl Interpreter {
                         selector,
                     )
                 },
+                // SAFETY: object_type confirmed by header
                 Some(ObjectType::Array) => unsafe {
                     self.format_array(
                         heap_obj.cast(),
@@ -117,12 +122,15 @@ impl Interpreter {
                         selector,
                     )
                 },
+                // SAFETY: object_type confirmed by header
                 Some(ObjectType::ByteArray) => unsafe {
                     self.format_byte_array(heap_obj.cast())
                 },
+                // SAFETY: object_type confirmed by header
                 Some(ObjectType::Float) => unsafe {
                     self.format_float(heap_obj.cast())
                 },
+                // SAFETY: object_type confirmed by header
                 Some(ObjectType::Quotation) => unsafe {
                     self.format_quotation(
                         heap_obj.cast(),
@@ -131,6 +139,7 @@ impl Interpreter {
                         selector,
                     )
                 },
+                // SAFETY: object_type confirmed by header
                 Some(ObjectType::Message) => unsafe {
                     self.format_message(heap_obj.cast())
                 },
@@ -163,6 +172,7 @@ impl Interpreter {
         out.push_str("{ ");
 
         for i in 0..size {
+            // SAFETY: i < size, bounds checked by loop
             let val = unsafe { array.get_unchecked(i) };
 
             // Pass max_depth through to the recursive call
@@ -213,6 +223,7 @@ impl Interpreter {
             let val = if slot_desc.tags().contains(SlotTags::ASSIGNABLE) {
                 let offset_val = slot_desc.value;
                 if let Some(offset) = offset_val.as_tagged_fixnum::<usize>() {
+                    // SAFETY: offset from slot descriptor is valid
                     unsafe { object.get_slot_unchecked(offset.into()) }
                 } else {
                     Value::zero()
@@ -247,7 +258,7 @@ impl Interpreter {
         let mut out = String::new();
         out.push('[');
         for b in bytes {
-            write!(&mut out, " {:02X}", b).unwrap();
+            let _ = write!(&mut out, " {:02X}", b);
         }
         out.push_str(" ]");
         out
@@ -261,7 +272,7 @@ impl Interpreter {
         let name = m.value;
         let bytes = name.as_bytes();
         let s = std::str::from_utf8(bytes).unwrap_or("???");
-        format!("{}", s)
+        s.to_string()
     }
 
     unsafe fn format_quotation(
@@ -293,6 +304,7 @@ impl Interpreter {
         out.push_str("[ ");
 
         for i in 0..size {
+            // SAFETY: i < size, bounds checked by loop
             let val = unsafe { body_array.get_unchecked(i) };
 
             // Recursively print the body element, passing max_depth

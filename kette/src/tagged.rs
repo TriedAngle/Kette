@@ -1,10 +1,8 @@
-//! Value: any raw value, small integer/reference/header
+//! Tagged pointer system for representing VM values.
 //!
-//! Tagged<T>: same as Value but but typed (= type safe) for easier rust side type declaration, but not
-//! safe to use
-//!
-//! Handle<T>: untagged value, small integer or reference, is safe to use, GC does not clear/move this
-//! also implements Deref and DerefMut
+//! - `Value`: Untyped 64-bit value (fixnum, reference, or header)
+//! - `Tagged<T>`: Typed value, but not GC-safe
+//! - `Handle<T>`: Direct handle requiring manual GC safety (no allocations allowed while live)
 use std::{
     fmt::Debug,
     hash,
@@ -25,26 +23,23 @@ pub enum ValueTag {
 
 pub const OBECT_TAG_MASK: u64 = 0b11;
 
-/// A generic Value
-/// its first one or two bits decide what type of value it is
+/// A tagged 64-bit value. Low bits determine the value type.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Value(u64);
 
-/// A tagged value
-/// same memory layout as Value but Typed
+/// Typed variant of `Value`, but not GC-safe.
 #[repr(C)]
 pub struct Tagged<T: Object> {
     data: u64,
     _marker: PhantomData<*mut T>,
 }
 
-/// GC safe Reference to a HeapObject or an SMI
+/// Direct handle to a heap object or fixnum.
 ///
-/// Wraps a **Tagged** value (not a raw pointer).
-/// It guarantees that the underlying object is kept alive by the GC.
-///
-/// Memory Layout: Identical to `Value` and `Tagged<T>`.
+/// # Safety
+/// Caller must ensure no allocations or GC safepoints occur while this handle is live.
+/// Future: Will be statically enforced via `NoGcScope`.
 #[repr(C)]
 pub struct Handle<T: Object> {
     data: u64,

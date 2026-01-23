@@ -5,14 +5,6 @@ use crate::{
     Visitable, Visitor,
 };
 
-// Re-use OpCode from bytecode module, or redefine if needed.
-// Since the prompt says "new bytecode", but lists changes to "sends have both selector index... and a second one",
-// it implies the OpCodes are conceptually the same but the *instruction format* changes.
-// I will re-export the OpCode from the original module to avoid duplication if they are identical,
-// OR redefine them if they need to be different.
-// Looking at the original OpCode, it is just an enum with repr(u8).
-// I'll redefine it here to be self-contained and allow for future divergence if needed,
-// as "new bytecode" suggests independence.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpCode {
@@ -67,6 +59,7 @@ pub enum OpCode {
 impl OpCode {
     #[inline(always)]
     pub fn from_u8(v: u8) -> Self {
+        // SAFETY: OpCode is repr(u8) and all valid opcodes are defined
         unsafe { std::mem::transmute(v) }
     }
 }
@@ -83,9 +76,9 @@ pub struct Code {
     /// Feedback vector for inline caching
     pub feedback_vector: Handle<Array>,
 
-    // Memory Layout:
-    // 1. [Value; const_count]
-    // 2. [u8; inst_size]
+    // Memory Layout (DST pattern for flexible allocation):
+    // 1. [Value; const_count] - constant pool
+    // 2. [u8; inst_size] - bytecode instructions
     data: [u8; 0],
 }
 
@@ -143,7 +136,8 @@ impl Code {
     }
 
     pub fn constants(&self) -> &[Value] {
-        // SAFETY: this is safe
+        // SAFETY: Constants are stored at the start of data with length const_count,
+        // initialized during init_with_data and never modified.
         unsafe {
             let ptr = self.data.as_ptr() as *const Value;
             std::slice::from_raw_parts(ptr, self.const_count as usize)
@@ -151,7 +145,8 @@ impl Code {
     }
 
     pub fn instructions(&self) -> &[u8] {
-        // SAFETY: this is safe
+        // SAFETY: Instructions are stored after constants at offset (const_count * sizeof(Value)),
+        // initialized during init_with_data and never modified.
         unsafe {
             let offset_bytes =
                 self.const_count as usize * mem::size_of::<Value>();
@@ -202,13 +197,19 @@ impl Visitable for Code {
 }
 
 /// Helper to write bytecode into a buffer
+#[derive(Default)]
 pub struct BytecodeWriter {
     buffer: Vec<u8>,
 }
 
 impl BytecodeWriter {
     pub fn new() -> Self {
-        Self { buffer: Vec::new() }
+        Self::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
     }
 
     pub fn emit_op(&mut self, op: OpCode) {

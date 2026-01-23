@@ -6,12 +6,14 @@ use crate::{
     Strings, Tagged, Value,
 };
 
+/// Heap allocation interface for creating VM objects.
 pub trait Allocator: Sized {
+    /// Allocates raw memory with the given layout.
     fn allocate(&mut self, layout: Layout) -> NonNull<u8>;
 
-    /// Allocate a new Object and return it as a typed Handle
+    /// Allocates and returns a typed handle to a heap object.
     /// # Safety
-    /// the caller must guarantee to not experience any GC throughout the result's whole lifetime.
+    /// No GC may occur while the returned handle is live.
     unsafe fn allocate_handle<T: HeapObject>(
         &mut self,
         layout: Layout,
@@ -24,7 +26,7 @@ pub trait Allocator: Sized {
     fn allocate_float(&mut self, value: f64) -> Handle<Float> {
         let layout = Layout::new::<Float>();
 
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj = unsafe { self.allocate_handle::<Float>(layout) };
         obj.init(value);
         obj
@@ -36,7 +38,7 @@ pub trait Allocator: Sized {
         align: usize,
     ) -> Handle<ByteArray> {
         let layout = ByteArray::required_layout_size_align(size, align);
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init_zeroed called immediately after.
         let mut ba = unsafe { self.allocate_handle::<ByteArray>(layout) };
         ba.init_zeroed(size);
         ba
@@ -48,7 +50,7 @@ pub trait Allocator: Sized {
         align: usize,
     ) -> Handle<ByteArray> {
         let layout = ByteArray::required_layout_size_align(data.len(), align);
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init_data called immediately after.
         let mut ba = unsafe { self.allocate_handle::<ByteArray>(layout) };
         ba.init_data(data);
         ba
@@ -59,7 +61,7 @@ pub trait Allocator: Sized {
         interned: Handle<ByteArray>,
     ) -> Handle<Message> {
         let layout = Layout::new::<Message>();
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj = unsafe { self.allocate_handle::<Message>(layout) };
         obj.init(interned);
         obj
@@ -69,7 +71,7 @@ pub trait Allocator: Sized {
     /// user code must initialize this
     unsafe fn allocate_raw_array(&mut self, size: usize) -> Handle<Array> {
         let layout = Array::required_layout(size);
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut array = unsafe { self.allocate_handle::<Array>(layout) };
         array.init(size);
         array
@@ -77,7 +79,7 @@ pub trait Allocator: Sized {
 
     fn allocate_array(&mut self, data: &[Value]) -> Handle<Array> {
         let layout = Array::required_layout(data.len());
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init_with_data called immediately after.
         let mut array = unsafe { self.allocate_handle::<Array>(layout) };
         array.init_with_data(data);
         array
@@ -110,7 +112,7 @@ pub trait Allocator: Sized {
             })
             .collect::<Vec<_>>();
 
-        // SAFETY: safe because this means no code exist
+        // SAFETY: Null code handle is valid for non-executable slot maps.
         let code = unsafe { Handle::null() };
         self.allocate_slots_map(&slots, code, 0u64.into())
     }
@@ -140,7 +142,7 @@ pub trait Allocator: Sized {
         effect: Tagged<u64>,
     ) -> Handle<SlotMap> {
         let layout = SlotMap::required_layout(slots.len());
-        // SAFETY: initialize after
+        // SAFETY: allocate_handle returns valid memory, init_with_data called immediately after.
         let mut map = unsafe { self.allocate_handle::<SlotMap>(layout) };
         map.init_with_data(slots, code, effect);
         map
@@ -157,7 +159,7 @@ pub trait Allocator: Sized {
     }
 
     fn allocate_empty_map(&mut self) -> Handle<SlotMap> {
-        // SAFETY: safe because this means no code exist
+        // SAFETY: Null code handle is valid for non-executable slot maps.
         let code = unsafe { Handle::null() };
         self.allocate_slots_map(&[], code, 0u64.into())
     }
@@ -169,7 +171,7 @@ pub trait Allocator: Sized {
     ) -> Handle<SlotObject> {
         let assignable_slots = map.assignable_slots_count();
         let layout = SlotObject::required_layout(assignable_slots);
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init_with_data called immediately after.
         let mut obj = unsafe { self.allocate_handle::<SlotObject>(layout) };
         obj.init_with_data(map, slots);
         obj
@@ -181,7 +183,7 @@ pub trait Allocator: Sized {
         parent: Handle<ActivationObject>,
     ) -> Handle<Quotation> {
         let layout = Layout::new::<Quotation>();
-        // SAFETY: this is safe
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj = unsafe { self.allocate_handle::<Quotation>(layout) };
         obj.init(map, parent);
         obj
@@ -196,7 +198,7 @@ pub trait Allocator: Sized {
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         let layout = ActivationObject::required_layout(slots.len());
-        // SAFETY: initialize after
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj =
             unsafe { self.allocate_handle::<ActivationObject>(layout) };
         obj.init(receiver, map, slots);
@@ -209,7 +211,7 @@ pub trait Allocator: Sized {
         method: Handle<SlotObject>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
-        // SAFETY: handles safe, slots must be same size as map wants
+        // SAFETY: All handles are valid, slots.len() matches map's requirements.
         unsafe { self.allocate_activation_raw(receiver, method.map, slots) }
     }
 
@@ -218,14 +220,14 @@ pub trait Allocator: Sized {
         quotation: Handle<Quotation>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
-        // SAFETY: every method map is an executable map
+        // SAFETY: Quotation maps are always executable maps (SlotMap type).
         let map = unsafe { quotation.map.cast::<SlotMap>() };
         let receiver = if quotation.parent.as_ptr().is_null() {
             Handle::<Value>::zero()
         } else {
             quotation.parent.receiver
         };
-        // SAFETY: this is safe
+        // SAFETY: All handles are valid, slots.len() matches map's requirements.
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
     }
 }

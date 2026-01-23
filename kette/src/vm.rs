@@ -6,6 +6,7 @@ use crate::{
     HeapValue, Message, SlotHelper, SlotMap, SlotTags, Strings, Value,
 };
 
+/// Core VM objects required for bootstrap and runtime operation.
 #[derive(Debug)]
 pub struct SpecialObjects {
     pub universe: Handle<HeapValue>,
@@ -33,6 +34,7 @@ pub struct SpecialObjects {
     pub message_create_quotation: Handle<Message>,
 }
 
+/// Shared VM state accessible across threads.
 // TODO: the code heap should be removed.
 // why am I not using my normal heap for this? lol ?
 #[derive(Debug)]
@@ -48,12 +50,14 @@ unsafe impl Send for VMShared {}
 // Safety: VMProxy is never mutably shared / has internal locking
 unsafe impl Sync for VMShared {}
 
+/// Main VM instance managing the heap and special objects.
 #[allow(unused)]
 pub struct VM {
     inner: Arc<VMShared>,
     _marker: PhantomData<*const ()>,
 }
 
+/// Thread-safe proxy for accessing shared VM state.
 #[derive(Debug)]
 pub struct VMProxy {
     pub shared: Arc<VMShared>,
@@ -71,6 +75,7 @@ pub struct VMCreateInfo {
 }
 
 impl VM {
+    /// Creates a new VM instance, optionally loading from an image.
     pub fn new(info: VMCreateInfo) -> Self {
         let heap = Heap::new(info.heap);
 
@@ -252,7 +257,7 @@ impl VM {
             SlotHelper::primitive_message("(unwind)", SlotTags::empty()),
         ]);
 
-        // SAFETY: this is safe, no gc can happen here and afterwards these are initialized
+        // SAFETY: No GC can occur during initialization; all special objects are fully initialized before use.
         unsafe {
             let primitive_vector_map = Vector::new_map(&mut heap, strings);
 
@@ -395,9 +400,9 @@ impl VMProxy {
 }
 
 impl SpecialObjects {
-    /// create an unitialized SpecialObjects holder
-    /// # Safety:
-    /// must be initialized before usage
+    /// Creates an uninitialized SpecialObjects holder.
+    /// # Safety
+    /// Must be fully initialized before use.
     pub unsafe fn null() -> Self {
         // SAFETY: we initialize later, this is for simplicity
         unsafe {

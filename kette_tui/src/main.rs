@@ -56,14 +56,14 @@ impl OutputCapture {
     }
 
     fn get_string(&self) -> String {
-        let data = self.buffer.lock().unwrap();
+        let data = self.buffer.lock().expect("buffer lock poisoned");
         String::from_utf8_lossy(&data).to_string()
     }
 }
 
 impl io::Write for OutputCapture {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut data = self.buffer.lock().unwrap();
+        let mut data = self.buffer.lock().expect("buffer lock poisoned");
         data.extend_from_slice(buf);
         Ok(buf.len())
     }
@@ -237,14 +237,14 @@ impl App {
             self.draft = self.input.clone();
             self.history_index = Some(self.history.len());
         }
-        if let Some(idx) = self.history_index {
-            if idx > 0 {
-                let new_idx = idx - 1;
-                self.history_index = Some(new_idx);
-                self.input = self.history[new_idx].clone();
-                self.cursor.0 = self.input.len().saturating_sub(1);
-                self.cursor.1 = self.input[self.cursor.0].len();
-            }
+        if let Some(idx) = self.history_index
+            && idx > 0
+        {
+            let new_idx = idx - 1;
+            self.history_index = Some(new_idx);
+            self.input = self.history[new_idx].clone();
+            self.cursor.0 = self.input.len().saturating_sub(1);
+            self.cursor.1 = self.input[self.cursor.0].len();
         }
     }
 
@@ -371,8 +371,9 @@ impl App {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    let file = File::create("kette_repl.log")
-        .unwrap_or_else(|_| File::create("repl.log").unwrap());
+    let file = File::create("kette_repl.log").unwrap_or_else(|_| {
+        File::create("repl.log").expect("failed to create log file")
+    });
     tracing_subscriber::fmt()
         .with_writer(Mutex::new(file))
         .with_ansi(false)
@@ -795,6 +796,7 @@ fn execute_source(
     writer.emit_return();
 
     let dummy_body = interpreter.heap.allocate_array(&[]);
+    // SAFETY: null handle indicates no feedback vector
     let boot_code = interpreter.heap.allocate_code(
         &constants,
         &writer.into_inner(),
@@ -802,6 +804,7 @@ fn execute_source(
         unsafe { Handle::null() },
     );
     let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
+    // SAFETY: null handle indicates no parent activation
     let boot_quotation = interpreter
         .heap
         .allocate_quotation(boot_map, unsafe { Handle::null() });
@@ -816,6 +819,7 @@ fn execute_source(
     if body_val == interpreter.vm.shared.specials.false_object.as_value() {
         return Err("Parsing failed".into());
     }
+    // SAFETY: parser returns Array on success
     let body_array = unsafe { body_val.as_handle_unchecked().cast::<Array>() };
     let code = BytecodeCompiler::compile(
         &interpreter.vm.shared,
@@ -823,6 +827,7 @@ fn execute_source(
         body_array,
     );
     let code_map = interpreter.heap.allocate_executable_map(code, 0, 0);
+    // SAFETY: null handle indicates no parent activation
     let quotation = interpreter
         .heap
         .allocate_quotation(code_map, unsafe { Handle::null() });

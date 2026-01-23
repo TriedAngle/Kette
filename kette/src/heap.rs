@@ -1,17 +1,22 @@
+//! Immix garbage collector implementation.
+//!
+//! Uses coarse-grained blocks and fine-grained lines for efficient bump allocation
+//! and opportunistic evacuation. Supports parallel GC with barrier synchronization.
+
 use std::{
     alloc::Layout,
     mem,
     ops::Deref,
     ptr::{self, NonNull},
     sync::{
+        atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
 use crate::{
-    ActivationStack, Allocator, ExecutionState, FLAG_REMEMBERED, Handle,
-    HeapValue, OS_PAGE_SIZE, SenseBarrier, Value, Visitable, Visitor, system,
+    system, ActivationStack, Allocator, ExecutionState, Handle, HeapValue,
+    SenseBarrier, Value, Visitable, Visitor, FLAG_REMEMBERED, OS_PAGE_SIZE,
 };
 
 /// Configuration for the Immix heap structure.
@@ -160,9 +165,9 @@ pub struct HeapInner {
     pub lines: Box<[AtomicU8]>,
 }
 
-// SAFETY: this is safe
+// SAFETY: HeapInner uses atomic operations and interior mutability for all shared state.
 unsafe impl Send for HeapInner {}
-// SAFETY: this is safe
+// SAFETY: HeapInner uses atomic operations and interior mutability for all shared state.
 unsafe impl Sync for HeapInner {}
 
 #[derive(Debug, Clone)]
@@ -188,9 +193,9 @@ pub struct HeapProxy {
     pub end: *mut u8,
 }
 
-// SAFETY: this is safe
+// SAFETY: HeapProxy contains only Send/Sync types and raw pointers used with proper synchronization.
 unsafe impl Send for HeapProxy {}
-// SAFETY: this is safe
+// SAFETY: HeapProxy contains only Send/Sync types and raw pointers used with proper synchronization.
 unsafe impl Sync for HeapProxy {}
 
 #[derive(Debug, Default)]
@@ -430,6 +435,8 @@ impl HeapProxy {
     }
 
     /// Linearly scans the block's line map to find the next contiguous free region (hole).
+    /// Scans forward from current position to find the next hole (consecutive free lines).
+    /// Uses epoch markers to avoid clearing line mark bitmaps.
     /// Updates `self.bump` (cursor) and `self.end` (limit).
     unsafe fn find_next_hole(&mut self) -> bool {
         let lines_per_block = self.heap.info.lines_per_block;
@@ -861,7 +868,8 @@ impl HeapInner {
         }
     }
 
-    /// Main synchronization barrier for Parallel GC.
+    /// Main synchronization barrier for parallel GC.
+    /// Implements a 4-phase protocol: submit roots, distribute work, perform GC, wait for completion.
     pub fn rendezvous(&self, is_coordinator: bool, roots: RootSet) {
         use std::sync::atomic::Ordering::Acquire;
 
@@ -1373,8 +1381,8 @@ mod gc_tests {
         }
     }
 
-    fn create_test_env()
-    -> (Heap, HeapProxy, Box<ExecutionState>, Box<ActivationStack>) {
+    fn create_test_env(
+    ) -> (Heap, HeapProxy, Box<ExecutionState>, Box<ActivationStack>) {
         let settings = create_test_settings();
         let heap_inner = Arc::new(HeapInner::new(settings));
         let heap = Heap(heap_inner.clone());

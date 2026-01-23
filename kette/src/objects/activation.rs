@@ -238,7 +238,9 @@ impl ActivationStack {
             return false;
         }
 
+        // SAFETY: checked above that neither is a fixnum
         let ex_obj = unsafe { exception.as_heap_value_handle() };
+        // SAFETY: checked above that neither is a fixnum
         let handler_obj = unsafe { guard.as_heap_value_handle() };
 
         if let Some(ex_slot) = ex_obj.downcast_ref::<SlotObject>() {

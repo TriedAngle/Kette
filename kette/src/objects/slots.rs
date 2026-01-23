@@ -269,7 +269,8 @@ impl SlotObject {
     pub fn init_with_data(&mut self, map: Handle<SlotMap>, data: &[Value]) {
         let map_slot_count = map.assignable_slots_count();
         assert_eq!(map_slot_count, data.len());
-        // SAFETY: length checked and slot object correctly sized
+        // SAFETY: map_slot_count matches data.len() and object was allocated
+        // with sufficient space via required_layout().
         unsafe {
             ptr::copy_nonoverlapping(
                 data.as_ptr(),
@@ -277,7 +278,7 @@ impl SlotObject {
                 map_slot_count,
             )
         };
-        // SAFETY: this is safe
+        // SAFETY: Object is fully allocated and slots are copied; init completes initialization.
         unsafe { self.init(map) };
     }
     /// Initialize a slot object
@@ -370,6 +371,8 @@ impl SlotObject {
 }
 
 impl Object for SlotObject {
+    /// Looks up a slot by name, traversing parent chains.
+    /// Uses cycle detection to avoid infinite loops in circular parent relationships.
     fn lookup(
         &self,
         selector: Selector,
