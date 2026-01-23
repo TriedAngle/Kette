@@ -93,6 +93,7 @@ unsafe impl Send for NativeThread {}
 unsafe impl Sync for NativeThread {}
 
 impl ThreadShared {
+    #[must_use] 
     pub fn new(
         user_thread: Handle<ThreadObject>,
         is_virtual: bool,
@@ -113,6 +114,7 @@ impl ThreadShared {
 }
 
 impl VMThread {
+    #[must_use] 
     pub fn new_main() -> Self {
         // SAFETY: we will not dereference this
         let thread_obj = unsafe { Handle::null() };
@@ -126,6 +128,7 @@ impl VMThread {
             carrier: None,
         }
     }
+    #[must_use] 
     pub fn new_native(
         vm: VMProxy,
         heap: HeapProxy,
@@ -154,6 +157,7 @@ impl VMThread {
     }
 
     // a virtual spawns without a native nor a carrier, the carrier is set when running.
+    #[must_use] 
     pub fn new_virtual(
         user_thread: Handle<ThreadObject>,
         _executor: ExecutionState,
@@ -168,6 +172,7 @@ impl VMThread {
 }
 
 impl NativeThread {
+    #[must_use] 
     pub fn new_empty_thread() -> Arc<Self> {
         Self::spawn(|| {})
     }

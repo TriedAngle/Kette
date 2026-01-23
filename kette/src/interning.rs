@@ -1,18 +1,14 @@
-use std::collections::HashMap;
-
-use parking_lot::RwLock;
+use dashmap::DashMap;
 
 use crate::{Allocator, ByteArray, Handle, HeapProxy, Message};
 
-/// TODO: single RW lock is bad in multithreading.
-/// I think a better solution would be to have first thread local
-/// with an afterwards one time merge (or none at all if the eval doesn't "dirty" anything)
-/// sharding could also be a valid option
+/// Concurrent string interning table.
+///
 /// ByteArrays in this struct are rooted and thus handles.
-/// But: this table must be updated in case the GC compacts
+/// Note: this table must be updated in case the GC compacts.
 #[derive(Debug)]
 pub struct Strings {
-    table: RwLock<HashMap<String, Handle<ByteArray>, ahash::RandomState>>,
+    table: DashMap<String, Handle<ByteArray>, ahash::RandomState>,
 }
 
 impl Default for Strings {
@@ -22,40 +18,34 @@ impl Default for Strings {
 }
 
 impl Strings {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
-            table: RwLock::new(HashMap::default()),
+            table: DashMap::with_hasher(ahash::RandomState::new()),
         }
     }
 
     pub fn get(&self, s: &str, heap: &mut impl Allocator) -> Handle<ByteArray> {
-        {
-            let table = self.table.read();
-            if let Some(ba) = table.get(s).copied() {
-                return ba;
-            }
+        // Fast path: check if already exists
+        if let Some(ba) = self.table.get(s).map(|r| *r.value()) {
+            return ba;
         }
+
+        // Slow path: allocate and insert
         let ba = heap.allocate_aligned_bytearray(s.as_bytes(), 8);
-        let s = s.to_owned();
-        // Safety: the table is part of the rootset;
-        {
-            let mut table = self.table.write();
-            table.insert(s, ba);
-        }
+        // Safety: the table is part of the rootset
+        self.table.insert(s.to_owned(), ba);
         ba
     }
 }
 
-/// TODO: single RW lock is bad in multithreading.
-/// I think a better solution would be to have first thread local
-/// with an afterwards one time merge (or none at all if the eval doesn't "dirty" anything)
-/// sharding could also be a valid option
-/// ByteArrays in this struct are rooted and thus handles.
-/// But: this table must be updated in case the GC compacts
+/// Concurrent message interning table.
+///
+/// Messages in this struct are rooted and thus handles.
+/// Note: this table must be updated in case the GC compacts.
 #[derive(Debug)]
 pub struct Messages {
-    table:
-        RwLock<HashMap<Handle<ByteArray>, Handle<Message>, ahash::RandomState>>,
+    table: DashMap<Handle<ByteArray>, Handle<Message>, ahash::RandomState>,
 }
 
 impl Default for Messages {
@@ -67,7 +57,7 @@ impl Default for Messages {
 impl Messages {
     pub fn new() -> Self {
         Self {
-            table: RwLock::new(HashMap::default()),
+            table: DashMap::with_hasher(ahash::RandomState::new()),
         }
     }
 
@@ -76,16 +66,14 @@ impl Messages {
         ba: Handle<ByteArray>,
         heap: &mut HeapProxy,
     ) -> Handle<Message> {
-        {
-            let table = self.table.read();
-            if let Some(ba) = table.get(&ba).copied() {
-                return ba;
-            }
+        // Fast path: check if already exists
+        if let Some(msg) = self.table.get(&ba).map(|r| *r.value()) {
+            return msg;
         }
 
+        // Slow path: allocate and insert
         let message = heap.allocate_message(ba);
-        let mut table = self.table.write();
-        table.insert(ba, message);
+        self.table.insert(ba, message);
         message
     }
 }

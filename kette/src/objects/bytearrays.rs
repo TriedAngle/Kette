@@ -73,6 +73,7 @@ impl ByteArray {
         str::from_utf8(self.as_bytes())
     }
 
+    #[must_use] 
     pub fn required_layout_size_align(size: usize, align: usize) -> Layout {
         let new = Layout::new::<Self>();
         let inner =

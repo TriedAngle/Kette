@@ -28,9 +28,11 @@ pub enum LookupResult {
 }
 
 impl Selector {
+    #[must_use] 
     pub fn new(name: Handle<ByteArray>, vm: Arc<VMShared>) -> Self {
         Self { name, vm }
     }
+    #[must_use] 
     pub fn new_message(message: Handle<Message>, vm: Arc<VMShared>) -> Self {
         let name = message.value;
         Self { name, vm }
@@ -50,6 +52,7 @@ impl Selector {
 }
 
 impl VisitedLink {
+    #[must_use] 
     pub fn contains(&self, target: Value) -> bool {
         if self.value == target {
             return true;

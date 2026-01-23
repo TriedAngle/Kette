@@ -87,6 +87,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 impl Value {
     #[inline]
+    #[must_use] 
     pub fn as_message_handle(self) -> Option<Handle<Message>> {
         if !self.is_object() {
             return None;
@@ -358,9 +359,8 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
 
         // 2. Parse Slot Name
-        let name_msg = match token_val.as_message_handle() {
-            Some(m) => m,
-            None => return parser_error(ctx, "Expected slot name"),
+        let Some(name_msg) = token_val.as_message_handle() else {
+            return parser_error(ctx, "Expected slot name");
         };
 
         // SAFETY: Message value guaranteed to be valid UTF8 ByteArray by VM invariants

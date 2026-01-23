@@ -1,8 +1,8 @@
 use std::ops::Neg;
 
 use crate::{
-    Allocator, ExecutionResult, NumberError, PrimitiveContext, Tagged,
-    primitives::bool_object,
+    primitives::bool_object, Allocator, ExecutionResult, NumberError,
+    PrimitiveContext, Tagged,
 };
 
 // TODO: handle overflows and/or promotion

@@ -46,6 +46,7 @@ pub struct ActivationStack(Vec<Activation>);
 
 impl Activation {
     #[inline]
+    #[must_use] 
     pub fn code(&self) -> &Code {
         self.object.code()
     }
@@ -53,6 +54,7 @@ impl Activation {
     /// Getter for the registered handlers in this activation.
     /// Returns: Vec<(Type/Map, Handler)>
     #[inline]
+    #[must_use] 
     pub fn handlers(&self) -> &[(Handle<Value>, Handle<Value>)] {
         &self.handlers
     }
@@ -123,6 +125,7 @@ impl ActivationObject {
     }
 
     /// calculate the layout of an Activation with inputs amount slots
+    #[must_use] 
     pub fn required_layout(inputs: usize) -> Layout {
         let head = Layout::new::<Self>();
         let slots_layout =
@@ -134,6 +137,7 @@ impl ActivationObject {
 }
 
 impl ActivationStack {
+    #[must_use] 
     pub fn new() -> Self {
         Self(Vec::new())
     }
@@ -146,6 +150,7 @@ impl ActivationStack {
         self.0.pop().expect("popping activation")
     }
 
+    #[must_use] 
     pub fn current(&self) -> Option<&Activation> {
         self.0.last()
     }
@@ -154,6 +159,7 @@ impl ActivationStack {
         self.0.last_mut()
     }
 
+    #[must_use] 
     pub fn depth(&self) -> usize {
         self.0.len()
     }
@@ -176,6 +182,7 @@ impl ActivationStack {
         self.0.push(activation);
     }
 
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -211,6 +218,7 @@ impl ActivationStack {
     /// 1. **Fixnum**: Matches by strict equality (value match).
     /// 2. **SlotObject**: Matches if the object's `map` equals the `handler_tag`.
     /// 3. **Other Objects**: Matches if the `ObjectType` (header tag) is identical.
+    #[must_use] 
     pub fn find_handler(
         &self,
         exception_val: Handle<Value>,

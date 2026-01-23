@@ -59,7 +59,7 @@ pub const FLAG_REMEMBERED: u8 = 0b0000_0001;
 pub struct Header {
     /// Bits:
     /// [0..2) tag  (ValueTag: Number=0b00, Ref=0b01, Header=0b11)
-    /// [2]    kind (0=Object, 1=Map)
+    /// \[2\]    kind (0=Object, 1=Map)
     /// [3..8) type (5 bits: ObjectType or MapType)
     pub ty: u8,
 
@@ -140,21 +140,25 @@ impl Header {
         | (((ObjectType::Max as u8) & 0x1F) << Self::TYPE_SHIFT);
 
     #[inline]
+    #[must_use] 
     pub const fn new_object(ty: ObjectType) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, 0, 0)
     }
 
     #[inline]
+    #[must_use] 
     pub const fn new_map(ty: MapType) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, 0, 0)
     }
 
     #[inline]
+    #[must_use] 
     pub const fn new_object2(ty: ObjectType, flags: u8, data: u32) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, flags, data)
     }
 
     #[inline]
+    #[must_use] 
     pub const fn new_map2(ty: MapType, flags: u8, data: u32) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, flags, data)
     }

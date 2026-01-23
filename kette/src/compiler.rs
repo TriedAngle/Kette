@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     bytecode::BytecodeWriter, Allocator, Array, Code, Handle, HeapProxy,
     Message, ObjectType, Quotation, SlotMap, VMShared, Value,
@@ -12,17 +14,19 @@ impl BytecodeCompiler {
         body: Handle<Array>,
     ) -> Handle<Code> {
         let _span =
-            tracing::span!(tracing::Level::DEBUG, "compile2", body = ?body)
+            tracing::span!(tracing::Level::DEBUG, "compile", body = ?body)
                 .entered();
 
         let mut writer = BytecodeWriter::new();
         let mut constants: Vec<Value> = Vec::new();
+        let mut constant_map: HashMap<Value, u16, ahash::RandomState> =
+            HashMap::with_hasher(ahash::RandomState::new());
         let mut feedback_slots = 0;
 
         let mut add_constant = |val: Value| -> u16 {
-            // Linear scan for deduplication.
-            if let Some(idx) = constants.iter().position(|&c| c == val) {
-                return idx as u16;
+            // O(1) lookup for deduplication
+            if let Some(&idx) = constant_map.get(&val) {
+                return idx;
             }
 
             let idx = constants.len();
@@ -30,6 +34,7 @@ impl BytecodeCompiler {
                 panic!("Constant pool overflow: >65k constants in one method");
             }
             constants.push(val);
+            constant_map.insert(val, idx as u16);
             idx as u16
         };
 
@@ -146,22 +151,6 @@ impl BytecodeCompiler {
         }
 
         writer.emit_return();
-
-        // Allocate feedback vector
-        // SAFETY: The heap allocator expects a size, which we have.
-        // We'll allocate a raw array of size `feedback_slots`.
-        // The array will be initialized with nil/zero by `allocate_raw_array`?
-        // `allocate_raw_array` in allocator.rs calls `init(size)`.
-        // `init` on Array usually sets fields to nil/0.
-        // Let's verify Array::init.
-        // Assuming it's safe to have uninitialized values if they are just placeholders?
-        // Actually allocator::allocate_raw_array comment says: "user code must initialize this".
-        // `Array::init` sets the header and length. Data might be garbage?
-        // `Array::required_layout` uses `Layout::array::<Value>`.
-        // `Value` is a tagged pointer. Garbage could be dangerous if GC traces it.
-        // I should use `allocate_array` with a slice of nils, or `allocate_raw_array` and fill it.
-        // `allocator.rs` has `allocate_array(&[Value])`.
-        // I'll create a vec of nils.
 
         let feedback_vector = unsafe { Handle::null() };
 

@@ -76,6 +76,7 @@ pub struct VMCreateInfo {
 
 impl VM {
     /// Creates a new VM instance, optionally loading from an image.
+    #[must_use] 
     pub fn new(info: VMCreateInfo) -> Self {
         let heap = Heap::new(info.heap);
 
@@ -101,6 +102,7 @@ impl VM {
         new
     }
 
+    #[must_use] 
     pub fn proxy(&self) -> VMProxy {
         VMProxy {
             shared: self.inner.clone(),
@@ -362,6 +364,7 @@ impl VM {
 }
 
 impl VMProxy {
+    #[must_use] 
     pub fn create_proxy(&self) -> Self {
         Self {
             shared: self.shared.clone(),
@@ -394,6 +397,7 @@ impl VMProxy {
         self.intern_message(bytearray, heap)
     }
 
+    #[must_use] 
     pub fn specials(&self) -> &SpecialObjects {
         &self.shared.specials
     }

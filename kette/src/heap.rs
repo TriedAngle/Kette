@@ -545,6 +545,7 @@ impl HeapProxy {
         self.remember.push(source);
     }
 
+    #[must_use] 
     pub fn new(heap: Heap) -> Self {
         heap.sync.state.register_thread();
         let epoch = heap.epoch();
@@ -1156,11 +1157,13 @@ impl Allocator for HeapProxy {
 }
 
 impl Heap {
+    #[must_use] 
     pub fn new(settings: HeapSettings) -> Self {
         let inner = HeapInner::new(settings);
         Self(Arc::new(inner))
     }
 
+    #[must_use] 
     pub fn proxy(&self) -> HeapProxy {
         HeapProxy::new(self.clone())
     }
@@ -1728,7 +1731,7 @@ mod gc_tests {
                 let mut acts = Box::new(ActivationStack::default());
 
                 let mut proxy = HeapProxy::new(heap_ref);
-                proxy.init_state(&mut *state, &mut *acts);
+                proxy.init_state(&mut state, &mut acts);
 
                 // Wait for all threads to be ready
                 barrier.wait();
@@ -1770,10 +1773,8 @@ mod gc_tests {
                             }
                         }
                         // 5% chance to pop (Garbage creation)
-                        else if roll < 10 {
-                            if state.depth() > 0 {
-                                state.pop();
-                            }
+                        else if roll < 10 && state.depth() > 0 {
+                            state.pop();
                         }
                     }
                 }

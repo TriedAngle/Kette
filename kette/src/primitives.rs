@@ -28,10 +28,12 @@ pub struct PrimitiveMessageIndex(usize);
 impl PrimitiveMessageIndex {
     /// # Safety
     /// id must be a valid primitive id
+    #[must_use] 
     pub unsafe fn from_usize(id: usize) -> Self {
         Self(id)
     }
 
+    #[must_use] 
     pub fn as_raw(self) -> usize {
         self.0
     }
@@ -62,22 +64,6 @@ impl<'a> PrimitiveMessage<'a> {
             outputs,
             ptr,
         }
-    }
-}
-
-// TODO: remove this unused
-#[allow(unused)]
-#[derive(Debug, Copy, Clone)]
-pub struct PrimitiveParser<'a> {
-    pub name: &'a str,
-    pub ptr: PrimitiveFunction,
-}
-
-impl<'a> PrimitiveParser<'a> {
-    // TODO: remove this unused
-    #[allow(unused)]
-    pub const fn new(name: &'a str, ptr: PrimitiveFunction) -> Self {
-        Self { name, ptr }
     }
 }
 
@@ -298,6 +284,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(unwind)", 1, 0,error::unwind),
 ];
 
+#[must_use] 
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
     debug_assert!(id.0 < PRIMITIVES.len());
     PRIMITIVES[id.0]

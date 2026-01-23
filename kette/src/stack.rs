@@ -18,6 +18,7 @@ pub struct ExecutionStateInfo {
 }
 
 impl ExecutionState {
+    #[must_use] 
     pub fn new(info: &ExecutionStateInfo) -> Self {
         let mut stack = Vec::with_capacity(info.stack_size);
         let mut return_stack = Vec::with_capacity(info.return_stack_size);
@@ -38,6 +39,7 @@ impl ExecutionState {
     }
 
     /// Returns the active portion of the main stack
+    #[must_use] 
     pub fn stack(&self) -> &[Value] {
         &self.stack[..self.depth]
     }
@@ -48,6 +50,7 @@ impl ExecutionState {
     }
 
     /// Returns the active portion of the return stack
+    #[must_use] 
     pub fn return_stack(&self) -> &[Value] {
         &self.return_stack[..self.return_depth]
     }
@@ -102,6 +105,7 @@ impl ExecutionState {
     }
 
     /// Gets the nth value from the top of the stack (0-indexed)
+    #[must_use] 
     pub fn stack_get_nth(&self, n: usize) -> Option<Value> {
         if self.depth == 0 || n >= self.depth {
             return None;
@@ -121,11 +125,13 @@ impl ExecutionState {
     }
 
     /// Returns the current stack depth
+    #[must_use] 
     pub fn depth(&self) -> usize {
         self.depth
     }
 
     /// Returns the current return stack depth
+    #[must_use] 
     pub fn return_depth(&self) -> usize {
         self.return_depth
     }
@@ -148,6 +154,7 @@ impl ExecutionState {
     /// get the n from the top of the stack
     /// # Safety
     /// caller must make sure that at least n elements are in the stack
+    #[must_use] 
     pub unsafe fn stack_get_nth_unchecked(&self, n: usize) -> Value {
         let top_idx = self.depth - 1;
         let idx = top_idx - n;
@@ -195,6 +202,7 @@ impl ExecutionState {
 
     /// Returns a slice of the top n elements without removing them.
     /// The slice is ordered from bottom-of-slice to top-of-stack.
+    #[must_use] 
     pub fn stack_peek_slice(&self, n: usize) -> Option<&[Value]> {
         if self.depth < n {
             return None;
@@ -254,6 +262,7 @@ impl ExecutionState {
     /// Returns a slice of the top n elements.
     /// # Safety
     /// Caller must ensure that self.depth >= n.
+    #[must_use] 
     pub unsafe fn stack_peek_slice_unchecked(&self, n: usize) -> &[Value] {
         let start = self.depth - n;
         // SAFETY: caller guarantees depth >= n, so range is valid

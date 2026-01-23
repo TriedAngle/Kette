@@ -1,6 +1,6 @@
 use crate::{
-    Allocator, ByteArray, ExecutionResult, ObjectType, PrimitiveContext, Value,
-    primitives::inputs,
+    primitives::inputs, Allocator, ByteArray, ExecutionResult, ObjectType,
+    PrimitiveContext, Value,
 };
 use std::ptr;
 
@@ -9,11 +9,11 @@ pub fn bytearray_print(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
     let data = ba.as_bytes();
     let value = std::str::from_utf8(data).expect("valid utf8 encoding");
-    
+
     if let Err(e) = write!(ctx.interpreter.output, "{}", value) {
         return ExecutionResult::Panic(format!("IO Error: {}", e));
     }
-    
+
     ExecutionResult::Normal
 }
 

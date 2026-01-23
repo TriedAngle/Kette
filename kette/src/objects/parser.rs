@@ -36,6 +36,7 @@ pub enum ParsedToken {
 
 impl Parser {
     #[inline]
+    #[must_use]
     pub fn new(code: &[u8]) -> Self {
         let end = code.len();
         let header = Header::new_object(ObjectType::Slot);
@@ -280,7 +281,7 @@ impl HeapObject for Parser {
 mod tests {
     use super::*;
 
-    fn parse_all<'code>(code: &'code str) -> (Parser, Vec<ParsedToken>) {
+    fn parse_all(code: &str) -> (Parser, Vec<ParsedToken>) {
         let mut p = Parser::new(code.as_bytes());
         let mut out = Vec::new();
         while let Some(t) = p.parse_next() {
@@ -321,9 +322,13 @@ mod tests {
 
     #[test]
     fn test_float_token() {
-        let (_p, v) = parse_all("3.14");
+        let (_p, v) = parse_all("2.718");
         match v[0] {
-            ParsedToken::Float((f, _)) => assert!((f - 3.14).abs() < 1e-12),
+            ParsedToken::Float((f, _)) => {
+                // Test parsing a floating point number
+                const EXPECTED: f64 = 2.718;
+                assert!((f - EXPECTED).abs() < 1e-12)
+            }
             _ => panic!("Expected Float"),
         }
     }
