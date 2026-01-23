@@ -58,7 +58,7 @@ pub enum OpCode {
 
 impl OpCode {
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub fn from_u8(v: u8) -> Self {
         // SAFETY: OpCode is repr(u8) and all valid opcodes are defined
         unsafe { std::mem::transmute(v) }
@@ -84,7 +84,7 @@ pub struct Code {
 }
 
 impl Code {
-    #[must_use] 
+    #[must_use]
     pub fn required_layout(consts: usize, inst_bytes: usize) -> Layout {
         let base = Layout::new::<Code>();
         let (with_consts, _) = base
@@ -205,13 +205,13 @@ pub struct BytecodeWriter {
 }
 
 impl BytecodeWriter {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     #[allow(dead_code)]
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
@@ -233,13 +233,13 @@ impl BytecodeWriter {
         self.buffer.extend_from_slice(&val.to_ne_bytes());
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn into_inner(self) -> Vec<u8> {
         self.buffer
     }
 
     #[allow(dead_code)]
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.buffer.len()
     }

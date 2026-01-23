@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    primitives::inputs, Allocator, Array, ByteArray, ExecutionResult, Handle,
-    ObjectType, PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, Value,
+    Allocator, Array, ByteArray, ExecutionResult, Handle, ObjectType,
+    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, Value,
+    primitives::inputs,
 };
 
 #[inline]

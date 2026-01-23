@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    interning::Messages, primitive_index, primitives::Vector, Allocator,
-    ByteArray, BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings,
-    HeapValue, Message, SlotHelper, SlotMap, SlotTags, Strings, Value,
+    Allocator, ByteArray, BytecodeWriter, Handle, Heap, HeapProxy,
+    HeapSettings, HeapValue, Message, SlotHelper, SlotMap, SlotTags, Strings,
+    Value, interning::Messages, primitive_index, primitives::Vector,
 };
 
 /// Core VM objects required for bootstrap and runtime operation.
@@ -76,7 +76,7 @@ pub struct VMCreateInfo {
 
 impl VM {
     /// Creates a new VM instance, optionally loading from an image.
-    #[must_use] 
+    #[must_use]
     pub fn new(info: VMCreateInfo) -> Self {
         let heap = Heap::new(info.heap);
 
@@ -102,7 +102,7 @@ impl VM {
         new
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn proxy(&self) -> VMProxy {
         VMProxy {
             shared: self.inner.clone(),
@@ -364,7 +364,7 @@ impl VM {
 }
 
 impl VMProxy {
-    #[must_use] 
+    #[must_use]
     pub fn create_proxy(&self) -> Self {
         Self {
             shared: self.shared.clone(),
@@ -397,7 +397,7 @@ impl VMProxy {
         self.intern_message(bytearray, heap)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn specials(&self) -> &SpecialObjects {
         &self.shared.specials
     }

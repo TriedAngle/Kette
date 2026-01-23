@@ -87,7 +87,7 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 impl Value {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_message_handle(self) -> Option<Handle<Message>> {
         if !self.is_object() {
             return None;

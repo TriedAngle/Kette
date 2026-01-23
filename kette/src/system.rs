@@ -74,7 +74,7 @@ pub const PAGE_SIZE: usize = 4096;
 
 pub const OS_PAGE_SIZE: usize = 4096;
 
-#[must_use] 
+#[must_use]
 pub fn map_memory(size: usize) -> Option<NonNull<u8>> {
     // SAFETY: this is safe
     let ptr = unsafe { unix::anonymous_mmap(size) };

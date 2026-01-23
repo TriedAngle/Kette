@@ -18,7 +18,7 @@ impl Default for Strings {
 }
 
 impl Strings {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             table: DashMap::with_hasher(ahash::RandomState::new()),

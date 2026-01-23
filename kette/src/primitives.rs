@@ -28,12 +28,12 @@ pub struct PrimitiveMessageIndex(usize);
 impl PrimitiveMessageIndex {
     /// # Safety
     /// id must be a valid primitive id
-    #[must_use] 
+    #[must_use]
     pub unsafe fn from_usize(id: usize) -> Self {
         Self(id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_raw(self) -> usize {
         self.0
     }
@@ -284,7 +284,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(unwind)", 1, 0,error::unwind),
 ];
 
-#[must_use] 
+#[must_use]
 pub fn get_primitive(id: PrimitiveMessageIndex) -> PrimitiveMessage<'static> {
     debug_assert!(id.0 < PRIMITIVES.len());
     PRIMITIVES[id.0]

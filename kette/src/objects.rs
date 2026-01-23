@@ -140,25 +140,25 @@ impl Header {
         | (((ObjectType::Max as u8) & 0x1F) << Self::TYPE_SHIFT);
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn new_object(ty: ObjectType) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, 0, 0)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn new_map(ty: MapType) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, 0, 0)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn new_object2(ty: ObjectType, flags: u8, data: u32) -> Self {
         Self::new_raw(ObjectKind::Object, ty as u8, flags, data)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn new_map2(ty: MapType, flags: u8, data: u32) -> Self {
         Self::new_raw(ObjectKind::Map, ty as u8, flags, data)
     }

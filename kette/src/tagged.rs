@@ -86,45 +86,45 @@ impl<T: Object> Clone for Handle<T> {
 impl<T: Object> Copy for Handle<T> {}
 
 impl Value {
-    #[must_use] 
+    #[must_use]
     pub fn from_fixnum(value: i64) -> Self {
         let casted = value.cast_unsigned();
         let tagged = casted << 1;
         Self(tagged)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn from_u64(value: u64) -> Self {
         let tagged = value << 1;
         Self(tagged)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn from_usize(value: usize) -> Self {
         Self::from_u64(value as u64)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn zero() -> Self {
         Self::from_u64(0)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_fixnum(&self) -> bool {
         self.0 & 0b1 == ValueTag::Fixnum as u64
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_object(&self) -> bool {
         self.0 & OBECT_TAG_MASK == ValueTag::Reference as u64
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_header(&self) -> bool {
         self.0 & OBECT_TAG_MASK == ValueTag::Header as u64
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_tagged_fixnum<T: PtrSizedObject>(self) -> Option<Tagged<T>> {
         if self.is_fixnum() {
             // SAFETY: we tested this
@@ -134,7 +134,7 @@ impl Value {
         None
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_tagged_object<T: HeapObject>(self) -> Option<Tagged<T>> {
         if self.is_object() {
             // SAFETY: we tested this
@@ -146,7 +146,7 @@ impl Value {
 
     /// # Safety
     /// check if this is a heap object
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_tagged_object_unchecked<T: HeapObject>(self) -> Tagged<T> {
         // Safety: by contract this is a T
         unsafe { Tagged::new_raw(self.0) }
@@ -155,7 +155,7 @@ impl Value {
     /// Create a handle from a value
     /// # Safety
     /// Caller must make sure Value doesn't get allocated/moved without GC knowing
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
         Handle {
             data: self.0,
@@ -166,7 +166,7 @@ impl Value {
     /// Create a handle from a value
     /// # Safety
     /// Caller must make sure Value doesn't get allocated/moved without GC knowing
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_heap_handle_unchecked(self) -> Handle<HeapValue> {
         Handle {
             data: self.0,
@@ -194,12 +194,12 @@ impl<T: Object> Tagged<T> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_value(&self) -> Value {
         Value(self.data)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_tagged_value(self) -> Tagged<Value> {
         Tagged {
             data: self.data,
@@ -210,7 +210,7 @@ impl<T: Object> Tagged<T> {
     /// Cast `Tagged<T>` to `Tagged<U>`
     /// # Safety
     /// T and U must have same layout, or T represents U (in case of Value)
-    #[must_use] 
+    #[must_use]
     pub unsafe fn cast<U: Object>(self) -> Tagged<U> {
         Tagged {
             data: self.data,
@@ -229,12 +229,12 @@ impl<T: PtrSizedObject> Tagged<T> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn raw(self) -> u64 {
         self.data
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn restore_u64(self) -> u64 {
         self.data >> 1
     }
@@ -262,7 +262,7 @@ impl<T: HeapObject> Tagged<T> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_ptr(self) -> *mut T {
         let untagged = self.data & !(ValueTag::Reference as u64);
         untagged as _
@@ -273,7 +273,7 @@ impl<T: HeapObject> Tagged<T> {
     /// this is overall not safe as we do not guarantee GC invocations inbetween.
     /// Please consider using `Handle<T>` deref
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_ref<'a>(self) -> &'a T {
         debug_assert_eq!(
             self.data & OBECT_TAG_MASK,
@@ -291,7 +291,7 @@ impl<T: HeapObject> Tagged<T> {
     /// this is overall not safe as we do not guarantee GC invocations inbetween.
     /// Please consider using `Handle<T>` deref mut
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_mut<'a>(self) -> &'a mut T {
         debug_assert_eq!(
             self.data & OBECT_TAG_MASK,
@@ -308,7 +308,7 @@ impl<T: HeapObject> Tagged<T> {
     /// # Safety
     /// the GC must be made aware of the Object or prevented from running
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn promote_to_handle(self) -> Handle<T> {
         Handle {
             data: self.data,
@@ -318,12 +318,12 @@ impl<T: HeapObject> Tagged<T> {
 }
 
 impl Tagged<i64> {
-    #[must_use] 
+    #[must_use]
     pub fn as_i64(self) -> i64 {
         i64::from(self)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn raw_i64(self) -> i64 {
         self.data.cast_signed()
     }
@@ -373,7 +373,7 @@ impl<T: Object> Handle<T> {
     /// # Safety
     /// the layout of T and U must be at least partially the same at the same offsets
     /// for example if U or T is the prefix of the other.
-    #[must_use] 
+    #[must_use]
     pub unsafe fn cast<U: Object>(self) -> Handle<U> {
         Handle {
             data: self.data,
@@ -403,7 +403,7 @@ impl<T: Object> Handle<T> {
     /// This is safe as long as T and U are "the same".
     /// Handle is also stricter than Tagged
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_tagged<U: Object>(self) -> Tagged<U> {
         // SAFETY: this is safe as long as the contract described holds
         unsafe { Tagged::new_raw(self.data) }
@@ -411,17 +411,17 @@ impl<T: Object> Handle<T> {
 
     /// Returns the internal tagged raw bits
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn raw_tagged_u64(self) -> u64 {
         self.data
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_value(self) -> Value {
         Value(self.data)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_value_handle(self) -> Handle<Value> {
         Handle {
             data: self.data,
@@ -435,7 +435,7 @@ impl Handle<Value> {
     /// # Safety
     /// only for initialization or super special cases
     /// must make sure to not dereference this
-    #[must_use] 
+    #[must_use]
     pub fn zero() -> Handle<Value> {
         // We tag it as a reference, so it looks like a valid (but null) tagged pointer
         let null_tagged = ValueTag::Fixnum as u64;
@@ -497,14 +497,14 @@ impl<T: HeapObject> Handle<T> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_object(self) -> Tagged<T> {
         // SAFETY: this is safe, Handle is stricter than Tagged
         unsafe { Tagged::new_raw(self.data) }
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_heap_value_handle(self) -> Handle<HeapValue> {
         Handle::<HeapValue> {
             data: self.data,
@@ -513,7 +513,7 @@ impl<T: HeapObject> Handle<T> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn as_ptr(self) -> *mut T {
         debug_assert_eq!(
             self.data & OBECT_TAG_MASK,
@@ -528,7 +528,7 @@ impl<T: HeapObject> Handle<T> {
     /// # Safety
     /// only for initialization or super special cases
     /// must make sure to not dereference this
-    #[must_use] 
+    #[must_use]
     pub unsafe fn null() -> Handle<T> {
         // We tag it as a reference, so it looks like a valid (but null) tagged pointer
         let null_tagged = ValueTag::Reference as u64;
@@ -538,7 +538,7 @@ impl<T: HeapObject> Handle<T> {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn inner(&self) -> &T {
         // SAFETY: safe for handle
         unsafe { &*self.as_ptr() }
@@ -546,7 +546,7 @@ impl<T: HeapObject> Handle<T> {
 }
 
 impl<T: PtrSizedObject> Handle<T> {
-    #[must_use] 
+    #[must_use]
     pub fn as_fixnum(self) -> Tagged<T> {
         // SAFETY: Handle is already tagged.
         unsafe { Tagged::new_raw(self.data) }
@@ -558,7 +558,7 @@ impl Handle<Value> {
     /// # Safety
     /// Value is already tagged,
     /// but `Tagged<T>` does not protect against GC invocations
-    #[must_use] 
+    #[must_use]
     pub unsafe fn into_tagged<T: Object>(self) -> Tagged<T> {
         // SAFETY: safe if adhering to the safety contract of this function
         unsafe { Tagged::new_raw(self.data) }
@@ -568,24 +568,24 @@ impl Handle<Value> {
     /// # Safety
     /// caller must make sure that the Value is representing a T: PtrSizedObject
     /// and not for example a pointer or header
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_fixnum<T: PtrSizedObject + From<Tagged<T>>>(self) -> T {
         // SAFETY: safe if adhering to the safety contract of this function
         let tagged = unsafe { Tagged::new_raw(self.data) };
         T::from(tagged)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn inner(self) -> Value {
         Value(self.data)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_fixnum(&self) -> bool {
         self.data & 0b1 == ValueTag::Fixnum as u64
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_object(&self) -> bool {
         self.data & OBECT_TAG_MASK == ValueTag::Reference as u64
     }
@@ -594,7 +594,7 @@ impl Handle<Value> {
     /// # Safety
     /// user must make sure this is a heap value
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn as_heap_value_handle(self) -> Handle<HeapValue> {
         Handle::<HeapValue> {
             data: self.data,
@@ -806,7 +806,7 @@ pub mod transmute {
     /// Safe because the memory layout is identical and a handle always contains
     /// a well-formed tagged value.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn handles_as_values<T: Object>(handles: &[Handle<T>]) -> &[Value] {
         let ptr = handles.as_ptr() as *const Value;
         // SAFETY: identical layout (see const assertions) and same length.
@@ -831,7 +831,7 @@ pub mod transmute {
     ///
     /// This is equivalent to calling `Value::as_handle_unchecked` on each element.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn values_as_handles(values: &[Value]) -> &[Handle<Value>] {
         let ptr = values.as_ptr() as *const Handle<Value>;
         // SAFETY: caller upholds the contract above.
@@ -855,7 +855,7 @@ pub mod transmute {
     ///
     /// Always safe: `Tagged<Value>` is just a typed view of raw tagged bits.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn tagged_values_as_values<T: Object>(
         tagged: &[Tagged<T>],
     ) -> &[Value] {
@@ -878,7 +878,7 @@ pub mod transmute {
     ///
     /// Safe because `Tagged<Value>` does not add invariants over `Value`.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn values_as_tagged_values(values: &[Value]) -> &[Tagged<Value>] {
         let ptr = values.as_ptr() as *const Tagged<Value>;
         // SAFETY: identical layout (see const assertions) and same length.

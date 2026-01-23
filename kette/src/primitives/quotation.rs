@@ -1,6 +1,6 @@
 use crate::{
-    primitives::{bool_object, inputs, outputs},
     Allocator, ExecutionResult, PrimitiveContext, Quotation,
+    primitives::{bool_object, inputs, outputs},
 };
 
 pub fn call(ctx: &mut PrimitiveContext) -> ExecutionResult {

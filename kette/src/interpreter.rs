@@ -65,7 +65,7 @@ pub enum ExecutionResult {
 }
 
 impl Interpreter {
-    #[must_use] 
+    #[must_use]
     pub fn new(
         vm: VMProxy,
         thread: ThreadProxy,
@@ -88,7 +88,7 @@ impl Interpreter {
     }
 
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub fn current_activation(&self) -> Option<&Activation> {
         self.activations.current()
     }
@@ -169,7 +169,7 @@ impl Interpreter {
     /// # Safety
     /// Caller guarantees `reload_context` was called and stack is not empty.
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn context_unchecked(&self) -> &ExecutionContext {
         // SAFETY: safe if contract holds
         unsafe { self.cache.as_ref().unwrap_unchecked() }
@@ -279,7 +279,7 @@ impl Interpreter {
 
     /// Helper to retrieve a value from the current code's constant pool
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub fn get_constant(&self, index: u32) -> Value {
         // SAFETY: The compiler guarantees the index is within bounds of the allocated Code object.
         unsafe { self.current_activation().unwrap_unchecked() }

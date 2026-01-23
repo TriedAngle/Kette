@@ -68,7 +68,7 @@ pub struct SlotObject {
 }
 
 impl SlotDescriptor {
-    #[must_use] 
+    #[must_use]
     pub fn new(name: Handle<ByteArray>, tags: SlotTags, value: Value) -> Self {
         let tags_raw = tags.bits();
         let metadata = Tagged::new_value(tags_raw as usize);
@@ -79,7 +79,7 @@ impl SlotDescriptor {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn tags(&self) -> SlotTags {
         let value: u64 = self.metadata.into();
         let raw: u8 = (value & 0xFF) as u8; // cutting off
@@ -87,7 +87,7 @@ impl SlotDescriptor {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn is_data_consumer(&self) -> bool {
         let tags = self.tags();
         !tags.contains(SlotTags::ASSIGNMENT)
@@ -207,7 +207,7 @@ impl SlotMap {
     }
 
     /// calculate the layout of a map with n slots
-    #[must_use] 
+    #[must_use]
     pub fn required_layout(slots: usize) -> Layout {
         let head = Layout::new::<Self>();
         let slots_layout = Layout::array::<SlotDescriptor>(slots)
@@ -364,7 +364,7 @@ impl SlotObject {
     }
 
     /// calculate the layout of an object with n assignable slots
-    #[must_use] 
+    #[must_use]
     pub fn required_layout(assignable_slots: usize) -> Layout {
         let head = Layout::new::<Self>();
         let slots_layout = Layout::array::<Value>(assignable_slots)
@@ -512,24 +512,24 @@ impl Visitable for SlotObject {
 
 impl<'a> SlotHelper<'a> {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn new(name: &'a str, value: Value, tags: SlotTags) -> Self {
         Self { name, tags, value }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn assignable(name: &'a str, value: Value, tags: SlotTags) -> Self {
         let tags = tags | SlotTags::ASSIGNABLE;
         Self { name, tags, value }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn constant(name: &'a str, value: Value, tags: SlotTags) -> Self {
         Self { name, tags, value }
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn primitive_message(name: &'a str, tags: SlotTags) -> Self {
         let tags = tags | SlotTags::PRIMITIVE;
         let index = primitive_index(name);
@@ -538,7 +538,7 @@ impl<'a> SlotHelper<'a> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn primitive_message2(
         name: &'a str,
         primitive: &'a str,
@@ -551,7 +551,7 @@ impl<'a> SlotHelper<'a> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn message(
         name: &'a str,
         method: Handle<SlotObject>,

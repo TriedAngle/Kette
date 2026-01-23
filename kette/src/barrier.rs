@@ -9,7 +9,7 @@ pub struct SenseBarrier {
 }
 
 impl SenseBarrier {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: Mutex::new((0, false)),

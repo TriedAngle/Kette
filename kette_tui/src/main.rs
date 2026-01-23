@@ -3,16 +3,17 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen,
-        LeaveAlternateScreen,
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
     },
 };
 use kette::{
     Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
     ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
-    Parser, Tagged, ThreadProxy, VMCreateInfo, VMThread, VM,
+    Parser, Tagged, ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
@@ -20,7 +21,6 @@ use ratatui::{
     widgets::{
         Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
     },
-    Terminal,
 };
 use std::{
     env,

@@ -9,14 +9,14 @@ use std::{
     ops::Deref,
     ptr::{self, NonNull},
     sync::{
-        atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
 use crate::{
-    system, ActivationStack, Allocator, ExecutionState, Handle, HeapValue,
-    SenseBarrier, Value, Visitable, Visitor, FLAG_REMEMBERED, OS_PAGE_SIZE,
+    ActivationStack, Allocator, ExecutionState, FLAG_REMEMBERED, Handle,
+    HeapValue, OS_PAGE_SIZE, SenseBarrier, Value, Visitable, Visitor, system,
 };
 
 /// Configuration for the Immix heap structure.
@@ -545,7 +545,7 @@ impl HeapProxy {
         self.remember.push(source);
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn new(heap: Heap) -> Self {
         heap.sync.state.register_thread();
         let epoch = heap.epoch();
@@ -1157,13 +1157,13 @@ impl Allocator for HeapProxy {
 }
 
 impl Heap {
-    #[must_use] 
+    #[must_use]
     pub fn new(settings: HeapSettings) -> Self {
         let inner = HeapInner::new(settings);
         Self(Arc::new(inner))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn proxy(&self) -> HeapProxy {
         HeapProxy::new(self.clone())
     }
@@ -1384,8 +1384,8 @@ mod gc_tests {
         }
     }
 
-    fn create_test_env(
-    ) -> (Heap, HeapProxy, Box<ExecutionState>, Box<ActivationStack>) {
+    fn create_test_env()
+    -> (Heap, HeapProxy, Box<ExecutionState>, Box<ActivationStack>) {
         let settings = create_test_settings();
         let heap_inner = Arc::new(HeapInner::new(settings));
         let heap = Heap(heap_inner.clone());

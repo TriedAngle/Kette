@@ -104,7 +104,7 @@ impl Array {
     }
 
     /// calculate the layout of an array with n fields
-    #[must_use] 
+    #[must_use]
     pub fn required_layout(size: usize) -> Layout {
         let head = Layout::new::<Array>();
         let slots_layout =

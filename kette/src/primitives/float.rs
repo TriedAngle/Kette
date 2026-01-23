@@ -1,6 +1,6 @@
 use crate::{
-    primitives::bool_object, Allocator, ExecutionResult, Float, Handle,
-    NumberError, ObjectType, PrimitiveContext, Value,
+    Allocator, ExecutionResult, Float, Handle, NumberError, ObjectType,
+    PrimitiveContext, Value, primitives::bool_object,
 };
 
 type Float2Op = fn(

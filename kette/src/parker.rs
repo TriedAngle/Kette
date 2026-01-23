@@ -1,11 +1,11 @@
 use std::{
     cell::Cell,
     sync::{
+        Condvar, Mutex,
         atomic::{
             AtomicU8,
             Ordering::{AcqRel, Acquire, Relaxed, Release},
         },
-        Condvar, Mutex,
     },
 };
 
@@ -27,7 +27,7 @@ unsafe impl Send for NativeParker {}
 unsafe impl Sync for NativeParker {}
 
 impl NativeParker {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: AtomicU8::new(0),
@@ -101,7 +101,7 @@ mod tests {
 
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
