@@ -72,9 +72,11 @@ pub struct Code {
     pub const_count: u32,
     /// Size of instructions in bytes
     pub inst_size: u32,
+    /// Number of Send sites (for lazy feedback vector allocation)
+    pub feedback_slot_count: u32,
     /// the original source code body parse result
     pub body: Handle<Array>,
-    /// Feedback vector for inline caching
+    /// Feedback vector for inline caching (lazily allocated)
     pub feedback_vector: Handle<Array>,
 
     // Memory Layout (DST pattern for flexible allocation):
@@ -102,6 +104,7 @@ impl Code {
         &mut self,
         constants: &[Value],
         instructions: &[u8],
+        feedback_slot_count: u32,
         body: Handle<Array>,
         feedback_vector: Handle<Array>,
     ) {
@@ -109,6 +112,7 @@ impl Code {
         self.header = Header::new_object(ObjectType::Code);
         self.const_count = constants.len() as u32;
         self.inst_size = instructions.len() as u32;
+        self.feedback_slot_count = feedback_slot_count;
         self.body = body;
         self.feedback_vector = feedback_vector;
 
@@ -176,7 +180,11 @@ impl Visitable for Code {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         // Visit strong references in fields
         visitor.visit_mut(self.body.into());
-        visitor.visit_mut(self.feedback_vector.into());
+
+        // feedback_vector may be null (lazily allocated)
+        if !self.feedback_vector.as_ptr().is_null() {
+            visitor.visit_mut(self.feedback_vector.into());
+        }
 
         // Visit constants
         let count = self.const_count as usize;
@@ -190,7 +198,11 @@ impl Visitable for Code {
 
     fn visit_edges(&self, visitor: &impl Visitor) {
         visitor.visit(self.body.into());
-        visitor.visit(self.feedback_vector.into());
+
+        // feedback_vector may be null (lazily allocated)
+        if !self.feedback_vector.as_ptr().is_null() {
+            visitor.visit(self.feedback_vector.into());
+        }
 
         for &val in self.constants() {
             visitor.visit(val);

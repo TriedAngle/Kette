@@ -196,11 +196,7 @@ fn parse_until_inner<'m, 'ex, 'arg>(
         let lookup = selector.lookup_object(&parsers.as_value());
 
         match lookup {
-            LookupResult::Found {
-                object: _,
-                slot,
-                slot_index: _,
-            } => {
+            LookupResult::Found { slot, .. } => {
                 let tags = slot.tags();
 
                 if tags.contains(SlotTags::PRIMITIVE) {

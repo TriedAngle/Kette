@@ -3,6 +3,10 @@ name = "kette"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["inline-cache"]
+inline-cache = []
+
 [dependencies]
 clap = { version = "4.5.53", features = ["derive"] }
 bitflags = "2.10.0"
@@ -12,3 +16,12 @@ ahash = "0.8.12"
 dashmap = "6.1"
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "vm_benchmark"
+harness = false
+
+

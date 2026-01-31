@@ -26,6 +26,17 @@ impl Array {
             )
         };
     }
+
+    /// Initialize array with all slots set to the same value.
+    pub fn init_fill(&mut self, size: usize, fill: Value) {
+        self.init(size);
+        // SAFETY: array was allocated with correct size
+        let slice = unsafe {
+            std::slice::from_raw_parts_mut(self.fields.as_mut_ptr(), size)
+        };
+        slice.fill(fill);
+    }
+
     /// Initialize a slot object
     pub fn init(&mut self, size: usize) {
         self.header = Header::new_object(ObjectType::Array);

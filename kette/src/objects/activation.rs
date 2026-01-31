@@ -102,8 +102,8 @@ impl ActivationObject {
 
     #[inline]
     pub fn assignable_slots(&self) -> usize {
-        // SAFETY: every object MUST have a map object
-        self.map.slot_count()
+        // Activations store only input values, not all map slots
+        self.map.input_count()
     }
 
     #[inline]

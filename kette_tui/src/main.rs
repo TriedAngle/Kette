@@ -10,7 +10,7 @@ use crossterm::{
 use kette::{
     Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
     ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
-    Parser, Tagged, ThreadProxy, VM, VMCreateInfo, VMThread,
+    ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 use ratatui::{
     Terminal,
@@ -776,17 +776,15 @@ fn execute_source(
     interpreter: &mut Interpreter,
     source: &str,
 ) -> Result<(), String> {
-    let parser_proxy = interpreter.vm.create_proxy();
-    let mut parser = Box::new(Parser::new_object(
-        &parser_proxy,
-        &mut interpreter.heap,
+    // Allocate parser on the GC heap (not Rust heap via Box)
+    let parser = interpreter.heap.allocate_parser(
+        &interpreter.vm.shared.strings,
         source.as_bytes(),
-    ));
-    let parser_obj = Tagged::new_ptr(parser.as_mut());
+    );
     let parse_msg = interpreter
         .vm
         .intern_string_message("parse", &mut interpreter.heap);
-    let constants = vec![parser_obj.as_value(), parse_msg.as_value()];
+    let constants = vec![parser.as_value(), parse_msg.as_value()];
 
     let mut writer = BytecodeWriter::new();
     // PushConstant(0) - parser object
@@ -800,6 +798,7 @@ fn execute_source(
     let boot_code = interpreter.heap.allocate_code(
         &constants,
         &writer.into_inner(),
+        1, // 1 Send site
         dummy_body,
         unsafe { Handle::null() },
     );

@@ -9,8 +9,8 @@ from enum import Enum
 
 TEST_DIR = "tests"
 CORE_INIT = "core/init.ktt"
-BUILD_CMD = ["cargo", "build", "--release"]
-RUN_CMD = ["cargo", "run", "--release", "--quiet", "--", CORE_INIT] 
+BUILD_CMD = ["cargo", "build", "--bin", "kette", "--release"]
+RUN_CMD = ["cargo", "run", "--bin", "kette", "--release", "--quiet", "--", CORE_INIT] 
 
 class Color:
     HEADER = '\033[95m'

@@ -24,6 +24,9 @@ pub enum LookupResult {
         object: Tagged<Value>,
         slot: SlotDescriptor,
         slot_index: usize,
+        /// True if the lookup traversed through an assignable parent slot.
+        /// Used by IC to decide whether to cache (assignable parents can change).
+        traversed_assignable_parent: bool,
     },
 }
 

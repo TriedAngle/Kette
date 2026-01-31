@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    Allocator, ByteArray, BytecodeWriter, Handle, Heap, HeapProxy,
-    HeapSettings, HeapValue, Map, Message, SlotHelper, SlotTags, Strings,
-    Value, interning::Messages, primitive_index, primitives::Vector,
+    interning::Messages, primitive_index, primitives::Vector, Allocator,
+    ByteArray, BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings,
+    HeapValue, Map, Message, SlotHelper, SlotTags, Strings, Value,
 };
 
 /// Core VM objects required for bootstrap and runtime operation.
@@ -32,6 +32,12 @@ pub struct SpecialObjects {
     pub message_self: Handle<Message>,
     pub message_create_object: Handle<Message>,
     pub message_create_quotation: Handle<Message>,
+
+    // IC sentinels
+    #[cfg(feature = "inline-cache")]
+    pub uninitialized_ic_sentinel: Handle<HeapValue>,
+    #[cfg(feature = "inline-cache")]
+    pub megamorphic_sentinel: Handle<HeapValue>,
 }
 
 /// Shared VM state accessible across threads.
@@ -300,6 +306,7 @@ impl VM {
             let dip_code = heap.allocate_code(
                 &[],
                 &writer.into_inner(),
+                0, // no Send sites in dip
                 dip_body,
                 Handle::null(),
             );
@@ -311,6 +318,14 @@ impl VM {
                 self.intern_string_message("(CreateObjectFromMap)", &mut heap);
             let message_create_quotation = self
                 .intern_string_message("(CreateQuotationFromMap)", &mut heap);
+
+            // IC sentinels - unique empty objects used to mark IC states
+            #[cfg(feature = "inline-cache")]
+            let uninitialized_ic_sentinel =
+                heap.allocate_slots(empty_map, &[]).cast();
+            #[cfg(feature = "inline-cache")]
+            let megamorphic_sentinel =
+                heap.allocate_slots(empty_map, &[]).cast();
 
             let specials = SpecialObjects {
                 universe,
@@ -330,6 +345,10 @@ impl VM {
                 message_self,
                 message_create_object,
                 message_create_quotation,
+                #[cfg(feature = "inline-cache")]
+                uninitialized_ic_sentinel,
+                #[cfg(feature = "inline-cache")]
+                megamorphic_sentinel,
             };
 
             let inner = Arc::get_mut(&mut self.inner).expect("get inner");
@@ -404,6 +423,39 @@ impl VMProxy {
 }
 
 impl SpecialObjects {
+    /// Returns all handles in SpecialObjects as a Vec for GC rooting.
+    #[must_use]
+    pub fn as_roots(&self) -> Vec<Handle<HeapValue>> {
+        // SAFETY: cast() is safe for GC rooting - we just need the pointer
+        let mut roots = unsafe {
+            vec![
+                self.universe,
+                self.parsers,
+                self.bytearray_traits,
+                self.array_traits,
+                self.fixnum_traits,
+                self.float_traits,
+                self.bignum_traits,
+                self.quotation_traits,
+                self.message_traits,
+                self.primitive_vector_map.cast(),
+                self.true_object,
+                self.false_object,
+                self.stack_object,
+                self.dip_map.cast(),
+                self.message_self.cast(),
+                self.message_create_object.cast(),
+                self.message_create_quotation.cast(),
+            ]
+        };
+        #[cfg(feature = "inline-cache")]
+        {
+            roots.push(self.uninitialized_ic_sentinel);
+            roots.push(self.megamorphic_sentinel);
+        }
+        roots
+    }
+
     /// Creates an uninitialized SpecialObjects holder.
     /// # Safety
     /// Must be fully initialized before use.
@@ -434,6 +486,11 @@ impl SpecialObjects {
                 message_create_quotation: Value::zero()
                     .as_heap_handle_unchecked()
                     .cast(),
+                #[cfg(feature = "inline-cache")]
+                uninitialized_ic_sentinel: Value::zero()
+                    .as_heap_handle_unchecked(),
+                #[cfg(feature = "inline-cache")]
+                megamorphic_sentinel: Value::zero().as_heap_handle_unchecked(),
             }
         }
     }

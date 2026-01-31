@@ -1,9 +1,9 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, Float, Handle, HeapObject, Map,
-    Message, Quotation, SlotDescriptor, SlotHelper, SlotObject, Strings,
-    Tagged, Value,
+    ActivationObject, Array, ByteArray, Code, FeedbackEntry, Float, Handle,
+    HeapObject, HeapValue, Map, Message, Parser, Quotation, SlotDescriptor,
+    SlotHelper, SlotObject, SlotTags, Strings, Tagged, Value,
 };
 
 /// Heap allocation interface for creating VM objects.
@@ -85,18 +85,53 @@ pub trait Allocator: Sized {
         array
     }
 
+    /// Allocate an array with all slots initialized to the same value.
+    fn allocate_array_fill(
+        &mut self,
+        size: usize,
+        fill: Value,
+    ) -> Handle<Array> {
+        let layout = Array::required_layout(size);
+        // SAFETY: allocate_handle returns valid memory, init_fill called immediately after.
+        let mut array = unsafe { self.allocate_handle::<Array>(layout) };
+        array.init_fill(size, fill);
+        array
+    }
+
     fn allocate_code(
         &mut self,
         constants: &[Value],
         instructions: &[u8],
+        feedback_slot_count: u32,
         body: Handle<Array>,
         feedback_vector: Handle<Array>,
     ) -> Handle<Code> {
         let layout = Code::required_layout(constants.len(), instructions.len());
         // SAFETY: init is called immediately
         let mut code = unsafe { self.allocate_handle::<Code>(layout) };
-        code.init_with_data(constants, instructions, body, feedback_vector);
+        code.init_with_data(
+            constants,
+            instructions,
+            feedback_slot_count,
+            body,
+            feedback_vector,
+        );
         code
+    }
+
+    fn allocate_feedback_entry(
+        &mut self,
+        receiver_map: Handle<Map>,
+        holder_map: Handle<Map>,
+        holder: Handle<HeapValue>,
+        slot_index: usize,
+    ) -> Handle<FeedbackEntry> {
+        let layout = Layout::new::<FeedbackEntry>();
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
+        let mut entry =
+            unsafe { self.allocate_handle::<FeedbackEntry>(layout) };
+        entry.init(receiver_map, holder_map, holder, slot_index);
+        entry
     }
 
     fn allocate_slot_map_helper(
@@ -229,5 +264,28 @@ pub trait Allocator: Sized {
         };
         // SAFETY: All handles are valid, slots.len() matches map's requirements.
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
+    }
+
+    /// Allocate a Parser on the GC heap with the given source code.
+    fn allocate_parser(
+        &mut self,
+        strings: &Strings,
+        code: &[u8],
+    ) -> Handle<Parser> {
+        // Create the parser's map with its primitive slots
+        let map = self.allocate_slot_map_helper(
+            strings,
+            &[
+                SlotHelper::primitive_message("parseNext", SlotTags::empty()),
+                SlotHelper::primitive_message("parseUntil", SlotTags::empty()),
+                SlotHelper::primitive_message("parse", SlotTags::empty()),
+            ],
+        );
+
+        let layout = Layout::new::<Parser>();
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
+        let mut parser = unsafe { self.allocate_handle::<Parser>(layout) };
+        parser.init(map, code);
+        parser
     }
 }

@@ -1,0 +1,26 @@
+// expect:
+// 100
+// done
+
+// Test: Monomorphic Inline Cache
+// Calls a method 100 times to trigger IC allocation (hotness threshold is 50)
+// and verify that the IC correctly handles assignable slot reads/writes.
+
+(| 
+    counter := 0 .
+    increment = (| -- | self counter 1 + self counter<< ) .
+    runLoop = (| count -- |
+        dup 0 > [
+            self increment
+            1 - self runLoop
+        ] [ drop ] if )
+|) 
+
+// Run 100 iterations - this will:
+// 1. First ~50 iterations: no IC (below hotness threshold)
+// 2. After hotness threshold: IC allocated, caches lookup results
+// 3. IC should correctly handle assignable slot 'counter' for both read and write
+dup 100 swap runLoop
+counter >string println
+
+"done" println

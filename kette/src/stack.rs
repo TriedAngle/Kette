@@ -139,6 +139,7 @@ impl ExecutionState {
     /// # Safety
     /// caller must make sure that at least one element is in the stack
     pub unsafe fn pop_unchecked(&mut self) -> Value {
+        debug_assert!(self.depth > 0, "pop_unchecked called with empty stack");
         self.depth -= 1;
         // SAFETY: caller guarantees depth > 0, so index is valid
         unsafe { *self.stack.get_unchecked(self.depth) }
@@ -147,6 +148,7 @@ impl ExecutionState {
     /// # Safety
     /// caller must make sure that at least one element is in the stack
     pub unsafe fn peek_unchecked(&mut self) -> Value {
+        debug_assert!(self.depth > 0, "peek_unchecked called with empty stack");
         // SAFETY: caller guarantees depth > 0, so index is valid
         unsafe { *self.stack.get_unchecked(self.depth - 1) }
     }
@@ -156,6 +158,12 @@ impl ExecutionState {
     /// caller must make sure that at least n elements are in the stack
     #[must_use]
     pub unsafe fn stack_get_nth_unchecked(&self, n: usize) -> Value {
+        debug_assert!(
+            self.depth > n,
+            "stack_get_nth_unchecked: depth {} <= n {}",
+            self.depth,
+            n
+        );
         let top_idx = self.depth - 1;
         let idx = top_idx - n;
         // SAFETY: caller guarantees depth > n, so index is valid
@@ -177,6 +185,10 @@ impl ExecutionState {
     /// # Safety
     /// caller must make sure that at least one element is in the return stack
     pub unsafe fn pop_return_unchecked(&mut self) -> Value {
+        debug_assert!(
+            self.return_depth > 0,
+            "pop_return_unchecked called with empty return stack"
+        );
         self.return_depth -= 1;
         // SAFETY: caller guarantees return_depth > 0, so index is valid
         unsafe { *self.return_stack.get_unchecked(self.return_depth) }

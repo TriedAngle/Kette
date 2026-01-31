@@ -420,6 +420,7 @@ impl Object for SlotObject {
                 object: self_value,
                 slot,
                 slot_index: idx,
+                traversed_assignable_parent: false,
             };
         }
 
@@ -430,7 +431,8 @@ impl Object for SlotObject {
             let tags = slot.tags();
 
             if tags.contains(SlotTags::PARENT) {
-                let parent = if tags.contains(SlotTags::ASSIGNABLE) {
+                let is_assignable_parent = tags.contains(SlotTags::ASSIGNABLE);
+                let parent = if is_assignable_parent {
                     // slot.value stores offset for assignable slots
                     let offset = slot
                         .value
@@ -444,7 +446,22 @@ impl Object for SlotObject {
 
                 match parent.lookup(selector.clone(), Some(&current_link)) {
                     LookupResult::None => continue,
-                    found => return found,
+                    LookupResult::Found {
+                        object,
+                        slot,
+                        slot_index,
+                        traversed_assignable_parent,
+                    } => {
+                        // Propagate the flag: if we traversed an assignable
+                        // parent, or if our child lookup did
+                        return LookupResult::Found {
+                            object,
+                            slot,
+                            slot_index,
+                            traversed_assignable_parent: traversed_assignable_parent
+                                || is_assignable_parent,
+                        };
+                    }
                 }
             }
         }

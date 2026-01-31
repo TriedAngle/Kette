@@ -9,14 +9,14 @@ use std::{
     ops::Deref,
     ptr::{self, NonNull},
     sync::{
+        atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
 use crate::{
-    ActivationStack, Allocator, ExecutionState, FLAG_REMEMBERED, Handle,
-    HeapValue, OS_PAGE_SIZE, SenseBarrier, Value, Visitable, Visitor, system,
+    system, ActivationStack, Allocator, ExecutionState, Handle, HeapValue,
+    SenseBarrier, Value, Visitable, Visitor, FLAG_REMEMBERED, OS_PAGE_SIZE,
 };
 
 /// Configuration for the Immix heap structure.
@@ -182,6 +182,8 @@ pub struct HeapProxy {
     pub remember: Vec<Handle<HeapValue>>,
     pub state: Option<NonNull<ExecutionState>>,
     pub activations: Option<NonNull<ActivationStack>>,
+    /// Extra permanent roots (e.g., SpecialObjects) that must survive GC.
+    pub permanent_roots: Vec<Handle<HeapValue>>,
     pub minor_allocated: usize,
     pub epoch: u8,
     pub block_status: u8,
@@ -553,6 +555,7 @@ impl HeapProxy {
         Self {
             heap,
             remember: Vec::with_capacity(32),
+            permanent_roots: Vec::new(),
             minor_allocated: 0,
             epoch,
             state: None,
@@ -562,6 +565,12 @@ impl HeapProxy {
             bump: ptr::null_mut(),
             end: ptr::null_mut(),
         }
+    }
+
+    /// Add permanent roots that must survive all GC cycles.
+    /// These are typically SpecialObjects like traits, true/false, etc.
+    pub fn add_permanent_roots(&mut self, roots: Vec<Handle<HeapValue>>) {
+        self.permanent_roots.extend(roots);
     }
 
     pub fn init_state(
@@ -613,6 +622,9 @@ impl HeapProxy {
                 .map(|activation| activation.object.as_heap_value_handle());
             roots.extend(activation_roots);
         }
+
+        // Add permanent roots (SpecialObjects, etc.)
+        roots.extend(self.permanent_roots.iter().copied());
 
         // Take local remembered set
         let remember = mem::take(&mut self.remember);
@@ -961,7 +973,7 @@ impl HeapInner {
             self.sync.state.finish_gc();
         }
 
-        // 2. Barrier 4: The "Exit Handshake".
+        // Barrier 4: The "Exit Handshake".
         // We MUST wait here. This ensures that NO thread leaves this function
         // until the Coordinator has definitely set the state to None.
         // Without this, a fast worker could leave, see the old 'MinorRequested'
@@ -979,9 +991,7 @@ impl HeapInner {
         match reason {
             GcStatus::MinorRequested => {
                 self.minor_gc_marking(roots);
-
                 self.sync.barrier.wait(threads);
-
                 self.minor_gc_sweep();
             }
             GcStatus::MajorRequested => unimplemented!(),
@@ -1053,7 +1063,6 @@ impl HeapInner {
         }
 
         while let Some(mut value) = queue.pop() {
-            // We pass the visitor again to find children of this object
             value.visit_edges_mut(&mut visitor);
         }
     }
@@ -1384,8 +1393,8 @@ mod gc_tests {
         }
     }
 
-    fn create_test_env()
-    -> (Heap, HeapProxy, Box<ExecutionState>, Box<ActivationStack>) {
+    fn create_test_env(
+    ) -> (Heap, HeapProxy, Box<ExecutionState>, Box<ActivationStack>) {
         let settings = create_test_settings();
         let heap_inner = Arc::new(HeapInner::new(settings));
         let heap = Heap(heap_inner.clone());

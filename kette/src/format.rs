@@ -10,7 +10,7 @@ impl Interpreter {
     /// Prints the current stack state to stdout.
     pub fn print_stack(&mut self) {
         let depth = self.state.depth();
-        println!("--- Datastack ({}):", depth);
+        tracing::debug!("--- Datastack ({}):", depth);
 
         if depth == 0 {
             return;

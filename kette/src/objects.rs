@@ -6,6 +6,7 @@ use std::{
 pub mod activation;
 pub mod arrays;
 pub mod bytearrays;
+pub mod feedback;
 pub mod floats;
 pub mod message;
 pub mod parser;
@@ -14,9 +15,9 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, Float, LookupResult, Map,
-    Message, Quotation, Selector, SlotObject, ThreadObject, Value, ValueTag,
-    Visitable, VisitedLink, Visitor,
+    ActivationObject, Array, ByteArray, Code, FeedbackEntry, Float,
+    LookupResult, Map, Message, Quotation, Selector, SlotObject, ThreadObject,
+    Value, ValueTag, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(u8)]
@@ -30,17 +31,18 @@ pub enum ObjectKind {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ObjectType {
-    Slot        = 0b00000,
-    Array       = 0b00010,
-    ByteArray   = 0b00011,
-    Activation  = 0b00100,
-    Quotation   = 0b00111,
-    Message     = 0b01000,
-    Float       = 0b01001,
-    BigNum      = 0b01010,
-    Thread      = 0b01011,
-    Code        = 0b11110,
-    Max         = 0b11111,
+    Slot          = 0b00000,
+    Array         = 0b00010,
+    ByteArray     = 0b00011,
+    Activation    = 0b00100,
+    Quotation     = 0b00111,
+    Message       = 0b01000,
+    Float         = 0b01001,
+    BigNum        = 0b01010,
+    Thread        = 0b01011,
+    FeedbackEntry = 0b01100,
+    Code          = 0b11110,
+    Max           = 0b11111,
 }
 
 pub const FLAG_REMEMBERED: u8 = 0b0000_0001;
@@ -206,8 +208,11 @@ impl Header {
             0b01000 => ObjectType::Message,
             0b01001 => ObjectType::Float,
             0b01010 => ObjectType::BigNum,
+            0b01011 => ObjectType::Thread,
+            0b01100 => ObjectType::FeedbackEntry,
+            0b11110 => ObjectType::Code,
             0b11111 => ObjectType::Max,
-            _ => unreachable!("object type doesn't exist"),
+            _ => unreachable!("object type doesn't exist: {:05b}", self.type_bits()),
         })
     }
 
@@ -315,16 +320,17 @@ impl Object for HeapValue {
     fn lookup(&self, selector: Selector, link: Option<&VisitedLink>) -> LookupResult {
         // SAFETY: only objects will ever be looked up 
         match unsafe { self.header.object_type().unwrap_unchecked() } {
-            ObjectType::Slot        => self.downcast_ref_match::<SlotObject>().lookup(selector, link),
-            ObjectType::Array       => self.downcast_ref_match::<Array>().lookup(selector, link),
-            ObjectType::ByteArray   => self.downcast_ref_match::<ByteArray>().lookup(selector, link),
-            ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
-            ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().lookup(selector, link),
-            ObjectType::Float       => self.downcast_ref_match::<Float>().lookup(selector, link),
-            ObjectType::Message     => self.downcast_ref_match::<Message>().lookup(selector, link),
-            ObjectType::BigNum      => unimplemented!(),
-            ObjectType::Thread      => unimplemented!(),
-            ObjectType::Code        => unreachable!("code cannot be looked up yet (or should it be maybe?)"),
+            ObjectType::Slot          => self.downcast_ref_match::<SlotObject>().lookup(selector, link),
+            ObjectType::Array         => self.downcast_ref_match::<Array>().lookup(selector, link),
+            ObjectType::ByteArray     => self.downcast_ref_match::<ByteArray>().lookup(selector, link),
+            ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
+            ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().lookup(selector, link),
+            ObjectType::Float         => self.downcast_ref_match::<Float>().lookup(selector, link),
+            ObjectType::Message       => self.downcast_ref_match::<Message>().lookup(selector, link),
+            ObjectType::BigNum        => unimplemented!(),
+            ObjectType::Thread        => unimplemented!(),
+            ObjectType::FeedbackEntry => unreachable!("feedback entry cannot be looked up"),
+            ObjectType::Code          => unreachable!("code cannot be looked up yet (or should it be maybe?)"),
             ObjectType::Max => {
                 unreachable!("illegal object type for lookup")
             }
@@ -341,17 +347,18 @@ impl HeapObject for HeapValue {
             ObjectKind::Object => {
                 // SAFETY: matched to this 
                 match unsafe { self.header.object_type().unwrap_unchecked() } {
-                    ObjectType::Slot       => self.downcast_ref_match::<SlotObject>().heap_size(),
-                    ObjectType::Array      => self.downcast_ref_match::<Array>().heap_size(),
-                    ObjectType::ByteArray  => self.downcast_ref_match::<ByteArray>().heap_size(),
-                    ObjectType::Activation => self.downcast_ref_match::<ActivationObject>().heap_size(),
-                    ObjectType::Quotation  => self.downcast_ref_match::<Quotation>().heap_size(),
-                    ObjectType::Message    => self.downcast_ref_match::<Message>().heap_size(),
-                    ObjectType::Float      => self.downcast_ref_match::<Float>().heap_size(),
-                    ObjectType::BigNum     => unimplemented!(),
-                    ObjectType::Thread     => unimplemented!(),
-                    ObjectType::Code      => self.downcast_ref_match::<Code>().heap_size(),
-                    ObjectType::Max        => unreachable!(),
+                    ObjectType::Slot          => self.downcast_ref_match::<SlotObject>().heap_size(),
+                    ObjectType::Array         => self.downcast_ref_match::<Array>().heap_size(),
+                    ObjectType::ByteArray     => self.downcast_ref_match::<ByteArray>().heap_size(),
+                    ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().heap_size(),
+                    ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().heap_size(),
+                    ObjectType::Message       => self.downcast_ref_match::<Message>().heap_size(),
+                    ObjectType::Float         => self.downcast_ref_match::<Float>().heap_size(),
+                    ObjectType::BigNum        => unimplemented!(),
+                    ObjectType::Thread        => unimplemented!(),
+                    ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().heap_size(),
+                    ObjectType::Code          => self.downcast_ref_match::<Code>().heap_size(),
+                    ObjectType::Max           => unreachable!(),
                 }
             }
             ObjectKind::Map => {
@@ -393,15 +400,15 @@ impl Visitable for HeapValue {
             ObjectKind::Object => {
                 // SAFETY: matched to this
                 match unsafe { self.header.object_type().unwrap_unchecked() } {
-                    ObjectType::Slot        => self.downcast_mut_match::<SlotObject>().visit_edges_mut(visitor),
-                    ObjectType::Array       => self.downcast_mut_match::<Array>().visit_edges_mut(visitor),
-                    ObjectType::Activation  => self.downcast_mut_match::<ActivationObject>().visit_edges_mut(visitor),
-                    ObjectType::Quotation   => self.downcast_mut_match::<Quotation>().visit_edges_mut(visitor),
-                    ObjectType::Message     => self.downcast_mut_match::<Message>().visit_edges_mut(visitor),
-                    ObjectType::Thread      => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
+                    ObjectType::Slot          => self.downcast_mut_match::<SlotObject>().visit_edges_mut(visitor),
+                    ObjectType::Array         => self.downcast_mut_match::<Array>().visit_edges_mut(visitor),
+                    ObjectType::Activation    => self.downcast_mut_match::<ActivationObject>().visit_edges_mut(visitor),
+                    ObjectType::Quotation     => self.downcast_mut_match::<Quotation>().visit_edges_mut(visitor),
+                    ObjectType::Message       => self.downcast_mut_match::<Message>().visit_edges_mut(visitor),
+                    ObjectType::Thread        => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
+                    ObjectType::FeedbackEntry => self.downcast_mut_match::<FeedbackEntry>().visit_edges_mut(visitor),
+                    ObjectType::Code          => self.downcast_mut_match::<Code>().visit_edges_mut(visitor),
                     ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
-
-                    ObjectType::Code      => self.downcast_mut_match::<Code>().visit_edges_mut(visitor),
                     ObjectType::Max => unreachable!(),
                 }
             }
@@ -417,15 +424,15 @@ impl Visitable for HeapValue {
             ObjectKind::Object => {
                 // SAFETY: matched to this
                 match unsafe { self.header.object_type().unwrap_unchecked() } {
-                    ObjectType::Slot        => self.downcast_ref_match::<SlotObject>().visit_edges(visitor),
-                    ObjectType::Array       => self.downcast_ref_match::<Array>().visit_edges(visitor),
-                    ObjectType::Activation  => self.downcast_ref_match::<ActivationObject>().visit_edges(visitor),
-                    ObjectType::Quotation   => self.downcast_ref_match::<Quotation>().visit_edges(visitor),
-                    ObjectType::Message     => self.downcast_ref_match::<Message>().visit_edges(visitor),
-                    ObjectType::Thread      => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
+                    ObjectType::Slot          => self.downcast_ref_match::<SlotObject>().visit_edges(visitor),
+                    ObjectType::Array         => self.downcast_ref_match::<Array>().visit_edges(visitor),
+                    ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().visit_edges(visitor),
+                    ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().visit_edges(visitor),
+                    ObjectType::Message       => self.downcast_ref_match::<Message>().visit_edges(visitor),
+                    ObjectType::Thread        => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
+                    ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().visit_edges(visitor),
+                    ObjectType::Code          => self.downcast_ref_match::<Code>().visit_edges(visitor),
                     ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
-
-                    ObjectType::Code      => self.downcast_ref_match::<Code>().visit_edges(visitor),
                     ObjectType::Max => unreachable!(),
                 }
             }

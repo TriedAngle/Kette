@@ -1,16 +1,15 @@
-use std::{mem, num::IntErrorKind, sync::Arc};
+use std::{mem, num::IntErrorKind, ptr, sync::Arc};
 
 use crate::{
-    Allocator, Header, HeapObject, HeapProxy, LookupResult, Map, Object,
-    ObjectKind, ObjectType, Selector, SlotHelper, SlotTags, Tagged, VMProxy,
-    Visitable, VisitedLink,
+    Handle, Header, HeapObject, LookupResult, Map, Object, ObjectKind,
+    ObjectType, Selector, Visitable, VisitedLink,
 };
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Parser {
     pub header: Header,
-    pub map: Tagged<Map>,
+    pub map: Handle<Map>,
     pub code: Arc<[u8]>,
     pub end: usize,
     pub offset: usize,
@@ -35,41 +34,46 @@ pub enum ParsedToken {
 }
 
 impl Parser {
+    /// Initialize a parser with the given map and source code.
+    /// Called by the allocator after memory is allocated.
+    ///
+    /// # Safety
+    /// This uses ptr::write to avoid dropping uninitialized memory.
+    /// The caller must ensure `self` points to valid, properly aligned memory.
+    #[inline]
+    pub fn init(&mut self, map: Handle<Map>, code: &[u8]) {
+        // Use ptr::write to avoid dropping uninitialized Arc
+        // SAFETY: self points to allocated but uninitialized memory
+        unsafe {
+            ptr::write(
+                self,
+                Parser {
+                    header: Header::new_object(ObjectType::Slot),
+                    map,
+                    code: Arc::from(code),
+                    end: code.len(),
+                    offset: 0,
+                    line: 1,
+                    column: 1,
+                },
+            );
+        }
+    }
+
+    /// Create a parser for testing (not GC-managed).
+    /// Only use this in unit tests, not in the VM.
+    #[cfg(test)]
     #[inline]
     #[must_use]
     pub fn new(code: &[u8]) -> Self {
         let end = code.len();
         let header = Header::new_object(ObjectType::Slot);
-        let map = Tagged::new_ptr(std::ptr::null_mut());
+        // SAFETY: null map is only valid for test parsers not used in GC context
+        let map = unsafe { Handle::null() };
 
         Self {
             header,
             map,
-            code: Arc::from(code),
-            end,
-            offset: 0,
-            line: 1,
-            column: 1,
-        }
-    }
-
-    #[inline]
-    pub fn new_object(vm: &VMProxy, heap: &mut HeapProxy, code: &[u8]) -> Self {
-        let end = code.len();
-        let header = Header::new_object(ObjectType::Slot);
-
-        let map = heap.allocate_slot_map_helper(
-            &vm.shared.strings,
-            &[
-                SlotHelper::primitive_message("parseNext", SlotTags::empty()),
-                SlotHelper::primitive_message("parseUntil", SlotTags::empty()),
-                SlotHelper::primitive_message("parse", SlotTags::empty()),
-            ],
-        );
-
-        Self {
-            header,
-            map: map.as_tagged(),
             code: Arc::from(code),
             end,
             offset: 0,
@@ -248,13 +252,13 @@ impl Parser {
 
 impl Visitable for Parser {
     #[inline]
-    fn visit_edges(&self, _visitor: &impl crate::Visitor) {
-        // visitor.visit(self.map.into());
+    fn visit_edges(&self, visitor: &impl crate::Visitor) {
+        visitor.visit(self.map.into());
     }
 
     #[inline]
-    fn visit_edges_mut(&mut self, _visitor: &mut impl crate::Visitor) {
-        // visitor.visit_mut(self.map.into());
+    fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
+        visitor.visit_mut(self.map.into());
     }
 }
 impl Object for Parser {

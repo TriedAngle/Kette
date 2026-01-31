@@ -1,0 +1,7 @@
+(| 
+    fizzbuzz = (| num -- s |? dup 15 divisible? | drop "fizzbuzz" ) .
+    fizzbuzz = (| num -- s |? dup 3 divisible? | drop "fizz" ) .
+    fizzbuzz = (| num -- s |? dup 5 divisible? | drop "buzz" ) .
+    fizzbuzz = (| num -- s |? t | >string ) .
+|) [ fizzbuzz println ] curry // creates closure that is: [ num | self fizzbuzz ]
+30 0 [a..b] each // creates an iterator over [30..0] and calls colsure on all
