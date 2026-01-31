@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    bytecode::BytecodeWriter, Allocator, Array, Code, Handle, HeapProxy, Map,
-    Message, ObjectType, Quotation, VMShared, Value,
+    Allocator, Array, Code, Handle, HeapProxy, Map, Message, ObjectType,
+    Quotation, VMShared, Value, bytecode::BytecodeWriter,
 };
 
 pub struct BytecodeCompiler {}
@@ -168,7 +168,7 @@ impl BytecodeCompiler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HeapSettings, OpCode, VMCreateInfo, VM};
+    use crate::{HeapSettings, OpCode, VM, VMCreateInfo};
 
     #[test]
     fn test_compiler_basic() {

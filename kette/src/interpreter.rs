@@ -851,8 +851,12 @@ impl Interpreter {
                             if let Some(fv) =
                                 self.ensure_feedback_vector(act_map, code)
                             {
-                                if let Some((holder, slot_index)) =
-                                    self.try_ic_lookup(&fv, feedback_idx, receiver_map)
+                                if let Some((holder, slot_index)) = self
+                                    .try_ic_lookup(
+                                        &fv,
+                                        feedback_idx,
+                                        receiver_map,
+                                    )
                                 {
                                     // IC HIT
                                     let res = self.dispatch_from_ic(
@@ -922,8 +926,9 @@ impl Interpreter {
                             if let Some(fv) =
                                 self.ensure_feedback_vector(act_map, code)
                             {
-                                let holder =
-                                    object.as_value().as_heap_handle_unchecked();
+                                let holder = object
+                                    .as_value()
+                                    .as_heap_handle_unchecked();
                                 self.update_ic(
                                     fv,
                                     feedback_idx,

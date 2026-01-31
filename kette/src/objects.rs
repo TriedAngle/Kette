@@ -212,7 +212,10 @@ impl Header {
             0b01100 => ObjectType::FeedbackEntry,
             0b11110 => ObjectType::Code,
             0b11111 => ObjectType::Max,
-            _ => unreachable!("object type doesn't exist: {:05b}", self.type_bits()),
+            _ => unreachable!(
+                "object type doesn't exist: {:05b}",
+                self.type_bits()
+            ),
         })
     }
 

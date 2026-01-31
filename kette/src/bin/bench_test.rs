@@ -15,7 +15,7 @@ use std::io;
 use kette::{
     Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
     ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
-    ThreadProxy, VMCreateInfo, VMThread, VM,
+    ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 
 fn execute_source(

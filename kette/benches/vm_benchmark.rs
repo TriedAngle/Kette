@@ -19,11 +19,11 @@
 
 use std::io;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use kette::{
     Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
     ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
-    ThreadProxy, VMCreateInfo, VMThread, VM,
+    ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 
 /// Helper to execute Kette source code on an interpreter (full parse + compile + run).

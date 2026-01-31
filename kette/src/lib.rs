@@ -28,10 +28,10 @@ pub use objects::activation::{
 };
 pub use objects::arrays::Array;
 pub use objects::bytearrays::ByteArray;
+pub use objects::feedback::FeedbackEntry;
 pub use objects::floats::Float;
 pub use objects::message::Message;
 pub use objects::parser::{ParsedToken, Parser, Token};
-pub use objects::feedback::FeedbackEntry;
 pub use objects::quotations::Quotation;
 pub use objects::slots::{
     Map, SlotDescriptor, SlotHelper, SlotObject, SlotTags,

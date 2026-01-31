@@ -2,7 +2,7 @@ use clap::Parser as ClapParser;
 use kette::{
     Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
     ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
-    ThreadProxy, VMCreateInfo, VMThread, VM,
+    ThreadProxy, VM, VMCreateInfo, VMThread,
 };
 use std::{
     fs,

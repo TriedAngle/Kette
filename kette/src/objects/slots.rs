@@ -458,8 +458,9 @@ impl Object for SlotObject {
                             object,
                             slot,
                             slot_index,
-                            traversed_assignable_parent: traversed_assignable_parent
-                                || is_assignable_parent,
+                            traversed_assignable_parent:
+                                traversed_assignable_parent
+                                    || is_assignable_parent,
                         };
                     }
                 }
