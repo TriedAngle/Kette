@@ -45,9 +45,15 @@ impl HeapObject for Quotation {
 impl Visitable for Quotation {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
         visitor.visit(self.map.into());
+        if !self.parent.as_ptr().is_null() {
+            visitor.visit(self.parent.into());
+        }
     }
 
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
         visitor.visit_mut(self.map.into());
+        if !self.parent.as_ptr().is_null() {
+            visitor.visit_mut(self.parent.into());
+        }
     }
 }

@@ -1,12 +1,5 @@
-//! Run with inline-cache (default):
-//!   cargo bench --bench vm_benchmark
-//!
-//! Run without inline-cache:
-//!   cargo bench --bench vm_benchmark --no-default-features
-
 use std::io;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use kette::{
     Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
     ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
@@ -96,7 +89,6 @@ fn execute_source(
 /// Creates a fresh interpreter WITHOUT loading core library.
 /// The caller MUST call `init_gc_roots()` and then load the core library.
 fn create_interpreter() -> Interpreter {
-    // Use a larger heap for benchmarks to avoid OOM during criterion's many iterations
     let mut heap_settings = HeapSettings::default();
     heap_settings.heap_size = 2 * 1024 * 1024 * 1024; // 2 GB
 
@@ -119,9 +111,6 @@ fn create_interpreter() -> Interpreter {
     let proxy = vm.proxy();
 
     let mut interpreter = Interpreter::new(proxy, thread_proxy, heap, state);
-    // NOTE: We don't call init_gc_roots() here because the interpreter will be
-    // moved when returned, invalidating the pointers. The caller must call
-    // init_gc_roots() after the interpreter is in its final location.
     interpreter.set_output(Box::new(io::sink()));
 
     interpreter
@@ -131,81 +120,18 @@ fn create_interpreter() -> Interpreter {
 /// This sets up GC roots and loads the core library.
 fn init_interpreter(interpreter: &mut Interpreter) {
     interpreter.init_gc_roots();
-    let core_content = include_str!("../../core/init.ktt");
+    let core_content = include_str!("../../../core/init.ktt");
     execute_source(interpreter, core_content).expect("Failed to load core");
 }
 
-/// Benchmark 1: Recursive countdown loop
-/// Tests method dispatch and recursion performance.
-fn bench_recursive_countdown(c: &mut Criterion) {
+fn main() {
     let mut interpreter = create_interpreter();
     init_interpreter(&mut interpreter);
 
-    let bench_code = r#"
-(| 
-    countdown = (| n -- |
-        dup 0 > [
-            1 - self countdown
-        ] [ drop ] if ) .
-    run = (| -- |
-        100 self countdown
-        )
-|) run
-"#;
-
-    // Warm up - run a few times to populate IC
-    for _ in 0..5 {
-        execute_source(&mut interpreter, bench_code).expect("Warmup failed");
-    }
-
-    c.bench_function("recursive_countdown_100", |b| {
-        b.iter(|| {
-            execute_source(&mut interpreter, black_box(bench_code))
-                .expect("Benchmark failed");
-        });
-    });
-}
-
-/// Benchmark 2: Object with counter and increment method
-/// Tests slot access and mutation performance.
-fn bench_counter_increment(c: &mut Criterion) {
-    let mut interpreter = create_interpreter();
-    init_interpreter(&mut interpreter);
-
-    let bench_code = r#"
-(| 
-    counter := 0 .
-    increment = (| -- | self counter 1 + self counter<< ) .
-    runLoop = (| count -- |
-        dup 0 > [
-            self increment
-            1 - self runLoop
-        ] [ drop ] if ) .
-    run = (| -- |
-        100 self runLoop
-        )
-|) 
-run
-"#;
-
-    // Warm up - run a few times to populate IC
-    for _ in 0..5 {
-        execute_source(&mut interpreter, bench_code).expect("Warmup failed");
-    }
-
-    c.bench_function("counter_increment_100", |b| {
-        b.iter(|| {
-            execute_source(&mut interpreter, black_box(bench_code))
-                .expect("Benchmark failed");
-        });
-    });
-}
-
-/// Benchmark 3: Fibonacci (recursive, exponential complexity)
-/// Tests deep recursion and multiple message sends per call.
-fn bench_fibonacci(c: &mut Criterion) {
-    let mut interpreter = create_interpreter();
-    init_interpreter(&mut interpreter);
+    let iterations = std::env::var("TEST_ITERATIONS")
+        .ok()
+        .and_then(|val| val.parse::<usize>().ok())
+        .unwrap_or(10);
 
     let bench_code = r#"
 (| 
@@ -216,7 +142,7 @@ fn bench_fibonacci(c: &mut Criterion) {
             dup 1 - self fib
             swap 2 - self fib
             +
-        ] if ) .
+        ] if )
     run = (| -- |
         12 self fib
         drop )
@@ -224,23 +150,8 @@ fn bench_fibonacci(c: &mut Criterion) {
 run
 "#;
 
-    // Warm up - run a few times to populate IC
-    for _ in 0..5 {
-        execute_source(&mut interpreter, bench_code).expect("Warmup failed");
+    for _ in 0..iterations {
+        execute_source(&mut interpreter, bench_code)
+            .expect("Fibonacci execution failed");
     }
-
-    c.bench_function("fibonacci_12", |b| {
-        b.iter(|| {
-            execute_source(&mut interpreter, black_box(bench_code))
-                .expect("Benchmark failed");
-        });
-    });
 }
-
-criterion_group! {
-    name = benches;
-    config = Criterion::default().sample_size(20);
-    targets = bench_recursive_countdown, bench_counter_increment, bench_fibonacci
-}
-
-criterion_main!(benches);

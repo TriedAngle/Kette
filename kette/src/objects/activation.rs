@@ -318,7 +318,7 @@ impl HeapObject for ActivationObject {
     const TYPE_BITS: u8 = ObjectType::Activation as u8;
 
     fn heap_size(&self) -> usize {
-        let count = self.map.assignable_slots_count();
+        let count = self.map.input_count();
         mem::size_of::<Self>() + count * mem::size_of::<Value>()
     }
 }

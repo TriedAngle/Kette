@@ -1079,6 +1079,10 @@ impl HeapInner {
                 if value.is_fixnum() {
                     return;
                 }
+                debug_assert!(
+                    !value.is_header(),
+                    "header value encountered in GC visitor"
+                );
 
                 // Safety: Validated as not fixnum, assumes valid heap pointer.
                 let handle = unsafe { value.as_heap_handle_unchecked() };
@@ -1148,6 +1152,10 @@ impl HeapInner {
                 if value.is_fixnum() {
                     return;
                 }
+                debug_assert!(
+                    !value.is_header(),
+                    "header value encountered in GC visitor"
+                );
 
                 let handle = unsafe { value.as_heap_handle_unchecked() };
 
