@@ -1,16 +1,3 @@
-//! Criterion benchmarks for the Kette VM.
-//!
-//! CURRENTLY BROKEN: Two issues prevent these benchmarks from running:
-//!
-//! 1. OOM: Major GC is not yet implemented, so repeated parse/compile cycles
-//!    fill up the heap. Even with a 2GB heap, criterion's many iterations
-//!    exhaust memory during the warmup phase.
-//!
-//! 2. IC corruption (with inline-cache feature): When the above is fixed,
-//!    there may be an issue with inline cache entries containing stale
-//!    references after GC. This causes slot_index out of bounds errors.
-//!    Running with --no-default-features (disabling IC) avoids this issue.
-//!
 //! Run with inline-cache (default):
 //!   cargo bench --bench vm_benchmark
 //!

@@ -185,6 +185,10 @@ impl Interpreter {
     #[inline(always)]
     #[must_use]
     pub unsafe fn context_unchecked(&self) -> &ExecutionContext {
+        debug_assert!(
+            self.cache.is_some(),
+            "context_unchecked called without cache"
+        );
         // SAFETY: safe if contract holds
         unsafe { self.cache.as_ref().unwrap_unchecked() }
     }
@@ -194,6 +198,10 @@ impl Interpreter {
     /// Caller guarantees `reload_context` was called and stack is not empty.
     #[inline(always)]
     pub unsafe fn context_unchecked_mut(&mut self) -> &mut ExecutionContext {
+        debug_assert!(
+            self.cache.is_some(),
+            "context_unchecked_mut called without cache"
+        );
         // SAFETY: safe if contract holds
         unsafe { self.cache.as_mut().unwrap_unchecked() }
     }
@@ -376,7 +384,11 @@ impl Interpreter {
         let sentinel = self.vm.specials().uninitialized_ic_sentinel.as_value();
         let fv = self.heap.allocate_array_fill(slot_count, sentinel);
 
-        // Store in Code
+        // Store in Code (record old -> young edge for GC)
+        self.heap.write_barrier(
+            code.as_heap_value_handle(),
+            fv.as_heap_value_handle(),
+        );
         code.feedback_vector = fv;
 
         Some(fv)
@@ -813,6 +825,7 @@ impl Interpreter {
                         Selector::new_message(message, self.vm.shared.clone());
 
                     self.heap.safepoint();
+                    self.reload_context();
 
                     // Universe lookup to find receiver
                     // TODO: this is very bad, remove universe
@@ -954,6 +967,7 @@ impl Interpreter {
                     let prim_id =
                         PrimitiveMessageIndex::from_usize(prim_idx as usize);
                     self.heap.safepoint();
+                    self.reload_context();
 
                     if let Err(e) = self.check_min_stack(1) {
                         return e;
@@ -971,6 +985,7 @@ impl Interpreter {
                     self.sync_context();
 
                     self.heap.safepoint();
+                    self.reload_context();
 
                     // SAFETY: correctly setup by compiler
                     let map_val =
@@ -999,6 +1014,7 @@ impl Interpreter {
                     self.sync_context();
 
                     self.heap.safepoint();
+                    self.reload_context();
 
                     // SAFETY: correctly setup by runtime
                     let ctx = self.context_unchecked();
@@ -1035,7 +1051,13 @@ impl Interpreter {
                     unimplemented!("SendParent")
                 }
                 // SAFETY: we match others before already
-                _ => std::hint::unreachable_unchecked(),
+                _ => {
+                    debug_assert!(
+                        false,
+                        "unknown opcode in execute_bytecode_slow"
+                    );
+                    std::hint::unreachable_unchecked()
+                }
             }
         }
     }
@@ -1175,9 +1197,59 @@ impl Interpreter {
 }
 
 impl ExecutionContext {
+    #[inline(always)]
+    fn debug_assert_context_layout(&self) {
+        debug_assert!(!self.inst_base.is_null(), "inst_base must be non-null");
+        debug_assert!(!self.ip.is_null(), "ip must be non-null");
+
+        let code = self.activation.code();
+        let inst_size = code.inst_size as usize;
+        if inst_size > 0 {
+            debug_assert_eq!(
+                self.inst_base,
+                code.instructions().as_ptr(),
+                "inst_base mismatch with code.instructions()"
+            );
+        }
+
+        if code.const_count > 0 {
+            debug_assert_eq!(
+                self.cp,
+                code.constants().as_ptr(),
+                "cp mismatch with code.constants()"
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn debug_assert_ip_in_bounds(&self, bytes: usize) {
+        self.debug_assert_context_layout();
+
+        let code = self.activation.code();
+        let inst_size = code.inst_size as usize;
+        let base = self.inst_base as usize;
+        let ip = self.ip as usize;
+        let end = base.saturating_add(inst_size);
+
+        debug_assert!(
+            ip >= base,
+            "ip before inst_base: ip {:#x} base {:#x}",
+            ip,
+            base
+        );
+        debug_assert!(
+            ip.saturating_add(bytes) <= end,
+            "ip out of bounds: ip {:#x} + {} > end {:#x}",
+            ip,
+            bytes,
+            end
+        );
+    }
+
     /// Reads the instruction at the current IP and advances the IP.
     #[inline(always)]
     pub fn fetch_opcode(&mut self) -> OpCode {
+        self.debug_assert_ip_in_bounds(1);
         // SAFETY: execution context is initialized
         unsafe {
             let inst = *self.ip;
@@ -1189,6 +1261,7 @@ impl ExecutionContext {
     /// Read u8 and advance
     #[inline(always)]
     pub fn read_u8(&mut self) -> u8 {
+        self.debug_assert_ip_in_bounds(1);
         // SAFETY: ip is valid within bytecode bounds
         unsafe {
             let val = *self.ip;
@@ -1200,6 +1273,7 @@ impl ExecutionContext {
     /// Read u16 and advance
     #[inline(always)]
     pub fn read_u16(&mut self) -> u16 {
+        self.debug_assert_ip_in_bounds(2);
         // SAFETY: ip is valid, read_unaligned handles alignment
         unsafe {
             let ptr = self.ip as *const u16;
@@ -1212,6 +1286,7 @@ impl ExecutionContext {
     /// Read i32 and advance
     #[inline(always)]
     pub fn read_i32(&mut self) -> i32 {
+        self.debug_assert_ip_in_bounds(4);
         // SAFETY: ip is valid, read_unaligned handles alignment
         unsafe {
             let ptr = self.ip as *const i32;
@@ -1224,6 +1299,13 @@ impl ExecutionContext {
     /// Fetches a value from the constant pool.
     #[inline(always)]
     pub fn fetch_constant(&self, index: u16) -> Value {
+        let code = self.activation.code();
+        debug_assert!(
+            (index as u32) < code.const_count,
+            "constant index out of bounds: {} >= {}",
+            index,
+            code.const_count
+        );
         // SAFETY: execution context is initialized
         unsafe { *self.cp.add(index as usize) }
     }

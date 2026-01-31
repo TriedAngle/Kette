@@ -350,6 +350,12 @@ impl SlotObject {
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
     pub unsafe fn get_slot_unchecked(&self, index: usize) -> Value {
+        debug_assert!(
+            index < self.assignable_slots(),
+            "get_slot_unchecked out of bounds: {} >= {}",
+            index,
+            self.assignable_slots()
+        );
         // SAFETY: safe if contract holds
         unsafe { self.slots_ptr().add(index).read() }
     }
@@ -359,6 +365,12 @@ impl SlotObject {
     /// Caller must ensure `index < assignable_slots()`.
     #[inline]
     pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {
+        debug_assert!(
+            index < self.assignable_slots(),
+            "set_slot_unchecked out of bounds: {} >= {}",
+            index,
+            self.assignable_slots()
+        );
         // SAFETY: safe if contract holds
         unsafe { self.slots_mut_ptr().add(index).write(value) };
     }

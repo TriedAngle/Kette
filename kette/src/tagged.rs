@@ -148,6 +148,10 @@ impl Value {
     /// check if this is a heap object
     #[must_use]
     pub unsafe fn as_tagged_object_unchecked<T: HeapObject>(self) -> Tagged<T> {
+        debug_assert!(
+            self.is_object(),
+            "as_tagged_object_unchecked requires an object value"
+        );
         // Safety: by contract this is a T
         unsafe { Tagged::new_raw(self.0) }
     }
@@ -157,6 +161,10 @@ impl Value {
     /// Caller must make sure Value doesn't get allocated/moved without GC knowing
     #[must_use]
     pub unsafe fn as_handle_unchecked(self) -> Handle<Value> {
+        debug_assert!(
+            !self.is_header(),
+            "as_handle_unchecked must not accept header values"
+        );
         Handle {
             data: self.0,
             _marker: PhantomData,
@@ -168,6 +176,10 @@ impl Value {
     /// Caller must make sure Value doesn't get allocated/moved without GC knowing
     #[must_use]
     pub unsafe fn as_heap_handle_unchecked(self) -> Handle<HeapValue> {
+        debug_assert!(
+            self.is_object(),
+            "as_heap_handle_unchecked requires an object value"
+        );
         Handle {
             data: self.0,
             _marker: PhantomData,
@@ -833,6 +845,10 @@ pub mod transmute {
     #[inline]
     #[must_use]
     pub unsafe fn values_as_handles(values: &[Value]) -> &[Handle<Value>] {
+        debug_assert!(
+            values.iter().all(|v| !v.is_header()),
+            "values_as_handles must not contain header values"
+        );
         let ptr = values.as_ptr() as *const Handle<Value>;
         // SAFETY: caller upholds the contract above.
         unsafe { std::slice::from_raw_parts(ptr, values.len()) }
@@ -846,6 +862,10 @@ pub mod transmute {
     pub unsafe fn values_as_handles_mut(
         values: &mut [Value],
     ) -> &mut [Handle<Value>] {
+        debug_assert!(
+            values.iter().all(|v| !v.is_header()),
+            "values_as_handles_mut must not contain header values"
+        );
         let ptr = values.as_mut_ptr() as *mut Handle<Value>;
         // SAFETY: caller upholds the contract above.
         unsafe { std::slice::from_raw_parts_mut(ptr, values.len()) }

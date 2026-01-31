@@ -463,34 +463,27 @@ impl SpecialObjects {
         // SAFETY: we initialize later, this is for simplicity
         unsafe {
             Self {
-                universe: Value::zero().as_heap_handle_unchecked(),
-                parsers: Value::zero().as_heap_handle_unchecked(),
-                bytearray_traits: Value::zero().as_heap_handle_unchecked(),
-                array_traits: Value::zero().as_heap_handle_unchecked(),
-                fixnum_traits: Value::zero().as_heap_handle_unchecked(),
-                float_traits: Value::zero().as_heap_handle_unchecked(),
-                bignum_traits: Value::zero().as_heap_handle_unchecked(),
-                quotation_traits: Value::zero().as_heap_handle_unchecked(),
-                message_traits: Value::zero().as_heap_handle_unchecked(),
-                primitive_vector_map: Value::zero()
-                    .as_heap_handle_unchecked()
-                    .cast(),
-                true_object: Value::zero().as_heap_handle_unchecked(),
-                false_object: Value::zero().as_heap_handle_unchecked(),
-                stack_object: Value::zero().as_heap_handle_unchecked(),
-                dip_map: Value::zero().as_heap_handle_unchecked().cast(),
-                message_self: Value::zero().as_heap_handle_unchecked().cast(),
-                message_create_object: Value::zero()
-                    .as_heap_handle_unchecked()
-                    .cast(),
-                message_create_quotation: Value::zero()
-                    .as_heap_handle_unchecked()
-                    .cast(),
+                universe: Handle::null(),
+                parsers: Handle::null(),
+                bytearray_traits: Handle::null(),
+                array_traits: Handle::null(),
+                fixnum_traits: Handle::null(),
+                float_traits: Handle::null(),
+                bignum_traits: Handle::null(),
+                quotation_traits: Handle::null(),
+                message_traits: Handle::null(),
+                primitive_vector_map: Handle::null(),
+                true_object: Handle::null(),
+                false_object: Handle::null(),
+                stack_object: Handle::null(),
+                dip_map: Handle::null(),
+                message_self: Handle::null(),
+                message_create_object: Handle::null(),
+                message_create_quotation: Handle::null(),
                 #[cfg(feature = "inline-cache")]
-                uninitialized_ic_sentinel: Value::zero()
-                    .as_heap_handle_unchecked(),
+                uninitialized_ic_sentinel: Handle::null(),
                 #[cfg(feature = "inline-cache")]
-                megamorphic_sentinel: Value::zero().as_heap_handle_unchecked(),
+                megamorphic_sentinel: Handle::null(),
             }
         }
     }

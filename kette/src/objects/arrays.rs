@@ -102,6 +102,12 @@ impl Array {
     /// Caller must ensure `index < len()`.
     #[inline]
     pub unsafe fn get_unchecked(&self, index: usize) -> Value {
+        debug_assert!(
+            index < self.size(),
+            "array get_unchecked out of bounds: {} >= {}",
+            index,
+            self.size()
+        );
         // SAFETY: safe if contract holds
         unsafe { self.fields_ptr().add(index).read() }
     }
@@ -110,6 +116,12 @@ impl Array {
     /// Caller must ensure `index < len()`.
     #[inline]
     pub unsafe fn set_unchecked(&mut self, index: usize, value: Value) {
+        debug_assert!(
+            index < self.size(),
+            "array set_unchecked out of bounds: {} >= {}",
+            index,
+            self.size()
+        );
         // SAFETY: safe if contract holds
         unsafe { self.fields_mut_ptr().add(index).write(value) };
     }

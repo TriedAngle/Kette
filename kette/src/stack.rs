@@ -62,6 +62,16 @@ impl ExecutionState {
 
     /// Pushes a value onto the main stack
     pub fn push(&mut self, value: Value) {
+        debug_assert!(
+            !value.is_header(),
+            "stack push must not store header values"
+        );
+        debug_assert!(
+            self.depth < self.stack.len(),
+            "stack overflow: depth {} >= capacity {}",
+            self.depth,
+            self.stack.len()
+        );
         self.stack[self.depth] = value;
         self.depth += 1;
     }
@@ -77,6 +87,16 @@ impl ExecutionState {
 
     /// Pushes a value onto the return stack
     pub fn push_return(&mut self, value: Value) {
+        debug_assert!(
+            !value.is_header(),
+            "return stack push must not store header values"
+        );
+        debug_assert!(
+            self.return_depth < self.return_stack.len(),
+            "return stack overflow: depth {} >= capacity {}",
+            self.return_depth,
+            self.return_stack.len()
+        );
         self.return_stack[self.return_depth] = value;
         self.return_depth += 1;
     }
@@ -118,6 +138,10 @@ impl ExecutionState {
     /// Sets the value at n from the top of the stack
     pub fn stack_set_nth(&mut self, n: usize, value: Value) {
         if self.depth > n {
+            debug_assert!(
+                !value.is_header(),
+                "stack_set_nth must not store header values"
+            );
             let top_idx = self.depth - 1;
             let idx = top_idx - n;
             self.stack[idx] = value;
@@ -174,6 +198,16 @@ impl ExecutionState {
     /// # Safety
     /// caller must make sure that at least n elements are in the stack
     pub unsafe fn stack_set_nth_unchecked(&mut self, n: usize, value: Value) {
+        debug_assert!(
+            !value.is_header(),
+            "stack_set_nth_unchecked must not store header values"
+        );
+        debug_assert!(
+            self.depth > n,
+            "stack_set_nth_unchecked: depth {} <= n {}",
+            self.depth,
+            n
+        );
         let top_idx = self.depth - 1;
         let idx = top_idx - n;
         // SAFETY: caller guarantees depth > n, so index is valid
@@ -244,6 +278,10 @@ impl ExecutionState {
         if self.depth + n > self.stack.len() {
             return None;
         }
+        debug_assert!(
+            slice.iter().all(|v| !v.is_header()),
+            "stack_push_slice must not store header values"
+        );
 
         let start = self.depth;
         let end = start + n;
@@ -260,6 +298,17 @@ impl ExecutionState {
     /// `self.depth + slice.len() <= self.stack.len()`.
     pub unsafe fn stack_push_slice_unchecked(&mut self, slice: &[Value]) {
         let n = slice.len();
+        debug_assert!(
+            self.depth + n <= self.stack.len(),
+            "stack_push_slice_unchecked overflow: depth {} + len {} > capacity {}",
+            self.depth,
+            n,
+            self.stack.len()
+        );
+        debug_assert!(
+            slice.iter().all(|v| !v.is_header()),
+            "stack_push_slice_unchecked must not store header values"
+        );
         // SAFETY: caller guarantees sufficient capacity
         let dst = unsafe { self.stack.as_mut_ptr().add(self.depth) };
         let src = slice.as_ptr();
@@ -276,6 +325,12 @@ impl ExecutionState {
     /// Caller must ensure that self.depth >= n.
     #[must_use]
     pub unsafe fn stack_peek_slice_unchecked(&self, n: usize) -> &[Value] {
+        debug_assert!(
+            self.depth >= n,
+            "stack_peek_slice_unchecked: depth {} < n {}",
+            self.depth,
+            n
+        );
         let start = self.depth - n;
         // SAFETY: caller guarantees depth >= n, so range is valid
         unsafe { self.stack.get_unchecked(start..self.depth) }
@@ -286,6 +341,12 @@ impl ExecutionState {
     /// - Caller must ensure that self.depth >= n.
     /// - The values may get overridden on pushing to the stack
     pub unsafe fn stack_pop_slice_unchecked(&mut self, n: usize) -> &[Value] {
+        debug_assert!(
+            self.depth >= n,
+            "stack_pop_slice_unchecked: depth {} < n {}",
+            self.depth,
+            n
+        );
         let start = self.depth - n;
         let depth = self.depth;
         self.depth -= n;
@@ -297,6 +358,12 @@ impl ExecutionState {
     /// # Safety
     /// Caller must ensure that self.depth >= n.
     pub unsafe fn stack_pop_unchecked(&mut self, n: usize) -> Vec<Value> {
+        debug_assert!(
+            self.depth >= n,
+            "stack_pop_unchecked: depth {} < n {}",
+            self.depth,
+            n
+        );
         let start = self.depth - n;
         let end = self.depth;
         // SAFETY: caller guarantees depth >= n, so range is valid
