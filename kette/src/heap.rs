@@ -40,6 +40,8 @@ pub struct HeapSettings {
     /// Ratio of marked lines (0.0 - 1.0) below which a block is considered "mostly empty"
     /// and recycled during Minor GC. Default 0.10 (10%).
     pub minor_recycle_threshold: f64,
+    /// Number of consecutive minor GCs allowed before forcing a major cycle.
+    pub max_minor_before_major: u32,
 }
 
 impl Default for HeapSettings {
@@ -52,6 +54,7 @@ impl Default for HeapSettings {
             bytes_before_gc: 0.05, // 5%
             nursery_fraction: 0.05, // 5%
             minor_recycle_threshold: 0.1, // 10%
+            max_minor_before_major: 10,
         }
     }
 }
@@ -76,6 +79,7 @@ pub struct RuntimeInfo {
     pub minor_threshold: usize,
     pub major_threshold: usize,
     pub minor_recycle_threshold: usize,
+    pub max_minor_before_major: u32,
 }
 
 /// Global atomic counters for allocation tracking.
@@ -87,6 +91,7 @@ pub struct Trackers {
     pub epoch: AtomicU8,
     pub minor_allocated: AtomicUsize,
     pub major_allocated: AtomicUsize,
+    pub minor_since_major: AtomicU32,
 }
 
 /// Synchronization state for parallel GC rendezvous.
@@ -243,7 +248,13 @@ impl HeapProxy {
             return ptr;
         }
 
-        // TODO: force call major GC
+        self.execute_gc_with_reason(GcStatus::MajorRequested, true);
+
+        if let Some(ptr) = self.allocate_on_block(layout) {
+            self.minor_allocated += layout.size();
+            return ptr;
+        }
+
         panic!("out of memory");
     }
 
@@ -309,40 +320,50 @@ impl HeapProxy {
         self.minor_allocated = 0;
         self.epoch = self.heap.track.epoch.load(Ordering::Relaxed);
 
-        // Acquire new block.
-        let new_block_idx = self.heap.request_block();
-        if new_block_idx == NO_BLOCK {
-            panic!("OOM: No blocks available");
-        }
+        let mut attempts = 0;
+        loop {
+            let new_block_idx = self.heap.request_block();
+            if new_block_idx == NO_BLOCK {
+                if attempts >= 1 {
+                    panic!("OOM: No blocks available after major GC");
+                }
+                attempts += 1;
+                self.execute_gc_with_reason(GcStatus::MajorRequested, false);
+                continue;
+            }
 
-        self.block = new_block_idx;
-        // Safety: index guaranteed valid by request_block logic.
-        let status = unsafe { self.heap.blocks.get_unchecked(new_block_idx) }
-            .status
-            .load(Ordering::Relaxed);
-        self.block_status = status;
+            self.block = new_block_idx;
+            // Safety: index guaranteed valid by request_block logic.
+            let status =
+                unsafe { self.heap.blocks.get_unchecked(new_block_idx) }
+                    .status
+                    .load(Ordering::Relaxed);
+            self.block_status = status;
 
-        self.bump = std::ptr::null_mut();
-        self.end = std::ptr::null_mut();
+            self.bump = std::ptr::null_mut();
+            self.end = std::ptr::null_mut();
 
-        // Calculate absolute address
-        let block_size = self.heap.settings.block_size;
-        let heap_start = self.heap.heap_start;
-        // SAFETY: safe invariant
-        let block_addr = unsafe { heap_start.add(self.block * block_size) };
-
-        // Initialize alloc window
-        if status == BLOCK_FREE {
-            self.bump = block_addr;
+            // Calculate absolute address
+            let block_size = self.heap.settings.block_size;
+            let heap_start = self.heap.heap_start;
             // SAFETY: safe invariant
-            self.end = unsafe { block_addr.add(block_size) };
-        } else if status == BLOCK_RECYCLED {
-            // SAFETY: safe invariant
-            unsafe {
-                if !self.find_next_hole() {
-                    panic!("Recycled block returned with no holes");
+            let block_addr = unsafe { heap_start.add(self.block * block_size) };
+
+            // Initialize alloc window
+            if status == BLOCK_FREE {
+                self.bump = block_addr;
+                // SAFETY: safe invariant
+                self.end = unsafe { block_addr.add(block_size) };
+            } else if status == BLOCK_RECYCLED {
+                // SAFETY: safe invariant
+                unsafe {
+                    if !self.find_next_hole() {
+                        panic!("Recycled block returned with no holes");
+                    }
                 }
             }
+
+            break;
         }
     }
 
@@ -485,6 +506,7 @@ impl HeapProxy {
         if status != GcStatus::None {
             let roots = self.collect_roots();
             self.heap.rendezvous(false, roots);
+            self.exchange_block();
             return;
         }
 
@@ -493,31 +515,51 @@ impl HeapProxy {
             self.heap.track.minor_allocated.load(Ordering::Relaxed);
 
         if global_alloc + self.minor_allocated > limit {
-            self.execute_gc();
+            self.execute_gc_with_reason(GcStatus::MinorRequested, true);
+            return;
+        }
+
+        let major_alloc =
+            self.heap.track.major_allocated.load(Ordering::Relaxed);
+        if major_alloc > self.heap.info.major_threshold {
+            self.execute_gc_with_reason(GcStatus::MajorRequested, true);
+            return;
+        }
+
+        let minor_since_major =
+            self.heap.track.minor_since_major.load(Ordering::Relaxed);
+        if minor_since_major >= self.heap.info.max_minor_before_major {
+            self.execute_gc_with_reason(GcStatus::MajorRequested, true);
         }
     }
 
     #[cold]
-    fn execute_gc(&mut self) {
-        // flush local stats
+    fn execute_gc_with_reason(
+        &mut self,
+        requested: GcStatus,
+        reacquire_block: bool,
+    ) {
         self.heap
             .track
             .minor_allocated
             .fetch_add(self.minor_allocated, Ordering::Relaxed);
         self.minor_allocated = 0;
 
-        let requested = GcStatus::MinorRequested;
-        let (is_coord, status, _gen, _participants) =
+        let (is_coord, _status, _gen, _participants) =
             self.heap.sync.state.try_start_gc(requested);
 
         let roots = self.collect_roots();
-
-        // If we won, status==requested; if we lost, status is whatever is active
-        let _ = status;
         self.heap.rendezvous(is_coord, roots);
 
-        // after GC, refresh alloc buffer
-        self.exchange_block();
+        if reacquire_block {
+            self.exchange_block();
+        }
+    }
+
+    #[cfg(test)]
+    #[cold]
+    fn execute_gc(&mut self) {
+        self.execute_gc_with_reason(GcStatus::MinorRequested, true);
     }
 
     #[inline(always)]
@@ -726,6 +768,7 @@ impl HeapInner {
             minor_recycle_threshold: (lines_per_block as f64
                 * settings.minor_recycle_threshold)
                 as usize,
+            max_minor_before_major: settings.max_minor_before_major,
         };
 
         let track = Trackers {
@@ -733,6 +776,7 @@ impl HeapInner {
             epoch: AtomicU8::new(1),
             minor_allocated: AtomicUsize::new(0),
             major_allocated: AtomicUsize::new(0),
+            minor_since_major: AtomicU32::new(0),
         };
 
         Self {
@@ -963,7 +1007,12 @@ impl HeapInner {
             .pop()
             .unwrap_or_default();
 
-        self.execute_parallel_gc_task(status, my_work, participants);
+        self.execute_parallel_gc_task(
+            status,
+            my_work,
+            participants,
+            is_coordinator,
+        );
 
         // Barrier 3: work done
         self.sync.barrier.wait(participants);
@@ -987,14 +1036,31 @@ impl HeapInner {
         reason: GcStatus,
         roots: RootSet,
         threads: usize,
+        is_coordinator: bool,
     ) {
         match reason {
             GcStatus::MinorRequested => {
                 self.minor_gc_marking(roots);
                 self.sync.barrier.wait(threads);
                 self.minor_gc_sweep();
+                if is_coordinator {
+                    self.track
+                        .minor_since_major
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             }
-            GcStatus::MajorRequested => unimplemented!(),
+            GcStatus::MajorRequested => {
+                if is_coordinator {
+                    self.advance_epoch();
+                }
+                self.sync.barrier.wait(threads);
+                self.major_gc_marking(roots);
+                self.sync.barrier.wait(threads);
+                if is_coordinator {
+                    self.major_gc_sweep();
+                    self.track.minor_since_major.store(0, Ordering::Relaxed);
+                }
+            }
             _ => {}
         }
     }
@@ -1053,7 +1119,7 @@ impl HeapInner {
         };
 
         // visit all remember set edges
-        for mut obj in remember {
+        for mut obj in remember.iter().copied() {
             obj.visit_edges_mut(&mut visitor);
         }
 
@@ -1064,6 +1130,85 @@ impl HeapInner {
 
         while let Some(mut value) = queue.pop() {
             value.visit_edges_mut(&mut visitor);
+        }
+
+        self.clear_remembered_flags(&remember);
+    }
+
+    fn major_gc_marking(&self, roots: RootSet) {
+        struct MajorMarkVisitor {
+            heap: *const HeapInner,
+            queue: *mut Vec<Handle<HeapValue>>,
+            epoch: u8,
+        }
+
+        impl Visitor for MajorMarkVisitor {
+            #[inline(always)]
+            fn visit_mut(&mut self, value: Value) {
+                if value.is_fixnum() {
+                    return;
+                }
+
+                let handle = unsafe { value.as_heap_handle_unchecked() };
+
+                if handle.header.age.load(Ordering::Relaxed) == self.epoch {
+                    return;
+                }
+
+                handle.header.age.store(self.epoch, Ordering::Relaxed);
+                unsafe { (*self.heap).mark_object_line(handle, self.epoch) };
+                unsafe { (*self.queue).push(handle) };
+            }
+        }
+
+        let RootSet { roots, remember } = roots;
+        let mut queue = Vec::new();
+        let epoch = self.epoch();
+        let mut visitor = MajorMarkVisitor {
+            heap: self,
+            queue: &mut queue,
+            epoch,
+        };
+
+        for mut obj in remember.iter().copied() {
+            obj.visit_edges_mut(&mut visitor);
+        }
+
+        for obj in roots {
+            visitor.visit_mut(obj.into());
+        }
+
+        while let Some(mut value) = queue.pop() {
+            value.visit_edges_mut(&mut visitor);
+        }
+
+        self.clear_remembered_flags(&remember);
+    }
+
+    fn clear_remembered_flags(&self, objects: &[Handle<HeapValue>]) {
+        for obj in objects {
+            obj.header
+                .flags
+                .fetch_and(!FLAG_REMEMBERED, Ordering::Relaxed);
+        }
+    }
+
+    fn advance_epoch(&self) -> u8 {
+        use std::sync::atomic::Ordering::*;
+        loop {
+            let current = self.track.epoch.load(Relaxed);
+            let mut next = current.wrapping_add(1);
+            if next == 0 {
+                next = 1;
+            }
+            match self
+                .track
+                .epoch
+                .compare_exchange(current, next, Release, Relaxed)
+            {
+                Ok(_) => return next,
+                Err(_) => continue,
+            }
         }
     }
 
@@ -1124,6 +1269,86 @@ impl HeapInner {
                 self.push_available(block_idx);
             }
         }
+    }
+
+    fn major_gc_sweep(&self) {
+        let epoch = self.epoch();
+        let lines_per_block = self.info.lines_per_block;
+        let recycle_threshold = self.info.minor_recycle_threshold;
+        let block_size = self.settings.block_size;
+        let block_count = self.info.block_count;
+
+        self.available.store(NO_BLOCK, Ordering::Relaxed);
+        self.full_blocks.store(NO_BLOCK, Ordering::Relaxed);
+
+        let mut sticky_blocks = 0usize;
+
+        for block_idx in 0..block_count {
+            let start_line_idx = block_idx * lines_per_block;
+            let end_line_idx = start_line_idx + lines_per_block;
+
+            let mut marked_lines = 0usize;
+
+            for i in start_line_idx..end_line_idx {
+                let byte = unsafe { self.lines.get_unchecked(i) }
+                    .load(Ordering::Relaxed);
+                if byte == epoch {
+                    marked_lines += 1;
+                } else {
+                    unsafe { self.lines.get_unchecked(i) }
+                        .store(0, Ordering::Relaxed);
+                }
+            }
+
+            let block = unsafe { self.blocks.get_unchecked(block_idx) };
+            block.next.store(NO_BLOCK, Ordering::Relaxed);
+
+            if marked_lines == 0 {
+                block.status.store(BLOCK_FREE, Ordering::Relaxed);
+                self.push_available(block_idx);
+            } else if marked_lines <= recycle_threshold {
+                block.status.store(BLOCK_RECYCLED, Ordering::Relaxed);
+                self.push_available(block_idx);
+            } else {
+                block.status.store(BLOCK_UNAVAILABLE, Ordering::Relaxed);
+                sticky_blocks += 1;
+            }
+        }
+
+        let large_bytes = self.sweep_large_objects(epoch);
+        let sticky_bytes = sticky_blocks * block_size;
+
+        self.track
+            .major_allocated
+            .store(sticky_bytes + large_bytes, Ordering::Relaxed);
+    }
+
+    fn sweep_large_objects(&self, epoch: u8) -> usize {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let mut live_bytes = 0usize;
+        let mut large_objects =
+            self.large_objects.lock().expect("TODO: handle poisioning");
+
+        large_objects.retain(|alloc| {
+            let allocation = unsafe { alloc.as_ref() };
+            let object_ptr = allocation.object.as_ptr() as *mut HeapValue;
+            if object_ptr.is_null() {
+                return false;
+            }
+
+            let header = unsafe { &(*object_ptr).header };
+            if header.age.load(Relaxed) == epoch {
+                live_bytes += allocation.size;
+                true
+            } else {
+                let raw = alloc.cast::<u8>();
+                system::unmap_memory(raw, allocation.size);
+                false
+            }
+        });
+
+        live_bytes
     }
 
     /// Calculates the global line index for a pointer within the heap.
@@ -1211,6 +1436,9 @@ impl HeapSettings {
             || !(0.0..=1.0).contains(&self.minor_recycle_threshold)
         {
             return Err("Fractions must be between 0.0 and 1.0");
+        }
+        if self.max_minor_before_major == 0 {
+            return Err("max_minor_before_major must be > 0");
         }
         Ok(())
     }
@@ -1390,6 +1618,7 @@ mod gc_tests {
             bytes_before_gc: 0.1,   // Trigger GC fast (10% of heap)
             nursery_fraction: 0.1,  // Large nursery for testing
             minor_recycle_threshold: 0.5,
+            max_minor_before_major: 3,
         }
     }
 
@@ -1714,6 +1943,7 @@ mod gc_tests {
             bytes_before_gc: 0.05,       // Trigger GC at 5% usage (Aggressive)
             nursery_fraction: 0.1,
             minor_recycle_threshold: 0.2,
+            max_minor_before_major: 5,
         };
 
         let heap_inner = Arc::new(HeapInner::new(settings));
@@ -1801,6 +2031,84 @@ mod gc_tests {
         assert!(
             generation > 0,
             "Should have triggered at least one GC cycle"
+        );
+    }
+
+    #[test]
+    fn test_major_gc_reclaims_unreachable_blocks() {
+        use std::alloc::Layout;
+
+        let (heap, mut proxy, _state, _acts) = create_test_env();
+        let layout = Layout::new::<TestObj>();
+
+        proxy.allocate(layout);
+        let first_block = proxy.block;
+
+        while proxy.block == first_block {
+            let ptr = proxy.allocate(layout);
+            unsafe { ptr.as_ptr().write_bytes(0, layout.size()) };
+            let header = unsafe { &mut *(ptr.as_ptr() as *mut Header) };
+            *header = Header::new_object(ObjectType::Array);
+        }
+
+        proxy.execute_gc_with_reason(GcStatus::MajorRequested, true);
+
+        let status = heap.blocks[first_block].status.load(Ordering::Relaxed);
+        assert_eq!(
+            status, BLOCK_FREE,
+            "Major GC should free completely dead block"
+        );
+    }
+
+    #[test]
+    fn test_major_gc_frees_large_objects() {
+        use std::alloc::Layout;
+
+        let (heap, mut proxy, _state, _acts) = create_test_env();
+        let size = heap.settings.large_size + 512;
+        let layout = Layout::from_size_align(size, 16).unwrap();
+
+        let ptr = proxy.allocate(layout);
+        unsafe { ptr.as_ptr().write_bytes(0, layout.size()) };
+        let header = unsafe { &mut *(ptr.as_ptr() as *mut Header) };
+        *header = Header::new_object(ObjectType::Array);
+
+        proxy.execute_gc_with_reason(GcStatus::MajorRequested, true);
+
+        let large_objects =
+            heap.large_objects.lock().expect("TODO: handle poisioning");
+        assert!(
+            large_objects.is_empty(),
+            "Major GC should unmap unreachable large allocations"
+        );
+    }
+
+    #[test]
+    fn test_minor_counter_forces_major() {
+        use std::alloc::Layout;
+
+        let (heap, mut proxy, mut state, _acts) = create_test_env();
+        let layout = Layout::new::<TestObj>();
+
+        let ptr = proxy.allocate(layout);
+        unsafe { ptr.as_ptr().write_bytes(0, layout.size()) };
+        let header = unsafe { &mut *(ptr.as_ptr() as *mut Header) };
+        *header = Header::new_object(ObjectType::Array);
+        let handle = unsafe {
+            Handle::<TestObj>::from_ptr(ptr.as_ptr() as *mut TestObj)
+        };
+        state.push(handle.into());
+
+        heap.track
+            .minor_since_major
+            .store(heap.info.max_minor_before_major, Ordering::Relaxed);
+
+        proxy.safepoint();
+
+        assert_eq!(
+            heap.track.minor_since_major.load(Ordering::Relaxed),
+            0,
+            "Major GC should reset minor counter when forced via threshold"
         );
     }
 }
