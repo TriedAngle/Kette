@@ -20,6 +20,14 @@ jobs:
       run: cargo fmt --check
     - name: Build
       run: cargo build --verbose
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+    - name: Run script tests
+      run: python run_tests.py --debug
+      env:
+        SKIP_BUILD: "1"
     - name: Clippy
       run: cargo clippy
     - name: Test

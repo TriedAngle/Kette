@@ -1,9 +1,3 @@
-//! Debug binary for benchmark issues
-//!
-//! CURRENTLY BROKEN: Hits OOM after ~200-300 iterations because major GC
-//! is not yet implemented. The GC cannot reclaim old objects, so memory
-//! fills up with each parse/compile cycle.
-//!
 //! Run in debug mode to catch precondition violations:
 //!   cargo run --bin bench_test
 //!

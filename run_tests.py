@@ -3,14 +3,25 @@ import subprocess
 import sys
 import glob
 import difflib
+import argparse
 from typing import List, Optional
 from dataclasses import dataclass
 from enum import Enum
 
 TEST_DIR = "tests"
 CORE_INIT = "core/init.ktt"
-BUILD_CMD = ["cargo", "build", "--bin", "kette", "--release"]
-RUN_CMD = ["cargo", "run", "--bin", "kette", "--release", "--quiet", "--", CORE_INIT] 
+def build_command(debug: bool) -> list[str]:
+    cmd = ["cargo", "build", "--bin", "kette"]
+    if not debug:
+        cmd.append("--release")
+    return cmd
+
+def run_command(debug: bool) -> list[str]:
+    cmd = ["cargo", "run", "--bin", "kette"]
+    if not debug:
+        cmd.append("--release")
+    cmd.extend(["--quiet", "--", CORE_INIT])
+    return cmd
 
 class Color:
     HEADER = '\033[95m'
@@ -35,10 +46,11 @@ class TestResult:
     actual: Optional[str] = None
     error_message: Optional[str] = None
 
-def build_project() -> bool:
-    print(f"{Color.HEADER}Compiling project (release mode)...{Color.ENDC}")
+def build_project(build_cmd: list[str], debug: bool) -> bool:
+    mode = "debug" if debug else "release"
+    print(f"{Color.HEADER}Compiling project ({mode} mode)...{Color.ENDC}")
     try:
-        result = subprocess.run(BUILD_CMD, check=False)
+        result = subprocess.run(build_cmd, check=False)
         if result.returncode == 0:
             print(f"{Color.OKGREEN}Build successful.{Color.ENDC}\n")
             return True
@@ -97,8 +109,12 @@ def parse_expected_output(filepath: str) -> Optional[str]:
             
     return "\n".join(expected_lines)
 
-def run_test_file(filepath: str, expected_output: str) -> TestResult:
-    cmd = RUN_CMD + [filepath]
+def run_test_file(
+    filepath: str,
+    expected_output: str,
+    run_cmd: list[str],
+) -> TestResult:
+    cmd = run_cmd + [filepath]
     
     try:
         result = subprocess.run(
@@ -131,8 +147,18 @@ def run_test_file(filepath: str, expected_output: str) -> TestResult:
         )
 
 def main() -> None:
-    if not build_project():
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Build/run in debug mode (default is release)",
+    )
+    args = parser.parse_args()
+
+    skip_build = os.environ.get("SKIP_BUILD", "").lower() in {"1", "true", "yes"}
+    if not skip_build:
+        if not build_project(build_command(args.debug), args.debug):
+            sys.exit(1)
 
     print(f"{Color.HEADER}Starting Test Runner...{Color.ENDC}")
     test_files: List[str] = sorted(glob.glob(os.path.join(TEST_DIR, "*")))
@@ -149,7 +175,7 @@ def main() -> None:
             continue
             
         print(f"Running {os.path.basename(filepath)}...", end="\r")
-        result = run_test_file(filepath, expected)
+        result = run_test_file(filepath, expected, run_command(args.debug))
         results.append(result)
         
         if result.status != TestStatus.PASSED:
