@@ -1074,7 +1074,7 @@ impl HeapInner {
 
         impl Visitor for MinorMarkVisitor {
             #[inline(always)]
-            fn visit_mut(&mut self, value: Value) {
+            fn visit_mut(&mut self, value: &mut Value) {
                 // Ignore immediates (integers, etc.)
                 if value.is_fixnum() {
                     return;
@@ -1085,7 +1085,7 @@ impl HeapInner {
                 );
 
                 // Safety: Validated as not fixnum, assumes valid heap pointer.
-                let handle = unsafe { value.as_heap_handle_unchecked() };
+                let handle = unsafe { (*value).as_heap_handle_unchecked() };
                 let epoch = self.epoch;
 
                 // FILTER:
@@ -1129,7 +1129,8 @@ impl HeapInner {
 
         // visit all roots
         for obj in roots {
-            visitor.visit_mut(obj.into());
+            let mut value: Value = obj.into();
+            visitor.visit_mut(&mut value);
         }
 
         while let Some(mut value) = queue.pop() {
@@ -1148,7 +1149,7 @@ impl HeapInner {
 
         impl Visitor for MajorMarkVisitor {
             #[inline(always)]
-            fn visit_mut(&mut self, value: Value) {
+            fn visit_mut(&mut self, value: &mut Value) {
                 if value.is_fixnum() {
                     return;
                 }
@@ -1157,7 +1158,7 @@ impl HeapInner {
                     "header value encountered in GC visitor"
                 );
 
-                let handle = unsafe { value.as_heap_handle_unchecked() };
+                let handle = unsafe { (*value).as_heap_handle_unchecked() };
 
                 if handle.header.age.load(Ordering::Relaxed) == self.epoch {
                     return;
@@ -1183,7 +1184,8 @@ impl HeapInner {
         }
 
         for obj in roots {
-            visitor.visit_mut(obj.into());
+            let mut value: Value = obj.into();
+            visitor.visit_mut(&mut value);
         }
 
         while let Some(mut value) = queue.pop() {

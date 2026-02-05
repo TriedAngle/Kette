@@ -114,6 +114,13 @@ impl ActivationObject {
     }
 
     #[inline]
+    pub fn slots_mut(&mut self) -> &mut [Handle<Value>] {
+        let len = self.assignable_slots();
+        // SAFETY: pointer and length must be valid
+        unsafe { std::slice::from_raw_parts_mut(self.slots_mut_ptr(), len) }
+    }
+
+    #[inline]
     pub fn code(&self) -> &Code {
         // SAFETY: safe by contract
         debug_assert!(self.map.has_code());
@@ -286,20 +293,20 @@ impl Default for ActivationStack {
 impl Visitable for ActivationObject {
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        visitor.visit(self.map.as_value());
-        visitor.visit(self.receiver.as_value());
+        visitor.visit(self.map.as_value_ref());
+        visitor.visit(self.receiver.as_value_ref());
         self.slots()
             .iter()
-            .for_each(|slot| visitor.visit(slot.as_value()))
+            .for_each(|slot| visitor.visit(slot.as_value_ref()))
     }
 
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        visitor.visit_mut(self.map.as_value());
-        visitor.visit_mut(self.receiver.as_value());
-        self.slots()
-            .iter()
-            .for_each(|slot| visitor.visit_mut(slot.as_value()))
+        visitor.visit_mut(self.map.as_value_mut());
+        visitor.visit_mut(self.receiver.as_value_mut());
+        self.slots_mut()
+            .iter_mut()
+            .for_each(|slot| visitor.visit_mut(slot.as_value_mut()))
     }
 }
 

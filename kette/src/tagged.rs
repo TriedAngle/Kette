@@ -433,6 +433,19 @@ impl<T: Object> Handle<T> {
         Value(self.data)
     }
 
+    #[inline]
+    #[must_use]
+    pub fn as_value_ref(&self) -> &Value {
+        // SAFETY: Handle<T> and Value share identical layout (u64 tagged bits).
+        unsafe { &*(self as *const Handle<T> as *const Value) }
+    }
+
+    #[inline]
+    pub fn as_value_mut(&mut self) -> &mut Value {
+        // SAFETY: Handle<T> and Value share identical layout (u64 tagged bits).
+        unsafe { &mut *(self as *mut Handle<T> as *mut Value) }
+    }
+
     #[must_use]
     pub fn as_value_handle(self) -> Handle<Value> {
         Handle {

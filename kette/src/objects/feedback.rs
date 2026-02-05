@@ -59,14 +59,14 @@ impl HeapObject for FeedbackEntry {
 
 impl Visitable for FeedbackEntry {
     fn visit_edges(&self, visitor: &impl Visitor) {
-        visitor.visit(self.receiver_map.into());
-        visitor.visit(self.holder_map.into());
-        visitor.visit(self.holder.into());
+        visitor.visit(self.receiver_map.as_value_ref());
+        visitor.visit(self.holder_map.as_value_ref());
+        visitor.visit(self.holder.as_value_ref());
     }
 
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        visitor.visit_mut(self.receiver_map.into());
-        visitor.visit_mut(self.holder_map.into());
-        visitor.visit_mut(self.holder.into());
+        visitor.visit_mut(self.receiver_map.as_value_mut());
+        visitor.visit_mut(self.holder_map.as_value_mut());
+        visitor.visit_mut(self.holder.as_value_mut());
     }
 }

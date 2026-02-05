@@ -22,10 +22,10 @@ impl Message {
 
 impl Visitable for Message {
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
-        visitor.visit_mut(self.value.into());
+        visitor.visit_mut(self.value.as_value_mut());
     }
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        visitor.visit(self.value.into());
+        visitor.visit(self.value.as_value_ref());
     }
 }
 

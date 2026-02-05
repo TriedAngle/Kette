@@ -44,16 +44,16 @@ impl HeapObject for Quotation {
 
 impl Visitable for Quotation {
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        visitor.visit(self.map.into());
+        visitor.visit(self.map.as_value_ref());
         if !self.parent.as_ptr().is_null() {
-            visitor.visit(self.parent.into());
+            visitor.visit(self.parent.as_value_ref());
         }
     }
 
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
-        visitor.visit_mut(self.map.into());
+        visitor.visit_mut(self.map.as_value_mut());
         if !self.parent.as_ptr().is_null() {
-            visitor.visit_mut(self.parent.into());
+            visitor.visit_mut(self.parent.as_value_mut());
         }
     }
 }

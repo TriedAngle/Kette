@@ -179,32 +179,32 @@ impl HeapObject for Code {
 impl Visitable for Code {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         // Visit strong references in fields
-        visitor.visit_mut(self.body.into());
+        visitor.visit_mut(self.body.as_value_mut());
 
         // feedback_vector may be null (lazily allocated)
         if !self.feedback_vector.as_ptr().is_null() {
-            visitor.visit_mut(self.feedback_vector.into());
+            visitor.visit_mut(self.feedback_vector.as_value_mut());
         }
 
         // Visit constants
         let count = self.const_count as usize;
         let ptr = self.data.as_mut_ptr() as *mut Value;
         // SAFETY: this is safe by contract
-        let constants = unsafe { std::slice::from_raw_parts(ptr, count) };
-        for &val in constants {
+        let constants = unsafe { std::slice::from_raw_parts_mut(ptr, count) };
+        for val in constants.iter_mut() {
             visitor.visit_mut(val);
         }
     }
 
     fn visit_edges(&self, visitor: &impl Visitor) {
-        visitor.visit(self.body.into());
+        visitor.visit(self.body.as_value_ref());
 
         // feedback_vector may be null (lazily allocated)
         if !self.feedback_vector.as_ptr().is_null() {
-            visitor.visit(self.feedback_vector.into());
+            visitor.visit(self.feedback_vector.as_value_ref());
         }
 
-        for &val in self.constants() {
+        for val in self.constants() {
             visitor.visit(val);
         }
     }

@@ -253,12 +253,12 @@ impl Parser {
 impl Visitable for Parser {
     #[inline]
     fn visit_edges(&self, visitor: &impl crate::Visitor) {
-        visitor.visit(self.map.into());
+        visitor.visit(self.map.as_value_ref());
     }
 
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl crate::Visitor) {
-        visitor.visit_mut(self.map.into());
+        visitor.visit_mut(self.map.as_value_mut());
     }
 }
 impl Object for Parser {

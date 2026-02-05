@@ -160,11 +160,13 @@ impl HeapObject for Array {
 impl Visitable for Array {
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        self.fields().iter().for_each(|&obj| visitor.visit_mut(obj));
+        self.fields_mut()
+            .iter_mut()
+            .for_each(|obj| visitor.visit_mut(obj));
     }
 
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        self.fields().iter().for_each(|&obj| visitor.visit(obj));
+        self.fields().iter().for_each(|obj| visitor.visit(obj));
     }
 }

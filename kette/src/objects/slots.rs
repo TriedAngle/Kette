@@ -507,22 +507,24 @@ impl Visitable for Map {
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         if self.has_code() {
-            visitor.visit_mut(self.code.as_value());
+            visitor.visit_mut(self.code.as_value_mut());
         }
-        self.slots().iter().for_each(|desc| {
-            visitor.visit_mut(desc.name.into());
-            visitor.visit_mut(desc.value);
+        // SAFETY: maps are expected to be immutable, but GC needs to update edges.
+        let slots = unsafe { self.slots_mut() };
+        slots.iter_mut().for_each(|desc| {
+            visitor.visit_mut(desc.name.as_value_mut());
+            visitor.visit_mut(&mut desc.value);
         });
     }
 
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
         if self.has_code() {
-            visitor.visit(self.code.as_value());
+            visitor.visit(self.code.as_value_ref());
         }
         self.slots().iter().for_each(|desc| {
-            visitor.visit(desc.name.into());
-            visitor.visit(desc.value);
+            visitor.visit(desc.name.as_value_ref());
+            visitor.visit(&desc.value);
         });
     }
 }
@@ -530,13 +532,15 @@ impl Visitable for Map {
 impl Visitable for SlotObject {
     #[inline]
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
-        visitor.visit_mut(self.map.into());
-        self.slots().iter().for_each(|&obj| visitor.visit_mut(obj));
+        visitor.visit_mut(self.map.as_value_mut());
+        self.slots_mut()
+            .iter_mut()
+            .for_each(|obj| visitor.visit_mut(obj));
     }
     #[inline]
     fn visit_edges(&self, visitor: &impl Visitor) {
-        visitor.visit(self.map.into());
-        self.slots().iter().for_each(|&obj| visitor.visit(obj));
+        visitor.visit(self.map.as_value_ref());
+        self.slots().iter().for_each(|obj| visitor.visit(obj));
     }
 }
 
