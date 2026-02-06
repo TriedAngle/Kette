@@ -2,7 +2,7 @@ use crate::{
     Allocator, ByteArray, ExecutionResult, ObjectType, PrimitiveContext, Value,
     primitives::inputs,
 };
-use std::ptr;
+use std::{mem, ptr};
 
 pub fn bytearray_print(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: receiver must be valid Bytarray
@@ -208,5 +208,281 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
         );
     }
 
+    ExecutionResult::Normal
+}
+
+const FIXNUM_MIN: i64 = -(1_i64 << 62);
+const FIXNUM_MAX: i64 = (1_i64 << 62) - 1;
+
+fn output_i64(ctx: &mut PrimitiveContext, value: i64) -> ExecutionResult {
+    if value < FIXNUM_MIN || value > FIXNUM_MAX {
+        unimplemented!("integer too large for fixnum");
+    }
+    ctx.outputs[0] = unsafe { Value::from_fixnum(value).as_handle_unchecked() };
+    ExecutionResult::Normal
+}
+
+fn output_u64(ctx: &mut PrimitiveContext, value: u64) -> ExecutionResult {
+    if value > FIXNUM_MAX as u64 {
+        unimplemented!("integer too large for fixnum");
+    }
+    ctx.outputs[0] = unsafe { Value::from_u64(value).as_handle_unchecked() };
+    ExecutionResult::Normal
+}
+
+fn index_from_fixnum(
+    value: crate::Handle<Value>,
+    name: &str,
+) -> Result<usize, ExecutionResult> {
+    if !value.is_fixnum() {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: index must be a fixnum"
+        )));
+    }
+    let idx = unsafe { value.as_fixnum::<i64>() };
+    if idx < 0 {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: index must be >= 0"
+        )));
+    }
+    Ok(idx as usize)
+}
+
+fn get_fixnum_i64(
+    value: crate::Handle<Value>,
+    name: &str,
+) -> Result<i64, ExecutionResult> {
+    if !value.is_fixnum() {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: value must be a fixnum"
+        )));
+    }
+    Ok(unsafe { value.as_fixnum::<i64>() })
+}
+
+fn check_signed_range(
+    value: i64,
+    min: i64,
+    max: i64,
+    name: &str,
+) -> Result<i64, ExecutionResult> {
+    if value < min || value > max {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: value out of range"
+        )));
+    }
+    Ok(value)
+}
+
+fn check_unsigned_range(
+    value: i64,
+    max: u64,
+    name: &str,
+) -> Result<u64, ExecutionResult> {
+    if value < 0 || (value as u64) > max {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: value out of range"
+        )));
+    }
+    Ok(value as u64)
+}
+
+fn read_unaligned<T: Copy>(ptr: *const u8) -> T {
+    // SAFETY: caller validates pointer range
+    unsafe { (ptr as *const T).read_unaligned() }
+}
+
+fn write_unaligned<T>(ptr: *mut u8, value: T) {
+    // SAFETY: caller validates pointer range
+    unsafe { (ptr as *mut T).write_unaligned(value) };
+}
+
+fn bytearray_read<T: Copy>(
+    ctx: &mut PrimitiveContext,
+    name: &str,
+) -> Result<T, ExecutionResult> {
+    let [index_val] = inputs(ctx);
+    let index = index_from_fixnum(index_val, name)?;
+    let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
+    let size = mem::size_of::<T>();
+    let slice = ba.as_bytes();
+    if index
+        .checked_add(size)
+        .map_or(true, |end| end > slice.len())
+    {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: index out of bounds"
+        )));
+    }
+    let ptr = unsafe { slice.as_ptr().add(index) };
+    let value: T = read_unaligned(ptr);
+    Ok(value)
+}
+
+fn bytearray_write<T>(
+    ctx: &mut PrimitiveContext,
+    name: &str,
+) -> Result<(*mut u8, i64), ExecutionResult> {
+    let [index_val, value_val] = inputs(ctx);
+    let index = index_from_fixnum(index_val, name)?;
+    let value = get_fixnum_i64(value_val, name)?;
+    let mut ba = unsafe { ctx.receiver.cast::<ByteArray>() };
+    let size = mem::size_of::<T>();
+    let slice = ba.as_bytes_mut();
+    if index
+        .checked_add(size)
+        .map_or(true, |end| end > slice.len())
+    {
+        return Err(ExecutionResult::Panic(format!(
+            "{name}: index out of bounds"
+        )));
+    }
+    let ptr = unsafe { slice.as_mut_ptr().add(index) };
+    Ok((ptr, value))
+}
+
+pub fn bytearray_u16_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = match bytearray_read::<u16>(ctx, "bytearrayU16At") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    output_u64(ctx, value as u64)
+}
+
+pub fn bytearray_i16_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = match bytearray_read::<i16>(ctx, "bytearrayI16At") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    output_i64(ctx, value as i64)
+}
+
+pub fn bytearray_u32_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = match bytearray_read::<u32>(ctx, "bytearrayU32At") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    output_u64(ctx, value as u64)
+}
+
+pub fn bytearray_i32_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = match bytearray_read::<i32>(ctx, "bytearrayI32At") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    output_i64(ctx, value as i64)
+}
+
+pub fn bytearray_u64_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = match bytearray_read::<u64>(ctx, "bytearrayU64At") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    output_u64(ctx, value)
+}
+
+pub fn bytearray_i64_at(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = match bytearray_read::<i64>(ctx, "bytearrayI64At") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    output_i64(ctx, value)
+}
+
+pub fn bytearray_u16_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let (ptr, value) = match bytearray_write::<u16>(ctx, "bytearrayU16AtPut") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    let value =
+        match check_unsigned_range(value, u16::MAX as u64, "bytearrayU16AtPut")
+        {
+            Ok(value) => value as u16,
+            Err(err) => return err,
+        };
+    write_unaligned(ptr, value);
+    ExecutionResult::Normal
+}
+
+pub fn bytearray_i16_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let (ptr, value) = match bytearray_write::<i16>(ctx, "bytearrayI16AtPut") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    let value = match check_signed_range(
+        value,
+        i16::MIN as i64,
+        i16::MAX as i64,
+        "bytearrayI16AtPut",
+    ) {
+        Ok(value) => value as i16,
+        Err(err) => return err,
+    };
+    write_unaligned(ptr, value);
+    ExecutionResult::Normal
+}
+
+pub fn bytearray_u32_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let (ptr, value) = match bytearray_write::<u32>(ctx, "bytearrayU32AtPut") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    let value =
+        match check_unsigned_range(value, u32::MAX as u64, "bytearrayU32AtPut")
+        {
+            Ok(value) => value as u32,
+            Err(err) => return err,
+        };
+    write_unaligned(ptr, value);
+    ExecutionResult::Normal
+}
+
+pub fn bytearray_i32_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let (ptr, value) = match bytearray_write::<i32>(ctx, "bytearrayI32AtPut") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    let value = match check_signed_range(
+        value,
+        i32::MIN as i64,
+        i32::MAX as i64,
+        "bytearrayI32AtPut",
+    ) {
+        Ok(value) => value as i32,
+        Err(err) => return err,
+    };
+    write_unaligned(ptr, value);
+    ExecutionResult::Normal
+}
+
+pub fn bytearray_u64_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let (ptr, value) = match bytearray_write::<u64>(ctx, "bytearrayU64AtPut") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    let value = match check_unsigned_range(value, u64::MAX, "bytearrayU64AtPut")
+    {
+        Ok(value) => value as u64,
+        Err(err) => return err,
+    };
+    write_unaligned(ptr, value);
+    ExecutionResult::Normal
+}
+
+pub fn bytearray_i64_at_put(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let (ptr, value) = match bytearray_write::<i64>(ctx, "bytearrayI64AtPut") {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    let value = match check_signed_range(
+        value,
+        i64::MIN,
+        i64::MAX,
+        "bytearrayI64AtPut",
+    ) {
+        Ok(value) => value,
+        Err(err) => return err,
+    };
+    write_unaligned(ptr, value);
     ExecutionResult::Normal
 }

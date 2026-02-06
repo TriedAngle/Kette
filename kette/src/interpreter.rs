@@ -353,6 +353,10 @@ impl Interpreter {
                 let traits = self.vm.specials().message_traits;
                 Some(unsafe { traits.cast::<SlotObject>() }.map)
             }
+            ObjectType::Alien => {
+                let traits = self.vm.specials().alien_traits;
+                Some(unsafe { traits.cast::<SlotObject>() }.map)
+            }
             _ => None,
         }
     }

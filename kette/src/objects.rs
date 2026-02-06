@@ -4,6 +4,7 @@ use std::{
 };
 
 pub mod activation;
+pub mod alien;
 pub mod arrays;
 pub mod bytearrays;
 pub mod feedback;
@@ -32,6 +33,7 @@ pub enum ObjectKind {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ObjectType {
     Slot          = 0b00000,
+    Alien         = 0b00001,
     Array         = 0b00010,
     ByteArray     = 0b00011,
     Activation    = 0b00100,
@@ -44,8 +46,6 @@ pub enum ObjectType {
     Code          = 0b11110,
     Max           = 0b11111,
 }
-
-pub const FLAG_REMEMBERED: u8 = 0b0000_0001;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -107,7 +107,10 @@ pub struct HeapValue {
 }
 
 impl Header {
-    pub const FLAG_PINNED: u8 = 1 << 0;
+    pub const FLAG_REMEMBERED: u8 = 1 << 0;
+    pub const FLAG_PINNED: u8 = 1 << 1;
+    pub const FLAG_ESCAPING: u8 = 1 << 2;
+    pub const FLAG_ESCAPED: u8 = 1 << 3;
 
     pub const TAG_SHIFT: u8 = 0;
     pub const TAG_MASK: u8 = 0b11;
@@ -201,6 +204,7 @@ impl Header {
         }
         Some(match self.type_bits() {
             0b00000 => ObjectType::Slot,
+            0b00001 => ObjectType::Alien,
             0b00010 => ObjectType::Array,
             0b00011 => ObjectType::ByteArray,
             0b00100 => ObjectType::Activation,
@@ -225,6 +229,40 @@ impl Header {
     }
 
     #[inline]
+    pub fn has_flag(&self, flag: u8) -> bool {
+        (self.flags.load(Ordering::Relaxed) & flag) != 0
+    }
+
+    #[inline]
+    pub fn set_flag(&self, flag: u8) -> bool {
+        let prev = self.flags.fetch_or(flag, Ordering::Relaxed);
+        (prev & flag) != 0
+    }
+
+    #[inline]
+    pub fn clear_flag(&self, flag: u8) -> bool {
+        let prev = self.flags.fetch_and(!flag, Ordering::Relaxed);
+        (prev & flag) != 0
+    }
+
+    #[inline]
+    pub fn update_flags(&self, set: u8, clear: u8) {
+        let mut current = self.flags.load(Ordering::Relaxed);
+        loop {
+            let next = (current | set) & !clear;
+            match self.flags.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(updated) => current = updated,
+            }
+        }
+    }
+
+    #[inline]
     pub fn set_age(&mut self, age: u8) {
         self.age.store(age, Ordering::Relaxed);
     }
@@ -244,6 +282,8 @@ impl Header {
         self.data = data;
     }
 }
+
+pub const FLAG_REMEMBERED: u8 = Header::FLAG_REMEMBERED;
 
 impl HeapValue {
     #[inline(always)]
@@ -324,6 +364,7 @@ impl Object for HeapValue {
         // SAFETY: only objects will ever be looked up 
         match unsafe { self.header.object_type().unwrap_unchecked() } {
             ObjectType::Slot          => self.downcast_ref_match::<SlotObject>().lookup(selector, link),
+            ObjectType::Alien         => self.downcast_ref_match::<alien::Alien>().lookup(selector, link),
             ObjectType::Array         => self.downcast_ref_match::<Array>().lookup(selector, link),
             ObjectType::ByteArray     => self.downcast_ref_match::<ByteArray>().lookup(selector, link),
             ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
@@ -351,6 +392,7 @@ impl HeapObject for HeapValue {
                 // SAFETY: matched to this 
                 match unsafe { self.header.object_type().unwrap_unchecked() } {
                     ObjectType::Slot          => self.downcast_ref_match::<SlotObject>().heap_size(),
+                    ObjectType::Alien         => self.downcast_ref_match::<alien::Alien>().heap_size(),
                     ObjectType::Array         => self.downcast_ref_match::<Array>().heap_size(),
                     ObjectType::ByteArray     => self.downcast_ref_match::<ByteArray>().heap_size(),
                     ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().heap_size(),
@@ -411,7 +453,7 @@ impl Visitable for HeapValue {
                     ObjectType::Thread        => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
                     ObjectType::FeedbackEntry => self.downcast_mut_match::<FeedbackEntry>().visit_edges_mut(visitor),
                     ObjectType::Code          => self.downcast_mut_match::<Code>().visit_edges_mut(visitor),
-                    ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
+                    ObjectType::Alien | ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
                     ObjectType::Max => unreachable!(),
                 }
             }
@@ -435,7 +477,7 @@ impl Visitable for HeapValue {
                     ObjectType::Thread        => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
                     ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().visit_edges(visitor),
                     ObjectType::Code          => self.downcast_ref_match::<Code>().visit_edges(visitor),
-                    ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
+                    ObjectType::Alien | ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
                     ObjectType::Max => unreachable!(),
                 }
             }

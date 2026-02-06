@@ -26,6 +26,7 @@ pub use heap::{Heap, HeapProxy, HeapSettings};
 pub use objects::activation::{
     Activation, ActivationObject, ActivationStack, ActivationType,
 };
+pub use objects::alien::Alien;
 pub use objects::arrays::Array;
 pub use objects::bytearrays::ByteArray;
 pub use objects::feedback::FeedbackEntry;

@@ -19,6 +19,7 @@ pub struct SpecialObjects {
     pub bignum_traits: Handle<HeapValue>,
     pub quotation_traits: Handle<HeapValue>,
     pub message_traits: Handle<HeapValue>,
+    pub alien_traits: Handle<HeapValue>,
 
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
@@ -213,6 +214,18 @@ impl VM {
             SlotHelper::primitive_message("(bytearrayAtPut)", SlotTags::empty()),
             SlotHelper::primitive_message("(bytearrayMemset)", SlotTags::empty()),
             SlotHelper::primitive_message("(bytearrayMemcpy)", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayU16At", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayI16At", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayU32At", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayI32At", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayU64At", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayI64At", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayU16AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayI16AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayU32AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayI32AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayU64AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearrayI64AtPut", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -238,6 +251,26 @@ impl VM {
         let message_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message2("parent*", "messageParent", SlotTags::empty()),
             SlotHelper::primitive_message2("name", "messageName", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let alien_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("alienU8At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI8At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU16At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI16At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU32At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI32At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU64At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI64At", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU8AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI8AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU16AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI16AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU32AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI32AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienU64AtPut", SlotTags::empty()),
+            SlotHelper::primitive_message("alienI64AtPut", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -286,6 +319,8 @@ impl VM {
             let true_object = heap.allocate_slots(empty_map, &[]).cast();
 
             let message_traits = heap.allocate_slots(message_map, &[]).cast();
+
+            let alien_traits = heap.allocate_slots(alien_map, &[]).cast();
 
             let false_object =
                 heap.allocate_slots(empty_map, &[]).cast::<HeapValue>();
@@ -338,6 +373,7 @@ impl VM {
                 bignum_traits,
                 quotation_traits,
                 message_traits,
+                alien_traits,
                 primitive_vector_map,
                 true_object,
                 false_object,
@@ -438,6 +474,7 @@ impl SpecialObjects {
                 self.bignum_traits,
                 self.quotation_traits,
                 self.message_traits,
+                self.alien_traits,
                 self.primitive_vector_map.cast(),
                 self.true_object,
                 self.false_object,
@@ -472,6 +509,7 @@ impl SpecialObjects {
                 bignum_traits: Handle::null(),
                 quotation_traits: Handle::null(),
                 message_traits: Handle::null(),
+                alien_traits: Handle::null(),
                 primitive_vector_map: Handle::null(),
                 true_object: Handle::null(),
                 false_object: Handle::null(),

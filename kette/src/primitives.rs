@@ -5,6 +5,7 @@ use crate::{
     ThreadProxy, VMProxy, Value,
 };
 
+mod alien;
 mod array;
 mod bignum;
 mod bytearray;
@@ -226,6 +227,23 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("float>=", 1, 1, float::float_geq),
     PrimitiveMessage::new("float>string", 0, 1, float::float_to_utf8_bytes),
     PrimitiveMessage::new("floatParent", 0, 1, float::parent),
+    // Alien
+    PrimitiveMessage::new("alienU8At", 1, 1, alien::alien_u8_at),
+    PrimitiveMessage::new("alienI8At", 1, 1, alien::alien_i8_at),
+    PrimitiveMessage::new("alienU16At", 1, 1, alien::alien_u16_at),
+    PrimitiveMessage::new("alienI16At", 1, 1, alien::alien_i16_at),
+    PrimitiveMessage::new("alienU32At", 1, 1, alien::alien_u32_at),
+    PrimitiveMessage::new("alienI32At", 1, 1, alien::alien_i32_at),
+    PrimitiveMessage::new("alienU64At", 1, 1, alien::alien_u64_at),
+    PrimitiveMessage::new("alienI64At", 1, 1, alien::alien_i64_at),
+    PrimitiveMessage::new("alienU8AtPut", 2, 0, alien::alien_u8_at_put),
+    PrimitiveMessage::new("alienI8AtPut", 2, 0, alien::alien_i8_at_put),
+    PrimitiveMessage::new("alienU16AtPut", 2, 0, alien::alien_u16_at_put),
+    PrimitiveMessage::new("alienI16AtPut", 2, 0, alien::alien_i16_at_put),
+    PrimitiveMessage::new("alienU32AtPut", 2, 0, alien::alien_u32_at_put),
+    PrimitiveMessage::new("alienI32AtPut", 2, 0, alien::alien_i32_at_put),
+    PrimitiveMessage::new("alienU64AtPut", 2, 0, alien::alien_u64_at_put),
+    PrimitiveMessage::new("alienI64AtPut", 2, 0, alien::alien_i64_at_put),
     // Bytearrays
     PrimitiveMessage::new("(print)", 0, 0, bytearray::bytearray_print),
     PrimitiveMessage::new("(println)", 0, 0, bytearray::bytearray_println),
@@ -236,6 +254,18 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(bytearrayAtPut)", 2, 0, bytearray::bytearray_at_put),
     PrimitiveMessage::new("(bytearrayMemset)", 3, 0, bytearray::bytearray_memset),
     PrimitiveMessage::new("(bytearrayMemcpy)", 4, 0, bytearray::bytearray_memcpy),
+    PrimitiveMessage::new("bytearrayU16At", 1, 1, bytearray::bytearray_u16_at),
+    PrimitiveMessage::new("bytearrayI16At", 1, 1, bytearray::bytearray_i16_at),
+    PrimitiveMessage::new("bytearrayU32At", 1, 1, bytearray::bytearray_u32_at),
+    PrimitiveMessage::new("bytearrayI32At", 1, 1, bytearray::bytearray_i32_at),
+    PrimitiveMessage::new("bytearrayU64At", 1, 1, bytearray::bytearray_u64_at),
+    PrimitiveMessage::new("bytearrayI64At", 1, 1, bytearray::bytearray_i64_at),
+    PrimitiveMessage::new("bytearrayU16AtPut", 2, 0, bytearray::bytearray_u16_at_put),
+    PrimitiveMessage::new("bytearrayI16AtPut", 2, 0, bytearray::bytearray_i16_at_put),
+    PrimitiveMessage::new("bytearrayU32AtPut", 2, 0, bytearray::bytearray_u32_at_put),
+    PrimitiveMessage::new("bytearrayI32AtPut", 2, 0, bytearray::bytearray_i32_at_put),
+    PrimitiveMessage::new("bytearrayU64AtPut", 2, 0, bytearray::bytearray_u64_at_put),
+    PrimitiveMessage::new("bytearrayI64AtPut", 2, 0, bytearray::bytearray_i64_at_put),
     // Arrays
     PrimitiveMessage::new("(>quotation)", 0, 1, array::array_to_quotation),
     PrimitiveMessage::new("arrayParent", 0, 1, array::parent),

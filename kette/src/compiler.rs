@@ -68,6 +68,7 @@ impl BytecodeCompiler {
             {
                 // Literals: Push as constants
                 ObjectType::Slot
+                | ObjectType::Alien
                 | ObjectType::Array
                 | ObjectType::ByteArray
                 | ObjectType::Float
