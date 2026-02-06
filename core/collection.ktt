@@ -68,5 +68,3 @@
 
 // [ 2 * ] { 1 2 3 4 } map [ >string println ] swap each
 
-
-

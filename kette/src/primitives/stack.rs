@@ -26,6 +26,13 @@ pub fn depth(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
+pub fn swap(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let y = ctx.receiver;
+    let x = ctx.inputs[0];
+    outputs(ctx, [y, x]);
+    ExecutionResult::Normal
+}
+
 shuffle! {
     dup: x -- x x ;
 
@@ -37,7 +44,8 @@ shuffle! {
 
     drop3: x y z -- ;
 
-    swap: x y -- y x ;
+    /// swap: x y -- y x ;
+    swap2: x y -- y x ;
 
     over: x y -- x y x ;
 

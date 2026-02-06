@@ -193,7 +193,9 @@ fn parse_until_inner<'m, 'ex, 'arg>(
 
         let name = message.value;
         let selector = Selector::new(name, ctx.vm.shared.clone());
-        let lookup = selector.lookup_object(&parsers.as_value());
+        let lookup = selector
+            .with_no_parents()
+            .lookup_object(&parsers.as_value());
 
         match lookup {
             LookupResult::Found { slot, .. } => {
@@ -585,11 +587,13 @@ pub fn parse_execute(ctx: &mut PrimitiveContext) -> ExecutionResult {
             .unwrap_unchecked()
             .object
     };
+    let receiver = current_activation.receiver;
     let quotation = ctx.heap.allocate_quotation(exe_map, current_activation);
 
     let start_depth = ctx.state.depth;
 
-    ctx.interpreter.add_quotation(quotation);
+    ctx.interpreter
+        .add_quotation_with_receiver(quotation, receiver);
     let exec_res = ctx.interpreter.execute_current_activation();
 
     if exec_res != ExecutionResult::Normal {

@@ -1,0 +1,66 @@
+$[
+(| 
+    std = (| 
+        parent* = self .
+        traits = (| 
+            parent* = self .
+            clonable = (| 
+                parent* = self .
+                clone = (| -- new | self (clone) ) .
+                clone! = (| -- new | self (cloneBoa) ) .
+                copy = (| -- copy | self clone ) .
+                copy! = (| -- copy | self cloneBoa ) . 
+            |) .
+            oddball = (| 
+                parent* = self .
+                copy = (| -- copy | self ) .
+                copy! = (| -- copy | self ) .
+            |) .
+            fixnum = 0 parent* .
+            float = 0.0 parent* .
+            bignum = 0 fixnum>bignum parent* .
+            bytearray = "incredible" parent* .
+            quotation = [ ] parent* .
+        |)
+    |) .
+    t = 0 0 fixnum= .
+    f = 0 1 fixnum= .
+    addTraitSlots = (| traits -- | self self universe reflect addTraitSlots ) .
+|) self self reflect addTraitSlots
+
+(|
+    parent* = self .
+|) self parsers self universe reflect addTraitSlots 
+
+
+(| box = (| 
+    parent* = self std traits clonable . 
+    value . 
+    >box = (| value -- boxed | self clone! ) .
+    box> = (| -- inner | self value ) .
+|) |) self std addTraitSlots
+
+(|
+    >box = (| value -- boxed | self std box >box ) .
+    box> = (| -- inner | self std box box> ) .
+|) self addTraitSlots
+
+(|
+    universe* = self .
+|) self std traits fixnum self reflect addTraitSlots
+
+]
+
+
+/*
+$[
+(| 
+    \ = (| accum -- accum | self parseNext >box over push ) .
+|) self parsers addTraitSlots
+]
+
+
+(| 
+    { = (| accum -- accum | \ } box> self parseUntil over push ) . 
+|) self parsers addTraitSlots 
+*/

@@ -332,6 +332,18 @@ pub trait Allocator: Sized {
         unsafe { self.allocate_activation_raw(receiver, map, slots) }
     }
 
+    fn allocate_quotation_activation_with_receiver(
+        &mut self,
+        quotation: Handle<Quotation>,
+        receiver: Handle<Value>,
+        slots: &[Handle<Value>],
+    ) -> Handle<ActivationObject> {
+        // SAFETY: Quotation maps are always executable maps (Map type).
+        let map = unsafe { quotation.map.cast::<Map>() };
+        // SAFETY: All handles are valid, slots.len() matches map's requirements.
+        unsafe { self.allocate_activation_raw(receiver, map, slots) }
+    }
+
     /// Allocate a Parser on the GC heap with the given source code.
     fn allocate_parser(
         &mut self,

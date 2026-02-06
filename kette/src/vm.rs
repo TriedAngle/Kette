@@ -10,7 +10,9 @@ use crate::{
 #[derive(Debug)]
 pub struct SpecialObjects {
     pub universe: Handle<HeapValue>,
+    pub reflect: Handle<HeapValue>,
     pub parsers: Handle<HeapValue>,
+    pub stack_object: Handle<HeapValue>,
 
     pub bytearray_traits: Handle<HeapValue>,
     pub array_traits: Handle<HeapValue>,
@@ -23,8 +25,6 @@ pub struct SpecialObjects {
 
     pub true_object: Handle<HeapValue>,
     pub false_object: Handle<HeapValue>,
-
-    pub stack_object: Handle<HeapValue>,
 
     pub primitive_vector_map: Handle<Map>,
 
@@ -148,8 +148,6 @@ impl VM {
                 SlotHelper::primitive_message("@vm-depth", SlotTags::empty()),
             ],
         );
-
-        let stack_object = heap.allocate_slots(stack_map, &[]);
 
         #[rustfmt::skip]
         let fixnum_map = heap.allocate_slot_map_helper(strings, &[
@@ -291,15 +289,24 @@ impl VM {
             SlotHelper::primitive_message("$[", SlotTags::empty()),
         ]);
 
+        #[rustfmt::skip]
+        let reflect_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
+            SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
+        ]);
+
         let parsers = heap.allocate_slots(parsers_map, &[]);
+
+        let stack_object = heap.allocate_slots(stack_map, &[]);
+
+        let reflect = heap.allocate_slots(reflect_map, &[]);
 
         #[rustfmt::skip]
         let universe_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::constant("stack*", stack_object.as_value(), SlotTags::PARENT),
             SlotHelper::constant("parsers", parsers.as_value(), SlotTags::empty()),
+            SlotHelper::constant("reflect", reflect.as_value(), SlotTags::empty()),
             SlotHelper::primitive_message2("universe", "(identity)", SlotTags::empty()),
-            SlotHelper::primitive_message("addTraitSlots", SlotTags::empty()),
-            SlotHelper::primitive_message("removeTraitSlots", SlotTags::empty()),
 
             SlotHelper::primitive_message("(clone)", SlotTags::empty()),
             SlotHelper::primitive_message("(cloneBoa)", SlotTags::empty()),
@@ -389,6 +396,7 @@ impl VM {
 
             let specials = SpecialObjects {
                 universe,
+                reflect: reflect.cast(),
                 parsers: parsers.cast(),
                 stack_object: stack_object.cast(),
                 bytearray_traits,
@@ -491,7 +499,9 @@ impl SpecialObjects {
         let mut roots = unsafe {
             vec![
                 self.universe,
+                self.reflect,
                 self.parsers,
+                self.stack_object,
                 self.bytearray_traits,
                 self.array_traits,
                 self.fixnum_traits,
@@ -503,7 +513,6 @@ impl SpecialObjects {
                 self.primitive_vector_map.cast(),
                 self.true_object,
                 self.false_object,
-                self.stack_object,
                 self.dip_map.cast(),
                 self.message_self.cast(),
                 self.message_create_object.cast(),
@@ -526,7 +535,9 @@ impl SpecialObjects {
         unsafe {
             Self {
                 universe: Handle::null(),
+                reflect: Handle::null(),
                 parsers: Handle::null(),
+                stack_object: Handle::null(),
                 bytearray_traits: Handle::null(),
                 array_traits: Handle::null(),
                 fixnum_traits: Handle::null(),
@@ -538,7 +549,6 @@ impl SpecialObjects {
                 primitive_vector_map: Handle::null(),
                 true_object: Handle::null(),
                 false_object: Handle::null(),
-                stack_object: Handle::null(),
                 dip_map: Handle::null(),
                 message_self: Handle::null(),
                 message_create_object: Handle::null(),

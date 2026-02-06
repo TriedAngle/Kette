@@ -4,10 +4,21 @@ use crate::{
     ByteArray, Handle, Message, Object, SlotDescriptor, Tagged, VMShared, Value,
 };
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ParentLookup {
+    /// Lookup in the receiver, then traverse parents.
+    SelfAndParents,
+    /// Lookup only in the receiver; skip parents.
+    SelfOnly,
+    /// Start lookup at a specific parent, then traverse its parents.
+    StartAtParent(Value),
+}
+
 #[derive(Debug, Clone)]
 pub struct Selector {
     pub name: Handle<ByteArray>,
     pub vm: Arc<VMShared>,
+    pub parent_lookup: ParentLookup,
 }
 
 /// used to find and break cycles
@@ -33,12 +44,38 @@ pub enum LookupResult {
 impl Selector {
     #[must_use]
     pub fn new(name: Handle<ByteArray>, vm: Arc<VMShared>) -> Self {
-        Self { name, vm }
+        Self {
+            name,
+            vm,
+            parent_lookup: ParentLookup::SelfAndParents,
+        }
     }
     #[must_use]
     pub fn new_message(message: Handle<Message>, vm: Arc<VMShared>) -> Self {
         let name = message.value;
-        Self { name, vm }
+        Self {
+            name,
+            vm,
+            parent_lookup: ParentLookup::SelfAndParents,
+        }
+    }
+
+    #[must_use]
+    pub fn with_no_parents(mut self) -> Self {
+        self.parent_lookup = ParentLookup::SelfOnly;
+        self
+    }
+
+    #[must_use]
+    pub fn with_parent_start(mut self, parent: Value) -> Self {
+        self.parent_lookup = ParentLookup::StartAtParent(parent);
+        self
+    }
+
+    #[must_use]
+    pub fn with_parent_lookup(mut self, parent_lookup: ParentLookup) -> Self {
+        self.parent_lookup = parent_lookup;
+        self
     }
 
     pub fn lookup_object(self, object: &impl Object) -> LookupResult {

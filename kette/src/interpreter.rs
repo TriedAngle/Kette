@@ -4,13 +4,14 @@ use std::{
 };
 
 #[cfg(feature = "inline-cache")]
-use crate::{Array, Code, FeedbackEntry, HeapValue, ObjectType};
+use crate::{Code, FeedbackEntry, HeapValue, ObjectType};
 
 use crate::{
     Activation, ActivationObject, ActivationStack, ActivationType, Allocator,
-    ExecutionState, Handle, HeapProxy, LookupResult, Map, Message, OpCode,
-    PrimitiveMessageIndex, Quotation, Selector, SlotObject, SlotTags,
-    ThreadProxy, VMProxy, Value, get_primitive, transmute,
+    Array, BytecodeCompiler, BytecodeWriter, ExecutionState, Handle, HeapProxy,
+    LookupResult, Map, Message, OpCode, PrimitiveMessageIndex, Quotation,
+    Selector, SlotObject, SlotTags, ThreadProxy, VMProxy, Value, get_primitive,
+    transmute,
 };
 
 /// Hotness threshold for allocating feedback vectors.
@@ -220,6 +221,22 @@ impl Interpreter {
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
         let activation_object =
             self.heap.allocate_quotation_activation(quotation, &[]);
+
+        self.activations
+            .new_activation(activation_object, ActivationType::Quotation);
+    }
+
+    pub fn add_quotation_with_receiver(
+        &mut self,
+        quotation: Handle<Quotation>,
+        receiver: Handle<Value>,
+    ) {
+        let activation_object =
+            self.heap.allocate_quotation_activation_with_receiver(
+                quotation,
+                receiver,
+                &[],
+            );
 
         self.activations
             .new_activation(activation_object, ActivationType::Quotation);
@@ -835,25 +852,12 @@ impl Interpreter {
                     self.heap.safepoint();
                     self.reload_context();
 
-                    // Universe lookup to find receiver
-                    // TODO: this is very bad, remove universe
-                    let universe = self.vm.specials().universe;
-                    let found_receiver = match selector
-                        .clone()
-                        .lookup_object(&universe.as_value())
-                    {
-                        LookupResult::Found { object, .. } => {
-                            // SAFETY: correctly setup by compiler
-                            object.as_value().as_handle_unchecked()
-                        }
-                        LookupResult::None => {
-                            if let Err(e) = self.check_min_stack(1) {
-                                return e;
-                            }
-                            // SAFETY: correctly setup by compiler
-                            self.state.pop_unchecked().as_handle_unchecked()
-                        }
-                    };
+                    if let Err(e) = self.check_min_stack(1) {
+                        return e;
+                    }
+                    // SAFETY: correctly setup by compiler
+                    let found_receiver =
+                        self.state.pop_unchecked().as_handle_unchecked();
 
                     // Get activation's map and code for IC
                     let activation = self.activations.current().unwrap();
@@ -1201,6 +1205,86 @@ impl Interpreter {
 
         self.state.push(slot.value);
         ExecutionResult::Normal
+    }
+}
+
+pub fn execute_source_with_receiver(
+    interpreter: &mut Interpreter,
+    source: &str,
+    receiver: Handle<Value>,
+) -> Result<(), String> {
+    let parser = interpreter
+        .heap
+        .allocate_parser(&interpreter.vm.shared.strings, source.as_bytes());
+
+    let parse_msg = interpreter
+        .vm
+        .intern_string_message("parse", &mut interpreter.heap);
+
+    let constants = vec![parser.as_value(), parse_msg.as_value()];
+
+    let mut writer = BytecodeWriter::new();
+    writer.emit_push_constant(0);
+    writer.emit_send(1, 0);
+    writer.emit_return();
+
+    let dummy_body = interpreter.heap.allocate_array(&[]);
+
+    let boot_code = interpreter.heap.allocate_code(
+        &constants,
+        &writer.into_inner(),
+        1,
+        dummy_body,
+        unsafe { Handle::null() },
+    );
+
+    let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
+
+    let boot_quotation = interpreter
+        .heap
+        .allocate_quotation(boot_map, unsafe { Handle::null() });
+
+    interpreter.add_quotation_with_receiver(boot_quotation, receiver);
+
+    match interpreter.execute() {
+        ExecutionResult::Normal => {}
+        ExecutionResult::Panic(msg) => {
+            return Err(format!("Parser Panic: {}", msg));
+        }
+        res => return Err(format!("Parser abnormal exit: {:?}", res)),
+    }
+
+    let body_val = match interpreter.state.pop() {
+        Some(v) => v,
+        None => {
+            return Err("Parser did not return a value (Empty Stack)".into());
+        }
+    };
+
+    if body_val == interpreter.vm.shared.specials.false_object.as_value() {
+        return Err("Parsing failed (Syntax Error)".into());
+    }
+
+    let body_array = unsafe { body_val.as_handle_unchecked().cast::<Array>() };
+
+    let code = BytecodeCompiler::compile(
+        &interpreter.vm.shared,
+        &mut interpreter.heap,
+        body_array,
+    );
+
+    let code_map = interpreter.heap.allocate_executable_map(code, 0, 0);
+
+    let quotation = interpreter
+        .heap
+        .allocate_quotation(code_map, unsafe { Handle::null() });
+
+    interpreter.add_quotation_with_receiver(quotation, receiver);
+
+    match interpreter.execute() {
+        ExecutionResult::Normal => Ok(()),
+        ExecutionResult::Panic(msg) => Err(format!("Panic: {}", msg)),
+        res => Err(format!("Abnormal exit: {:?}", res)),
     }
 }
 

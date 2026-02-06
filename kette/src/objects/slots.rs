@@ -4,8 +4,8 @@ use bitflags::bitflags;
 
 use crate::{
     ByteArray, Code, Handle, Header, HeapObject, LookupResult, Object,
-    ObjectKind, ObjectType, Selector, Tagged, Value, Visitable, VisitedLink,
-    Visitor, primitive_index,
+    ObjectKind, ObjectType, ParentLookup, Selector, Tagged, Value, Visitable,
+    VisitedLink, Visitor, primitive_index,
 };
 
 bitflags! {
@@ -385,29 +385,22 @@ impl SlotObject {
             head.extend(slots_layout).expect("create valid layout");
         layout
     }
-}
 
-impl Object for SlotObject {
-    /// Looks up a slot by name, traversing parent chains.
-    /// Uses cycle detection to avoid infinite loops in circular parent relationships.
-    fn lookup(
+    fn lookup_local_only(
         &self,
         selector: Selector,
-        link: Option<&VisitedLink>,
+        self_value: Tagged<Value>,
     ) -> LookupResult {
-        let self_ptr = self as *const Self as *mut Self;
-        let self_value = Tagged::new_ptr(self_ptr).as_tagged_value();
-
-        // 1. Cycle Detection
-        if let Some(history) = link
-            && history.contains(self_value.into())
-        {
-            return LookupResult::None;
-        }
-
         let slots = self.map.slots();
+        self.lookup_local(selector, self_value, &slots)
+    }
 
-        // Local Lookup
+    fn lookup_local(
+        &self,
+        selector: Selector,
+        self_value: Tagged<Value>,
+        slots: &[SlotDescriptor],
+    ) -> LookupResult {
         let local_match = slots
             .iter()
             .enumerate()
@@ -434,6 +427,50 @@ impl Object for SlotObject {
                 slot_index: idx,
                 traversed_assignable_parent: false,
             };
+        }
+
+        LookupResult::None
+    }
+}
+
+impl Object for SlotObject {
+    /// Looks up a slot by name, traversing parent chains.
+    /// Uses cycle detection to avoid infinite loops in circular parent relationships.
+    fn lookup(
+        &self,
+        selector: Selector,
+        link: Option<&VisitedLink>,
+    ) -> LookupResult {
+        let self_ptr = self as *const Self as *mut Self;
+        let self_value = Tagged::new_ptr(self_ptr).as_tagged_value();
+
+        // 1. Cycle Detection
+        if let Some(history) = link
+            && history.contains(self_value.into())
+        {
+            return LookupResult::None;
+        }
+
+        match selector.parent_lookup {
+            ParentLookup::SelfOnly => {
+                return self.lookup_local_only(selector, self_value);
+            }
+            ParentLookup::StartAtParent(parent) => {
+                let current_link = VisitedLink::new(self_value.into(), link);
+                let selector =
+                    selector.with_parent_lookup(ParentLookup::SelfAndParents);
+                return parent.lookup(selector, Some(&current_link));
+            }
+            ParentLookup::SelfAndParents => {}
+        }
+
+        let slots = self.map.slots();
+
+        // Local Lookup
+        let local_lookup =
+            self.lookup_local(selector.clone(), self_value, &slots);
+        if let LookupResult::Found { .. } = local_lookup {
+            return local_lookup;
         }
 
         // Parent Lookup

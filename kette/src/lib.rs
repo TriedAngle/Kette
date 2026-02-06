@@ -51,8 +51,10 @@ pub use primitives::Vector;
 
 pub use compiler::BytecodeCompiler;
 pub use interning::Strings;
-pub use interpreter::{ExecutionResult, Interpreter, NumberError};
-pub use lookup::{LookupResult, Selector, VisitedLink};
+pub use interpreter::{
+    ExecutionResult, Interpreter, NumberError, execute_source_with_receiver,
+};
+pub use lookup::{LookupResult, ParentLookup, Selector, VisitedLink};
 pub use parker::NativeParker;
 pub use primitives::{
     PrimitiveContext, PrimitiveMessage, PrimitiveMessageIndex, get_primitive,

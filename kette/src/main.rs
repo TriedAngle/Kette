@@ -1,8 +1,7 @@
 use clap::Parser as ClapParser;
 use kette::{
-    Allocator, Array, BytecodeCompiler, BytecodeWriter, ExecutionResult,
-    ExecutionState, ExecutionStateInfo, Handle, HeapSettings, Interpreter,
-    ThreadProxy, VM, VMCreateInfo, VMThread,
+    ExecutionState, ExecutionStateInfo, HeapSettings, Interpreter, ThreadProxy,
+    VM, VMCreateInfo, VMThread, execute_source_with_receiver,
 };
 use std::{
     fs,
@@ -140,80 +139,6 @@ fn execute_source(
     interpreter: &mut Interpreter,
     source: &str,
 ) -> Result<(), String> {
-    // Allocate parser on the GC heap (not Rust heap via Box)
-    let parser = interpreter
-        .heap
-        .allocate_parser(&interpreter.vm.shared.strings, source.as_bytes());
-
-    let parse_msg = interpreter
-        .vm
-        .intern_string_message("parse", &mut interpreter.heap);
-
-    let constants = vec![parser.as_value(), parse_msg.as_value()];
-
-    let mut writer = BytecodeWriter::new();
-    // PushConstant(0) - parser object
-    writer.emit_push_constant(0);
-    // Send(1) - "parse" message
-    writer.emit_send(1, 0);
-    writer.emit_return();
-
-    let dummy_body = interpreter.heap.allocate_array(&[]);
-
-    let boot_code = interpreter.heap.allocate_code(
-        &constants,
-        &writer.into_inner(),
-        1, // 1 Send site (the "parse" call)
-        dummy_body,
-        unsafe { Handle::null() },
-    );
-
-    let boot_map = interpreter.heap.allocate_executable_map(boot_code, 0, 0);
-
-    let boot_quotation = interpreter
-        .heap
-        .allocate_quotation(boot_map, unsafe { Handle::null() });
-
-    interpreter.add_quotation(boot_quotation);
-
-    match interpreter.execute() {
-        ExecutionResult::Normal => {}
-        ExecutionResult::Panic(msg) => {
-            return Err(format!("Parser Panic: {}", msg));
-        }
-        res => return Err(format!("Parser abnormal exit: {:?}", res)),
-    }
-
-    let body_val = match interpreter.state.pop() {
-        Some(v) => v,
-        None => {
-            return Err("Parser did not return a value (Empty Stack)".into());
-        }
-    };
-
-    if body_val == interpreter.vm.shared.specials.false_object.as_value() {
-        return Err("Parsing failed (Syntax Error)".into());
-    }
-
-    let body_array = unsafe { body_val.as_handle_unchecked().cast::<Array>() };
-
-    let code = BytecodeCompiler::compile(
-        &interpreter.vm.shared,
-        &mut interpreter.heap,
-        body_array,
-    );
-
-    let code_map = interpreter.heap.allocate_executable_map(code, 0, 0);
-
-    let quotation = interpreter
-        .heap
-        .allocate_quotation(code_map, unsafe { Handle::null() });
-
-    interpreter.add_quotation(quotation);
-
-    match interpreter.execute() {
-        ExecutionResult::Normal => Ok(()),
-        ExecutionResult::Panic(msg) => Err(format!("Panic: {}", msg)),
-        res => Err(format!("Abnormal exit: {:?}", res)),
-    }
+    let receiver = interpreter.vm.shared.specials.universe.as_value_handle();
+    execute_source_with_receiver(interpreter, source, receiver)
 }

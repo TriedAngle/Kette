@@ -164,13 +164,14 @@ impl<'m> PrimitiveMessage<'m> {
 #[rustfmt::skip]
 pub const PRIMITIVES: &[PrimitiveMessage] = &[
     // Stack
-    PrimitiveMessage::new("dup", 1, 2, stack::dup),
-    PrimitiveMessage::new("2dup", 2, 4, stack::dup2),
-    PrimitiveMessage::new("drop", 1, 0, stack::drop),
-    PrimitiveMessage::new("2drop", 2, 0, stack::drop2),
-    PrimitiveMessage::new("3drop", 3, 0, stack::drop3),
-    PrimitiveMessage::new("swap", 2, 2, stack::swap),
-    PrimitiveMessage::new("over", 2, 3, stack::over),
+    PrimitiveMessage::new("dup", 0, 2, stack::dup),
+    PrimitiveMessage::new("2dup", 1, 4, stack::dup2),
+    PrimitiveMessage::new("drop", 0, 0, stack::drop),
+    PrimitiveMessage::new("2drop", 1, 0, stack::drop2),
+    PrimitiveMessage::new("3drop", 2, 0, stack::drop3),
+    PrimitiveMessage::new("swap", 1, 2, stack::swap),
+    PrimitiveMessage::new("over", 1, 3, stack::over),
+
     PrimitiveMessage::new("pick", 3, 4, stack::pick),
     PrimitiveMessage::new("rot", 3, 3, stack::rot),
     PrimitiveMessage::new("-rot", 3, 3, stack::neg_rot),
