@@ -155,12 +155,20 @@ impl VM {
         let fixnum_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("fixnum?", SlotTags::empty()),
             SlotHelper::primitive_message("2fixnum?", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>bignum", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum+", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum-", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum*", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum/", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum%", SlotTags::empty()),
             SlotHelper::primitive_message("fixnumNeg", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum+Unchecked", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum-Unchecked", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum*Unchecked", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum/Unchecked", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum%Unchecked", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum^Unchecked", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnumNegUnchecked", SlotTags::empty()),
             SlotHelper::primitive_message("fixnumBitAnd", SlotTags::empty()),
             SlotHelper::primitive_message("fixnumBitOr", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum=", SlotTags::empty()),
@@ -177,6 +185,7 @@ impl VM {
         let float_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("float?", SlotTags::empty()),
             SlotHelper::primitive_message("2float?", SlotTags::empty()),
+            SlotHelper::primitive_message("float>bignum", SlotTags::empty()),
             SlotHelper::primitive_message("float+", SlotTags::empty()),
             SlotHelper::primitive_message("float-", SlotTags::empty()),
             SlotHelper::primitive_message("float*", SlotTags::empty()),
@@ -298,6 +307,22 @@ impl VM {
             SlotHelper::primitive_message("(unwind)", SlotTags::empty()),
         ]);
 
+        #[rustfmt::skip]
+        let bignum_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("bignumToFixnumChecked", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum+", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum-", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum*", SlotTags::empty()),
+            SlotHelper::primitive_message("bignumNeg", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum=", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum!=", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum<", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum>", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum<=", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum>=", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "bignumParent", SlotTags::empty()),
+        ]);
+
         // SAFETY: No GC can occur during initialization; all special objects are fully initialized before use.
         unsafe {
             let primitive_vector_map = Vector::new_map(&mut heap, strings);
@@ -311,7 +336,7 @@ impl VM {
 
             let float_traits = heap.allocate_slots(float_map, &[]).cast();
 
-            let bignum_traits = heap.allocate_slots(empty_map, &[]).cast();
+            let bignum_traits = heap.allocate_slots(bignum_map, &[]).cast();
 
             let quotation_traits =
                 heap.allocate_slots(quotation_map, &[]).cast();

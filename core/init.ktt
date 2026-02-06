@@ -14,6 +14,7 @@ $[
             |) .
             fixnum = 0 parent* .
             float = 0.0 parent* .
+            bignum = 0 fixnum>bignum parent* .
             bytearray = "incredible" parent* .
             quotation = [ ] parent* .
             number = (| |) .
@@ -76,6 +77,7 @@ $[
     <= = (| lhs -- ? | self fixnum<= ) .
     >= = (| lhs -- ? | self fixnum>= ) .
     positive? = (| -- ? | self 0 > ) .
+    >bignum = (| -- new | self fixnum>bignum ) .
     >string = (| -- str | self fixnum>string ) .
 |) std traits fixnum addTraitSlots
 
@@ -105,8 +107,24 @@ $[
     <= = (| lhs -- ? | self float<= ) .
     >= = (| lhs -- ? | self float>= ) .
     positive? = (| -- ? | self 0.0 > ) .
+    >bignum = (| -- new | self float>bignum ) .
     >string = (| -- str | self float>string ) .
 |) std traits float addTraitSlots
+
+(|
+    clonable* = std traits clonable .
+    number* = std traits number .
+    + = (| lhs -- new | self bignum+ ) .
+    - = (| lhs -- new | self bignum- ) .
+    * = (| lhs -- new | self bignum* ) .
+    neg = (| -- -self | self bignumNeg ) .
+    = = (| lhs -- ? | self bignum= ) .
+    != = (| lhs -- ? | self bignum!= ) .
+    < = (| lhs -- ? | self bignum< ) .
+    > = (| lhs -- ? | self bignum> ) .
+    <= = (| lhs -- ? | self bignum<= ) .
+    >= = (| lhs -- ? | self bignum>= ) .
+|) std traits bignum addTraitSlots
 
 (| 
     clonable* = std traits clonable .

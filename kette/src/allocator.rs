@@ -1,9 +1,9 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, FeedbackEntry, Float, Handle,
-    HeapObject, HeapValue, Map, Message, Parser, Quotation, SlotDescriptor,
-    SlotHelper, SlotObject, SlotTags, Strings, Tagged, Value,
+    ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
+    Handle, HeapObject, HeapValue, Map, Message, Parser, Quotation,
+    SlotDescriptor, SlotHelper, SlotObject, SlotTags, Strings, Tagged, Value,
 };
 
 /// Heap allocation interface for creating VM objects.
@@ -64,6 +64,72 @@ pub trait Allocator: Sized {
         // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj = unsafe { self.allocate_handle::<Message>(layout) };
         obj.init(interned);
+        obj
+    }
+
+    fn allocate_bignum_from_u64(&mut self, value: u64) -> Handle<BigNum> {
+        if value == 0 {
+            let layout = BigNum::required_layout(0);
+            let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+            obj.init(0, &[]);
+            return obj;
+        }
+
+        let layout = BigNum::required_layout(1);
+        let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+        obj.init(1, &[value]);
+        obj
+    }
+
+    fn allocate_bignum_from_i64(&mut self, value: i64) -> Handle<BigNum> {
+        if value == 0 {
+            let layout = BigNum::required_layout(0);
+            let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+            obj.init(0, &[]);
+            return obj;
+        }
+
+        let sign = if value < 0 { -1 } else { 1 };
+        let magnitude = value.unsigned_abs();
+        let layout = BigNum::required_layout(1);
+        let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+        obj.init(sign, &[magnitude]);
+        obj
+    }
+
+    fn allocate_bignum_from_u128(&mut self, value: u128) -> Handle<BigNum> {
+        if value == 0 {
+            let layout = BigNum::required_layout(0);
+            let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+            obj.init(0, &[]);
+            return obj;
+        }
+
+        if value <= u64::MAX as u128 {
+            return self.allocate_bignum_from_u64(value as u64);
+        }
+
+        let low = value as u64;
+        let high = (value >> 64) as u64;
+        let limbs = [low, high];
+        let layout = BigNum::required_layout(2);
+        let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+        obj.init(1, &limbs);
+        obj
+    }
+
+    fn allocate_bignum_from_i128(&mut self, value: i128) -> Handle<BigNum> {
+        if value == 0 {
+            let layout = BigNum::required_layout(0);
+            let mut obj = unsafe { self.allocate_handle::<BigNum>(layout) };
+            obj.init(0, &[]);
+            return obj;
+        }
+
+        let sign = if value < 0 { -1 } else { 1 };
+        let magnitude = value.unsigned_abs();
+        let mut obj = self.allocate_bignum_from_u128(magnitude);
+        obj.sign = sign;
         obj
     }
 

@@ -28,6 +28,7 @@ pub use objects::activation::{
 };
 pub use objects::alien::Alien;
 pub use objects::arrays::Array;
+pub use objects::bignum::BigNum;
 pub use objects::bytearrays::ByteArray;
 pub use objects::feedback::FeedbackEntry;
 pub use objects::floats::Float;

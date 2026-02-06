@@ -293,6 +293,26 @@ pub fn float_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
+pub fn float_to_bignum(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let value = unsafe { ctx.receiver.cast::<Float>() };
+    let float = value.value;
+    if !float.is_finite() {
+        return ExecutionResult::Panic(
+            "float>bignum: value must be finite".to_string(),
+        );
+    }
+    let truncated = float.trunc();
+    if truncated < (i128::MIN as f64) || truncated > (i128::MAX as f64) {
+        return ExecutionResult::Panic(
+            "float>bignum: value out of range".to_string(),
+        );
+    }
+    let value = truncated as i128;
+    let big = ctx.heap.allocate_bignum_from_i128(value);
+    ctx.outputs[0] = big.into();
+    ExecutionResult::Normal
+}
+
 pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let p = ctx.vm.specials().float_traits;
     ctx.outputs[0] = p.into();

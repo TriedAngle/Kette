@@ -6,6 +6,7 @@ use std::{
 pub mod activation;
 pub mod alien;
 pub mod arrays;
+pub mod bignum;
 pub mod bytearrays;
 pub mod feedback;
 pub mod floats;
@@ -16,7 +17,7 @@ pub mod slots;
 pub mod threads;
 
 use crate::{
-    ActivationObject, Array, ByteArray, Code, FeedbackEntry, Float,
+    ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
     LookupResult, Map, Message, Quotation, Selector, SlotObject, ThreadObject,
     Value, ValueTag, Visitable, VisitedLink, Visitor,
 };
@@ -371,7 +372,7 @@ impl Object for HeapValue {
             ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().lookup(selector, link),
             ObjectType::Float         => self.downcast_ref_match::<Float>().lookup(selector, link),
             ObjectType::Message       => self.downcast_ref_match::<Message>().lookup(selector, link),
-            ObjectType::BigNum        => unimplemented!(),
+            ObjectType::BigNum        => self.downcast_ref_match::<BigNum>().lookup(selector, link),
             ObjectType::Thread        => unimplemented!(),
             ObjectType::FeedbackEntry => unreachable!("feedback entry cannot be looked up"),
             ObjectType::Code          => unreachable!("code cannot be looked up yet (or should it be maybe?)"),
@@ -399,7 +400,7 @@ impl HeapObject for HeapValue {
                     ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().heap_size(),
                     ObjectType::Message       => self.downcast_ref_match::<Message>().heap_size(),
                     ObjectType::Float         => self.downcast_ref_match::<Float>().heap_size(),
-                    ObjectType::BigNum        => unimplemented!(),
+                    ObjectType::BigNum        => self.downcast_ref_match::<BigNum>().heap_size(),
                     ObjectType::Thread        => unimplemented!(),
                     ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().heap_size(),
                     ObjectType::Code          => self.downcast_ref_match::<Code>().heap_size(),

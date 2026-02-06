@@ -216,7 +216,9 @@ const FIXNUM_MAX: i64 = (1_i64 << 62) - 1;
 
 fn output_i64(ctx: &mut PrimitiveContext, value: i64) -> ExecutionResult {
     if value < FIXNUM_MIN || value > FIXNUM_MAX {
-        unimplemented!("integer too large for fixnum");
+        let big = ctx.heap.allocate_bignum_from_i64(value);
+        ctx.outputs[0] = big.into();
+        return ExecutionResult::Normal;
     }
     ctx.outputs[0] = unsafe { Value::from_fixnum(value).as_handle_unchecked() };
     ExecutionResult::Normal
@@ -224,7 +226,9 @@ fn output_i64(ctx: &mut PrimitiveContext, value: i64) -> ExecutionResult {
 
 fn output_u64(ctx: &mut PrimitiveContext, value: u64) -> ExecutionResult {
     if value > FIXNUM_MAX as u64 {
-        unimplemented!("integer too large for fixnum");
+        let big = ctx.heap.allocate_bignum_from_u64(value);
+        ctx.outputs[0] = big.into();
+        return ExecutionResult::Normal;
     }
     ctx.outputs[0] = unsafe { Value::from_u64(value).as_handle_unchecked() };
     ExecutionResult::Normal

@@ -345,6 +345,10 @@ impl Interpreter {
                 let traits = self.vm.specials().float_traits;
                 Some(unsafe { traits.cast::<SlotObject>() }.map)
             }
+            ObjectType::BigNum => {
+                let traits = self.vm.specials().bignum_traits;
+                Some(unsafe { traits.cast::<SlotObject>() }.map)
+            }
             ObjectType::Quotation => {
                 let traits = self.vm.specials().quotation_traits;
                 Some(unsafe { traits.cast::<SlotObject>() }.map)
