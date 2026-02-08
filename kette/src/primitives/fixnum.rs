@@ -83,9 +83,9 @@ pub fn fixnum_mul(ctx: &mut PrimitiveContext) -> ExecutionResult {
 }
 
 pub fn fixnum_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    let arg = ctx.inputs[0];
     let b = unsafe { ctx.receiver.as_fixnum::<i64>() };
-    let a = unsafe { arg.as_fixnum::<i64>() };
+    let a = unsafe { ctx.inputs[0].as_fixnum::<i64>() };
+
     if b == 0 {
         return ExecutionResult::NumberError(NumberError::DivisionByZero);
     }

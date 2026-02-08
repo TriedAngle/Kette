@@ -178,6 +178,7 @@ impl VM {
             SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>string", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>float", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>ratio", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "fixnumParent", SlotTags::empty()),
         ]);
 
@@ -344,6 +345,7 @@ impl VM {
             SlotHelper::primitive_message("bignum<=", SlotTags::empty()),
             SlotHelper::primitive_message("bignum>=", SlotTags::empty()),
             SlotHelper::primitive_message("bignum>float", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum>ratio", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "bignumParent", SlotTags::empty()),
         ]);
 
@@ -354,6 +356,7 @@ impl VM {
             SlotHelper::primitive_message("ratioNew", SlotTags::empty()),
             SlotHelper::primitive_message("ratioNumerator", SlotTags::empty()),
             SlotHelper::primitive_message("ratioDenominator", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio>fixnum", SlotTags::empty()),
             SlotHelper::primitive_message("ratio+", SlotTags::empty()),
             SlotHelper::primitive_message("ratio-", SlotTags::empty()),
             SlotHelper::primitive_message("ratio*", SlotTags::empty()),

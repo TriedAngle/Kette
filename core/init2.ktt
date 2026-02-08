@@ -182,113 +182,113 @@ $[
     <= = (| rhs -- | self mustImplement ) .
     >= = (| rhs -- | self mustImplement ) .
 
-    addFixnum = (| n -- | self mustImplement ) .
-    addBignum = (| n -- | self mustImplement ) .
-    addFloat = (| n -- | self mustImplement ) .
-    addRatio = (| n -- | self mustImplement ) .
-    subFromFixnum = (| n -- | self mustImplement ) .
-    subFromBignum = (| n -- | self mustImplement ) .
-    subFromFloat = (| n -- | self mustImplement ) .
-    subFromRatio = (| n -- | self mustImplement ) .
-    mulFixnum = (| n -- | self mustImplement ) .
-    mulBignum = (| n -- | self mustImplement ) .
-    mulFloat = (| n -- | self mustImplement ) .
-    mulRatio = (| n -- | self mustImplement ) .
-    divFromFixnum = (| n -- | self mustImplement ) .
-    divFromBignum = (| n -- | self mustImplement ) .
-    divFromFloat = (| n -- | self mustImplement ) .
-    divFromRatio = (| n -- | self mustImplement ) .
-    eqFixnum = (| n -- | self mustImplement ) .
-    eqBignum = (| n -- | self mustImplement ) .
-    eqFloat = (| n -- | self mustImplement ) .
-    eqRatio = (| n -- | self mustImplement ) .
-    ltFixnum = (| n -- | self mustImplement ) .
-    ltBignum = (| n -- | self mustImplement ) .
-    ltFloat = (| n -- | self mustImplement ) .
-    ltRatio = (| n -- | self mustImplement ) .
-    gtFixnum = (| n -- | self mustImplement ) .
-    gtBignum = (| n -- | self mustImplement ) .
-    gtFloat = (| n -- | self mustImplement ) .
-    gtRatio = (| n -- | self mustImplement ) .
-    leFixnum = (| n -- | self mustImplement ) .
-    leBignum = (| n -- | self mustImplement ) .
-    leFloat = (| n -- | self mustImplement ) .
-    leRatio = (| n -- | self mustImplement ) .
-    geFixnum = (| n -- | self mustImplement ) .
-    geBignum = (| n -- | self mustImplement ) .
-    geFloat = (| n -- | self mustImplement ) .
-    geRatio = (| n -- | self mustImplement ) .
+    addFixnum = (| rhs -- | self mustImplement ) .
+    addBignum = (| rhs -- | self mustImplement ) .
+    addFloat = (| rhs -- | self mustImplement ) .
+    addRatio = (| rhs -- | self mustImplement ) .
+    subFromFixnum = (| rhs -- | self mustImplement ) .
+    subFromBignum = (| rhs -- | self mustImplement ) .
+    subFromFloat = (| rhs -- | self mustImplement ) .
+    subFromRatio = (| rhs -- | self mustImplement ) .
+    mulFixnum = (| rhs -- | self mustImplement ) .
+    mulBignum = (| rhs -- | self mustImplement ) .
+    mulFloat = (| rhs -- | self mustImplement ) .
+    mulRatio = (| rhs -- | self mustImplement ) .
+    divFromFixnum = (| rhs -- | self mustImplement ) .
+    divFromBignum = (| rhs -- | self mustImplement ) .
+    divFromFloat = (| rhs -- | self mustImplement ) .
+    divFromRatio = (| rhs -- | self mustImplement ) .
+    eqFixnum = (| rhs -- | self mustImplement ) .
+    eqBignum = (| rhs -- | self mustImplement ) .
+    eqFloat = (| rhs -- | self mustImplement ) .
+    eqRatio = (| rhs -- | self mustImplement ) .
+    ltFixnum = (| rhs -- | self mustImplement ) .
+    ltBignum = (| rhs -- | self mustImplement ) .
+    ltFloat = (| rhs -- | self mustImplement ) .
+    ltRatio = (| rhs -- | self mustImplement ) .
+    gtFixnum = (| rhs -- | self mustImplement ) .
+    gtBignum = (| rhs -- | self mustImplement ) .
+    gtFloat = (| rhs -- | self mustImplement ) .
+    gtRatio = (| rhs -- | self mustImplement ) .
+    leFixnum = (| rhs -- | self mustImplement ) .
+    leBignum = (| rhs -- | self mustImplement ) .
+    leFloat = (| rhs -- | self mustImplement ) .
+    leRatio = (| rhs -- | self mustImplement ) .
+    geFixnum = (| rhs -- | self mustImplement ) .
+    geBignum = (| rhs -- | self mustImplement ) .
+    geFloat = (| rhs -- | self mustImplement ) .
+    geRatio = (| rhs -- | self mustImplement ) .
 |) self std traits number addTraitSlots
 
 (|
     clonable* = self std traits clonable .
     number* = self std traits number .
-    + = (| rhs -- new | self addFixnum ) .
-    - = (| rhs -- new | self subFromFixnum ) .
-    * = (| rhs -- new | self mulFixnum ) .
-    / = (| rhs -- new | self divFromFixnum ) .
+    + = (| rhs -- new | self swap addFixnum ) .
+    - = (| rhs -- new | self swap subFromFixnum ) .
+    * = (| rhs -- new | self swap mulFixnum ) .
+    / = (| rhs -- new | self swap divFromFixnum ) .
     % = (| rhs -- new |
         dup fixnum? [ self fixnum% ] [ drop self universe globals error MustImplement throw ] if ) .
     neg = (| -- -self | self fixnumNeg ) .
     bit& = (| lhs -- ? | self fixnumBitAnd ) .
     bit| = (| lhs -- ? | self fixnumBitOr ) .
-    = = (| rhs -- ? | self eqFixnum ) .
-    != = (| rhs -- ? | self eqFixnum not ) .
-    < = (| rhs -- ? | self ltFixnum ) .
-    > = (| rhs -- ? | self gtFixnum ) .
-    <= = (| rhs -- ? | self leFixnum ) .
-    >= = (| rhs -- ? | self geFixnum ) .
+    = = (| rhs -- ? | self swap eqFixnum ) .
+    != = (| rhs -- ? | self swap eqFixnum not ) .
+    < = (| rhs -- ? | self swap ltFixnum ) .
+    > = (| rhs -- ? | self swap gtFixnum ) .
+    <= = (| rhs -- ? | self swap leFixnum ) .
+    >= = (| rhs -- ? | self swap geFixnum ) .
     positive? = (| -- ? | self 0 > ) .
     >bignum = (| -- new | self fixnum>bignum ) .
     >float = (| -- new | self fixnum>float ) .
-    >ratio = (| -- new | self 1 ratioNew ) .
+    >ratio = (| -- new | self fixnum>ratio ) .
     >string = (| -- str | self fixnum>string ) .
 
-    addFixnum = (| lhs -- new | self fixnum+ ) .
-    addBignum = (| lhs -- new | self fixnum>bignum bignum+ ) .
-    addFloat = (| lhs -- new | self fixnum>float float+ ) .
-    addRatio = (| lhs -- new | self >ratio ratio+ ) .
-    subFromFixnum = (| lhs -- new | self fixnum- ) .
-    subFromBignum = (| lhs -- new | self fixnum>bignum bignum- ) .
-    subFromFloat = (| lhs -- new | self fixnum>float float- ) .
-    subFromRatio = (| lhs -- new | self >ratio ratio- ) .
-    mulFixnum = (| lhs -- new | self fixnum* ) .
-    mulBignum = (| lhs -- new | self fixnum>bignum bignum* ) .
-    mulFloat = (| lhs -- new | self fixnum>float float* ) .
-    mulRatio = (| lhs -- new | self >ratio ratio* ) .
-    divFromFixnum = (| lhs -- new | self fixnum/ ) .
-    divFromBignum = (| lhs -- new | self fixnum>bignum bignum/ ) .
-    divFromFloat = (| lhs -- new | self fixnum>float float/ ) .
-    divFromRatio = (| lhs -- new | self >ratio ratio/ ) .
-    eqFixnum = (| lhs -- ? | self fixnum= ) .
-    eqBignum = (| lhs -- ? | self fixnum>bignum bignum= ) .
-    eqFloat = (| lhs -- ? | self fixnum>float float= ) .
-    eqRatio = (| lhs -- ? | self >ratio ratio= ) .
-    ltFixnum = (| lhs -- ? | self fixnum< ) .
-    ltBignum = (| lhs -- ? | self fixnum>bignum bignum< ) .
-    ltFloat = (| lhs -- ? | self fixnum>float float< ) .
-    ltRatio = (| lhs -- ? | self >ratio ratio< ) .
-    gtFixnum = (| lhs -- ? | self fixnum> ) .
-    gtBignum = (| lhs -- ? | self fixnum>bignum bignum> ) .
-    gtFloat = (| lhs -- ? | self fixnum>float float> ) .
-    gtRatio = (| lhs -- ? | self >ratio ratio> ) .
-    leFixnum = (| lhs -- ? | self fixnum<= ) .
-    leBignum = (| lhs -- ? | self fixnum>bignum bignum<= ) .
-    leFloat = (| lhs -- ? | self fixnum>float float<= ) .
-    leRatio = (| lhs -- ? | self >ratio ratio<= ) .
-    geFixnum = (| lhs -- ? | self fixnum>= ) .
-    geBignum = (| lhs -- ? | self fixnum>bignum bignum>= ) .
-    geFloat = (| lhs -- ? | self fixnum>float float>= ) .
-    geRatio = (| lhs -- ? | self >ratio ratio>= ) .
+    addFixnum = (| rhs -- new | self swap fixnum+ ) .
+    addBignum = (| rhs -- new | self fixnum>bignum swap bignum+ ) .
+    addFloat = (| rhs -- new | self fixnum>float swap float+ ) .
+    addRatio = (| rhs -- new | self >ratio swap ratio+ ) .
+    subFromFixnum = (| rhs -- new | self swap fixnum- ) .
+    subFromBignum = (| rhs -- new | self fixnum>bignum swap bignum- ) .
+    subFromFloat = (| rhs -- new | self fixnum>float swap float- ) .
+    subFromRatio = (| rhs -- new | self >ratio swap ratio- ) .
+    mulFixnum = (| rhs -- new | self swap fixnum* ) .
+    mulBignum = (| rhs -- new | self fixnum>bignum swap bignum* ) .
+    mulFloat = (| rhs -- new | self fixnum>float swap float* ) .
+    mulRatio = (| rhs -- new | self >ratio swap ratio* ) .
+    divFromFixnum = (| rhs -- new | self swap fixnum/ ) .
+    divFromBignum = (| rhs -- new | self fixnum>bignum swap bignum/ ) .
+    divFromFloat = (| rhs -- new | self fixnum>float swap float/ ) .
+    divFromRatio = (| rhs -- new | self >ratio swap ratio/ ) .
+    eqFixnum = (| rhs -- ? | self swap fixnum= ) .
+    eqBignum = (| rhs -- ? | self fixnum>bignum swap bignum= ) .
+    eqFloat = (| rhs -- ? | self fixnum>float swap float= ) .
+    eqRatio = (| rhs -- ? | self >ratio swap ratio= ) .
+    ltFixnum = (| rhs -- ? | self swap fixnum< ) .
+    ltBignum = (| rhs -- ? | self fixnum>bignum swap bignum< ) .
+    ltFloat = (| rhs -- ? | self fixnum>float swap float< ) .
+    ltRatio = (| rhs -- ? | self >ratio swap ratio< ) .
+    gtFixnum = (| rhs -- ? | self swap fixnum> ) .
+    gtBignum = (| rhs -- ? | self fixnum>bignum swap bignum> ) .
+    gtFloat = (| rhs -- ? | self fixnum>float swap float> ) .
+    gtRatio = (| rhs -- ? | self >ratio swap ratio> ) .
+    leFixnum = (| rhs -- ? | self swap fixnum<= ) .
+    leBignum = (| rhs -- ? | self fixnum>bignum swap bignum<= ) .
+    leFloat = (| rhs -- ? | self fixnum>float swap float<= ) .
+    leRatio = (| rhs -- ? | self >ratio swap ratio<= ) .
+    geFixnum = (| rhs -- ? | self swap fixnum>= ) .
+    geBignum = (| rhs -- ? | self fixnum>bignum swap bignum>= ) .
+    geFloat = (| rhs -- ? | self fixnum>float swap float>= ) .
+    geRatio = (| rhs -- ? | self >ratio swap ratio>= ) .
 |) self std traits fixnum addTraitSlots
 
 (|
     clonable* = self std traits clonable .
     number* = self std traits number .
-    + = (| rhs -- new | self addFloat ) .
-    - = (| rhs -- new | self subFromFloat ) .
-    * = (| rhs -- new | self mulFloat ) .
-    / = (| rhs -- new | self divFromFloat ) .
+    + = (| rhs -- new | self swap addFloat ) .
+    - = (| rhs -- new | self swap subFromFloat ) .
+    * = (| rhs -- new | self swap mulFloat ) .
+    / = (| rhs -- new | self swap divFromFloat ) .
     % = (| rhs -- new |
         dup float? [ self float% ] [ drop self universe globals error MustImplement throw ] if ) .
     ^ = (| rhs -- new | dup float? [ self float^ ] [ drop self universe globals error MustImplement throw ] if ) .
@@ -302,165 +302,166 @@ $[
     asin = (| -- res | self floatAsin ) .
     acos = (| -- res | self floatAcos ) .
     atan = (| -- res | self floatAtan ) .
-    = = (| rhs -- ? | self eqFloat ) .
-    != = (| rhs -- ? | self eqFloat not ) .
-    < = (| rhs -- ? | self ltFloat ) .
-    > = (| rhs -- ? | self gtFloat ) .
-    <= = (| rhs -- ? | self leFloat ) .
-    >= = (| rhs -- ? | self geFloat ) .
+    = = (| rhs -- ? | self swap eqFloat ) .
+    != = (| rhs -- ? | self swap eqFloat not ) .
+    < = (| rhs -- ? | self swap ltFloat ) .
+    > = (| rhs -- ? | self swap gtFloat ) .
+    <= = (| rhs -- ? | self swap leFloat ) .
+    >= = (| rhs -- ? | self swap geFloat ) .
     positive? = (| -- ? | self 0.0 > ) .
     >bignum = (| -- new | self float>bignum ) .
     >string = (| -- str | self float>string ) .
 
-    addFixnum = (| lhs -- new | fixnum>float self float+ ) .
-    addBignum = (| lhs -- new | bignum>float self float+ ) .
-    addFloat = (| lhs -- new | self float+ ) .
-    addRatio = (| lhs -- new | ratio>float self float+ ) .
-    subFromFixnum = (| lhs -- new | fixnum>float self float- ) .
-    subFromBignum = (| lhs -- new | bignum>float self float- ) .
-    subFromFloat = (| lhs -- new | self float- ) .
-    subFromRatio = (| lhs -- new | ratio>float self float- ) .
-    mulFixnum = (| lhs -- new | fixnum>float self float* ) .
-    mulBignum = (| lhs -- new | bignum>float self float* ) .
-    mulFloat = (| lhs -- new | self float* ) .
-    mulRatio = (| lhs -- new | ratio>float self float* ) .
-    divFromFixnum = (| lhs -- new | fixnum>float self float/ ) .
-    divFromBignum = (| lhs -- new | bignum>float self float/ ) .
-    divFromFloat = (| lhs -- new | self float/ ) .
-    divFromRatio = (| lhs -- new | ratio>float self float/ ) .
-    eqFixnum = (| lhs -- ? | fixnum>float self float= ) .
-    eqBignum = (| lhs -- ? | bignum>float self float= ) .
-    eqFloat = (| lhs -- ? | self float= ) .
-    eqRatio = (| lhs -- ? | ratio>float self float= ) .
-    ltFixnum = (| lhs -- ? | fixnum>float self float< ) .
-    ltBignum = (| lhs -- ? | bignum>float self float< ) .
-    ltFloat = (| lhs -- ? | self float< ) .
-    ltRatio = (| lhs -- ? | ratio>float self float< ) .
-    gtFixnum = (| lhs -- ? | fixnum>float self float> ) .
-    gtBignum = (| lhs -- ? | bignum>float self float> ) .
-    gtFloat = (| lhs -- ? | self float> ) .
-    gtRatio = (| lhs -- ? | ratio>float self float> ) .
-    leFixnum = (| lhs -- ? | fixnum>float self float<= ) .
-    leBignum = (| lhs -- ? | bignum>float self float<= ) .
-    leFloat = (| lhs -- ? | self float<= ) .
-    leRatio = (| lhs -- ? | ratio>float self float<= ) .
-    geFixnum = (| lhs -- ? | fixnum>float self float>= ) .
-    geBignum = (| lhs -- ? | bignum>float self float>= ) .
-    geFloat = (| lhs -- ? | self float>= ) .
-    geRatio = (| lhs -- ? | ratio>float self float>= ) .
+    addFixnum = (| rhs -- new | fixnum>float self swap float+ ) .
+    addBignum = (| rhs -- new | bignum>float self swap float+ ) .
+    addFloat = (| rhs -- new | self swap float+ ) .
+    addRatio = (| rhs -- new | ratio>float self swap float+ ) .
+    subFromFixnum = (| rhs -- new | fixnum>float self swap float- ) .
+    subFromBignum = (| rhs -- new | bignum>float self swap float- ) .
+    subFromFloat = (| rhs -- new | self swap float- ) .
+    subFromRatio = (| rhs -- new | ratio>float self swap float- ) .
+    mulFixnum = (| rhs -- new | fixnum>float self swap float* ) .
+    mulBignum = (| rhs -- new | bignum>float self swap float* ) .
+    mulFloat = (| rhs -- new | self swap float* ) .
+    mulRatio = (| rhs -- new | ratio>float self swap float* ) .
+    divFromFixnum = (| rhs -- new | fixnum>float self swap float/ ) .
+    divFromBignum = (| rhs -- new | bignum>float self swap float/ ) .
+    divFromFloat = (| rhs -- new | self swap float/ ) .
+    divFromRatio = (| rhs -- new | ratio>float self swap float/ ) .
+    eqFixnum = (| rhs -- ? | fixnum>float self swap float= ) .
+    eqBignum = (| rhs -- ? | bignum>float self swap float= ) .
+    eqFloat = (| rhs -- ? | self swap float= ) .
+    eqRatio = (| rhs -- ? | ratio>float self swap float= ) .
+    ltFixnum = (| rhs -- ? | fixnum>float self swap float< ) .
+    ltBignum = (| rhs -- ? | bignum>float self swap float< ) .
+    ltFloat = (| rhs -- ? | self swap float< ) .
+    ltRatio = (| rhs -- ? | ratio>float self swap float< ) .
+    gtFixnum = (| rhs -- ? | fixnum>float self swap float> ) .
+    gtBignum = (| rhs -- ? | bignum>float self swap float> ) .
+    gtFloat = (| rhs -- ? | self swap float> ) .
+    gtRatio = (| rhs -- ? | ratio>float self swap float> ) .
+    leFixnum = (| rhs -- ? | fixnum>float self swap float<= ) .
+    leBignum = (| rhs -- ? | bignum>float self swap float<= ) .
+    leFloat = (| rhs -- ? | self swap float<= ) .
+    leRatio = (| rhs -- ? | ratio>float self swap float<= ) .
+    geFixnum = (| rhs -- ? | fixnum>float self swap float>= ) .
+    geBignum = (| rhs -- ? | bignum>float self swap float>= ) .
+    geFloat = (| rhs -- ? | self swap float>= ) .
+    geRatio = (| rhs -- ? | ratio>float self swap float>= ) .
 |) self std traits float addTraitSlots
 
 (|
     clonable* = self std traits clonable .
     number* = self std traits number .
-    + = (| rhs -- new | self addBignum ) .
-    - = (| rhs -- new | self subFromBignum ) .
-    * = (| rhs -- new | self mulBignum ) .
-    / = (| rhs -- new | self divFromBignum ) .
+    + = (| rhs -- new | self swap addBignum ) .
+    - = (| rhs -- new | self swap subFromBignum ) .
+    * = (| rhs -- new | self swap mulBignum ) .
+    / = (| rhs -- new | self swap divFromBignum ) .
     % = (| rhs -- new | self swap bignum% ) .
     neg = (| -- -self | self bignumNeg ) .
-    = = (| rhs -- ? | self eqBignum ) .
-    != = (| rhs -- ? | self eqBignum not ) .
-    < = (| rhs -- ? | self ltBignum ) .
-    > = (| rhs -- ? | self gtBignum ) .
-    <= = (| rhs -- ? | self leBignum ) .
-    >= = (| rhs -- ? | self geBignum ) .
+    = = (| rhs -- ? | self swap eqBignum ) .
+    != = (| rhs -- ? | self swap eqBignum not ) .
+    < = (| rhs -- ? | self swap ltBignum ) .
+    > = (| rhs -- ? | self swap gtBignum ) .
+    <= = (| rhs -- ? | self swap leBignum ) .
+    >= = (| rhs -- ? | self swap geBignum ) .
     >float = (| -- new | self bignum>float ) .
-    >ratio = (| -- new | self 1 ratioNew ) .
+    >ratio = (| -- new | self bignum>ratio ) .
 
-    addFixnum = (| lhs -- new | self bignum+ ) .
-    addBignum = (| lhs -- new | self bignum+ ) .
-    addFloat = (| lhs -- new | self bignum>float float+ ) .
-    addRatio = (| lhs -- new | self >ratio ratio+ ) .
-    subFromFixnum = (| lhs -- new | self bignum- ) .
-    subFromBignum = (| lhs -- new | self bignum- ) .
-    subFromFloat = (| lhs -- new | self bignum>float float- ) .
-    subFromRatio = (| lhs -- new | self >ratio ratio- ) .
-    mulFixnum = (| lhs -- new | self bignum* ) .
-    mulBignum = (| lhs -- new | self bignum* ) .
-    mulFloat = (| lhs -- new | self bignum>float float* ) .
-    mulRatio = (| lhs -- new | self >ratio ratio* ) .
-    divFromFixnum = (| lhs -- new | fixnum>bignum self bignum/ ) .
-    divFromBignum = (| lhs -- new | self bignum/ ) .
-    divFromFloat = (| lhs -- new | self bignum>float float/ ) .
-    divFromRatio = (| lhs -- new | self >ratio ratio/ ) .
-    eqFixnum = (| lhs -- ? | self bignum= ) .
-    eqBignum = (| lhs -- ? | self bignum= ) .
-    eqFloat = (| lhs -- ? | self bignum>float float= ) .
-    eqRatio = (| lhs -- ? | self >ratio ratio= ) .
-    ltFixnum = (| lhs -- ? | self bignum< ) .
-    ltBignum = (| lhs -- ? | self bignum< ) .
-    ltFloat = (| lhs -- ? | self bignum>float float< ) .
-    ltRatio = (| lhs -- ? | self >ratio ratio< ) .
-    gtFixnum = (| lhs -- ? | self bignum> ) .
-    gtBignum = (| lhs -- ? | self bignum> ) .
-    gtFloat = (| lhs -- ? | self bignum>float float> ) .
-    gtRatio = (| lhs -- ? | self >ratio ratio> ) .
-    leFixnum = (| lhs -- ? | self bignum<= ) .
-    leBignum = (| lhs -- ? | self bignum<= ) .
-    leFloat = (| lhs -- ? | self bignum>float float<= ) .
-    leRatio = (| lhs -- ? | self >ratio ratio<= ) .
-    geFixnum = (| lhs -- ? | self bignum>= ) .
-    geBignum = (| lhs -- ? | self bignum>= ) .
-    geFloat = (| lhs -- ? | self bignum>float float>= ) .
-    geRatio = (| lhs -- ? | self >ratio ratio>= ) .
+    addFixnum = (| rhs -- new | fixnum>bignum self swap bignum+ ) .
+    addBignum = (| rhs -- new | self swap bignum+ ) .
+    addFloat = (| rhs -- new | self bignum>float swap float+ ) .
+    addRatio = (| rhs -- new | self >ratio swap ratio+ ) .
+    subFromFixnum = (| rhs -- new | fixnum>bignum self swap bignum- ) .
+    subFromBignum = (| rhs -- new | self swap bignum- ) .
+    subFromFloat = (| rhs -- new | self bignum>float swap float- ) .
+    subFromRatio = (| rhs -- new | self >ratio swap ratio- ) .
+    mulFixnum = (| rhs -- new | fixnum>bignum self swap bignum* ) .
+    mulBignum = (| rhs -- new | self swap bignum* ) .
+    mulFloat = (| rhs -- new | self bignum>float swap float* ) .
+    mulRatio = (| rhs -- new | self >ratio swap ratio* ) .
+    divFromFixnum = (| rhs -- new | fixnum>bignum self swap bignum/ ) .
+    divFromBignum = (| rhs -- new | self swap bignum/ ) .
+    divFromFloat = (| rhs -- new | self bignum>float swap float/ ) .
+    divFromRatio = (| rhs -- new | self >ratio swap ratio/ ) .
+    eqFixnum = (| rhs -- ? | fixnum>bignum self swap bignum= ) .
+    eqBignum = (| rhs -- ? | self swap bignum= ) .
+    eqFloat = (| rhs -- ? | self bignum>float swap float= ) .
+    eqRatio = (| rhs -- ? | self >ratio swap ratio= ) .
+    ltFixnum = (| rhs -- ? | fixnum>bignum self swap bignum< ) .
+    ltBignum = (| rhs -- ? | self swap bignum< ) .
+    ltFloat = (| rhs -- ? | self bignum>float swap float< ) .
+    ltRatio = (| rhs -- ? | self >ratio swap ratio< ) .
+    gtFixnum = (| rhs -- ? | fixnum>bignum self swap bignum> ) .
+    gtBignum = (| rhs -- ? | self swap bignum> ) .
+    gtFloat = (| rhs -- ? | self bignum>float swap float> ) .
+    gtRatio = (| rhs -- ? | self >ratio swap ratio> ) .
+    leFixnum = (| rhs -- ? | fixnum>bignum self swap bignum<= ) .
+    leBignum = (| rhs -- ? | self swap bignum<= ) .
+    leFloat = (| rhs -- ? | self bignum>float swap float<= ) .
+    leRatio = (| rhs -- ? | self >ratio swap ratio<= ) .
+    geFixnum = (| rhs -- ? | fixnum>bignum self swap bignum>= ) .
+    geBignum = (| rhs -- ? | self swap bignum>= ) .
+    geFloat = (| rhs -- ? | self bignum>float swap float>= ) .
+    geRatio = (| rhs -- ? | self >ratio swap ratio>= ) .
 |) self std traits bignum addTraitSlots
 
 (|
     clonable* = self std traits clonable .
     number* = self std traits number .
-    + = (| rhs -- new | self addRatio ) .
-    - = (| rhs -- new | self subFromRatio ) .
-    * = (| rhs -- new | self mulRatio ) .
-    / = (| rhs -- new | self divFromRatio ) .
+    + = (| rhs -- new | self swap addRatio ) .
+    - = (| rhs -- new | self swap subFromRatio ) .
+    * = (| rhs -- new | self swap mulRatio ) .
+    / = (| rhs -- new | self swap divFromRatio ) .
     neg = (| -- -self | self ratioNeg ) .
-    = = (| rhs -- ? | self eqRatio ) .
-    != = (| rhs -- ? | self eqRatio not ) .
-    < = (| rhs -- ? | self ltRatio ) .
-    > = (| rhs -- ? | self gtRatio ) .
-    <= = (| rhs -- ? | self leRatio ) .
-    >= = (| rhs -- ? | self geRatio ) .
+    = = (| rhs -- ? | self swap eqRatio ) .
+    != = (| rhs -- ? | self swap eqRatio not ) .
+    < = (| rhs -- ? | self swap ltRatio ) .
+    > = (| rhs -- ? | self swap gtRatio ) .
+    <= = (| rhs -- ? | self swap leRatio ) .
+    >= = (| rhs -- ? | self swap geRatio ) .
     numerator = (| -- n | self ratioNumerator ) .
     denominator = (| -- n | self ratioDenominator ) .
     >float = (| -- new | self ratio>float ) .
+    >fixnum = (| -- new | self ratio>fixnum ) .
     >string = (| -- str | self ratio>string ) .
 
-    addFixnum = (| lhs -- new | lhs 1 ratioNew self ratio+ ) .
-    addBignum = (| lhs -- new | lhs 1 ratioNew self ratio+ ) .
-    addFloat = (| lhs -- new | self ratio>float float+ ) .
-    addRatio = (| lhs -- new | self ratio+ ) .
-    subFromFixnum = (| lhs -- new | lhs 1 ratioNew self ratio- ) .
-    subFromBignum = (| lhs -- new | lhs 1 ratioNew self ratio- ) .
-    subFromFloat = (| lhs -- new | self ratio>float float- ) .
-    subFromRatio = (| lhs -- new | self ratio- ) .
-    mulFixnum = (| lhs -- new | lhs 1 ratioNew self ratio* ) .
-    mulBignum = (| lhs -- new | lhs 1 ratioNew self ratio* ) .
-    mulFloat = (| lhs -- new | self ratio>float float* ) .
-    mulRatio = (| lhs -- new | self ratio* ) .
-    divFromFixnum = (| lhs -- new | lhs 1 ratioNew self ratio/ ) .
-    divFromBignum = (| lhs -- new | lhs 1 ratioNew self ratio/ ) .
-    divFromFloat = (| lhs -- new | self ratio>float float/ ) .
-    divFromRatio = (| lhs -- new | self ratio/ ) .
-    eqFixnum = (| lhs -- ? | lhs 1 ratioNew self ratio= ) .
-    eqBignum = (| lhs -- ? | lhs 1 ratioNew self ratio= ) .
-    eqFloat = (| lhs -- ? | self ratio>float float= ) .
-    eqRatio = (| lhs -- ? | self ratio= ) .
-    ltFixnum = (| lhs -- ? | lhs 1 ratioNew self ratio< ) .
-    ltBignum = (| lhs -- ? | lhs 1 ratioNew self ratio< ) .
-    ltFloat = (| lhs -- ? | self ratio>float float< ) .
-    ltRatio = (| lhs -- ? | self ratio< ) .
-    gtFixnum = (| lhs -- ? | lhs 1 ratioNew self ratio> ) .
-    gtBignum = (| lhs -- ? | lhs 1 ratioNew self ratio> ) .
-    gtFloat = (| lhs -- ? | self ratio>float float> ) .
-    gtRatio = (| lhs -- ? | self ratio> ) .
-    leFixnum = (| lhs -- ? | lhs 1 ratioNew self ratio<= ) .
-    leBignum = (| lhs -- ? | lhs 1 ratioNew self ratio<= ) .
-    leFloat = (| lhs -- ? | self ratio>float float<= ) .
-    leRatio = (| lhs -- ? | self ratio<= ) .
-    geFixnum = (| lhs -- ? | lhs 1 ratioNew self ratio>= ) .
-    geBignum = (| lhs -- ? | lhs 1 ratioNew self ratio>= ) .
-    geFloat = (| lhs -- ? | self ratio>float float>= ) .
-    geRatio = (| lhs -- ? | self ratio>= ) .
+    addFixnum = (| rhs -- new | fixnum>ratio self swap ratio+ ) .
+    addBignum = (| rhs -- new | bignum>ratio self swap ratio+ ) .
+    addFloat = (| rhs -- new | self ratio>float swap float+ ) .
+    addRatio = (| rhs -- new | self swap ratio+ ) .
+    subFromFixnum = (| rhs -- new | fixnum>ratio self swap ratio- ) .
+    subFromBignum = (| rhs -- new | bignum>ratio self swap ratio- ) .
+    subFromFloat = (| rhs -- new | self ratio>float swap float- ) .
+    subFromRatio = (| rhs -- new | self swap ratio- ) .
+    mulFixnum = (| rhs -- new | fixnum>ratio self swap ratio* ) .
+    mulBignum = (| rhs -- new | bignum>ratio self swap ratio* ) .
+    mulFloat = (| rhs -- new | self ratio>float swap float* ) .
+    mulRatio = (| rhs -- new | self swap ratio* ) .
+    divFromFixnum = (| rhs -- new | fixnum>ratio self swap ratio/ ) .
+    divFromBignum = (| rhs -- new | bignum>ratio self swap ratio/ ) .
+    divFromFloat = (| rhs -- new | self ratio>float swap float/ ) .
+    divFromRatio = (| rhs -- new | self swap ratio/ ) .
+    eqFixnum = (| rhs -- ? | fixnum>ratio self swap ratio= ) .
+    eqBignum = (| rhs -- ? | bignum>ratio self swap ratio= ) .
+    eqFloat = (| rhs -- ? | self ratio>float swap float= ) .
+    eqRatio = (| rhs -- ? | self swap ratio= ) .
+    ltFixnum = (| rhs -- ? | fixnum>ratio self swap ratio< ) .
+    ltBignum = (| rhs -- ? | bignum>ratio self swap ratio< ) .
+    ltFloat = (| rhs -- ? | self ratio>float swap float< ) .
+    ltRatio = (| rhs -- ? | self swap ratio< ) .
+    gtFixnum = (| rhs -- ? | fixnum>ratio self swap ratio> ) .
+    gtBignum = (| rhs -- ? | bignum>ratio self swap ratio> ) .
+    gtFloat = (| rhs -- ? | self ratio>float swap float> ) .
+    gtRatio = (| rhs -- ? | self swap ratio> ) .
+    leFixnum = (| rhs -- ? | fixnum>ratio self swap ratio<= ) .
+    leBignum = (| rhs -- ? | bignum>ratio self swap ratio<= ) .
+    leFloat = (| rhs -- ? | self ratio>float swap float<= ) .
+    leRatio = (| rhs -- ? | self swap ratio<= ) .
+    geFixnum = (| rhs -- ? | fixnum>ratio self swap ratio>= ) .
+    geBignum = (| rhs -- ? | bignum>ratio self swap ratio>= ) .
+    geFloat = (| rhs -- ? | self ratio>float swap float>= ) .
+    geRatio = (| rhs -- ? | self swap ratio>= ) .
 |) self std traits ratio addTraitSlots
 
 (| 
@@ -491,6 +492,11 @@ $[
     curry = (| obj -- curried | self std curried clone! ) .
     compose = (| quot -- curried | self std composed clone! ) .
 |) self std traits callable addTraitSlots
+
+(| 
+    callable* = self std traits callable .
+    call = (| -- | self (call) ) .
+|) self std traits quotation addTraitSlots
 
 (| 
     curried = (| 
@@ -546,6 +552,3 @@ $[
     newWithSizeFill = (| size . fill -- new | self (arrayNew) ) .
     copyRemoveAll = (| -- new | self size f self newWithSizeFill ) .
 |) self std traits array addTraitSlots
-
-3 1 / >string println
-1 3 fixnum/ >string println

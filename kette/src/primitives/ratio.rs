@@ -82,26 +82,41 @@ pub(crate) fn make_ratio_from_values(
     numerator: Value,
     denominator: Value,
 ) -> Result<Handle<Value>, NumberError> {
+    make_ratio_from_values_mode(heap, numerator, denominator, true)
+}
+
+fn make_ratio_from_values_mode(
+    heap: &mut impl Allocator,
+    numerator: Value,
+    denominator: Value,
+    allow_demote: bool,
+) -> Result<Handle<Value>, NumberError> {
     let Some(numer) = value_to_bignum(heap, numerator) else {
         return Err(NumberError::Overflow);
     };
     let Some(denom) = value_to_bignum(heap, denominator) else {
         return Err(NumberError::Overflow);
     };
-    make_ratio_from_bignums(heap, numer, denom)
+    make_ratio_from_bignums(heap, numer, denom, allow_demote)
 }
 
 fn make_ratio_from_bignums(
     heap: &mut impl Allocator,
     numerator: Handle<BigNum>,
     denominator: Handle<BigNum>,
+    allow_demote: bool,
 ) -> Result<Handle<Value>, NumberError> {
     if is_bignum_zero(&denominator) {
         return Err(NumberError::DivisionByZero);
     }
     if is_bignum_zero(&numerator) {
-        // SAFETY: fixnum range already checked
-        return Ok(unsafe { Value::from_fixnum(0).as_handle_unchecked() });
+        if allow_demote {
+            // SAFETY: fixnum range already checked
+            return Ok(unsafe { Value::from_fixnum(0).as_handle_unchecked() });
+        }
+        let ratio =
+            heap.allocate_ratio(Value::from_fixnum(0), Value::from_fixnum(1));
+        return Ok(ratio.into());
     }
 
     let mut num = numerator;
@@ -123,8 +138,13 @@ fn make_ratio_from_bignums(
     }
 
     if is_bignum_one(&den) {
-        // SAFETY: fixnum range already checked when demoted
-        return Ok(unsafe { demote_value(num).as_handle_unchecked() });
+        if allow_demote {
+            // SAFETY: fixnum range already checked when demoted
+            return Ok(unsafe { demote_value(num).as_handle_unchecked() });
+        }
+        let ratio =
+            heap.allocate_ratio(demote_value(num), Value::from_fixnum(1));
+        return Ok(ratio.into());
     }
 
     let ratio = heap.allocate_ratio(demote_value(num), demote_value(den));
@@ -170,6 +190,56 @@ pub fn ratio_new(ctx: &mut PrimitiveContext) -> ExecutionResult {
                     .to_string(),
             );
         }
+    }
+    ExecutionResult::Normal
+}
+
+pub fn fixnum_to_ratio(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let numerator = ctx.receiver.inner();
+    let denominator = Value::from_fixnum(1);
+    match make_ratio_from_values_mode(ctx.heap, numerator, denominator, false) {
+        Ok(res) => ctx.outputs[0] = res,
+        Err(err) => return ExecutionResult::NumberError(err),
+    }
+    ExecutionResult::Normal
+}
+
+pub fn bignum_to_ratio(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: caller ensures receiver is bignum
+    let _bignum = unsafe { ctx.receiver.cast::<BigNum>() };
+    let numerator = ctx.receiver.inner();
+    let denominator = Value::from_fixnum(1);
+    match make_ratio_from_values_mode(ctx.heap, numerator, denominator, false) {
+        Ok(res) => ctx.outputs[0] = res,
+        Err(err) => return ExecutionResult::NumberError(err),
+    }
+    ExecutionResult::Normal
+}
+
+pub fn ratio_to_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: caller must ensure receiver is ratio
+    let ratio = unsafe { ctx.receiver.cast::<Ratio>() };
+    let Some(numer) = value_to_bignum(ctx.heap, ratio.numerator) else {
+        return ExecutionResult::Panic(
+            "ratio>fixnum: numerator must be an integer".to_string(),
+        );
+    };
+    let Some(denom) = value_to_bignum(ctx.heap, ratio.denominator) else {
+        return ExecutionResult::Panic(
+            "ratio>fixnum: denominator must be an integer".to_string(),
+        );
+    };
+
+    if !is_bignum_one(&denom) {
+        ctx.outputs[0] = bool_object(ctx, false);
+        return ExecutionResult::Normal;
+    }
+
+    if let Some(fix) = numer.to_fixnum_checked() {
+        ctx.outputs[0] =
+            unsafe { Value::from_fixnum(fix).as_handle_unchecked() };
+    } else {
+        ctx.outputs[0] = bool_object(ctx, false);
     }
     ExecutionResult::Normal
 }
@@ -251,7 +321,7 @@ pub fn ratio_neg(ctx: &mut PrimitiveContext) -> ExecutionResult {
     };
 
     let numer = negate_bignum(ctx.heap, &numer);
-    match make_ratio_from_bignums(ctx.heap, numer, denom) {
+    match make_ratio_from_bignums(ctx.heap, numer, denom, true) {
         Ok(res) => ctx.outputs[0] = res,
         Err(err) => return ExecutionResult::NumberError(err),
     }
@@ -314,7 +384,7 @@ pub(crate) fn ratio_add_raw(
     let right = bignum_mul_raw(heap, &b_num, &a_den);
     let numer = bignum_add_raw(heap, &left, &right);
     let denom = bignum_mul_raw(heap, &a_den, &b_den);
-    make_ratio_from_bignums(heap, numer, denom)
+    make_ratio_from_bignums(heap, numer, denom, true)
 }
 
 pub(crate) fn ratio_sub_raw(
@@ -329,7 +399,7 @@ pub(crate) fn ratio_sub_raw(
     let right = bignum_mul_raw(heap, &b_num, &a_den);
     let numer = bignum_sub_raw(heap, &left, &right);
     let denom = bignum_mul_raw(heap, &a_den, &b_den);
-    make_ratio_from_bignums(heap, numer, denom)
+    make_ratio_from_bignums(heap, numer, denom, true)
 }
 
 pub(crate) fn ratio_mul_raw(
@@ -342,7 +412,7 @@ pub(crate) fn ratio_mul_raw(
 
     let numer = bignum_mul_raw(heap, &a_num, &b_num);
     let denom = bignum_mul_raw(heap, &a_den, &b_den);
-    make_ratio_from_bignums(heap, numer, denom)
+    make_ratio_from_bignums(heap, numer, denom, true)
 }
 
 pub(crate) fn ratio_div_raw(
@@ -359,7 +429,7 @@ pub(crate) fn ratio_div_raw(
 
     let numer = bignum_mul_raw(heap, &a_num, &b_den);
     let denom = bignum_mul_raw(heap, &a_den, &b_num);
-    make_ratio_from_bignums(heap, numer, denom)
+    make_ratio_from_bignums(heap, numer, denom, true)
 }
 
 pub(crate) fn ratio_cmp_raw(

@@ -209,6 +209,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum<=", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum>=", 1, 1, fixnum::fixnum_geq),
     PrimitiveMessage::new("fixnum>string", 0, 1, fixnum::fixnum_to_utf8_bytes),
+    PrimitiveMessage::new("fixnum>ratio", 0, 1, ratio::fixnum_to_ratio),
     PrimitiveMessage::new("fixnum>float", 0, 1, fixnum::fixnum_to_float),
     PrimitiveMessage::new("fixnumParent", 0, 1, fixnum::parent),
     // Float 
@@ -243,6 +244,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum>bignum", 0, 1, bignum::fixnum_to_bignum),
     PrimitiveMessage::new("bignumToFixnumChecked", 0, 1, bignum::bignum_to_fixnum_checked),
     PrimitiveMessage::new("bignum>float", 0, 1, bignum::bignum_to_float),
+    PrimitiveMessage::new("bignum>ratio", 0, 1, ratio::bignum_to_ratio),
     PrimitiveMessage::new("bignum+", 1, 1, bignum::bignum_add),
     PrimitiveMessage::new("bignum-", 1, 1, bignum::bignum_sub),
     PrimitiveMessage::new("bignum*", 1, 1, bignum::bignum_mul),
@@ -262,6 +264,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("ratioNew", 1, 1, ratio::ratio_new),
     PrimitiveMessage::new("ratioNumerator", 0, 1, ratio::ratio_numerator),
     PrimitiveMessage::new("ratioDenominator", 0, 1, ratio::ratio_denominator),
+    PrimitiveMessage::new("ratio>fixnum", 0, 1, ratio::ratio_to_fixnum),
     PrimitiveMessage::new("ratio+", 1, 1, ratio::ratio_add),
     PrimitiveMessage::new("ratio-", 1, 1, ratio::ratio_sub),
     PrimitiveMessage::new("ratio*", 1, 1, ratio::ratio_mul),
