@@ -8,6 +8,10 @@ use crate::primitives::bignum::{
     clone_bignum, cmp_bignum,
 };
 
+fn value_to_i64(value: Value) -> Option<i64> {
+    value.as_tagged_fixnum::<i64>().map(|fix| fix.as_i64())
+}
+
 fn value_to_bignum(
     heap: &mut impl Allocator,
     value: Value,
@@ -62,6 +66,22 @@ fn demote_value(value: Handle<BigNum>) -> Value {
     value.into()
 }
 
+fn i128_to_value(heap: &mut impl Allocator, value: i128) -> Value {
+    if value >= i64::MIN as i128 && value <= i64::MAX as i128 {
+        return Value::from_fixnum(value as i64);
+    }
+    heap.allocate_bignum_from_i128(value).into()
+}
+
+fn gcd_u128(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a
+}
+
 fn gcd_bignum(
     heap: &mut impl Allocator,
     a: &BigNum,
@@ -91,6 +111,16 @@ fn make_ratio_from_values_mode(
     denominator: Value,
     allow_demote: bool,
 ) -> Result<Handle<Value>, NumberError> {
+    if let (Some(numer), Some(denom)) =
+        (value_to_i64(numerator), value_to_i64(denominator))
+    {
+        return make_ratio_from_i128s(
+            heap,
+            numer as i128,
+            denom as i128,
+            allow_demote,
+        );
+    }
     let Some(numer) = value_to_bignum(heap, numerator) else {
         return Err(NumberError::Overflow);
     };
@@ -98,6 +128,75 @@ fn make_ratio_from_values_mode(
         return Err(NumberError::Overflow);
     };
     make_ratio_from_bignums(heap, numer, denom, allow_demote)
+}
+
+fn make_ratio_from_i128s(
+    heap: &mut impl Allocator,
+    numerator: i128,
+    denominator: i128,
+    allow_demote: bool,
+) -> Result<Handle<Value>, NumberError> {
+    if denominator == 0 {
+        return Err(NumberError::DivisionByZero);
+    }
+    if numerator == 0 {
+        if allow_demote {
+            // SAFETY: fixnum range already checked
+            return Ok(unsafe { Value::from_fixnum(0).as_handle_unchecked() });
+        }
+        let ratio =
+            heap.allocate_ratio(Value::from_fixnum(0), Value::from_fixnum(1));
+        return Ok(ratio.into());
+    }
+
+    let mut num = numerator;
+    let mut den = denominator;
+
+    if den < 0 {
+        let Some(den_pos) = den.checked_neg() else {
+            let numer = heap.allocate_bignum_from_i128(num);
+            let denom = heap.allocate_bignum_from_i128(den);
+            return make_ratio_from_bignums(heap, numer, denom, allow_demote);
+        };
+        let Some(num_pos) = num.checked_neg() else {
+            let numer = heap.allocate_bignum_from_i128(num);
+            let denom = heap.allocate_bignum_from_i128(den);
+            return make_ratio_from_bignums(heap, numer, denom, allow_demote);
+        };
+        num = num_pos;
+        den = den_pos;
+    }
+
+    let num_abs = num.unsigned_abs();
+    let den_abs = den.unsigned_abs();
+    let gcd = gcd_u128(num_abs, den_abs);
+    if gcd > i128::MAX as u128 {
+        let numer = heap.allocate_bignum_from_i128(num);
+        let denom = heap.allocate_bignum_from_i128(den);
+        return make_ratio_from_bignums(heap, numer, denom, allow_demote);
+    }
+    let gcd_i128 = gcd as i128;
+    if gcd_i128 > 1 {
+        num /= gcd_i128;
+        den /= gcd_i128;
+    }
+
+    if den == 1 {
+        if allow_demote {
+            // SAFETY: fixnum range already checked when demoted
+            return Ok(unsafe {
+                i128_to_value(heap, num).as_handle_unchecked()
+            });
+        }
+        let numer = i128_to_value(heap, num);
+        let ratio = heap.allocate_ratio(numer, Value::from_fixnum(1));
+        return Ok(ratio.into());
+    }
+
+    let numer = i128_to_value(heap, num);
+    let denom = i128_to_value(heap, den);
+    let ratio = heap.allocate_ratio(numer, denom);
+    Ok(ratio.into())
 }
 
 fn make_ratio_from_bignums(
@@ -219,6 +318,18 @@ pub fn bignum_to_ratio(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn ratio_to_fixnum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: caller must ensure receiver is ratio
     let ratio = unsafe { ctx.receiver.cast::<Ratio>() };
+    if let (Some(numer), Some(denom)) = (
+        value_to_i64(ratio.numerator),
+        value_to_i64(ratio.denominator),
+    ) {
+        if denom != 1 {
+            ctx.outputs[0] = bool_object(ctx, false);
+            return ExecutionResult::Normal;
+        }
+        ctx.outputs[0] =
+            unsafe { Value::from_fixnum(numer).as_handle_unchecked() };
+        return ExecutionResult::Normal;
+    }
     let Some(numer) = value_to_bignum(ctx.heap, ratio.numerator) else {
         return ExecutionResult::Panic(
             "ratio>fixnum: numerator must be an integer".to_string(),
@@ -309,6 +420,18 @@ pub fn ratio_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn ratio_neg(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: caller must ensure receiver is ratio
     let ratio = unsafe { ctx.receiver.cast::<Ratio>() };
+    if let (Some(numer), Some(denom)) = (
+        value_to_i64(ratio.numerator),
+        value_to_i64(ratio.denominator),
+    ) {
+        let numer = -(numer as i128);
+        let denom = denom as i128;
+        match make_ratio_from_i128s(ctx.heap, numer, denom, true) {
+            Ok(res) => ctx.outputs[0] = res,
+            Err(err) => return ExecutionResult::NumberError(err),
+        }
+        return ExecutionResult::Normal;
+    }
     let Some(numer) = value_to_bignum(ctx.heap, ratio.numerator) else {
         return ExecutionResult::Panic(
             "ratio: numerator must be an integer".to_string(),
@@ -377,6 +500,23 @@ pub(crate) fn ratio_add_raw(
     lhs: Handle<Ratio>,
     rhs: Handle<Ratio>,
 ) -> Result<Handle<Value>, NumberError> {
+    let a_num_val = lhs.numerator;
+    let a_den_val = lhs.denominator;
+    let b_num_val = rhs.numerator;
+    let b_den_val = rhs.denominator;
+
+    if let (Some(a_num), Some(a_den), Some(b_num), Some(b_den)) = (
+        value_to_i64(a_num_val),
+        value_to_i64(a_den_val),
+        value_to_i64(b_num_val),
+        value_to_i64(b_den_val),
+    ) {
+        let numer = (a_num as i128) * (b_den as i128)
+            + (b_num as i128) * (a_den as i128);
+        let denom = (a_den as i128) * (b_den as i128);
+        return make_ratio_from_i128s(heap, numer, denom, true);
+    }
+
     let (a_num, a_den) = ratio_components_raw(heap, lhs)?;
     let (b_num, b_den) = ratio_components_raw(heap, rhs)?;
 
@@ -392,6 +532,23 @@ pub(crate) fn ratio_sub_raw(
     lhs: Handle<Ratio>,
     rhs: Handle<Ratio>,
 ) -> Result<Handle<Value>, NumberError> {
+    let a_num_val = lhs.numerator;
+    let a_den_val = lhs.denominator;
+    let b_num_val = rhs.numerator;
+    let b_den_val = rhs.denominator;
+
+    if let (Some(a_num), Some(a_den), Some(b_num), Some(b_den)) = (
+        value_to_i64(a_num_val),
+        value_to_i64(a_den_val),
+        value_to_i64(b_num_val),
+        value_to_i64(b_den_val),
+    ) {
+        let numer = (a_num as i128) * (b_den as i128)
+            - (b_num as i128) * (a_den as i128);
+        let denom = (a_den as i128) * (b_den as i128);
+        return make_ratio_from_i128s(heap, numer, denom, true);
+    }
+
     let (a_num, a_den) = ratio_components_raw(heap, lhs)?;
     let (b_num, b_den) = ratio_components_raw(heap, rhs)?;
 
@@ -407,6 +564,22 @@ pub(crate) fn ratio_mul_raw(
     lhs: Handle<Ratio>,
     rhs: Handle<Ratio>,
 ) -> Result<Handle<Value>, NumberError> {
+    let a_num_val = lhs.numerator;
+    let a_den_val = lhs.denominator;
+    let b_num_val = rhs.numerator;
+    let b_den_val = rhs.denominator;
+
+    if let (Some(a_num), Some(a_den), Some(b_num), Some(b_den)) = (
+        value_to_i64(a_num_val),
+        value_to_i64(a_den_val),
+        value_to_i64(b_num_val),
+        value_to_i64(b_den_val),
+    ) {
+        let numer = (a_num as i128) * (b_num as i128);
+        let denom = (a_den as i128) * (b_den as i128);
+        return make_ratio_from_i128s(heap, numer, denom, true);
+    }
+
     let (a_num, a_den) = ratio_components_raw(heap, lhs)?;
     let (b_num, b_den) = ratio_components_raw(heap, rhs)?;
 
@@ -420,6 +593,25 @@ pub(crate) fn ratio_div_raw(
     lhs: Handle<Ratio>,
     rhs: Handle<Ratio>,
 ) -> Result<Handle<Value>, NumberError> {
+    let a_num_val = lhs.numerator;
+    let a_den_val = lhs.denominator;
+    let b_num_val = rhs.numerator;
+    let b_den_val = rhs.denominator;
+
+    if let (Some(a_num), Some(a_den), Some(b_num), Some(b_den)) = (
+        value_to_i64(a_num_val),
+        value_to_i64(a_den_val),
+        value_to_i64(b_num_val),
+        value_to_i64(b_den_val),
+    ) {
+        if b_num == 0 {
+            return Err(NumberError::DivisionByZero);
+        }
+        let numer = (a_num as i128) * (b_den as i128);
+        let denom = (a_den as i128) * (b_num as i128);
+        return make_ratio_from_i128s(heap, numer, denom, true);
+    }
+
     let (a_num, a_den) = ratio_components_raw(heap, lhs)?;
     let (b_num, b_den) = ratio_components_raw(heap, rhs)?;
 
@@ -437,6 +629,22 @@ pub(crate) fn ratio_cmp_raw(
     lhs: Handle<Ratio>,
     rhs: Handle<Ratio>,
 ) -> Result<std::cmp::Ordering, ExecutionResult> {
+    let a_num_val = lhs.numerator;
+    let a_den_val = lhs.denominator;
+    let b_num_val = rhs.numerator;
+    let b_den_val = rhs.denominator;
+
+    if let (Some(a_num), Some(a_den), Some(b_num), Some(b_den)) = (
+        value_to_i64(a_num_val),
+        value_to_i64(a_den_val),
+        value_to_i64(b_num_val),
+        value_to_i64(b_den_val),
+    ) {
+        let left = (a_num as i128) * (b_den as i128);
+        let right = (b_num as i128) * (a_den as i128);
+        return Ok(left.cmp(&right));
+    }
+
     let (a_num, a_den) = ratio_components_raw(heap, lhs).map_err(|_| {
         ExecutionResult::Panic(
             "ratio: numerator or denominator must be an integer".to_string(),
@@ -517,6 +725,23 @@ fn bignum_to_decimal_string(
 pub fn ratio_to_float(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: caller must ensure receiver is ratio
     let ratio = unsafe { ctx.receiver.cast::<Ratio>() };
+    if let (Some(numer), Some(denom)) = (
+        value_to_i64(ratio.numerator),
+        value_to_i64(ratio.denominator),
+    ) {
+        if denom == 0 {
+            return ExecutionResult::NumberError(NumberError::DivisionByZero);
+        }
+        let res = (numer as f64) / (denom as f64);
+        if !res.is_finite() {
+            return ExecutionResult::Panic(
+                "ratio>float: result not finite".to_string(),
+            );
+        }
+        let float = ctx.heap.allocate_float(res);
+        ctx.outputs[0] = float.into();
+        return ExecutionResult::Normal;
+    }
     let Some(numer) = value_to_bignum(ctx.heap, ratio.numerator) else {
         return ExecutionResult::Panic(
             "ratio>float: numerator must be an integer".to_string(),
@@ -554,6 +779,20 @@ pub fn ratio_to_float(ctx: &mut PrimitiveContext) -> ExecutionResult {
 pub fn ratio_to_string(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: caller must ensure receiver is ratio
     let ratio = unsafe { ctx.receiver.cast::<Ratio>() };
+    if let (Some(numer), Some(denom)) = (
+        value_to_i64(ratio.numerator),
+        value_to_i64(ratio.denominator),
+    ) {
+        let mut out = String::new();
+        out.push_str(&numer.to_string());
+        out.push('/');
+        out.push_str(&denom.to_string());
+
+        let ba = ctx.heap.allocate_aligned_bytearray(out.as_bytes(), 8);
+        let string = ctx.heap.allocate_string(ba);
+        ctx.outputs[0] = string.into();
+        return ExecutionResult::Normal;
+    }
     let Some(numer) = value_to_bignum(ctx.heap, ratio.numerator) else {
         return ExecutionResult::Panic(
             "ratio>string: numerator must be an integer".to_string(),
@@ -586,7 +825,7 @@ pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Allocator, Heap, HeapSettings, Value};
+    use crate::{Allocator, Heap, HeapSettings, ObjectType, Value};
 
     use super::{
         make_ratio_from_values, ratio_add_raw, ratio_div_raw, ratio_mul_raw,
@@ -781,6 +1020,65 @@ mod tests {
         let denom = Value::from_fixnum(0);
         let err = make_ratio_from_values(&mut heap, numer, denom).unwrap_err();
         assert_eq!(err, crate::NumberError::DivisionByZero);
+    }
+
+    #[test]
+    fn ratio_mixed_components_adds() {
+        let heap = Heap::new(HeapSettings::default());
+        let mut heap = heap.proxy();
+
+        // Use (1<<70) / 3 -- GCD is 1 (power of 2 vs 3), so it stays a ratio
+        let big = heap.allocate_bignum_from_i128(1_i128 << 70);
+        let a = make_ratio_from_values(
+            &mut heap,
+            big.into(),
+            Value::from_fixnum(3),
+        )
+        .unwrap();
+        let b = make_ratio_from_values(
+            &mut heap,
+            Value::from_fixnum(1),
+            Value::from_fixnum(3),
+        )
+        .unwrap();
+
+        // Verify a is a ratio (bignum numerator, fixnum denominator)
+        let a_val = a.as_value();
+        assert!(a_val.is_object());
+        let a_ratio =
+            unsafe { a_val.as_heap_handle_unchecked().cast::<crate::Ratio>() };
+
+        let b_val = b.as_value();
+        assert!(b_val.is_object());
+        let b_ratio =
+            unsafe { b_val.as_heap_handle_unchecked().cast::<crate::Ratio>() };
+
+        // (1<<70)/3 + 1/3 = (1<<70 + 1)/3
+        let result = ratio_add_raw(&mut heap, a_ratio, b_ratio).unwrap();
+        let result_val = result.as_value();
+        assert!(result_val.is_object());
+        let handle = unsafe { result_val.as_heap_handle_unchecked() };
+        assert_eq!(
+            unsafe { handle.header.object_type().unwrap_unchecked() },
+            ObjectType::Ratio
+        );
+        let ratio = unsafe { handle.cast::<crate::Ratio>() };
+
+        assert_eq!(
+            ratio
+                .denominator
+                .as_tagged_fixnum::<i64>()
+                .unwrap()
+                .as_i64(),
+            3
+        );
+        // (1<<70 + 1) doesn't fit in i64, so numerator must be a bignum
+        assert!(ratio.numerator.is_object());
+        let handle = unsafe { ratio.numerator.as_heap_handle_unchecked() };
+        assert_eq!(
+            unsafe { handle.header.object_type().unwrap_unchecked() },
+            ObjectType::BigNum
+        );
     }
 
     #[test]
