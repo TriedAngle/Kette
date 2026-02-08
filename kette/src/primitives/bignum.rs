@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
 
 use crate::{
-    Allocator, BigNum, ExecutionResult, NumberError, PrimitiveContext, Value,
-    primitives::bool_object,
+    Allocator, BigNum, ExecutionResult, Handle, NumberError, PrimitiveContext,
+    Value, primitives::bool_object,
 };
+
+use crate::primitives::ratio::make_ratio_from_values;
 
 pub fn fixnum_to_bignum(ctx: &mut PrimitiveContext) -> ExecutionResult {
     if !ctx.receiver.inner().is_fixnum() {
@@ -523,11 +525,21 @@ pub fn bignum_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
             .cast::<BigNum>()
     };
     let b = unsafe { ctx.receiver.cast::<BigNum>() };
-    let (quot, _) = match bignum_div_mod_raw(ctx.heap, &a, &b) {
+    let (quot, rem) = match bignum_div_mod_raw(ctx.heap, &a, &b) {
         Ok(res) => res,
         Err(err) => return ExecutionResult::NumberError(err),
     };
-    ctx.outputs[0] = maybe_demote(quot);
+    if rem.len() == 0 {
+        ctx.outputs[0] = maybe_demote(quot);
+        return ExecutionResult::Normal;
+    }
+
+    let numer: Handle<Value> = a.into();
+    let denom: Handle<Value> = b.into();
+    match make_ratio_from_values(ctx.heap, numer.inner(), denom.inner()) {
+        Ok(res) => ctx.outputs[0] = res,
+        Err(err) => return ExecutionResult::NumberError(err),
+    }
     ExecutionResult::Normal
 }
 

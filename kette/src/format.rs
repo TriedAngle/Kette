@@ -1,7 +1,7 @@
 use crate::{
     Array, ByteArray, Handle, HeapValue, Interpreter, Message, ObjectType,
-    Quotation, Selector, SlotDescriptor, SlotObject, SlotTags, StringObject,
-    Value,
+    Quotation, Ratio, Selector, SlotDescriptor, SlotObject, SlotTags,
+    StringObject, Value,
 };
 use std::{fmt::Write, ops::Deref};
 
@@ -133,6 +133,14 @@ impl Interpreter {
                 // SAFETY: object_type confirmed by header
                 Some(ObjectType::Float) => unsafe {
                     self.format_float(heap_obj.cast())
+                },
+                Some(ObjectType::Ratio) => unsafe {
+                    self.format_ratio(
+                        heap_obj.cast(),
+                        depth,
+                        max_depth,
+                        selector,
+                    )
                 },
                 // SAFETY: object_type confirmed by header
                 Some(ObjectType::Quotation) => unsafe {
@@ -269,6 +277,28 @@ impl Interpreter {
 
     unsafe fn format_float(&self, f: Handle<crate::Float>) -> String {
         format!("{}", f.value)
+    }
+
+    unsafe fn format_ratio(
+        &mut self,
+        ratio: Handle<Ratio>,
+        depth: usize,
+        max_depth: usize,
+        selector: &Selector,
+    ) -> String {
+        let numerator = self.pretty_print_internal(
+            ratio.numerator,
+            depth + 1,
+            max_depth,
+            selector,
+        );
+        let denominator = self.pretty_print_internal(
+            ratio.denominator,
+            depth + 1,
+            max_depth,
+            selector,
+        );
+        format!("{}/{}", numerator, denominator)
     }
 
     unsafe fn format_message(&self, m: Handle<Message>) -> String {

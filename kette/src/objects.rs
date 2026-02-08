@@ -13,14 +13,16 @@ pub mod floats;
 pub mod message;
 pub mod parser;
 pub mod quotations;
+pub mod ratio;
 pub mod slots;
 pub mod strings;
 pub mod threads;
 
 use crate::{
     ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
-    LookupResult, Map, Message, Quotation, Selector, SlotObject, StringObject,
-    ThreadObject, Value, ValueTag, Visitable, VisitedLink, Visitor,
+    LookupResult, Map, Message, Quotation, Ratio, Selector, SlotObject,
+    StringObject, ThreadObject, Value, ValueTag, Visitable, VisitedLink,
+    Visitor,
 };
 
 #[repr(u8)]
@@ -46,6 +48,7 @@ pub enum ObjectType {
     BigNum        = 0b01010,
     Thread        = 0b01011,
     FeedbackEntry = 0b01100,
+    Ratio         = 0b01101,
     Code          = 0b11110,
     Max           = 0b11111,
 }
@@ -218,6 +221,7 @@ impl Header {
             0b01010 => ObjectType::BigNum,
             0b01011 => ObjectType::Thread,
             0b01100 => ObjectType::FeedbackEntry,
+            0b01101 => ObjectType::Ratio,
             0b11110 => ObjectType::Code,
             0b11111 => ObjectType::Max,
             _ => unreachable!(
@@ -377,6 +381,7 @@ impl Object for HeapValue {
             ObjectType::Float         => self.downcast_ref_match::<Float>().lookup(selector, link),
             ObjectType::Message       => self.downcast_ref_match::<Message>().lookup(selector, link),
             ObjectType::BigNum        => self.downcast_ref_match::<BigNum>().lookup(selector, link),
+            ObjectType::Ratio         => self.downcast_ref_match::<Ratio>().lookup(selector, link),
             ObjectType::Thread        => unimplemented!(),
             ObjectType::FeedbackEntry => unreachable!("feedback entry cannot be looked up"),
             ObjectType::Code          => unreachable!("code cannot be looked up yet (or should it be maybe?)"),
@@ -406,6 +411,7 @@ impl HeapObject for HeapValue {
                     ObjectType::Message       => self.downcast_ref_match::<Message>().heap_size(),
                     ObjectType::Float         => self.downcast_ref_match::<Float>().heap_size(),
                     ObjectType::BigNum        => self.downcast_ref_match::<BigNum>().heap_size(),
+                    ObjectType::Ratio         => self.downcast_ref_match::<Ratio>().heap_size(),
                     ObjectType::Thread        => unimplemented!(),
                     ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().heap_size(),
                     ObjectType::Code          => self.downcast_ref_match::<Code>().heap_size(),
@@ -460,6 +466,7 @@ impl Visitable for HeapValue {
                     ObjectType::Thread        => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
                     ObjectType::FeedbackEntry => self.downcast_mut_match::<FeedbackEntry>().visit_edges_mut(visitor),
                     ObjectType::Code          => self.downcast_mut_match::<Code>().visit_edges_mut(visitor),
+                    ObjectType::Ratio         => self.downcast_mut_match::<Ratio>().visit_edges_mut(visitor),
                     ObjectType::Alien | ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
                     ObjectType::Max => unreachable!(),
                 }
@@ -485,6 +492,7 @@ impl Visitable for HeapValue {
                     ObjectType::Thread        => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
                     ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().visit_edges(visitor),
                     ObjectType::Code          => self.downcast_ref_match::<Code>().visit_edges(visitor),
+                    ObjectType::Ratio         => self.downcast_ref_match::<Ratio>().visit_edges(visitor),
                     ObjectType::Alien | ObjectType::ByteArray | ObjectType::Float | ObjectType::BigNum => {}
                     ObjectType::Max => unreachable!(),
                 }

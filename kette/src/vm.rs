@@ -20,6 +20,7 @@ pub struct SpecialObjects {
     pub fixnum_traits: Handle<HeapValue>,
     pub float_traits: Handle<HeapValue>,
     pub bignum_traits: Handle<HeapValue>,
+    pub ratio_traits: Handle<HeapValue>,
     pub quotation_traits: Handle<HeapValue>,
     pub message_traits: Handle<HeapValue>,
     pub alien_traits: Handle<HeapValue>,
@@ -346,6 +347,29 @@ impl VM {
             SlotHelper::primitive_message2("parent*", "bignumParent", SlotTags::empty()),
         ]);
 
+        #[rustfmt::skip]
+        let ratio_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("ratio?", SlotTags::empty()),
+            SlotHelper::primitive_message("2ratio?", SlotTags::empty()),
+            SlotHelper::primitive_message("ratioNew", SlotTags::empty()),
+            SlotHelper::primitive_message("ratioNumerator", SlotTags::empty()),
+            SlotHelper::primitive_message("ratioDenominator", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio+", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio-", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio*", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio/", SlotTags::empty()),
+            SlotHelper::primitive_message("ratioNeg", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio=", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio!=", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio<", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio>", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio<=", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio>=", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio>float", SlotTags::empty()),
+            SlotHelper::primitive_message("ratio>string", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "ratioParent", SlotTags::empty()),
+        ]);
+
         // SAFETY: No GC can occur during initialization; all special objects are fully initialized before use.
         unsafe {
             let universe =
@@ -366,6 +390,8 @@ impl VM {
             let float_traits = heap.allocate_slots(float_map, &[]).cast();
 
             let bignum_traits = heap.allocate_slots(bignum_map, &[]).cast();
+
+            let ratio_traits = heap.allocate_slots(ratio_map, &[]).cast();
 
             let quotation_traits =
                 heap.allocate_slots(quotation_map, &[]).cast();
@@ -424,6 +450,7 @@ impl VM {
                 fixnum_traits,
                 float_traits,
                 bignum_traits,
+                ratio_traits,
                 quotation_traits,
                 message_traits,
                 alien_traits,
@@ -528,6 +555,7 @@ impl SpecialObjects {
                 self.fixnum_traits,
                 self.float_traits,
                 self.bignum_traits,
+                self.ratio_traits,
                 self.quotation_traits,
                 self.message_traits,
                 self.alien_traits,
@@ -565,6 +593,7 @@ impl SpecialObjects {
                 fixnum_traits: Handle::null(),
                 float_traits: Handle::null(),
                 bignum_traits: Handle::null(),
+                ratio_traits: Handle::null(),
                 quotation_traits: Handle::null(),
                 message_traits: Handle::null(),
                 alien_traits: Handle::null(),

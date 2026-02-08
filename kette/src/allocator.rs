@@ -2,7 +2,7 @@ use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
     ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
-    Handle, HeapObject, HeapValue, Map, Message, Parser, Quotation,
+    Handle, HeapObject, HeapValue, Map, Message, Parser, Quotation, Ratio,
     SlotDescriptor, SlotHelper, SlotObject, SlotTags, StringObject, Strings,
     Tagged, Value,
 };
@@ -30,6 +30,18 @@ pub trait Allocator: Sized {
         // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj = unsafe { self.allocate_handle::<Float>(layout) };
         obj.init(value);
+        obj
+    }
+
+    fn allocate_ratio(
+        &mut self,
+        numerator: Value,
+        denominator: Value,
+    ) -> Handle<Ratio> {
+        let layout = Layout::new::<Ratio>();
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
+        let mut obj = unsafe { self.allocate_handle::<Ratio>(layout) };
+        obj.init(numerator, denominator);
         obj
     }
 

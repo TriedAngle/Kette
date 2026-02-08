@@ -1,9 +1,11 @@
 use std::ops::Neg;
 
 use crate::{
-    Allocator, ExecutionResult, NumberError, PrimitiveContext, Tagged,
+    Allocator, ExecutionResult, NumberError, PrimitiveContext, Tagged, Value,
     primitives::bool_object,
 };
+
+use crate::primitives::ratio::make_ratio_from_values;
 
 type Fixnum2Op = fn(
     ctx: &mut PrimitiveContext,
@@ -87,7 +89,21 @@ pub fn fixnum_div(ctx: &mut PrimitiveContext) -> ExecutionResult {
     if b == 0 {
         return ExecutionResult::NumberError(NumberError::DivisionByZero);
     }
-    output_checked_i64(ctx, a.checked_div(b), || (a as i128) / (b as i128))
+    if a % b == 0 {
+        return output_checked_i64(ctx, a.checked_div(b), || {
+            (a as i128) / (b as i128)
+        });
+    }
+
+    match make_ratio_from_values(
+        ctx.heap,
+        Value::from_fixnum(a),
+        Value::from_fixnum(b),
+    ) {
+        Ok(res) => ctx.outputs[0] = res,
+        Err(err) => return ExecutionResult::NumberError(err),
+    }
+    ExecutionResult::Normal
 }
 
 pub fn fixnum_mod(ctx: &mut PrimitiveContext) -> ExecutionResult {

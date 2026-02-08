@@ -17,6 +17,7 @@ mod message;
 mod method;
 mod parsing;
 mod quotation;
+mod ratio;
 mod stack;
 mod string;
 mod threads;
@@ -255,6 +256,26 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("bignum<=", 1, 1, bignum::bignum_leq),
     PrimitiveMessage::new("bignum>=", 1, 1, bignum::bignum_geq),
     PrimitiveMessage::new("bignumParent", 0, 1, bignum::parent),
+    // Ratio
+    PrimitiveMessage::new("ratio?", 0, 1, ratio::is_ratio),
+    PrimitiveMessage::new("2ratio?", 1, 1, ratio::is_2ratio),
+    PrimitiveMessage::new("ratioNew", 1, 1, ratio::ratio_new),
+    PrimitiveMessage::new("ratioNumerator", 0, 1, ratio::ratio_numerator),
+    PrimitiveMessage::new("ratioDenominator", 0, 1, ratio::ratio_denominator),
+    PrimitiveMessage::new("ratio+", 1, 1, ratio::ratio_add),
+    PrimitiveMessage::new("ratio-", 1, 1, ratio::ratio_sub),
+    PrimitiveMessage::new("ratio*", 1, 1, ratio::ratio_mul),
+    PrimitiveMessage::new("ratio/", 1, 1, ratio::ratio_div),
+    PrimitiveMessage::new("ratioNeg", 0, 1, ratio::ratio_neg),
+    PrimitiveMessage::new("ratio=", 1, 1, ratio::ratio_eq),
+    PrimitiveMessage::new("ratio!=", 1, 1, ratio::ratio_neq),
+    PrimitiveMessage::new("ratio<", 1, 1, ratio::ratio_lt),
+    PrimitiveMessage::new("ratio>", 1, 1, ratio::ratio_gt),
+    PrimitiveMessage::new("ratio<=", 1, 1, ratio::ratio_leq),
+    PrimitiveMessage::new("ratio>=", 1, 1, ratio::ratio_geq),
+    PrimitiveMessage::new("ratio>float", 0, 1, ratio::ratio_to_float),
+    PrimitiveMessage::new("ratio>string", 0, 1, ratio::ratio_to_string),
+    PrimitiveMessage::new("ratioParent", 0, 1, ratio::parent),
     // Alien
     PrimitiveMessage::new("alienU8At", 1, 1, alien::alien_u8_at),
     PrimitiveMessage::new("alienI8At", 1, 1, alien::alien_i8_at),

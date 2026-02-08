@@ -50,9 +50,10 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
         let k = name_key(sd.name);
         if existing.contains(&k) {
-            return ExecutionResult::Panic(
-                "addTraitSlots: Duplicate slot name".to_string(),
-            );
+            return ExecutionResult::Panic(format!(
+                "addTraitSlots: Duplicate slot name: {:?}",
+                sd.name.as_utf8()
+            ));
         }
         existing.insert(k);
         new_slots.push(sd);

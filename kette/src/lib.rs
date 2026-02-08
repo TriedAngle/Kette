@@ -35,6 +35,7 @@ pub use objects::floats::Float;
 pub use objects::message::Message;
 pub use objects::parser::{ParsedToken, Parser, Token};
 pub use objects::quotations::Quotation;
+pub use objects::ratio::Ratio;
 pub use objects::slots::{
     Map, SlotDescriptor, SlotHelper, SlotObject, SlotTags,
 };
