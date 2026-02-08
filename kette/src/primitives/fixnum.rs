@@ -1,8 +1,8 @@
 use std::ops::Neg;
 
 use crate::{
-    Allocator, ExecutionResult, NumberError, PrimitiveContext, Tagged, Value,
-    primitives::bool_object,
+    primitives::bool_object, Allocator, ExecutionResult, NumberError,
+    PrimitiveContext, Tagged, Value,
 };
 
 use crate::primitives::ratio::make_ratio_from_values;

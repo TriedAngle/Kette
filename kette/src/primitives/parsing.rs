@@ -1,5 +1,5 @@
 use crate::{
-    Allocator, BytecodeCompiler, ExecutionResult, Handle, LookupResult,
+    Allocator, BytecodeCompiler, ExecutionResult, Handle, LookupResult, Map,
     Message, ObjectType, ParsedToken, Parser, PrimitiveContext,
     PrimitiveMessageIndex, Selector, SlotDescriptor, SlotObject, SlotTags,
     Value, Vector,
@@ -59,9 +59,9 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     // SAFETY: must exist by contract
     let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
 
-    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
-
     let end = ctx.vm.intern_string_message("]", ctx.heap);
+
+    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
 
     let (res, _) = parse_until_inner(ctx, &[end], body_accum);
     if res != ExecutionResult::Normal {
@@ -71,6 +71,127 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let body = ctx.heap.allocate_array(body_accum.as_slice());
     let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body);
     let exe_map = ctx.heap.allocate_executable_map(code, 0, 0);
+
+    accumulator.push(exe_map.into(), ctx.heap, &ctx.vm.shared);
+    accumulator.push(
+        ctx.vm.specials().message_create_quotation.as_value(),
+        ctx.heap,
+        &ctx.vm.shared,
+    );
+
+    ctx.outputs[0] = accumulator.into();
+
+    ExecutionResult::Normal
+}
+
+/// Parse a lambda quotation entry: `[| ... | body ]`
+pub fn parse_lambda_quotation_entry(
+    ctx: &mut PrimitiveContext,
+) -> ExecutionResult {
+    // SAFETY: must exist by contract
+    let accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+
+    let pipe_msg = ctx.vm.intern_string_message("|", ctx.heap);
+    let dot_msg = ctx.vm.intern_string_message(".", ctx.heap);
+    let end = ctx.vm.intern_string_message("]", ctx.heap);
+    let false_val = ctx.vm.shared.specials.false_object.as_value();
+
+    parse_lambda_quotation(ctx, accumulator, pipe_msg, dot_msg, end, false_val)
+}
+
+/// Parse a lambda with named parameters: `[| a . b . c | body ]`
+///
+/// At this point, `[` and `|` have already been consumed.
+/// We parse parameter names separated by `.` until the closing `|`,
+/// then parse the body until `]`.
+fn parse_lambda_quotation(
+    ctx: &mut PrimitiveContext,
+    mut accumulator: Handle<Vector>,
+    pipe_msg: Handle<Message>,
+    dot_msg: Handle<Message>,
+    end_msg: Handle<Message>,
+    false_val: Value,
+) -> ExecutionResult {
+    let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
+    let mut assignable_offset: i64 = 0;
+    let mut inputs_count: u32 = 0;
+
+    // Parse parameter declarations until closing `|`
+    loop {
+        let mut output = [Handle::<Value>::zero()];
+        let res =
+            parse_next(&mut ctx.new_invoke(ctx.receiver, &[], &mut output));
+        if res != ExecutionResult::Normal {
+            return parser_error(ctx, "Failed parsing lambda parameters");
+        }
+
+        let token_val = output[0].as_value();
+
+        if token_val == false_val {
+            return parser_error(ctx, "Unterminated lambda (EOF in params)");
+        }
+
+        // Check for closing `|` (end of parameter list)
+        if let Some(msg) = token_val.as_message_handle() {
+            if msg == pipe_msg {
+                break;
+            }
+            if msg == dot_msg {
+                continue; // Skip separators
+            }
+        }
+
+        // Must be a parameter name (a Message)
+        let Some(name_msg) = token_val.as_message_handle() else {
+            return parser_error(ctx, "Expected parameter name in lambda");
+        };
+
+        let raw_name_str = name_msg.value.as_utf8().expect("valid utf8");
+        let name_ba = ctx.vm.intern_string(raw_name_str, ctx.heap);
+
+        let offset_val = Value::from_fixnum(assignable_offset);
+        assignable_offset += 1;
+
+        // Create getter slot
+        slot_descs.push(SlotDescriptor::new(
+            name_ba,
+            SlotTags::ASSIGNABLE,
+            offset_val,
+        ));
+
+        // Create setter slot (name<<)
+        let mut setter_name = String::with_capacity(raw_name_str.len() + 2);
+        setter_name.push_str(raw_name_str);
+        setter_name.push_str("<<");
+        let setter_ba = ctx.vm.intern_string(&setter_name, ctx.heap);
+        slot_descs.push(SlotDescriptor::new(
+            setter_ba,
+            SlotTags::ASSIGNMENT,
+            offset_val,
+        ));
+
+        inputs_count += 1;
+    }
+
+    // Parse the body until `]`
+    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 100);
+
+    let (res, _) = parse_until_inner(ctx, &[end_msg], body_accum);
+    if res != ExecutionResult::Normal {
+        return parser_error(ctx, "Failed parsing lambda body");
+    }
+
+    let body = ctx.heap.allocate_array(body_accum.as_slice());
+    let code = BytecodeCompiler::compile(&ctx.vm.shared, ctx.heap, body);
+
+    // Create the map with slot descriptors, code, effect, and FLAG_NAMED_PARAMS
+    let effect = (inputs_count as u64) << 32; // inputs only, no outputs
+    let exe_map = ctx.heap.allocate_slots_map(
+        &slot_descs,
+        code,
+        effect.into(),
+        Map::FLAG_NAMED_PARAMS,
+    );
 
     accumulator.push(exe_map.into(), ctx.heap, &ctx.vm.shared);
     accumulator.push(
@@ -230,7 +351,12 @@ fn parse_until_inner<'m, 'ex, 'arg>(
                         unsafe { PrimitiveMessageIndex::from_usize(id.into()) };
 
                     ctx.state.push(accum.as_value());
-                    ctx.interpreter.primitive_send(ctx.receiver, message_idx);
+                    let exec_res = ctx
+                        .interpreter
+                        .primitive_send(ctx.receiver, message_idx);
+                    if exec_res != ExecutionResult::Normal {
+                        return (exec_res, None);
+                    }
 
                     // SAFETY: this is safe
                     accum = unsafe {
@@ -312,6 +438,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let dot_msg = ctx.vm.intern_string_message(".", heap);
     let pipe_msg = ctx.vm.intern_string_message("|", heap);
     let dash_msg = ctx.vm.intern_string_message("--", heap);
+    let named_sep_msg = ctx.vm.intern_string_message("-@-", heap);
     let close_paren_msg = ctx.vm.intern_string_message(")", heap);
     let close_bar_msg = ctx.vm.intern_string_message("|)", heap);
     let create_obj_msg = ctx.vm.specials().message_create_object;
@@ -320,7 +447,8 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let false_val = ctx.vm.shared.specials.false_object.as_value();
 
     // Terminators for the value parser
-    let value_terminators = [dot_msg, dash_msg, pipe_msg, close_bar_msg];
+    let value_terminators =
+        [dot_msg, dash_msg, named_sep_msg, pipe_msg, close_bar_msg];
     // Terminators for the code body parser
     let body_terminators = [close_bar_msg, close_paren_msg];
 
@@ -330,6 +458,7 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let mut has_code = false;
     let mut saw_separator = false;
     let mut reading_inputs = true;
+    let mut has_named_params = false;
     let mut inputs_count: u32 = 0;
     let mut outputs_count: u32 = 0;
 
@@ -361,12 +490,15 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
                 has_code = true;
                 break;
             }
-            if msg == dash_msg {
+            if msg == dash_msg || msg == named_sep_msg {
                 if saw_separator {
-                    return parser_error(ctx, "Duplicate separator '--'");
+                    return parser_error(ctx, "Duplicate separator");
                 }
                 saw_separator = true;
                 reading_inputs = false;
+                if msg == named_sep_msg {
+                    has_named_params = true;
+                }
                 continue;
             }
             if msg == dot_msg {
@@ -477,12 +609,15 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
         if terminator == dot_msg {
             continue;
-        } else if terminator == dash_msg {
+        } else if terminator == dash_msg || terminator == named_sep_msg {
             if saw_separator {
-                return parser_error(ctx, "Duplicate separator '--'");
+                return parser_error(ctx, "Duplicate separator");
             }
             saw_separator = true;
             reading_inputs = false;
+            if terminator == named_sep_msg {
+                has_named_params = true;
+            }
             continue;
         } else if terminator == pipe_msg {
             has_code = true;
@@ -508,10 +643,15 @@ pub fn parse_object(ctx: &mut PrimitiveContext) -> ExecutionResult {
     };
 
     let effect = ((inputs_count as u64) << 32) | (outputs_count as u64);
+    let flags = if has_named_params {
+        Map::FLAG_NAMED_PARAMS
+    } else {
+        0
+    };
 
-    let map = ctx
-        .heap
-        .allocate_slots_map(&slot_descs, code, effect.into());
+    let map =
+        ctx.heap
+            .allocate_slots_map(&slot_descs, code, effect.into(), flags);
 
     outer_accum.push(map.into(), ctx.heap, &ctx.vm.shared);
     outer_accum.push(create_obj_msg.as_value(), ctx.heap, &ctx.vm.shared);

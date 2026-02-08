@@ -351,6 +351,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("messageName", 0, 1, message::name),
     // Parse Time
     PrimitiveMessage::new("[", 1, 1, parsing::parse_quotation),
+    PrimitiveMessage::new("[|", 1, 1, parsing::parse_lambda_quotation_entry),
     PrimitiveMessage::new("(|", 1, 1, parsing::parse_object),
     PrimitiveMessage::new("//", 1, 1, parsing::parse_line_comment),
     PrimitiveMessage::new("/*", 1, 1, parsing::parse_block_comment),

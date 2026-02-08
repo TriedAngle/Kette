@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    Allocator, BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings,
-    HeapValue, Map, Message, SlotHelper, SlotTags, StringObject, Strings,
-    interning::Messages, primitive_index, primitives::Vector,
+    interning::Messages, primitive_index, primitives::Vector, Allocator,
+    BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings, HeapValue, Map,
+    Message, SlotHelper, SlotTags, StringObject, Strings,
 };
 
 /// Core VM objects required for bootstrap and runtime operation.
@@ -297,6 +297,7 @@ impl VM {
         #[rustfmt::skip]
         let parsers_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("[", SlotTags::empty()),
+            SlotHelper::primitive_message("[|", SlotTags::empty()),
             SlotHelper::primitive_message("(|", SlotTags::empty()),
             SlotHelper::primitive_message("//", SlotTags::empty()),
             SlotHelper::primitive_message("/*", SlotTags::empty()),

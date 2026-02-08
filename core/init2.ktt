@@ -552,3 +552,5 @@ $[
     newWithSizeFill = (| size . fill -- new | self (arrayNew) ) .
     copyRemoveAll = (| -- new | self size f self newWithSizeFill ) .
 |) self std traits array addTraitSlots
+
+

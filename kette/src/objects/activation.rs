@@ -2,8 +2,8 @@ use std::{alloc::Layout, mem};
 
 use crate::{
     Code, Handle, Header, HeapObject, LookupResult, Map, Object, ObjectKind,
-    ObjectType, Selector, SlotObject, Tagged, Value, Visitable, VisitedLink,
-    Visitor,
+    ObjectType, Selector, SlotObject, SlotTags, Tagged, Value, Visitable,
+    VisitedLink, Visitor,
 };
 
 #[repr(C)]
@@ -61,32 +61,46 @@ impl Activation {
 }
 
 impl ActivationObject {
+    /// Initialize an activation object.
+    ///
+    /// `total_slots` is the number of slots allocated (must match the layout).
+    /// `arguments` are the initial values for the first N slots (inputs).
+    /// Remaining slots (outputs/locals) are zeroed.
+    ///
     /// # Panics
-    /// arguments must have same length as map requires
+    /// Panics if `arguments.len() > total_slots`.
     pub fn init(
         &mut self,
         receiver: Handle<Value>,
         map: Handle<Map>,
         arguments: &[Handle<Value>],
+        total_slots: usize,
     ) {
         self.header = Header::new_object(ObjectType::Activation);
         self.map = map;
         self.receiver = receiver;
 
-        assert_eq!(
-            map.input_count(),
+        assert!(
+            arguments.len() <= total_slots,
+            "arguments ({}) must not exceed total_slots ({})",
             arguments.len(),
-            "map and arguments must be same length"
+            total_slots,
         );
 
         let ptr = self.slots.as_mut_ptr();
         // Safety: assumption activation object is allocated with correct size
         unsafe {
+            // Copy the provided arguments (inputs)
             std::ptr::copy_nonoverlapping(
                 arguments.as_ptr(),
                 ptr,
                 arguments.len(),
             );
+            // Zero-fill remaining slots (outputs/locals for named-param maps)
+            let remaining = total_slots - arguments.len();
+            if remaining > 0 {
+                std::ptr::write_bytes(ptr.add(arguments.len()), 0, remaining);
+            }
         };
     }
 
@@ -102,8 +116,9 @@ impl ActivationObject {
 
     #[inline]
     pub fn assignable_slots(&self) -> usize {
-        // Activations store only input values, not all map slots
-        self.map.input_count()
+        // For named-param maps, activations store all named slots (inputs + outputs).
+        // For regular maps, only input values.
+        self.map.total_named_slots()
     }
 
     #[inline]
@@ -118,6 +133,21 @@ impl ActivationObject {
         let len = self.assignable_slots();
         // SAFETY: pointer and length must be valid
         unsafe { std::slice::from_raw_parts_mut(self.slots_mut_ptr(), len) }
+    }
+
+    /// Set a slot at the given offset.
+    /// # Safety
+    /// Caller must ensure `index < assignable_slots()`.
+    #[inline]
+    pub unsafe fn set_slot_unchecked(&mut self, index: usize, value: Value) {
+        debug_assert!(
+            index < self.assignable_slots(),
+            "set_slot_unchecked out of bounds: {} >= {}",
+            index,
+            self.assignable_slots()
+        );
+        // SAFETY: Handle<Value> and Value have the same repr (u64)
+        unsafe { (self.slots_mut_ptr() as *mut Value).add(index).write(value) };
     }
 
     #[inline]
@@ -316,6 +346,37 @@ impl Object for ActivationObject {
         selector: Selector,
         link: Option<&VisitedLink>,
     ) -> LookupResult {
+        // Check own named parameters first (only if the map opts in)
+        if self.map.has_named_params() {
+            let self_ptr = self as *const Self as *mut Self;
+            let self_value = Tagged::new_ptr(self_ptr).as_tagged_value();
+
+            for (idx, slot_desc) in self.map.slots().iter().enumerate() {
+                if slot_desc.name.as_ptr() == selector.name.as_ptr() {
+                    let mut slot = *slot_desc;
+                    // For ASSIGNABLE (getter) slots, resolve the offset to the actual value
+                    if slot.tags().contains(SlotTags::ASSIGNABLE) {
+                        let offset: usize = slot
+                            .value
+                            .as_tagged_fixnum::<usize>()
+                            .expect("assignable slot must store offset")
+                            .into();
+                        // SAFETY: offset is valid by construction from the parser
+                        slot.value = unsafe {
+                            std::ptr::read(self.slots_ptr().add(offset))
+                                .as_value()
+                        };
+                    }
+                    return LookupResult::Found {
+                        object: self_value,
+                        slot,
+                        slot_index: idx,
+                        traversed_assignable_parent: false,
+                    };
+                }
+            }
+        }
+        // Fall back to receiver lookup
         self.receiver.as_value().lookup(selector, link)
     }
 }
@@ -325,7 +386,7 @@ impl HeapObject for ActivationObject {
     const TYPE_BITS: u8 = ObjectType::Activation as u8;
 
     fn heap_size(&self) -> usize {
-        let count = self.map.input_count();
+        let count = self.map.total_named_slots();
         mem::size_of::<Self>() + count * mem::size_of::<Value>()
     }
 }

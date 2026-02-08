@@ -239,7 +239,7 @@ pub trait Allocator: Sized {
 
         // SAFETY: Null code handle is valid for non-executable slot maps.
         let code = unsafe { Handle::null() };
-        self.allocate_slots_map(&slots, code, 0u64.into())
+        self.allocate_slots_map(&slots, code, 0u64.into(), 0)
     }
 
     fn allocate_slot_map_helper2(
@@ -257,7 +257,7 @@ pub trait Allocator: Sized {
             })
             .collect::<Vec<_>>();
 
-        self.allocate_slots_map(&slots, code, effect)
+        self.allocate_slots_map(&slots, code, effect, 0)
     }
 
     fn allocate_slots_map(
@@ -265,11 +265,12 @@ pub trait Allocator: Sized {
         slots: &[SlotDescriptor],
         code: Handle<Code>,
         effect: Tagged<u64>,
+        flags: usize,
     ) -> Handle<Map> {
         let layout = Map::required_layout(slots.len());
         // SAFETY: allocate_handle returns valid memory, init_with_data called immediately after.
         let mut map = unsafe { self.allocate_handle::<Map>(layout) };
-        map.init_with_data(slots, code, effect);
+        map.init_with_data(slots, code, effect, flags);
         map
     }
 
@@ -280,13 +281,13 @@ pub trait Allocator: Sized {
         output: u64,
     ) -> Handle<Map> {
         let effect = (input << 32) | output;
-        self.allocate_slots_map(&[], code, effect.into())
+        self.allocate_slots_map(&[], code, effect.into(), 0)
     }
 
     fn allocate_empty_map(&mut self) -> Handle<Map> {
         // SAFETY: Null code handle is valid for non-executable slot maps.
         let code = unsafe { Handle::null() };
-        self.allocate_slots_map(&[], code, 0u64.into())
+        self.allocate_slots_map(&[], code, 0u64.into(), 0)
     }
 
     fn allocate_slots(
@@ -314,6 +315,19 @@ pub trait Allocator: Sized {
         obj
     }
 
+    fn allocate_quotation_with_captures(
+        &mut self,
+        map: Handle<Map>,
+        parent: Handle<ActivationObject>,
+        captures: &[Value],
+    ) -> Handle<Quotation> {
+        let layout = Quotation::required_layout(captures.len());
+        // SAFETY: allocate_handle returns valid memory, init_with_captures called immediately.
+        let mut obj = unsafe { self.allocate_handle::<Quotation>(layout) };
+        obj.init_with_captures(map, parent, captures);
+        obj
+    }
+
     /// # Safety
     /// must be initialed with data afterwards
     unsafe fn allocate_activation_raw(
@@ -322,11 +336,12 @@ pub trait Allocator: Sized {
         map: Handle<Map>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
-        let layout = ActivationObject::required_layout(slots.len());
+        let total_slots = map.total_named_slots();
+        let layout = ActivationObject::required_layout(total_slots);
         // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj =
             unsafe { self.allocate_handle::<ActivationObject>(layout) };
-        obj.init(receiver, map, slots);
+        obj.init(receiver, map, slots, total_slots);
         obj
     }
 

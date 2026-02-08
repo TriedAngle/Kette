@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::{
-    Allocator, Array, ByteArray, ExecutionResult, Handle, ObjectType,
-    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, StringObject,
-    Value, primitives::inputs,
+    primitives::inputs, Allocator, Array, ByteArray, ExecutionResult, Handle,
+    ObjectType, PrimitiveContext, SlotDescriptor, SlotObject, SlotTags,
+    StringObject, Value,
 };
 
 #[inline]
@@ -64,6 +64,7 @@ pub fn add_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
         &new_slots,
         target_map.code,
         target_map.effect,
+        target_map.flags.into(),
     );
 
     target.map = new_map;
@@ -110,6 +111,7 @@ pub fn remove_trait_slots(ctx: &mut PrimitiveContext) -> ExecutionResult {
         &new_slots,
         target_map.code,
         target_map.effect,
+        target_map.flags.into(),
     );
 
     target.map = new_map;

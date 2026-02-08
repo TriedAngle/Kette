@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
 use crate::{
-    Allocator, BigNum, ExecutionResult, Handle, NumberError, PrimitiveContext,
-    Value, primitives::bool_object,
+    primitives::bool_object, Allocator, BigNum, ExecutionResult, Handle,
+    NumberError, PrimitiveContext, Value,
 };
 
 use crate::primitives::ratio::make_ratio_from_values;

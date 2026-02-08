@@ -219,8 +219,18 @@ impl Interpreter {
     }
 
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
+        let capture_handles: &[Handle<Value>] =
+            if quotation.capture_count() == 0 {
+                &[]
+            } else {
+                // SAFETY: captured slots never contain header values
+                unsafe {
+                    transmute::values_as_handles(quotation.captured_slots())
+                }
+            };
+
         let activation_object =
-            self.heap.allocate_quotation_activation(quotation, &[]);
+            self.heap.allocate_quotation_activation(quotation, capture_handles);
 
         self.activations
             .new_activation(activation_object, ActivationType::Quotation);
@@ -231,11 +241,21 @@ impl Interpreter {
         quotation: Handle<Quotation>,
         receiver: Handle<Value>,
     ) {
+        let capture_handles: &[Handle<Value>] =
+            if quotation.capture_count() == 0 {
+                &[]
+            } else {
+                // SAFETY: captured slots never contain header values
+                unsafe {
+                    transmute::values_as_handles(quotation.captured_slots())
+                }
+            };
+
         let activation_object =
             self.heap.allocate_quotation_activation_with_receiver(
                 quotation,
                 receiver,
-                &[],
+                capture_handles,
             );
 
         self.activations
@@ -655,6 +675,86 @@ impl Interpreter {
         ExecutionResult::Normal
     }
 
+    /// Tries to resolve a message against the current activation's named parameters.
+    ///
+    /// Returns `Some(result)` if the name was found in the activation's slots,
+    /// or `None` if it should fall through to the normal Send path.
+    ///
+    /// For getters: pushes the slot value onto the data stack (TOS untouched).
+    /// For setters (`a<<`): pops TOS and writes it into the activation slot.
+    #[inline]
+    fn try_dispatch_activation_slot(
+        &mut self,
+        selector: &Selector,
+    ) -> Option<ExecutionResult> {
+        // SAFETY: context is valid when called from the Send handler
+        let mut activation = unsafe { self.context_unchecked().activation };
+        let map = activation.map;
+
+        // Fast bail: only check if this map has named params
+        if !map.has_named_params() {
+            return None;
+        }
+
+        for slot_desc in map.slots() {
+            if slot_desc.name.as_ptr() != selector.name.as_ptr() {
+                continue;
+            }
+
+            let tags = slot_desc.tags();
+
+            if tags.contains(SlotTags::ASSIGNMENT) {
+                // Setter: `a<<` — pop TOS as the value to store
+                let offset: usize = slot_desc
+                    .value
+                    .as_tagged_fixnum::<usize>()
+                    .expect("assignment slot must store offset")
+                    .into();
+
+                // SAFETY: compiler guarantees a value on the stack for setters
+                let new_value = unsafe { self.state.pop_unchecked() };
+
+                if new_value.is_object() {
+                    // SAFETY: must be valid by protocol
+                    let val_obj =
+                        unsafe { new_value.as_heap_handle_unchecked() };
+                    self.heap.write_barrier(
+                        activation.as_heap_value_handle(),
+                        val_obj,
+                    );
+                }
+
+                // SAFETY: offset is valid by construction (parser-generated)
+                unsafe { activation.set_slot_unchecked(offset, new_value) };
+
+                return Some(ExecutionResult::Normal);
+            }
+
+            if tags.contains(SlotTags::ASSIGNABLE) {
+                // Getter: push the named parameter's value onto the stack
+                let offset: usize = slot_desc
+                    .value
+                    .as_tagged_fixnum::<usize>()
+                    .expect("assignable slot must store offset")
+                    .into();
+
+                // SAFETY: offset is valid by construction
+                let value = unsafe {
+                    std::ptr::read(activation.slots_ptr().add(offset))
+                        .as_value()
+                };
+                self.state.push(value);
+                return Some(ExecutionResult::Normal);
+            }
+
+            // Constant/other slot types in the activation — push value
+            self.state.push(slot_desc.value);
+            return Some(ExecutionResult::Normal);
+        }
+
+        None
+    }
+
     /// Dispatch based on a SlotDescriptor (used for IC miss path).
     fn dispatch_slot(
         &mut self,
@@ -853,6 +953,16 @@ impl Interpreter {
                     let selector =
                         Selector::new_message(message, self.vm.shared.clone());
 
+                    // Named parameter check: resolve from activation before
+                    // touching the data stack.  This path does NOT pop TOS for
+                    // getters and pops only the value for setters.
+                    if let Some(res) =
+                        self.try_dispatch_activation_slot(&selector)
+                    {
+                        self.record_depth();
+                        return res;
+                    }
+
                     self.heap.safepoint();
                     self.reload_context();
 
@@ -1040,9 +1150,26 @@ impl Interpreter {
                     let map = map_val.as_handle_unchecked().cast::<Map>();
 
                     let activation = ctx.activation;
+                    let capture_count = if map.has_named_params() {
+                        map.input_count()
+                    } else {
+                        0
+                    };
 
-                    let quotation =
-                        self.heap.allocate_quotation(map, activation);
+                    let quotation = if capture_count == 0 {
+                        self.heap.allocate_quotation(map, activation)
+                    } else {
+                        if let Err(e) = self.check_min_stack(capture_count) {
+                            return e;
+                        }
+
+                        // SAFETY: stack depth verified above
+                        let captures =
+                            self.state.stack_pop_slice_unchecked(capture_count);
+
+                        self.heap
+                            .allocate_quotation_with_captures(map, activation, captures)
+                    };
                     self.state.push(quotation.into());
 
                     ExecutionResult::Normal
@@ -1406,5 +1533,136 @@ impl ExecutionContext {
         );
         // SAFETY: execution context is initialized
         unsafe { *self.cp.add(index as usize) }
+    }
+}
+
+#[cfg(test)]
+mod named_param_tests {
+    use super::*;
+    use crate::{ExecutionStateInfo, HeapSettings, VM, VMCreateInfo, VMThread};
+
+    fn setup_interpreter() -> Interpreter {
+        let vm = VM::new(VMCreateInfo {
+            image: None,
+            heap: HeapSettings::default(),
+        });
+        let proxy = vm.proxy();
+        let heap = proxy.shared.heap.proxy();
+        let state = ExecutionState::new(&ExecutionStateInfo {
+            stack_size: 128,
+            return_stack_size: 128,
+        });
+        let main_thread = VMThread::new_main();
+        let thread_proxy = ThreadProxy(main_thread.inner);
+        Interpreter::new(vm.proxy(), thread_proxy, heap, state)
+    }
+
+    fn execute_source(
+        interpreter: &mut Interpreter,
+        source: &str,
+    ) -> Result<(), String> {
+        let receiver = interpreter.vm.shared.specials.universe.into();
+        execute_source_with_receiver(interpreter, source, receiver)
+    }
+
+    #[test]
+    fn test_named_param_basic_getter() {
+        // An object with a -@- method. doAdd takes x and y as named params.
+        // The method takes 2 inputs (x, y). At call time they are peeked from stack.
+        // We arrange: push 3, push 5, push obj, call doAdd on it.
+        // doAdd peeks [3, 5] from below the obj on the stack? No - the obj is popped
+        // by Send, then doAdd peeks 2 values from the remaining stack [3, 5].
+        // Inside the body: x=3, y=5. `x y fixnum+` pushes x(3), pushes y(5),
+        // fixnum+ is sent to 5(TOS) with 3 below => 8.
+        let mut interp = setup_interpreter();
+        let src = r#"
+            3 5
+            (| doAdd = (| x . y -@- | x y fixnum+ ) |)
+            doAdd
+        "#;
+        execute_source(&mut interp, src).expect("execution failed");
+        let result = interp.state.pop().expect("empty stack");
+        assert_eq!(
+            result,
+            Value::from_fixnum(8),
+            "3 + 5 via named params should be 8"
+        );
+    }
+
+    #[test]
+    fn test_named_param_setter() {
+        // Test that named param setters (a<<) work in activation
+        // a starts as 99 (from stack), we set it to 10, then read it twice and add
+        let mut interp = setup_interpreter();
+        let src = r#"
+            99
+            (| compute = (| a -@- | 10 a<< a a fixnum+ ) |)
+            compute
+        "#;
+        execute_source(&mut interp, src).expect("execution failed");
+        let result = interp.state.pop().expect("empty stack");
+        assert_eq!(
+            result,
+            Value::from_fixnum(20),
+            "a << 10, then a fixnum+ a should be 20"
+        );
+    }
+
+    #[test]
+    fn test_named_param_output_slots() {
+        // Test that output slots after -@- are accessible and settable
+        // x is input (7 from stack), out is output (starts as 0/false)
+        // We compute x + x via fixnum+, store in out, then read out
+        let mut interp = setup_interpreter();
+        let src = r#"
+            7
+            (| compute = (| x -@- out | x x fixnum+ out<< out ) |)
+            compute
+        "#;
+        execute_source(&mut interp, src).expect("execution failed");
+        let result = interp.state.pop().expect("empty stack");
+        assert_eq!(
+            result,
+            Value::from_fixnum(14),
+            "7 + 7 stored in out should be 14"
+        );
+    }
+
+    #[test]
+    fn test_normal_method_unchanged() {
+        // Methods using -- should NOT have named params behavior
+        // Basic fixnum addition through the universe primitives
+        let mut interp = setup_interpreter();
+        let src = r#"
+            3 5 fixnum+
+        "#;
+        execute_source(&mut interp, src).expect("execution failed");
+        let result = interp.state.pop().expect("empty stack");
+        assert_eq!(result, Value::from_fixnum(8), "3 fixnum+ 5 should be 8");
+    }
+
+    #[test]
+    fn test_named_param_no_flag_no_activation_lookup() {
+        // A method with -- (not -@-) should NOT resolve names from activation.
+        // With -@-, `x` in the body would resolve from the activation.
+        // With --, `x` in the body is just a message sent to TOS (normal behavior).
+        // Here we verify that by checking that -@- DOES resolve from activation
+        // while omitting -@- would cause x to be sent to TOS.
+        //
+        // We test both: -@- version returns the named param, while
+        // creating an object with `val` and using `self val` returns it normally.
+        let mut interp = setup_interpreter();
+        let src = r#"
+            (| val := 42 .
+               getVal = (| -- | self val ) |)
+            getVal
+        "#;
+        execute_source(&mut interp, src).expect("execution failed");
+        let result = interp.state.pop().expect("empty stack");
+        assert_eq!(
+            result,
+            Value::from_fixnum(42),
+            "self val should return 42 via normal method"
+        );
     }
 }

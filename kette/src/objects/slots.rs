@@ -52,6 +52,7 @@ pub struct Map {
     pub header: Header,
     pub code: Handle<Code>,
     pub effect: Tagged<u64>,
+    pub flags: Tagged<usize>,
     pub assignable_slots: Tagged<usize>,
     pub data_slots: Tagged<usize>,
     pub total_slots: Tagged<usize>,
@@ -100,6 +101,31 @@ impl SlotDescriptor {
 }
 
 impl Map {
+    /// Flag indicating that this map's method/quotation uses named parameters.
+    /// When set, activations created from this map will have their named
+    /// parameter slots accessible via the lookup algorithm.
+    pub const FLAG_NAMED_PARAMS: usize = 1 << 0;
+
+    /// Returns true if this map uses named parameters (opt-in via `-@-` or `[| ... |`).
+    #[inline]
+    #[must_use]
+    pub fn has_named_params(&self) -> bool {
+        let f: usize = self.flags.into();
+        f & Self::FLAG_NAMED_PARAMS != 0
+    }
+
+    /// Returns the total number of named slots (inputs + outputs) for named-param maps.
+    /// For non-named-param maps, returns `input_count()` for backwards compatibility.
+    #[inline]
+    #[must_use]
+    pub fn total_named_slots(&self) -> usize {
+        if self.has_named_params() {
+            self.input_count() + self.output_count()
+        } else {
+            self.input_count()
+        }
+    }
+
     pub fn collect_values(&mut self, values: &[Value]) -> Vec<Value> {
         let assignable_count = self.assignable_slots_count();
         let mut object_storage = Vec::with_capacity(assignable_count);
@@ -128,6 +154,7 @@ impl Map {
         slots: &[SlotDescriptor],
         code_ptr: Handle<Code>,
         effect: Tagged<u64>,
+        flags: usize,
     ) {
         let data_slots = slots.iter().filter(|s| s.is_data_consumer()).count();
 
@@ -155,6 +182,7 @@ impl Map {
                 total_slots,
                 code_ptr,
                 effect,
+                flags,
             )
         };
     }
@@ -171,11 +199,13 @@ impl Map {
         total_slots: usize,
         code_ptr: Handle<Code>,
         effect: Tagged<u64>,
+        flags: usize,
     ) {
         self.assignable_slots = assignable_slots.into();
         self.data_slots = data_slots.into();
         self.total_slots = total_slots.into();
         self.hotness = 0usize.into();
+        self.flags = flags.into();
         // SAFETY: safe if contract holds
         self.header = Header::new_map();
         self.code = code_ptr;
