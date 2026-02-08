@@ -18,6 +18,7 @@ bitflags! {
         const PARENT = 1 << 0;
         const ASSIGNABLE = 1 << 1;
         const PRIMITIVE = 1 << 2;
+        const IMPLICIT = 1 << 3;
         const ASSIGNMENT = 1 << 4;
     }
 }

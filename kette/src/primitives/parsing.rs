@@ -115,6 +115,8 @@ fn parse_lambda_quotation(
     let mut slot_descs: Vec<SlotDescriptor> = Vec::new();
     let mut assignable_offset: i64 = 0;
     let mut inputs_count: u32 = 0;
+    let equals_msg = ctx.vm.intern_string_message("=", ctx.heap);
+    let assign_msg = ctx.vm.intern_string_message(":=", ctx.heap);
 
     // Parse parameter declarations until closing `|`
     loop {
@@ -149,28 +151,70 @@ fn parse_lambda_quotation(
         let raw_name_str = name_msg.value.as_utf8().expect("valid utf8");
         let name_ba = ctx.vm.intern_string(raw_name_str, ctx.heap);
 
+        // Parse operator after name
+        let mut output = [Handle::<Value>::zero()];
+        let res =
+            parse_next(&mut ctx.new_invoke(ctx.receiver, &[], &mut output));
+        if res != ExecutionResult::Normal {
+            return parser_error(ctx, "Failed parsing lambda parameter");
+        }
+
+        let op_val = output[0].as_value();
+        let op_msg = op_val
+            .as_message_handle()
+            .ok_or("Expected operator or terminator after lambda name")
+            .map_err(|e| parser_error(ctx, e))
+            .expect("get message");
+
+        let (is_implicit, make_setter, terminator) =
+            if op_msg == dot_msg || op_msg == pipe_msg {
+                // Implicit capture
+                (true, true, op_msg)
+            } else if op_msg == equals_msg || op_msg == assign_msg {
+                // Parse value expression until '.' or '|'
+                let (res, term_opt) =
+                    parse_until_inner(ctx, &[dot_msg, pipe_msg], accumulator);
+                if res != ExecutionResult::Normal {
+                    return res;
+                }
+                let term = term_opt.expect("get terminator");
+                (false, op_msg == assign_msg, term)
+            } else {
+                return parser_error(
+                    ctx,
+                    "Expected '.', '|' or assignment in lambda",
+                );
+            };
+
         let offset_val = Value::from_fixnum(assignable_offset);
         assignable_offset += 1;
 
-        // Create getter slot
-        slot_descs.push(SlotDescriptor::new(
-            name_ba,
-            SlotTags::ASSIGNABLE,
-            offset_val,
-        ));
+        let mut tags = SlotTags::ASSIGNABLE;
+        if is_implicit {
+            tags |= SlotTags::IMPLICIT;
+        }
 
-        // Create setter slot (name<<)
-        let mut setter_name = String::with_capacity(raw_name_str.len() + 2);
-        setter_name.push_str(raw_name_str);
-        setter_name.push_str("<<");
-        let setter_ba = ctx.vm.intern_string(&setter_name, ctx.heap);
-        slot_descs.push(SlotDescriptor::new(
-            setter_ba,
-            SlotTags::ASSIGNMENT,
-            offset_val,
-        ));
+        // Create getter slot
+        slot_descs.push(SlotDescriptor::new(name_ba, tags, offset_val));
+
+        // Create setter slot (name<<) when requested
+        if make_setter {
+            let mut setter_name = String::with_capacity(raw_name_str.len() + 2);
+            setter_name.push_str(raw_name_str);
+            setter_name.push_str("<<");
+            let setter_ba = ctx.vm.intern_string(&setter_name, ctx.heap);
+            slot_descs.push(SlotDescriptor::new(
+                setter_ba,
+                SlotTags::ASSIGNMENT,
+                offset_val,
+            ));
+        }
 
         inputs_count += 1;
+
+        if terminator == pipe_msg {
+            break;
+        }
     }
 
     // Parse the body until `]`

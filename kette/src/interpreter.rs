@@ -1159,16 +1159,56 @@ impl Interpreter {
                     let quotation = if capture_count == 0 {
                         self.heap.allocate_quotation(map, activation)
                     } else {
+                        let mut implicit_count = 0usize;
+                        for slot_desc in map.slots() {
+                            let tags = slot_desc.tags();
+                            if tags.contains(SlotTags::ASSIGNABLE)
+                                && !tags.contains(SlotTags::ASSIGNMENT)
+                                && tags.contains(SlotTags::IMPLICIT)
+                            {
+                                implicit_count += 1;
+                            }
+                        }
+
                         if let Err(e) = self.check_min_stack(capture_count) {
                             return e;
                         }
 
                         // SAFETY: stack depth verified above
-                        let captures =
+                        let all_vals =
                             self.state.stack_pop_slice_unchecked(capture_count);
+                        let (implicit_vals, explicit_vals) =
+                            all_vals.split_at(implicit_count);
 
-                        self.heap
-                            .allocate_quotation_with_captures(map, activation, captures)
+                        let mut explicit_iter = explicit_vals.iter();
+                        let mut implicit_iter = implicit_vals.iter();
+                        let mut captures =
+                            Vec::with_capacity(capture_count);
+
+                        for slot_desc in map.slots() {
+                            let tags = slot_desc.tags();
+                            if tags.contains(SlotTags::ASSIGNABLE)
+                                && !tags.contains(SlotTags::ASSIGNMENT)
+                            {
+                                if tags.contains(SlotTags::IMPLICIT) {
+                                    let val = implicit_iter
+                                        .next()
+                                        .expect("implicit values mismatch");
+                                    captures.push(*val);
+                                } else {
+                                    let val = explicit_iter
+                                        .next()
+                                        .expect("explicit values mismatch");
+                                    captures.push(*val);
+                                }
+                            }
+                        }
+
+                        self.heap.allocate_quotation_with_captures(
+                            map,
+                            activation,
+                            &captures,
+                        )
                     };
                     self.state.push(quotation.into());
 
