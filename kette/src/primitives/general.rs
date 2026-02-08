@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use crate::{
     Allocator, Array, ByteArray, ExecutionResult, Handle, ObjectType,
-    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, Value,
-    primitives::inputs,
+    PrimitiveContext, SlotDescriptor, SlotObject, SlotTags, StringObject,
+    Value, primitives::inputs,
 };
 
 #[inline]
@@ -12,7 +12,7 @@ fn is_constant_slot(tags: SlotTags) -> bool {
 }
 
 #[inline]
-fn name_key(name: Handle<ByteArray>) -> usize {
+fn name_key(name: Handle<StringObject>) -> usize {
     name.as_ptr() as usize
 }
 

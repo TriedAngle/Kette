@@ -289,7 +289,8 @@ pub fn float_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let value = unsafe { ctx.receiver.cast::<Float>() };
     let string = value.value.to_string();
     let ba = ctx.heap.allocate_aligned_bytearray(string.as_bytes(), 8);
-    ctx.outputs[0] = ba.into();
+    let string = ctx.heap.allocate_string(ba);
+    ctx.outputs[0] = string.into();
     ExecutionResult::Normal
 }
 

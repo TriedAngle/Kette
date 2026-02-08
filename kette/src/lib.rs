@@ -38,6 +38,7 @@ pub use objects::quotations::Quotation;
 pub use objects::slots::{
     Map, SlotDescriptor, SlotHelper, SlotObject, SlotTags,
 };
+pub use objects::strings::StringObject;
 pub use objects::threads::{
     NativeThread, ThreadInfo, ThreadObject, ThreadProxy, ThreadShared,
     ThreadState, VMThread,

@@ -17,9 +17,11 @@ fn execute_source(
     source: &str,
 ) -> Result<(), String> {
     // Allocate parser on the GC heap (not Rust heap via Box)
-    let parser = interpreter
-        .heap
-        .allocate_parser(&interpreter.vm.shared.strings, source.as_bytes());
+    let parser = interpreter.heap.allocate_parser(
+        &interpreter.vm.shared.strings,
+        interpreter.vm.shared.specials.universe,
+        source.as_bytes(),
+    );
 
     let parse_msg = interpreter
         .vm

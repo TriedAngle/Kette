@@ -15,11 +15,14 @@ $[
             fixnum = 0 parent* .
             float = 0.0 parent* .
             bignum = 0 fixnum>bignum parent* .
-            bytearray = "incredible" parent* .
+            string = "incredible" parent* .
+            bytearray = "incredible" string>bytearray parent* .
             quotation = [ ] parent* .
             number = (| |) .
             callable = (| |) .
             boolean = (| |) .
+            true = (| |) .
+            false = (| |) .
         |) .
         collections = (| |) .
     |) .
@@ -29,30 +32,30 @@ $[
     f = 0 1 fixnum= .
 |) universe addTraitSlots ]
 
-/*
-(| 
-    defaultBehavior* = (|
-        
-    |)
-|) dup std traits clonable addTraitSlots std traits oddball addTraitSlots
-*/
-
 (| addBoolAbilities = (| -- |
-    (| parent* = (| parent* = std traits boolean |) |) t addTraitSlots
-    (| parent* = (| parent* = std traits boolean |) |) f addTraitSlots
+    (| parent* = std traits oddball |) std traits boolean addTraitSlots
+    (| parent* = std traits boolean |) std traits true addTraitSlots
+    (| parent* = std traits boolean |) std traits false addTraitSlots
+
+    (| parent* = std traits true |) t addTraitSlots
+    (| parent* = std traits false |) f addTraitSlots
     
     (| 
         not = (| -- ? | f ) .
         && = (| other -- ? | ) . 
         >string = "t" .
-    |) t parent* addTraitSlots
+    |) std traits true addTraitSlots
 
     (| 
         not = (| -- ? | t ) .
         && = (| other -- ? | drop self ) .
         >string = "f" .
-    |) f parent* addTraitSlots 
+    |) std traits false addTraitSlots 
 ) |)  addBoolAbilities
+
+(| 
+    defaultBehavior* = (| parent* = std traits true |)
+|) universe addTraitSlots
 
 
 (|  parent* = std traits clonable .
@@ -143,8 +146,18 @@ $[
         [ 0 -rot memcpyFull ] 2keep // lhs new
         [ size self ] dip 
         [ memcpyFull ] keep ) .
-    >string = (| -- str | self ) .
+    >string = (| -- str | self bytearray>string ) .
 |) std traits bytearray addTraitSlots
+
+(| 
+    clonable* = std traits clonable .
+    print = (| -- | self (print) ) .
+    println = (| -- | self (println) ) .
+    size = (| -- | self stringSize ) .
+    >bytearray = (| -- ba | self string>bytearray ) .
+    >message = (| -- msg | self string>message ) .
+    >string = (| -- str | self ) .
+|) std traits string addTraitSlots
 
 (| 
     call = f  .
@@ -209,12 +222,6 @@ $[
     \ = (| accum -- accum | self parseNext std box >box over push ) .
     t = (| accum -- accum | t over push ) .
     f = (| accum -- accum | f over push ) .
-|) parsers addTraitSlots 
-]
-
-$[
-(| 
-    { = (| accum -- accum | \ } box> self parseUntil over push ) . 
 |) parsers addTraitSlots 
 ]
 

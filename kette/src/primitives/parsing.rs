@@ -40,14 +40,13 @@ pub fn parse_next(ctx: &mut PrimitiveContext) -> ExecutionResult {
         }
         ParsedToken::String(token) => {
             let s = parser.get_token_string(token);
-            let ba = ctx.vm.intern_string(s, heap);
-            ctx.outputs[0] = ba.into();
+            let string = ctx.vm.intern_string(s, heap);
+            ctx.outputs[0] = string.into();
         }
         ParsedToken::Identifier(token) => {
             let s = parser.get_token_string(token);
-
-            let ba = ctx.vm.intern_string(s, heap);
-            let message = ctx.vm.intern_message(ba, heap);
+            let string = ctx.vm.intern_string(s, heap);
+            let message = ctx.vm.intern_message(string, heap);
             ctx.outputs[0] = message.into();
         }
     }
@@ -82,6 +81,25 @@ pub fn parse_quotation(ctx: &mut PrimitiveContext) -> ExecutionResult {
 
     ctx.outputs[0] = accumulator.into();
 
+    ExecutionResult::Normal
+}
+
+pub fn parse_array(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: must exist by contract
+    let mut accumulator = unsafe { ctx.inputs[0].cast::<Vector>() };
+
+    let body_accum = Vector::new(ctx.heap, &ctx.vm.shared, 32);
+    let end = ctx.vm.intern_string_message("}", ctx.heap);
+
+    let (res, _) = parse_until_inner(ctx, &[end], body_accum);
+    if res != ExecutionResult::Normal {
+        return parser_error(ctx, "Failed parsing array");
+    }
+
+    let body = ctx.heap.allocate_array(body_accum.as_slice());
+    accumulator.push(body.into(), ctx.heap, &ctx.vm.shared);
+
+    ctx.outputs[0] = accumulator.into();
     ExecutionResult::Normal
 }
 

@@ -28,6 +28,25 @@ pub fn bignum_to_fixnum_checked(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
+pub fn bignum_to_float(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let bignum = unsafe { ctx.receiver.cast::<BigNum>() };
+    let mut value = 0.0f64;
+    for &limb in bignum.limbs().iter().rev() {
+        value = value * 18446744073709551616.0 + (limb as f64);
+        if !value.is_finite() {
+            return ExecutionResult::Panic(
+                "bignum>float: value out of range".to_string(),
+            );
+        }
+    }
+    if bignum.sign < 0 {
+        value = -value;
+    }
+    let float = ctx.heap.allocate_float(value);
+    ctx.outputs[0] = float.into();
+    ExecutionResult::Normal
+}
+
 pub fn parent(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let p = ctx.vm.specials().bignum_traits;
     ctx.outputs[0] = p.into();

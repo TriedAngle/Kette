@@ -71,6 +71,7 @@ impl BytecodeCompiler {
                 | ObjectType::Alien
                 | ObjectType::Array
                 | ObjectType::ByteArray
+                | ObjectType::String
                 | ObjectType::Float
                 | ObjectType::Thread
                 | ObjectType::BigNum => {

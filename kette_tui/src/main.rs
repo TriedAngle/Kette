@@ -8,9 +8,8 @@ use crossterm::{
     },
 };
 use kette::{
-    Allocator, ExecutionResult, ExecutionState, ExecutionStateInfo,
-    HeapSettings, Interpreter, ThreadProxy, VM, VMCreateInfo, VMThread,
-    execute_source_with_receiver,
+    ExecutionState, ExecutionStateInfo, HeapSettings, Interpreter, ThreadProxy,
+    VM, VMCreateInfo, VMThread, execute_source_with_receiver,
 };
 use ratatui::{
     Terminal,

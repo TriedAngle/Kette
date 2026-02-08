@@ -1,8 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    Allocator, ByteArray, BytecodeWriter, Handle, Heap, HeapProxy,
-    HeapSettings, HeapValue, Map, Message, SlotHelper, SlotTags, Strings,
+    Allocator, BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings,
+    HeapValue, Map, Message, SlotHelper, SlotTags, StringObject, Strings,
     interning::Messages, primitive_index, primitives::Vector,
 };
 
@@ -15,6 +15,7 @@ pub struct SpecialObjects {
     pub stack_object: Handle<HeapValue>,
 
     pub bytearray_traits: Handle<HeapValue>,
+    pub string_traits: Handle<HeapValue>,
     pub array_traits: Handle<HeapValue>,
     pub fixnum_traits: Handle<HeapValue>,
     pub float_traits: Handle<HeapValue>,
@@ -34,7 +35,6 @@ pub struct SpecialObjects {
     pub message_create_object: Handle<Message>,
     pub message_create_quotation: Handle<Message>,
 
-    // IC sentinels
     #[cfg(feature = "inline-cache")]
     pub uninitialized_ic_sentinel: Handle<HeapValue>,
     #[cfg(feature = "inline-cache")]
@@ -176,6 +176,7 @@ impl VM {
             SlotHelper::primitive_message("fixnum<=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>=", SlotTags::empty()),
             SlotHelper::primitive_message("fixnum>string", SlotTags::empty()),
+            SlotHelper::primitive_message("fixnum>float", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "fixnumParent", SlotTags::empty()),
         ]);
 
@@ -221,6 +222,7 @@ impl VM {
             SlotHelper::primitive_message("(bytearrayAtPut)", SlotTags::empty()),
             SlotHelper::primitive_message("(bytearrayMemset)", SlotTags::empty()),
             SlotHelper::primitive_message("(bytearrayMemcpy)", SlotTags::empty()),
+            SlotHelper::primitive_message("bytearray>string", SlotTags::empty()),
             SlotHelper::primitive_message("bytearrayU16At", SlotTags::empty()),
             SlotHelper::primitive_message("bytearrayI16At", SlotTags::empty()),
             SlotHelper::primitive_message("bytearrayU32At", SlotTags::empty()),
@@ -233,6 +235,16 @@ impl VM {
             SlotHelper::primitive_message("bytearrayI32AtPut", SlotTags::empty()),
             SlotHelper::primitive_message("bytearrayU64AtPut", SlotTags::empty()),
             SlotHelper::primitive_message("bytearrayI64AtPut", SlotTags::empty()),
+        ]);
+
+        #[rustfmt::skip]
+        let string_map = heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::primitive_message("(print)", SlotTags::empty()),
+            SlotHelper::primitive_message("(println)", SlotTags::empty()),
+            SlotHelper::primitive_message2("parent*", "stringParent", SlotTags::empty()),
+            SlotHelper::primitive_message("stringSize", SlotTags::empty()),
+            SlotHelper::primitive_message("string>bytearray", SlotTags::empty()),
+            SlotHelper::primitive_message("string>message", SlotTags::empty()),
         ]);
 
         #[rustfmt::skip]
@@ -249,7 +261,7 @@ impl VM {
         let quotation_map = heap.allocate_slot_map_helper(strings, &[
             SlotHelper::primitive_message("(call)", SlotTags::empty()),
             SlotHelper::primitive_message("dip", SlotTags::empty()),
-            SlotHelper::primitive_message("if", SlotTags::empty()),
+            // SlotHelper::primitive_message("if", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "quotationParent", SlotTags::empty()),
             SlotHelper::primitive_message("(withHandler)", SlotTags::empty()),
         ]);
@@ -286,6 +298,7 @@ impl VM {
             SlotHelper::primitive_message("(|", SlotTags::empty()),
             SlotHelper::primitive_message("//", SlotTags::empty()),
             SlotHelper::primitive_message("/*", SlotTags::empty()),
+            SlotHelper::primitive_message("{", SlotTags::empty()),
             SlotHelper::primitive_message("$[", SlotTags::empty()),
         ]);
 
@@ -327,15 +340,22 @@ impl VM {
             SlotHelper::primitive_message("bignum>", SlotTags::empty()),
             SlotHelper::primitive_message("bignum<=", SlotTags::empty()),
             SlotHelper::primitive_message("bignum>=", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum>float", SlotTags::empty()),
             SlotHelper::primitive_message2("parent*", "bignumParent", SlotTags::empty()),
         ]);
 
         // SAFETY: No GC can occur during initialization; all special objects are fully initialized before use.
         unsafe {
-            let primitive_vector_map = Vector::new_map(&mut heap, strings);
+            let universe =
+                heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
+
+            let primitive_vector_map =
+                Vector::new_map(&mut heap, strings, universe);
 
             let bytearray_traits =
                 heap.allocate_slots(bytearray_map, &[]).cast();
+
+            let string_traits = heap.allocate_slots(string_map, &[]).cast();
 
             let array_traits = heap.allocate_slots(array_map, &[]).cast();
 
@@ -356,9 +376,6 @@ impl VM {
 
             let false_object =
                 heap.allocate_slots(empty_map, &[]).cast::<HeapValue>();
-
-            let universe =
-                heap.allocate_slots(universe_map, &[]).cast::<HeapValue>();
 
             // SAFETY: just allocated
             let dip_body = heap.allocate_array(&[]);
@@ -400,6 +417,7 @@ impl VM {
                 parsers: parsers.cast(),
                 stack_object: stack_object.cast(),
                 bytearray_traits,
+                string_traits,
                 array_traits,
                 fixnum_traits,
                 float_traits,
@@ -429,16 +447,16 @@ impl VM {
         &self,
         s: &str,
         heap: &mut HeapProxy,
-    ) -> Handle<ByteArray> {
+    ) -> Handle<StringObject> {
         self.inner.strings.get(s, heap)
     }
 
     pub fn intern_message(
         &self,
-        interned_bytearray: Handle<ByteArray>,
+        interned_string: Handle<StringObject>,
         heap: &mut HeapProxy,
     ) -> Handle<Message> {
-        self.inner.messages.get(interned_bytearray, heap)
+        self.inner.messages.get(interned_string, heap)
     }
 
     pub fn intern_string_message(
@@ -446,8 +464,8 @@ impl VM {
         s: &str,
         heap: &mut HeapProxy,
     ) -> Handle<Message> {
-        let bytearray = self.intern_string(s, heap);
-        self.intern_message(bytearray, heap)
+        let string = self.intern_string(s, heap);
+        self.intern_message(string, heap)
     }
 }
 
@@ -464,16 +482,16 @@ impl VMProxy {
         &self,
         s: &str,
         heap: &mut HeapProxy,
-    ) -> Handle<ByteArray> {
+    ) -> Handle<StringObject> {
         self.shared.strings.get(s, heap)
     }
 
     pub fn intern_message(
         &self,
-        interned_bytearray: Handle<ByteArray>,
+        interned_string: Handle<StringObject>,
         heap: &mut HeapProxy,
     ) -> Handle<Message> {
-        self.shared.messages.get(interned_bytearray, heap)
+        self.shared.messages.get(interned_string, heap)
     }
 
     pub fn intern_string_message(
@@ -481,8 +499,8 @@ impl VMProxy {
         s: &str,
         heap: &mut HeapProxy,
     ) -> Handle<Message> {
-        let bytearray = self.intern_string(s, heap);
-        self.intern_message(bytearray, heap)
+        let string = self.intern_string(s, heap);
+        self.intern_message(string, heap)
     }
 
     #[must_use]
@@ -503,6 +521,7 @@ impl SpecialObjects {
                 self.parsers,
                 self.stack_object,
                 self.bytearray_traits,
+                self.string_traits,
                 self.array_traits,
                 self.fixnum_traits,
                 self.float_traits,
@@ -539,6 +558,7 @@ impl SpecialObjects {
                 parsers: Handle::null(),
                 stack_object: Handle::null(),
                 bytearray_traits: Handle::null(),
+                string_traits: Handle::null(),
                 array_traits: Handle::null(),
                 fixnum_traits: Handle::null(),
                 float_traits: Handle::null(),

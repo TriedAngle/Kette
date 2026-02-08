@@ -358,6 +358,10 @@ impl Interpreter {
                 let traits = self.vm.specials().bytearray_traits;
                 Some(unsafe { traits.cast::<SlotObject>() }.map)
             }
+            ObjectType::String => {
+                let traits = self.vm.specials().string_traits;
+                Some(unsafe { traits.cast::<SlotObject>() }.map)
+            }
             ObjectType::Float => {
                 let traits = self.vm.specials().float_traits;
                 Some(unsafe { traits.cast::<SlotObject>() }.map)
@@ -1213,9 +1217,11 @@ pub fn execute_source_with_receiver(
     source: &str,
     receiver: Handle<Value>,
 ) -> Result<(), String> {
-    let parser = interpreter
-        .heap
-        .allocate_parser(&interpreter.vm.shared.strings, source.as_bytes());
+    let parser = interpreter.heap.allocate_parser(
+        &interpreter.vm.shared.strings,
+        interpreter.vm.shared.specials.universe,
+        source.as_bytes(),
+    );
 
     let parse_msg = interpreter
         .vm

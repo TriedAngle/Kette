@@ -372,8 +372,21 @@ pub fn fixnum_to_utf8_bytes(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
     let string = value.to_string();
     let ba = ctx.heap.allocate_aligned_bytearray(string.as_bytes(), 8);
+    let string = ctx.heap.allocate_string(ba);
     // SAFETY: no gc here
-    ctx.outputs[0] = ba.into();
+    ctx.outputs[0] = string.into();
+    ExecutionResult::Normal
+}
+
+pub fn fixnum_to_float(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    if !ctx.receiver.inner().is_fixnum() {
+        return ExecutionResult::Panic(
+            "fixnum>float: receiver must be a fixnum".to_string(),
+        );
+    }
+    let value = unsafe { ctx.receiver.as_fixnum::<i64>() };
+    let float = ctx.heap.allocate_float(value as f64);
+    ctx.outputs[0] = float.into();
     ExecutionResult::Normal
 }
 

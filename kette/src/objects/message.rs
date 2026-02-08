@@ -1,20 +1,20 @@
 use std::mem;
 
 use crate::{
-    ByteArray, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
-    ObjectType, Selector, Visitable, VisitedLink,
+    Handle, Header, HeapObject, LookupResult, Object, ObjectKind, ObjectType,
+    Selector, StringObject, Visitable, VisitedLink,
 };
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Message {
     pub header: Header,
-    pub value: Handle<ByteArray>,
+    pub value: Handle<StringObject>,
 }
 
 impl Message {
     /// initialize message
-    pub fn init(&mut self, value: Handle<ByteArray>) {
+    pub fn init(&mut self, value: Handle<StringObject>) {
         self.header = Header::new_object(ObjectType::Message);
         self.value = value;
     }

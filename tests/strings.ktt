@@ -1,0 +1,2 @@
+"hello" >bytearray (bytearraySize) 5 = [ "t" println ] [ "f" println ] if
+"ping" string>message messageName println

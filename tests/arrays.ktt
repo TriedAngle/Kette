@@ -1,0 +1,2 @@
+{ 1 2 3 } size 3 = [ "t" println ] [ "f" println ] if
+{ } size 0 = [ "t" println ] [ "f" println ] if

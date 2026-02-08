@@ -1,31 +1,67 @@
 use crate::{
-    Allocator, ByteArray, ExecutionResult, ObjectType, PrimitiveContext, Value,
-    primitives::inputs,
+    Allocator, ByteArray, ExecutionResult, ObjectType, PrimitiveContext,
+    StringObject, Value, primitives::inputs,
 };
 use std::{mem, ptr};
 
 pub fn bytearray_print(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    // SAFETY: receiver must be valid Bytarray
-    let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
-    let data = ba.as_bytes();
-    let value = std::str::from_utf8(data).expect("valid utf8 encoding");
-
-    if let Err(e) = write!(ctx.interpreter.output, "{}", value) {
-        return ExecutionResult::Panic(format!("IO Error: {}", e));
-    }
+    // SAFETY: receiver must be valid bytearray or string
+    match unsafe { ctx.receiver.as_heap_value_handle() }
+        .header
+        .object_type()
+    {
+        Some(ObjectType::ByteArray) => {
+            let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
+            let data = ba.as_bytes();
+            let value = std::str::from_utf8(data).expect("valid utf8 encoding");
+            if let Err(e) = write!(ctx.interpreter.output, "{}", value) {
+                return ExecutionResult::Panic(format!("IO Error: {}", e));
+            }
+        }
+        Some(ObjectType::String) => {
+            let s = unsafe { ctx.receiver.cast::<StringObject>() };
+            let value = s.as_utf8().expect("valid utf8 encoding");
+            if let Err(e) = write!(ctx.interpreter.output, "{}", value) {
+                return ExecutionResult::Panic(format!("IO Error: {}", e));
+            }
+        }
+        _ => {
+            return ExecutionResult::Panic(
+                "(print): receiver must be bytearray or string".to_string(),
+            );
+        }
+    };
 
     ExecutionResult::Normal
 }
 
 pub fn bytearray_println(ctx: &mut PrimitiveContext) -> ExecutionResult {
-    // SAFETY: receiver must be valid bytearray
-    let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
-    let data = ba.as_bytes();
-    let value = std::str::from_utf8(data).expect("valid utf8 encoding");
-
-    if let Err(e) = writeln!(ctx.interpreter.output, "{}", value) {
-        return ExecutionResult::Panic(format!("IO Error: {}", e));
-    }
+    // SAFETY: receiver must be valid bytearray or string
+    match unsafe { ctx.receiver.as_heap_value_handle() }
+        .header
+        .object_type()
+    {
+        Some(ObjectType::ByteArray) => {
+            let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
+            let data = ba.as_bytes();
+            let value = std::str::from_utf8(data).expect("valid utf8 encoding");
+            if let Err(e) = writeln!(ctx.interpreter.output, "{}", value) {
+                return ExecutionResult::Panic(format!("IO Error: {}", e));
+            }
+        }
+        Some(ObjectType::String) => {
+            let s = unsafe { ctx.receiver.cast::<StringObject>() };
+            let value = s.as_utf8().expect("valid utf8 encoding");
+            if let Err(e) = writeln!(ctx.interpreter.output, "{}", value) {
+                return ExecutionResult::Panic(format!("IO Error: {}", e));
+            }
+        }
+        _ => {
+            return ExecutionResult::Panic(
+                "(println): receiver must be bytearray or string".to_string(),
+            );
+        }
+    };
 
     ExecutionResult::Normal
 }
@@ -208,6 +244,21 @@ pub fn bytearray_memcpy(ctx: &mut PrimitiveContext) -> ExecutionResult {
         );
     }
 
+    ExecutionResult::Normal
+}
+
+pub fn bytearray_to_string(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    // SAFETY: receiver must be valid bytearray
+    let ba = unsafe { ctx.receiver.cast::<ByteArray>() };
+    let data = ba.as_bytes();
+    if std::str::from_utf8(data).is_err() {
+        return ExecutionResult::Panic(
+            "bytearray>string: bytearray must be valid utf8".to_string(),
+        );
+    }
+
+    let string = ctx.heap.allocate_string(ba);
+    ctx.outputs[0] = string.into();
     ExecutionResult::Normal
 }
 

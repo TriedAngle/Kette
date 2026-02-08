@@ -1,23 +1,5 @@
-use super::{inputs, outputs};
+use super::outputs;
 use crate::{ExecutionResult, PrimitiveContext, Value};
-macro_rules! shuffle {
-    (
-        $(
-            $(#[$doc:meta])* $name:ident : $($in:ident)* -- $($out:ident)*
-        );* $(;)?
-    ) => {
-        $(
-            $(#[$doc])*
-            pub fn $name(ctx: &mut PrimitiveContext) -> ExecutionResult {
-                #[allow(unused)]
-                let [$($in),*] = inputs(ctx);
-                outputs(ctx, [$($out),*]);
-
-                ExecutionResult::Normal
-            }
-        )*
-    };
-}
 
 pub fn depth(ctx: &mut PrimitiveContext) -> ExecutionResult {
     let depth = ctx.state.depth();
@@ -33,38 +15,95 @@ pub fn swap(ctx: &mut PrimitiveContext) -> ExecutionResult {
     ExecutionResult::Normal
 }
 
-shuffle! {
-    dup: x -- x x ;
+pub fn dup(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.receiver;
+    outputs(ctx, [x, x]);
+    ExecutionResult::Normal
+}
 
-    dup2: x y -- x y x y ;
+pub fn dup2(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.receiver;
+    outputs(ctx, [x, y, x, y]);
+    ExecutionResult::Normal
+}
 
-    drop: x -- ;
+pub fn drop(_ctx: &mut PrimitiveContext) -> ExecutionResult {
+    ExecutionResult::Normal
+}
 
-    drop2: x y -- ;
+pub fn drop2(_ctx: &mut PrimitiveContext) -> ExecutionResult {
+    ExecutionResult::Normal
+}
 
-    drop3: x y z -- ;
+pub fn drop3(_ctx: &mut PrimitiveContext) -> ExecutionResult {
+    ExecutionResult::Normal
+}
 
-    /// swap: x y -- y x ;
-    swap2: x y -- y x ;
+pub fn over(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.receiver;
+    outputs(ctx, [x, y, x]);
+    ExecutionResult::Normal
+}
 
-    over: x y -- x y x ;
+pub fn pick(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.inputs[1];
+    let z = ctx.receiver;
+    outputs(ctx, [x, y, z, x]);
+    ExecutionResult::Normal
+}
 
-    pick: x y z -- x y z x ;
+/// rotates top three elements backwards
+pub fn rot(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.inputs[1];
+    let z = ctx.receiver;
+    outputs(ctx, [y, z, x]);
+    ExecutionResult::Normal
+}
 
-    /// rotates top three elements backwards
-    rot: x y z -- y z x ;
+/// rotates top three elements forwards
+pub fn neg_rot(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.inputs[1];
+    let z = ctx.receiver;
+    outputs(ctx, [z, x, y]);
+    ExecutionResult::Normal
+}
 
-    /// rotates top three elements forwards
-    neg_rot: x y z -- z x y ;
+pub fn spin(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.inputs[1];
+    let z = ctx.receiver;
+    outputs(ctx, [z, y, x]);
+    ExecutionResult::Normal
+}
 
-    spin: x y z -- z y x;
+pub fn dupd(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.receiver;
+    outputs(ctx, [x, x, y]);
+    ExecutionResult::Normal
+}
 
-    dupd: x y -- x x y ;
+pub fn dropd(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let y = ctx.receiver;
+    outputs(ctx, [y]);
+    ExecutionResult::Normal
+}
 
-    dropd: x y -- y ;
+pub fn dropd2(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let z = ctx.receiver;
+    outputs(ctx, [z]);
+    ExecutionResult::Normal
+}
 
-    dropd2: x y z -- z ;
-
-    swapd: x y z -- y x z ;
-
+pub fn swapd(ctx: &mut PrimitiveContext) -> ExecutionResult {
+    let x = ctx.inputs[0];
+    let y = ctx.inputs[1];
+    let z = ctx.receiver;
+    outputs(ctx, [y, x, z]);
+    ExecutionResult::Normal
 }

@@ -1,7 +1,8 @@
 use std::{ptr::NonNull, sync::Arc};
 
 use crate::{
-    ByteArray, Handle, Message, Object, SlotDescriptor, Tagged, VMShared, Value,
+    Handle, Message, Object, SlotDescriptor, StringObject, Tagged, VMShared,
+    Value,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -16,7 +17,7 @@ pub enum ParentLookup {
 
 #[derive(Debug, Clone)]
 pub struct Selector {
-    pub name: Handle<ByteArray>,
+    pub name: Handle<StringObject>,
     pub vm: Arc<VMShared>,
     pub parent_lookup: ParentLookup,
 }
@@ -43,7 +44,7 @@ pub enum LookupResult {
 
 impl Selector {
     #[must_use]
-    pub fn new(name: Handle<ByteArray>, vm: Arc<VMShared>) -> Self {
+    pub fn new(name: Handle<StringObject>, vm: Arc<VMShared>) -> Self {
         Self {
             name,
             vm,

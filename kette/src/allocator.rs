@@ -3,7 +3,8 @@ use std::{alloc::Layout, ptr::NonNull};
 use crate::{
     ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
     Handle, HeapObject, HeapValue, Map, Message, Parser, Quotation,
-    SlotDescriptor, SlotHelper, SlotObject, SlotTags, Strings, Tagged, Value,
+    SlotDescriptor, SlotHelper, SlotObject, SlotTags, StringObject, Strings,
+    Tagged, Value,
 };
 
 /// Heap allocation interface for creating VM objects.
@@ -58,12 +59,23 @@ pub trait Allocator: Sized {
 
     fn allocate_message(
         &mut self,
-        interned: Handle<ByteArray>,
+        interned: Handle<StringObject>,
     ) -> Handle<Message> {
         let layout = Layout::new::<Message>();
         // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj = unsafe { self.allocate_handle::<Message>(layout) };
         obj.init(interned);
+        obj
+    }
+
+    fn allocate_string(
+        &mut self,
+        value: Handle<ByteArray>,
+    ) -> Handle<StringObject> {
+        let layout = Layout::new::<StringObject>();
+        // SAFETY: allocate_handle returns valid memory, init called immediately after.
+        let mut obj = unsafe { self.allocate_handle::<StringObject>(layout) };
+        obj.init(value);
         obj
     }
 
@@ -348,12 +360,18 @@ pub trait Allocator: Sized {
     fn allocate_parser(
         &mut self,
         strings: &Strings,
+        universe: Handle<HeapValue>,
         code: &[u8],
     ) -> Handle<Parser> {
         // Create the parser's map with its primitive slots
         let map = self.allocate_slot_map_helper(
             strings,
             &[
+                SlotHelper::constant(
+                    "parent*",
+                    universe.as_value(),
+                    SlotTags::PARENT,
+                ),
                 SlotHelper::primitive_message("parseNext", SlotTags::empty()),
                 SlotHelper::primitive_message("parseUntil", SlotTags::empty()),
                 SlotHelper::primitive_message("parse", SlotTags::empty()),

@@ -14,12 +14,13 @@ pub mod message;
 pub mod parser;
 pub mod quotations;
 pub mod slots;
+pub mod strings;
 pub mod threads;
 
 use crate::{
     ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
-    LookupResult, Map, Message, Quotation, Selector, SlotObject, ThreadObject,
-    Value, ValueTag, Visitable, VisitedLink, Visitor,
+    LookupResult, Map, Message, Quotation, Selector, SlotObject, StringObject,
+    ThreadObject, Value, ValueTag, Visitable, VisitedLink, Visitor,
 };
 
 #[repr(u8)]
@@ -38,6 +39,7 @@ pub enum ObjectType {
     Array         = 0b00010,
     ByteArray     = 0b00011,
     Activation    = 0b00100,
+    String        = 0b00101,
     Quotation     = 0b00111,
     Message       = 0b01000,
     Float         = 0b01001,
@@ -209,6 +211,7 @@ impl Header {
             0b00010 => ObjectType::Array,
             0b00011 => ObjectType::ByteArray,
             0b00100 => ObjectType::Activation,
+            0b00101 => ObjectType::String,
             0b00111 => ObjectType::Quotation,
             0b01000 => ObjectType::Message,
             0b01001 => ObjectType::Float,
@@ -369,6 +372,7 @@ impl Object for HeapValue {
             ObjectType::Array         => self.downcast_ref_match::<Array>().lookup(selector, link),
             ObjectType::ByteArray     => self.downcast_ref_match::<ByteArray>().lookup(selector, link),
             ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().lookup(selector, link),
+            ObjectType::String        => self.downcast_ref_match::<StringObject>().lookup(selector, link),
             ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().lookup(selector, link),
             ObjectType::Float         => self.downcast_ref_match::<Float>().lookup(selector, link),
             ObjectType::Message       => self.downcast_ref_match::<Message>().lookup(selector, link),
@@ -397,6 +401,7 @@ impl HeapObject for HeapValue {
                     ObjectType::Array         => self.downcast_ref_match::<Array>().heap_size(),
                     ObjectType::ByteArray     => self.downcast_ref_match::<ByteArray>().heap_size(),
                     ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().heap_size(),
+                    ObjectType::String        => self.downcast_ref_match::<StringObject>().heap_size(),
                     ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().heap_size(),
                     ObjectType::Message       => self.downcast_ref_match::<Message>().heap_size(),
                     ObjectType::Float         => self.downcast_ref_match::<Float>().heap_size(),
@@ -451,6 +456,7 @@ impl Visitable for HeapValue {
                     ObjectType::Activation    => self.downcast_mut_match::<ActivationObject>().visit_edges_mut(visitor),
                     ObjectType::Quotation     => self.downcast_mut_match::<Quotation>().visit_edges_mut(visitor),
                     ObjectType::Message       => self.downcast_mut_match::<Message>().visit_edges_mut(visitor),
+                    ObjectType::String        => self.downcast_mut_match::<StringObject>().visit_edges_mut(visitor),
                     ObjectType::Thread        => self.downcast_mut_match::<ThreadObject>().visit_edges_mut(visitor),
                     ObjectType::FeedbackEntry => self.downcast_mut_match::<FeedbackEntry>().visit_edges_mut(visitor),
                     ObjectType::Code          => self.downcast_mut_match::<Code>().visit_edges_mut(visitor),
@@ -475,6 +481,7 @@ impl Visitable for HeapValue {
                     ObjectType::Activation    => self.downcast_ref_match::<ActivationObject>().visit_edges(visitor),
                     ObjectType::Quotation     => self.downcast_ref_match::<Quotation>().visit_edges(visitor),
                     ObjectType::Message       => self.downcast_ref_match::<Message>().visit_edges(visitor),
+                    ObjectType::String        => self.downcast_ref_match::<StringObject>().visit_edges(visitor),
                     ObjectType::Thread        => self.downcast_ref_match::<ThreadObject>().visit_edges(visitor),
                     ObjectType::FeedbackEntry => self.downcast_ref_match::<FeedbackEntry>().visit_edges(visitor),
                     ObjectType::Code          => self.downcast_ref_match::<Code>().visit_edges(visitor),

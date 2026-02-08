@@ -3,8 +3,8 @@ use std::{alloc::Layout, mem, ops::Deref, ptr};
 use bitflags::bitflags;
 
 use crate::{
-    ByteArray, Code, Handle, Header, HeapObject, LookupResult, Object,
-    ObjectKind, ObjectType, ParentLookup, Selector, Tagged, Value, Visitable,
+    Code, Handle, Header, HeapObject, LookupResult, Object, ObjectKind,
+    ObjectType, ParentLookup, Selector, StringObject, Tagged, Value, Visitable,
     VisitedLink, Visitor, primitive_index,
 };
 
@@ -38,7 +38,7 @@ pub struct SlotHelper<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct SlotDescriptor {
     /// guaranteed to be interned
-    pub name: Handle<ByteArray>,
+    pub name: Handle<StringObject>,
     pub metadata: Tagged<usize>,
     pub value: Value,
 }
@@ -69,7 +69,11 @@ pub struct SlotObject {
 
 impl SlotDescriptor {
     #[must_use]
-    pub fn new(name: Handle<ByteArray>, tags: SlotTags, value: Value) -> Self {
+    pub fn new(
+        name: Handle<StringObject>,
+        tags: SlotTags,
+        value: Value,
+    ) -> Self {
         let tags_raw = tags.bits();
         let metadata = Tagged::new_value(tags_raw as usize);
         Self {
@@ -404,10 +408,7 @@ impl SlotObject {
         let local_match = slots
             .iter()
             .enumerate()
-            .find(|(_idx, slot)| {
-                slot.name.as_ptr()
-                    == selector.name.as_tagged::<ByteArray>().as_ptr()
-            })
+            .find(|(_idx, slot)| slot.name.as_ptr() == selector.name.as_ptr())
             .map(|(idx, slot)| (idx, *slot));
 
         if let Some((idx, mut slot)) = local_match {

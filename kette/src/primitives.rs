@@ -18,6 +18,7 @@ mod method;
 mod parsing;
 mod quotation;
 mod stack;
+mod string;
 mod threads;
 mod vector;
 pub use vector::Vector;
@@ -172,14 +173,14 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("swap", 1, 2, stack::swap),
     PrimitiveMessage::new("over", 1, 3, stack::over),
 
-    PrimitiveMessage::new("pick", 3, 4, stack::pick),
-    PrimitiveMessage::new("rot", 3, 3, stack::rot),
-    PrimitiveMessage::new("-rot", 3, 3, stack::neg_rot),
-    PrimitiveMessage::new("spin", 3, 3, stack::spin),
-    PrimitiveMessage::new("dupd", 2, 3, stack::dupd),
-    PrimitiveMessage::new("dropd", 2, 1, stack::dropd),
-    PrimitiveMessage::new("2dropd", 3, 1, stack::dropd2),
-    PrimitiveMessage::new("swapd", 3, 3, stack::swapd),
+    PrimitiveMessage::new("pick", 2, 4, stack::pick),
+    PrimitiveMessage::new("rot", 2, 3, stack::rot),
+    PrimitiveMessage::new("-rot", 2, 3, stack::neg_rot),
+    PrimitiveMessage::new("spin", 2, 3, stack::spin),
+    PrimitiveMessage::new("dupd", 1, 3, stack::dupd),
+    PrimitiveMessage::new("dropd", 1, 1, stack::dropd),
+    PrimitiveMessage::new("2dropd", 2, 1, stack::dropd2),
+    PrimitiveMessage::new("swapd", 2, 3, stack::swapd),
     PrimitiveMessage::new("@vm-depth", 0, 1, stack::depth),
     // Fixnum
     PrimitiveMessage::new("fixnum?", 0, 1, fixnum::is_fixnum),
@@ -207,6 +208,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("fixnum<=", 1, 1, fixnum::fixnum_leq),
     PrimitiveMessage::new("fixnum>=", 1, 1, fixnum::fixnum_geq),
     PrimitiveMessage::new("fixnum>string", 0, 1, fixnum::fixnum_to_utf8_bytes),
+    PrimitiveMessage::new("fixnum>float", 0, 1, fixnum::fixnum_to_float),
     PrimitiveMessage::new("fixnumParent", 0, 1, fixnum::parent),
     // Float 
     PrimitiveMessage::new("float?", 0, 1, float::is_float),
@@ -239,6 +241,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     // Bignum
     PrimitiveMessage::new("fixnum>bignum", 0, 1, bignum::fixnum_to_bignum),
     PrimitiveMessage::new("bignumToFixnumChecked", 0, 1, bignum::bignum_to_fixnum_checked),
+    PrimitiveMessage::new("bignum>float", 0, 1, bignum::bignum_to_float),
     PrimitiveMessage::new("bignum+", 1, 1, bignum::bignum_add),
     PrimitiveMessage::new("bignum-", 1, 1, bignum::bignum_sub),
     PrimitiveMessage::new("bignum*", 1, 1, bignum::bignum_mul),
@@ -277,6 +280,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(bytearrayAtPut)", 2, 0, bytearray::bytearray_at_put),
     PrimitiveMessage::new("(bytearrayMemset)", 3, 0, bytearray::bytearray_memset),
     PrimitiveMessage::new("(bytearrayMemcpy)", 4, 0, bytearray::bytearray_memcpy),
+    PrimitiveMessage::new("bytearray>string", 0, 1, bytearray::bytearray_to_string),
     PrimitiveMessage::new("bytearrayU16At", 1, 1, bytearray::bytearray_u16_at),
     PrimitiveMessage::new("bytearrayI16At", 1, 1, bytearray::bytearray_i16_at),
     PrimitiveMessage::new("bytearrayU32At", 1, 1, bytearray::bytearray_u32_at),
@@ -289,6 +293,10 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("bytearrayI32AtPut", 2, 0, bytearray::bytearray_i32_at_put),
     PrimitiveMessage::new("bytearrayU64AtPut", 2, 0, bytearray::bytearray_u64_at_put),
     PrimitiveMessage::new("bytearrayI64AtPut", 2, 0, bytearray::bytearray_i64_at_put),
+    PrimitiveMessage::new("stringParent", 0, 1, string::parent),
+    PrimitiveMessage::new("stringSize", 0, 1, string::size),
+    PrimitiveMessage::new("string>bytearray", 0, 1, string::string_to_bytearray),
+    PrimitiveMessage::new("string>message", 0, 1, string::string_to_message),
     // Arrays
     PrimitiveMessage::new("(>quotation)", 0, 1, array::array_to_quotation),
     PrimitiveMessage::new("arrayParent", 0, 1, array::parent),
@@ -320,6 +328,7 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("(|", 1, 1, parsing::parse_object),
     PrimitiveMessage::new("//", 1, 1, parsing::parse_line_comment),
     PrimitiveMessage::new("/*", 1, 1, parsing::parse_block_comment),
+    PrimitiveMessage::new("{", 1, 1, parsing::parse_array),
     PrimitiveMessage::new("$[", 1, 1, parsing::parse_execute),
     // Method
     // PrimitiveMessage::new("(call-method)", 1, 0, method::call),

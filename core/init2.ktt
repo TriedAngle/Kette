@@ -19,48 +19,396 @@ $[
             fixnum = 0 parent* .
             float = 0.0 parent* .
             bignum = 0 fixnum>bignum parent* .
-            bytearray = "incredible" parent* .
+            string = "incredible" parent* .
+            bytearray = "incredible" string>bytearray parent* .
+            message = "wow" string>message parent* .
             quotation = [ ] parent* .
-        |)
+            number = (| parent* = self |) .
+            callable = (| parent* = self |) .
+            array = { } parent* .
+            boolean = (| parent* = self |) .
+            true = (| parent* = self |) .
+            false = (| parent* = self |) .
+        |) .
     |) .
-    t = 0 0 fixnum= .
-    f = 0 1 fixnum= .
-    addTraitSlots = (| traits -- | self self universe reflect addTraitSlots ) .
+    defaultBehavior* = (| 
+        universe* = self .
+        signal = (| exception -- | self universe (signal) ) .
+    |) .
+    globals = (| 
+        parent* = self .
+        t = 0 0 fixnum= .
+        f = 0 1 fixnum= .
+    |)
 |) self self reflect addTraitSlots
 
-(|
-    parent* = self .
-|) self parsers self universe reflect addTraitSlots 
-
-
-(| box = (| 
-    parent* = self std traits clonable . 
-    value . 
-    >box = (| value -- boxed | self clone! ) .
-    box> = (| -- inner | self value ) .
-|) |) self std addTraitSlots
-
-(|
-    >box = (| value -- boxed | self std box >box ) .
-    box> = (| -- inner | self std box box> ) .
-|) self addTraitSlots
-
-(|
-    universe* = self .
-|) self std traits fixnum self reflect addTraitSlots
-
-]
-
-
-/*
-$[
 (| 
-    \ = (| accum -- accum | self parseNext >box over push ) .
-|) self parsers addTraitSlots
-]
+    addTraitSlots = (| traits -- | self self reflect addTraitSlots ) .
+|) self defaultBehavior* self reflect addTraitSlots
 
+
+"hello" (println)
+(| 
+    universe = self .
+    addUniverseParent = (| obj -- | 
+        (| 
+            universe* = self universe .
+        |) swap self universe reflect addTraitSlots
+    ) .
+    addUniverse = (| -- |
+        self universe parsers self addUniverseParent
+        self universe std traits fixnum self addUniverseParent 
+        self universe std traits float self addUniverseParent 
+        self universe std traits bignum self addUniverseParent 
+        self universe std traits number self addUniverseParent
+        self universe std traits string self addUniverseParent 
+        self universe std traits bytearray self addUniverseParent 
+        self universe std traits message self addUniverseParent 
+        self universe std traits quotation self addUniverseParent 
+        self universe std traits array self addUniverseParent
+    )
+|) addUniverse
+
+(|
+    error = (|
+        parent* = self universe .
+        throw = (| -- | self signal ) .
+    |) .
+|) self std traits addTraitSlots
+
+(|
+    error = (| parent* = self std traits error |) .
+|) self globals addTraitSlots
+
+(|
+    MustImplement = (| parent* = self globals error |) .
+    unimplemented = (| parent* = self globals error |) .
+|) self globals addTraitSlots
+
+(| boolean* = self std traits boolean |) self std traits true addTraitSlots
+(| boolean* = self std traits boolean |) self std traits false addTraitSlots
 
 (| 
-    { = (| accum -- accum | \ } box> self parseUntil over push ) . 
+    oddball* = self std traits oddball . 
+    true* = self std traits true .
+|) self globals t self reflect addTraitSlots
+
+(| 
+    oddball* = self std traits oddball . 
+    false* = self std traits false .
+|) self globals f self reflect addTraitSlots
+
+(| 
+    not = (| -- ? | f ) .
+    && = (| other -- ? | ) . 
+    || = (| other -- ? | drop self ) .
+    xor = (| other -- ? | not ) .
+    == = (| other -- ? | ) .
+    != = (| other -- ? | not ) .
+    when = (| q -- ... | (call) ) .
+    unless = (| q -- ... | drop ) .
+    if = (| tb . fb -- ... | drop (call) ) .
+    >string = "t" .
+|) self std traits true addTraitSlots
+
+(| 
+    not = (| -- ? | t ) .
+    && = (| other -- ? | drop self ) .
+    || = (| other -- ? | ) .
+    xor = (| other -- ? | ) .
+    == = (| other -- ? | not ) .
+    != = (| other -- ? | ) .
+    when = (| q -- ... | drop ) .
+    unless = (| q -- ... | (call) ) .
+    if = (| tb . fb -- ... | dropd (call) ) .
+    >string = "f" .
+|) self std traits false addTraitSlots
+
+(|
+    if = (| ? . tb -- ... | self rot if )
+|) self std traits quotation addTraitSlots
+
+(| 
+    \ = (| accum -- accum | self parseNext std box >box over push ) .
+    t = (| accum -- accum | self globals t over push ) .
+    f = (| accum -- accum | self globals f over push ) .
+    throw: = (| accum -- accum |
+        self parseNext
+        [
+            "self" string>message over push
+            "universe" string>message over push
+            "globals" string>message over push
+            "error" string>message over push
+        ] dip
+        over push
+        "throw" string>message over push
+    ) .
+    global: = (| accum -- accum |
+        self parseNext
+        [
+            "self" string>message over push
+            "universe" string>message over push
+            "globals" string>message over push
+        ] dip
+        over push
+    ) .
+    traits: = (| accum -- accum |
+        self parseNext
+        [
+            "self" string>message over push
+            "universe" string>message over push
+            "std" string>message over push
+            "traits" string>message over push
+        ] dip
+        over push
+    ) .
 |) self parsers addTraitSlots 
-*/
+]
+
+(| 
+    mustImplement = (| -- | self universe globals error MustImplement throw ) .
+    abs = (| -- new | self positive? [ self ] [ self neg ] if ) .
+
+    + = (| rhs -- | self mustImplement ) .
+    - = (| rhs -- | self mustImplement ) .
+    * = (| rhs -- | self mustImplement ) .
+    / = (| rhs -- | self mustImplement ) .
+    % = (| rhs -- | self mustImplement ) .
+    = = (| rhs -- | self mustImplement ) .
+    != = (| rhs -- | self mustImplement ) .
+    < = (| rhs -- | self mustImplement ) .
+    > = (| rhs -- | self mustImplement ) .
+    <= = (| rhs -- | self mustImplement ) .
+    >= = (| rhs -- | self mustImplement ) .
+
+    addFixnum = (| n -- | self mustImplement ) .
+    addBignum = (| n -- | self mustImplement ) .
+    addFloat = (| n -- | self mustImplement ) .
+    subFromFixnum = (| n -- | self mustImplement ) .
+    subFromBignum = (| n -- | self mustImplement ) .
+    subFromFloat = (| n -- | self mustImplement ) .
+    mulFixnum = (| n -- | self mustImplement ) .
+    mulBignum = (| n -- | self mustImplement ) .
+    mulFloat = (| n -- | self mustImplement ) .
+    divFromFixnum = (| n -- | self mustImplement ) .
+    divFromBignum = (| n -- | self mustImplement ) .
+    divFromFloat = (| n -- | self mustImplement ) .
+    eqFixnum = (| n -- | self mustImplement ) .
+    eqBignum = (| n -- | self mustImplement ) .
+    eqFloat = (| n -- | self mustImplement ) .
+    ltFixnum = (| n -- | self mustImplement ) .
+    ltBignum = (| n -- | self mustImplement ) .
+    ltFloat = (| n -- | self mustImplement ) .
+    gtFixnum = (| n -- | self mustImplement ) .
+    gtBignum = (| n -- | self mustImplement ) .
+    gtFloat = (| n -- | self mustImplement ) .
+    leFixnum = (| n -- | self mustImplement ) .
+    leBignum = (| n -- | self mustImplement ) .
+    leFloat = (| n -- | self mustImplement ) .
+    geFixnum = (| n -- | self mustImplement ) .
+    geBignum = (| n -- | self mustImplement ) .
+    geFloat = (| n -- | self mustImplement ) .
+|) self std traits number addTraitSlots
+
+(|
+    clonable* = self std traits clonable .
+    number* = self std traits number .
+    + = (| rhs -- new | self swap addFixnum ) .
+    - = (| rhs -- new | self swap subFromFixnum ) .
+    * = (| rhs -- new | self swap mulFixnum ) .
+    / = (| rhs -- new | self swap divFromFixnum ) .
+    % = (| rhs -- new |
+        dup fixnum? [ self fixnum% ] [ drop self universe globals error MustImplement throw ] if ) .
+    neg = (| -- -self | self fixnumNeg ) .
+    bit& = (| lhs -- ? | self fixnumBitAnd ) .
+    bit| = (| lhs -- ? | self fixnumBitOr ) .
+    = = (| rhs -- ? | self swap eqFixnum ) .
+    != = (| rhs -- ? | self swap eqFixnum not ) .
+    < = (| rhs -- ? | self swap ltFixnum ) .
+    > = (| rhs -- ? | self swap gtFixnum ) .
+    <= = (| rhs -- ? | self swap leFixnum ) .
+    >= = (| rhs -- ? | self swap geFixnum ) .
+    positive? = (| -- ? | self 0 > ) .
+    >bignum = (| -- new | self fixnum>bignum ) .
+    >float = (| -- new | self fixnum>float ) .
+    >string = (| -- str | self fixnum>string ) .
+
+    addFixnum = (| lhs -- new | self fixnum+ ) .
+    addBignum = (| lhs -- new | self fixnum>bignum bignum+ ) .
+    addFloat = (| lhs -- new | self fixnum>float float+ ) .
+    subFromFixnum = (| lhs -- new | self fixnum- ) .
+    subFromBignum = (| lhs -- new | self fixnum>bignum bignum- ) .
+    subFromFloat = (| lhs -- new | self fixnum>float float- ) .
+    mulFixnum = (| lhs -- new | self fixnum* ) .
+    mulBignum = (| lhs -- new | self fixnum>bignum bignum* ) .
+    mulFloat = (| lhs -- new | self fixnum>float float* ) .
+    divFromFixnum = (| lhs -- new | self fixnum/ ) .
+    divFromBignum = (| lhs -- new | bignum>float self fixnum>float float/ ) .
+    divFromFloat = (| lhs -- new | self fixnum>float float/ ) .
+    eqFixnum = (| lhs -- ? | self fixnum= ) .
+    eqBignum = (| lhs -- ? | self fixnum>bignum bignum= ) .
+    eqFloat = (| lhs -- ? | self fixnum>float float= ) .
+    ltFixnum = (| lhs -- ? | self fixnum< ) .
+    ltBignum = (| lhs -- ? | self fixnum>bignum bignum< ) .
+    ltFloat = (| lhs -- ? | self fixnum>float float< ) .
+    gtFixnum = (| lhs -- ? | self fixnum> ) .
+    gtBignum = (| lhs -- ? | self fixnum>bignum bignum> ) .
+    gtFloat = (| lhs -- ? | self fixnum>float float> ) .
+    leFixnum = (| lhs -- ? | self fixnum<= ) .
+    leBignum = (| lhs -- ? | self fixnum>bignum bignum<= ) .
+    leFloat = (| lhs -- ? | self fixnum>float float<= ) .
+    geFixnum = (| lhs -- ? | self fixnum>= ) .
+    geBignum = (| lhs -- ? | self fixnum>bignum bignum>= ) .
+    geFloat = (| lhs -- ? | self fixnum>float float>= ) .
+|) self std traits fixnum addTraitSlots
+
+(|
+    clonable* = self std traits clonable .
+    number* = self std traits number .
+    + = (| rhs -- new | self swap addFloat ) .
+    - = (| rhs -- new | self swap subFromFloat ) .
+    * = (| rhs -- new | self swap mulFloat ) .
+    / = (| rhs -- new | self swap divFromFloat ) .
+    % = (| rhs -- new |
+        dup float? [ self float% ] [ drop self universe globals error MustImplement throw ] if ) .
+    ^ = (| rhs -- new | dup float? [ self float^ ] [ drop self universe globals error MustImplement throw ] if ) .
+    sqrt = (| -- sqrt | self floatSqrt ) .
+    e^ = (| -- new | self floate^ ) .
+    2^ = (| -- new | self float2^ ) .
+    neg = (| -- -self | self floatNeg ) .
+    sin  = (| -- res | self floatSin ) .
+    cos  = (| -- res | self floatCos ) .
+    tan  = (| -- res | self floatTan ) .
+    asin = (| -- res | self floatAsin ) .
+    acos = (| -- res | self floatAcos ) .
+    atan = (| -- res | self floatAtan ) .
+    = = (| rhs -- ? | self swap eqFloat ) .
+    != = (| rhs -- ? | self swap eqFloat not ) .
+    < = (| rhs -- ? | self swap ltFloat ) .
+    > = (| rhs -- ? | self swap gtFloat ) .
+    <= = (| rhs -- ? | self swap leFloat ) .
+    >= = (| rhs -- ? | self swap geFloat ) .
+    positive? = (| -- ? | self 0.0 > ) .
+    >bignum = (| -- new | self float>bignum ) .
+    >string = (| -- str | self float>string ) .
+
+    addFixnum = (| lhs -- new | fixnum>float self float+ ) .
+    addBignum = (| lhs -- new | bignum>float self float+ ) .
+    addFloat = (| lhs -- new | self float+ ) .
+    subFromFixnum = (| lhs -- new | fixnum>float self float- ) .
+    subFromBignum = (| lhs -- new | bignum>float self float- ) .
+    subFromFloat = (| lhs -- new | self float- ) .
+    mulFixnum = (| lhs -- new | fixnum>float self float* ) .
+    mulBignum = (| lhs -- new | bignum>float self float* ) .
+    mulFloat = (| lhs -- new | self float* ) .
+    divFromFixnum = (| lhs -- new | fixnum>float self float/ ) .
+    divFromBignum = (| lhs -- new | bignum>float self float/ ) .
+    divFromFloat = (| lhs -- new | self float/ ) .
+    eqFixnum = (| lhs -- ? | fixnum>float self float= ) .
+    eqBignum = (| lhs -- ? | bignum>float self float= ) .
+    eqFloat = (| lhs -- ? | self float= ) .
+    ltFixnum = (| lhs -- ? | fixnum>float self float< ) .
+    ltBignum = (| lhs -- ? | bignum>float self float< ) .
+    ltFloat = (| lhs -- ? | self float< ) .
+    gtFixnum = (| lhs -- ? | fixnum>float self float> ) .
+    gtBignum = (| lhs -- ? | bignum>float self float> ) .
+    gtFloat = (| lhs -- ? | self float> ) .
+    leFixnum = (| lhs -- ? | fixnum>float self float<= ) .
+    leBignum = (| lhs -- ? | bignum>float self float<= ) .
+    leFloat = (| lhs -- ? | self float<= ) .
+    geFixnum = (| lhs -- ? | fixnum>float self float>= ) .
+    geBignum = (| lhs -- ? | bignum>float self float>= ) .
+    geFloat = (| lhs -- ? | self float>= ) .
+|) self std traits float addTraitSlots
+
+(|
+    clonable* = self std traits clonable .
+    number* = self std traits number .
+    + = (| rhs -- new | self swap addBignum ) .
+    - = (| rhs -- new | self swap subFromBignum ) .
+    * = (| rhs -- new | self swap mulBignum ) .
+    / = (| rhs -- new | self swap divFromBignum ) .
+    neg = (| -- -self | self bignumNeg ) .
+    = = (| rhs -- ? | self swap eqBignum ) .
+    != = (| rhs -- ? | self swap eqBignum not ) .
+    < = (| rhs -- ? | self swap ltBignum ) .
+    > = (| rhs -- ? | self swap gtBignum ) .
+    <= = (| rhs -- ? | self swap leBignum ) .
+    >= = (| rhs -- ? | self swap geBignum ) .
+    >float = (| -- new | self bignum>float ) .
+
+    addFixnum = (| lhs -- new | self bignum+ ) .
+    addBignum = (| lhs -- new | self bignum+ ) .
+    addFloat = (| lhs -- new | self bignum>float float+ ) .
+    subFromFixnum = (| lhs -- new | self bignum- ) .
+    subFromBignum = (| lhs -- new | self bignum- ) .
+    subFromFloat = (| lhs -- new | self bignum>float float- ) .
+    mulFixnum = (| lhs -- new | self bignum* ) .
+    mulBignum = (| lhs -- new | self bignum* ) .
+    mulFloat = (| lhs -- new | self bignum>float float* ) .
+    divFromFixnum = (| lhs -- new | fixnum>float self bignum>float float/ ) .
+    divFromBignum = (| lhs -- new | bignum>float self bignum>float float/ ) .
+    divFromFloat = (| lhs -- new | self bignum>float float/ ) .
+    eqFixnum = (| lhs -- ? | self bignum= ) .
+    eqBignum = (| lhs -- ? | self bignum= ) .
+    eqFloat = (| lhs -- ? | self bignum>float float= ) .
+    ltFixnum = (| lhs -- ? | self bignum< ) .
+    ltBignum = (| lhs -- ? | self bignum< ) .
+    ltFloat = (| lhs -- ? | self bignum>float float< ) .
+    gtFixnum = (| lhs -- ? | self bignum> ) .
+    gtBignum = (| lhs -- ? | self bignum> ) .
+    gtFloat = (| lhs -- ? | self bignum>float float> ) .
+    leFixnum = (| lhs -- ? | self bignum<= ) .
+    leBignum = (| lhs -- ? | self bignum<= ) .
+    leFloat = (| lhs -- ? | self bignum>float float<= ) .
+    geFixnum = (| lhs -- ? | self bignum>= ) .
+    geBignum = (| lhs -- ? | self bignum>= ) .
+    geFloat = (| lhs -- ? | self bignum>float float>= ) .
+|) self std traits bignum addTraitSlots
+
+(| 
+    call = f  .
+    if =  
+        (| ? . trueBranch -- ... | swap [ call ] [ drop self call ] if ) .
+    when = (| ? -- ... | self [ ] if ) .
+    unless = (| ? -- ... | [ ] self if ) .
+    dip = // takes x, calls self, puts back x 
+        (| x -- . x | [ self call ] dip ) .
+    keep = // calls self with x, then puts back x
+        (| x -- . x | dup [ self call ] dip ) .
+    bi = // applies p to x, then self to x 
+        (| x . p -- ..a | keep self call ) .
+    bi* = // appplies p to x, then self to y
+        (| x . y . p -- ..a | dip self call ) .
+    bi@ = // applies self to x, then y
+        (| x . y -- ..a | self dup bi* ) .
+    2dip = // removes x and y from stack then call self
+        (| . x . y -- . x . y | [ self dip ] dip ) .
+    2keep = // calls self with x and y then put x and y back
+        (| . x . y -- . x . y | 2dup self 2dip ) .
+    2bi = // applies p to x and y then self to x and y
+        (| x . y . p -- | 2keep self call ) .
+    tri = (| x . q . p -- | [ keep ] dip keep self call ) .
+    each[a..b) = (| from . to -- |  // call self from->to
+        2dup < [ [ drop self call ] 2keep [ 1 + ] dip self each[a..b) ] [ 2drop ] if ) .
+    curry = (| obj -- curried | self std curried clone! ) .
+    compose = (| quot -- curried | self std composed clone! ) .
+|) self std traits callable addTraitSlots
+
+(| 
+    curried = (| 
+        parent* = self std traits clonable .
+        callable* = self std traits callable .
+        obj . callable .
+        call = (| -- | self obj self callable call ) .
+    |) . 
+    composed = (|
+        parent* = self std traits clonable .
+        callable* = self std traits callable .
+        callable1 . callable2 .
+        call = (| -- | self callable1 call self callable2 call ) .
+    |) .
+|) self std addTraitSlots
+
+t f && [ "hello" (println) ] [ "nooo" (println) ] if
+

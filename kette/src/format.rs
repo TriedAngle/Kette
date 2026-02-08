@@ -1,6 +1,7 @@
 use crate::{
     Array, ByteArray, Handle, HeapValue, Interpreter, Message, ObjectType,
-    Quotation, Selector, SlotDescriptor, SlotObject, SlotTags, Value,
+    Quotation, Selector, SlotDescriptor, SlotObject, SlotTags, StringObject,
+    Value,
 };
 use std::{fmt::Write, ops::Deref};
 
@@ -126,6 +127,9 @@ impl Interpreter {
                 Some(ObjectType::ByteArray) => unsafe {
                     self.format_byte_array(heap_obj.cast())
                 },
+                Some(ObjectType::String) => unsafe {
+                    self.format_string(heap_obj.cast())
+                },
                 // SAFETY: object_type confirmed by header
                 Some(ObjectType::Float) => unsafe {
                     self.format_float(heap_obj.cast())
@@ -213,8 +217,7 @@ impl Interpreter {
         out.push_str("(| ");
 
         for (i, slot_desc) in data_slots.iter().enumerate() {
-            let name_bytes = slot_desc.name.as_bytes();
-            let name_str = std::str::from_utf8(name_bytes).unwrap_or("???");
+            let name_str = slot_desc.name.as_utf8().unwrap_or("???");
 
             out.push_str(name_str);
             out.push_str(":= ");
@@ -270,9 +273,12 @@ impl Interpreter {
 
     unsafe fn format_message(&self, m: Handle<Message>) -> String {
         let name = m.value;
-        let bytes = name.as_bytes();
-        let s = std::str::from_utf8(bytes).unwrap_or("???");
+        let s = name.as_utf8().unwrap_or("???");
         s.to_string()
+    }
+
+    unsafe fn format_string(&self, s: Handle<StringObject>) -> String {
+        s.as_utf8().unwrap_or("???").to_string()
     }
 
     unsafe fn format_quotation(

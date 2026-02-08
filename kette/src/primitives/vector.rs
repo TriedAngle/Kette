@@ -1,7 +1,7 @@
 use crate::{
     Allocator, Array, ExecutionResult, Handle, Header, HeapObject, HeapProxy,
-    Map, Object, ObjectKind, ObjectType, PrimitiveContext, SlotHelper,
-    SlotTags, Strings, Tagged, VMShared, Value, Visitable,
+    HeapValue, Map, Object, ObjectKind, ObjectType, PrimitiveContext,
+    SlotHelper, SlotTags, Strings, Tagged, VMShared, Value, Visitable,
 };
 
 // this is a very simple vector implementation,
@@ -34,8 +34,17 @@ impl Vector {
     }
 
     #[rustfmt::skip]
-    pub fn new_map(heap: &mut HeapProxy, strings: &Strings) -> Handle<Map> {
+    pub fn new_map(
+        heap: &mut HeapProxy,
+        strings: &Strings,
+        universe: Handle<HeapValue>,
+    ) -> Handle<Map> {
         heap.allocate_slot_map_helper(strings, &[
+            SlotHelper::constant(
+                "parent*",
+                universe.as_value(),
+                SlotTags::PARENT,
+            ),
             SlotHelper::assignable("data", Value::from_usize(0), SlotTags::empty()),
             SlotHelper::assignable("length", Value::from_usize(1), SlotTags::empty()),
             SlotHelper::primitive_message2("push", "vectorPush", SlotTags::empty()),
