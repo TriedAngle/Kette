@@ -245,6 +245,8 @@ pub const PRIMITIVES: &[PrimitiveMessage] = &[
     PrimitiveMessage::new("bignum+", 1, 1, bignum::bignum_add),
     PrimitiveMessage::new("bignum-", 1, 1, bignum::bignum_sub),
     PrimitiveMessage::new("bignum*", 1, 1, bignum::bignum_mul),
+    PrimitiveMessage::new("bignum/", 1, 1, bignum::bignum_div),
+    PrimitiveMessage::new("bignum%", 1, 1, bignum::bignum_mod),
     PrimitiveMessage::new("bignumNeg", 0, 1, bignum::bignum_neg),
     PrimitiveMessage::new("bignum=", 1, 1, bignum::bignum_eq),
     PrimitiveMessage::new("bignum!=", 1, 1, bignum::bignum_neq),

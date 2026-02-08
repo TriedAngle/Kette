@@ -333,6 +333,8 @@ impl VM {
             SlotHelper::primitive_message("bignum+", SlotTags::empty()),
             SlotHelper::primitive_message("bignum-", SlotTags::empty()),
             SlotHelper::primitive_message("bignum*", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum/", SlotTags::empty()),
+            SlotHelper::primitive_message("bignum%", SlotTags::empty()),
             SlotHelper::primitive_message("bignumNeg", SlotTags::empty()),
             SlotHelper::primitive_message("bignum=", SlotTags::empty()),
             SlotHelper::primitive_message("bignum!=", SlotTags::empty()),

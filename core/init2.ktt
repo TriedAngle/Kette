@@ -46,8 +46,6 @@ $[
     addTraitSlots = (| traits -- | self self reflect addTraitSlots ) .
 |) self defaultBehavior* self reflect addTraitSlots
 
-
-"hello" (println)
 (| 
     universe = self .
     addUniverseParent = (| obj -- | 
@@ -83,6 +81,7 @@ $[
 (|
     MustImplement = (| parent* = self globals error |) .
     unimplemented = (| parent* = self globals error |) .
+    OutOfBounds = (| parent* = self globals error |) .
 |) self globals addTraitSlots
 
 (| boolean* = self std traits boolean |) self std traits true addTraitSlots
@@ -243,7 +242,7 @@ $[
     mulBignum = (| lhs -- new | self fixnum>bignum bignum* ) .
     mulFloat = (| lhs -- new | self fixnum>float float* ) .
     divFromFixnum = (| lhs -- new | self fixnum/ ) .
-    divFromBignum = (| lhs -- new | bignum>float self fixnum>float float/ ) .
+    divFromBignum = (| lhs -- new | self fixnum>bignum bignum/ ) .
     divFromFloat = (| lhs -- new | self fixnum>float float/ ) .
     eqFixnum = (| lhs -- ? | self fixnum= ) .
     eqBignum = (| lhs -- ? | self fixnum>bignum bignum= ) .
@@ -328,6 +327,7 @@ $[
     - = (| rhs -- new | self swap subFromBignum ) .
     * = (| rhs -- new | self swap mulBignum ) .
     / = (| rhs -- new | self swap divFromBignum ) .
+    % = (| rhs -- new | self swap bignum% ) .
     neg = (| -- -self | self bignumNeg ) .
     = = (| rhs -- ? | self swap eqBignum ) .
     != = (| rhs -- ? | self swap eqBignum not ) .
@@ -346,8 +346,8 @@ $[
     mulFixnum = (| lhs -- new | self bignum* ) .
     mulBignum = (| lhs -- new | self bignum* ) .
     mulFloat = (| lhs -- new | self bignum>float float* ) .
-    divFromFixnum = (| lhs -- new | fixnum>float self bignum>float float/ ) .
-    divFromBignum = (| lhs -- new | bignum>float self bignum>float float/ ) .
+    divFromFixnum = (| lhs -- new | fixnum>bignum self bignum/ ) .
+    divFromBignum = (| lhs -- new | self bignum/ ) .
     divFromFloat = (| lhs -- new | self bignum>float float/ ) .
     eqFixnum = (| lhs -- ? | self bignum= ) .
     eqBignum = (| lhs -- ? | self bignum= ) .
@@ -410,5 +410,42 @@ $[
     |) .
 |) self std addTraitSlots
 
-t f && [ "hello" (println) ] [ "nooo" (println) ] if
+(| 
+    clonable* = self std traits clonable .
+    print = (| -- | self (print) ) .
+    println = (| -- | self (println) ) . 
+    size = (| -- | self (bytearraySize) ) .
+    newWithSize = (| size -- new | self (bytearrayNew) ) .
+    nthUnchecked = (| idx -- value | self (bytearrayAt) ) .
+    setNthUnchecked = (| value . idx -- | self (bytearrayAtPut) ) .
+    memset = (| offset . count . value -- | self (bytearrayMemset) ) .
+    memcpy = (| offset . src . srcOffset . count -- | self (bytearrayMemcpy) ) .
+    memcpyFull = (| offset . src -- | 0 over size self memcpy ) .
+    + = (| other -- new | 
+        dup self [ size ] bi@ +
+        self std traits bytearray newWithSize
+        [ 0 -rot memcpyFull ] 2keep
+        [ size self ] dip 
+        [ memcpyFull ] keep ) .
+    >string = (| -- str | self bytearray>string ) .
+|) self std traits bytearray addTraitSlots
 
+(| 
+    clonable* = self std traits clonable .
+    print = (| -- | self (print) ) .
+    println = (| -- | self (println) ) .
+    size = (| -- | self stringSize ) .
+    nthUnchecked = (| idx -- value | self string>bytearray (bytearrayAt) ) .
+    >bytearray = (| -- ba | self string>bytearray ) .
+    >message = (| -- msg | self string>message ) .
+    >string = (| -- str | self ) .
+|) self std traits string addTraitSlots
+
+(| 
+    clonable* = self std traits clonable .
+    size = (| -- | self (arraySize) ) .
+    nthUnchecked = (| i -- e | self (arrayAt) ) .
+    setNthUnchecked = (| e . i -- | self (arrayAtPut) ) .
+    newWithSizeFill = (| size . fill -- new | self (arrayNew) ) .
+    copyRemoveAll = (| -- new | self size f self newWithSizeFill ) .
+|) self std traits array addTraitSlots
