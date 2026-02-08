@@ -1,10 +1,10 @@
 use std::{alloc::Layout, ptr::NonNull};
 
 use crate::{
-    ActivationObject, Array, BigNum, ByteArray, Code, FeedbackEntry, Float,
-    Handle, HeapObject, HeapValue, Map, Message, Parser, Quotation, Ratio,
-    SlotDescriptor, SlotHelper, SlotObject, SlotTags, StringObject, Strings,
-    Tagged, Value,
+    ActivationObject, ActivationType, Array, BigNum, ByteArray, Code,
+    FeedbackEntry, Float, Handle, HeapObject, HeapValue, Map, Message, Parser,
+    Quotation, Ratio, SlotDescriptor, SlotHelper, SlotObject, SlotTags,
+    StringObject, Strings, Tagged, Value,
 };
 
 /// Heap allocation interface for creating VM objects.
@@ -333,6 +333,8 @@ pub trait Allocator: Sized {
     unsafe fn allocate_activation_raw(
         &mut self,
         receiver: Handle<Value>,
+        parent: Handle<ActivationObject>,
+        activation_type: ActivationType,
         map: Handle<Map>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
@@ -341,7 +343,7 @@ pub trait Allocator: Sized {
         // SAFETY: allocate_handle returns valid memory, init called immediately after.
         let mut obj =
             unsafe { self.allocate_handle::<ActivationObject>(layout) };
-        obj.init(receiver, map, slots, total_slots);
+        obj.init(receiver, parent, activation_type, map, slots, total_slots);
         obj
     }
 
@@ -352,12 +354,21 @@ pub trait Allocator: Sized {
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         // SAFETY: All handles are valid, slots.len() matches map's requirements.
-        unsafe { self.allocate_activation_raw(receiver, method.map, slots) }
+        unsafe {
+            self.allocate_activation_raw(
+                receiver,
+                Handle::null(),
+                ActivationType::Method,
+                method.map,
+                slots,
+            )
+        }
     }
 
     fn allocate_quotation_activation(
         &mut self,
         quotation: Handle<Quotation>,
+        parent: Handle<ActivationObject>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         // SAFETY: Quotation maps are always executable maps (Map type).
@@ -368,19 +379,36 @@ pub trait Allocator: Sized {
             quotation.parent.receiver
         };
         // SAFETY: All handles are valid, slots.len() matches map's requirements.
-        unsafe { self.allocate_activation_raw(receiver, map, slots) }
+        unsafe {
+            self.allocate_activation_raw(
+                receiver,
+                parent,
+                ActivationType::Quotation,
+                map,
+                slots,
+            )
+        }
     }
 
     fn allocate_quotation_activation_with_receiver(
         &mut self,
         quotation: Handle<Quotation>,
         receiver: Handle<Value>,
+        parent: Handle<ActivationObject>,
         slots: &[Handle<Value>],
     ) -> Handle<ActivationObject> {
         // SAFETY: Quotation maps are always executable maps (Map type).
         let map = unsafe { quotation.map.cast::<Map>() };
         // SAFETY: All handles are valid, slots.len() matches map's requirements.
-        unsafe { self.allocate_activation_raw(receiver, map, slots) }
+        unsafe {
+            self.allocate_activation_raw(
+                receiver,
+                parent,
+                ActivationType::Quotation,
+                map,
+                slots,
+            )
+        }
     }
 
     /// Allocate a Parser on the GC heap with the given source code.

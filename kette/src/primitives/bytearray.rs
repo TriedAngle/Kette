@@ -1,6 +1,6 @@
 use crate::{
-    primitives::inputs, Allocator, ByteArray, ExecutionResult, ObjectType,
-    PrimitiveContext, StringObject, Value,
+    Allocator, ByteArray, ExecutionResult, ObjectType, PrimitiveContext,
+    StringObject, Value, primitives::inputs,
 };
 use std::{mem, ptr};
 

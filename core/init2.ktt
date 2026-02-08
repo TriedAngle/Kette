@@ -163,6 +163,16 @@ $[
         ] dip
         over push
     ) .
+    math: = (| accum -- accum | 
+        self parseNext
+        [
+            "self" string>message over push
+            "universe" string>message over push
+            "globals" string>message over push
+            "math" string>message over push
+        ] dip
+        over push
+    ) .
 |) self parsers addTraitSlots 
 ]
 
@@ -240,6 +250,7 @@ $[
     >= = (| rhs -- ? | self swap geFixnum ) .
     positive? = (| -- ? | self 0 > ) .
     >bignum = (| -- new | self fixnum>bignum ) .
+    >fixnum = (| -- new | self ) .
     >float = (| -- new | self fixnum>float ) .
     >ratio = (| -- new | self fixnum>ratio ) .
     >string = (| -- str | self fixnum>string ) .
@@ -311,6 +322,8 @@ $[
     positive? = (| -- ? | self 0.0 > ) .
     >bignum = (| -- new | self float>bignum ) .
     >string = (| -- str | self float>string ) .
+    >float = (| -- new | self ) .
+    >fixnum = (| -- new | self float>fixnum ) .
 
     addFixnum = (| rhs -- new | fixnum>float self swap float+ ) .
     addBignum = (| rhs -- new | bignum>float self swap float+ ) .
@@ -553,4 +566,21 @@ $[
     copyRemoveAll = (| -- new | self size f self newWithSizeFill ) .
 |) self std traits array addTraitSlots
 
+(|
+    math = (|
+        discriminant = (| a . b . c -@- disc |
+            b b * 4.0 a c * * - disc<<
+        ) .
+        quadraticRoots = (| a . b . c -@- x1 . x2 |
+            a b c self discriminant
+            dup 0.0 < [ drop f x1<< f x2<< ] [
+                [ sqrt b neg swap + ] 
+                [ sqrt b neg swap - ] bi
+                [ 2.0 a * / ] bi@ x2<< x1<<
+            ] if
+        ) .
+    |) .
+|) self globals addTraitSlots
+
+2 1 0 math: quadraticRoots
 

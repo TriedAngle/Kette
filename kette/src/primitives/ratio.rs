@@ -1,6 +1,6 @@
 use crate::{
-    primitives::bool_object, Allocator, BigNum, ExecutionResult, Handle,
-    NumberError, ObjectType, PrimitiveContext, Ratio, Value,
+    Allocator, BigNum, ExecutionResult, Handle, NumberError, ObjectType,
+    PrimitiveContext, Ratio, Value, primitives::bool_object,
 };
 
 use crate::primitives::bignum::{

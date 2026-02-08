@@ -1,6 +1,6 @@
 use crate::{
-    primitives::inputs, ActivationObject, ExecutionResult, PrimitiveContext,
-    Quotation,
+    ActivationObject, ExecutionResult, PrimitiveContext, Quotation,
+    primitives::inputs,
 };
 
 /// Primitive: `( tag handler body -- )`

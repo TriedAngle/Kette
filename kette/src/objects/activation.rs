@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivationType {
     Method,
     Quotation,
@@ -31,6 +31,8 @@ pub struct ActivationObject {
     pub header: Header,
     pub map: Handle<Map>,
     pub receiver: Handle<Value>,
+    pub parent: Handle<ActivationObject>,
+    pub activation_type: ActivationType,
     /// The absolute index of this activation in the ActivationStack.
     /// Used for O(1) unwinding
     pub stack_index: Tagged<usize>,
@@ -72,6 +74,8 @@ impl ActivationObject {
     pub fn init(
         &mut self,
         receiver: Handle<Value>,
+        parent: Handle<ActivationObject>,
+        activation_type: ActivationType,
         map: Handle<Map>,
         arguments: &[Handle<Value>],
         total_slots: usize,
@@ -79,6 +83,8 @@ impl ActivationObject {
         self.header = Header::new_object(ObjectType::Activation);
         self.map = map;
         self.receiver = receiver;
+        self.parent = parent;
+        self.activation_type = activation_type;
 
         assert!(
             arguments.len() <= total_slots,
@@ -325,6 +331,9 @@ impl Visitable for ActivationObject {
     fn visit_edges(&self, visitor: &impl Visitor) {
         visitor.visit(self.map.as_value_ref());
         visitor.visit(self.receiver.as_value_ref());
+        if !self.parent.as_ptr().is_null() {
+            visitor.visit(self.parent.as_value_ref());
+        }
         self.slots()
             .iter()
             .for_each(|slot| visitor.visit(slot.as_value_ref()))
@@ -334,6 +343,9 @@ impl Visitable for ActivationObject {
     fn visit_edges_mut(&mut self, visitor: &mut impl Visitor) {
         visitor.visit_mut(self.map.as_value_mut());
         visitor.visit_mut(self.receiver.as_value_mut());
+        if !self.parent.as_ptr().is_null() {
+            visitor.visit_mut(self.parent.as_value_mut());
+        }
         self.slots_mut()
             .iter_mut()
             .for_each(|slot| visitor.visit_mut(slot.as_value_mut()))
@@ -375,6 +387,49 @@ impl Object for ActivationObject {
                     };
                 }
             }
+        }
+        // Walk lexical parent chain (quotations only)
+        let mut parent = self.parent;
+        while !parent.as_ptr().is_null() {
+            // SAFETY: parent handle is valid by construction
+            let parent_obj = unsafe { &*parent.as_ptr() };
+            if parent_obj.map.has_named_params() {
+                let parent_ptr = parent_obj as *const Self as *mut Self;
+                let parent_value =
+                    Tagged::new_ptr(parent_ptr).as_tagged_value();
+
+                for (idx, slot_desc) in
+                    parent_obj.map.slots().iter().enumerate()
+                {
+                    if slot_desc.name.as_ptr() == selector.name.as_ptr() {
+                        let mut slot = *slot_desc;
+                        if slot.tags().contains(SlotTags::ASSIGNABLE) {
+                            let offset: usize = slot
+                                .value
+                                .as_tagged_fixnum::<usize>()
+                                .expect("assignable slot must store offset")
+                                .into();
+                            // SAFETY: offset is valid by construction
+                            slot.value = unsafe {
+                                std::ptr::read::<Handle<Value>>(
+                                    parent_obj.slots_ptr().add(offset),
+                                )
+                                .as_value()
+                            };
+                        }
+                        return LookupResult::Found {
+                            object: parent_value,
+                            slot,
+                            slot_index: idx,
+                            traversed_assignable_parent: false,
+                        };
+                    }
+                }
+            }
+            if parent_obj.activation_type == ActivationType::Method {
+                break;
+            }
+            parent = parent_obj.parent;
         }
         // Fall back to receiver lookup
         self.receiver.as_value().lookup(selector, link)

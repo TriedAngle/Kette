@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{
-    interning::Messages, primitive_index, primitives::Vector, Allocator,
-    BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings, HeapValue, Map,
-    Message, SlotHelper, SlotTags, StringObject, Strings,
+    Allocator, BytecodeWriter, Handle, Heap, HeapProxy, HeapSettings,
+    HeapValue, Map, Message, SlotHelper, SlotTags, StringObject, Strings,
+    interning::Messages, primitive_index, primitives::Vector,
 };
 
 /// Core VM objects required for bootstrap and runtime operation.

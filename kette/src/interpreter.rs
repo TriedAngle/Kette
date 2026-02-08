@@ -219,18 +219,28 @@ impl Interpreter {
     }
 
     pub fn add_quotation(&mut self, quotation: Handle<Quotation>) {
-        let capture_handles: &[Handle<Value>] =
-            if quotation.capture_count() == 0 {
-                &[]
-            } else {
-                // SAFETY: captured slots never contain header values
-                unsafe {
-                    transmute::values_as_handles(quotation.captured_slots())
-                }
-            };
+        let capture_handles: &[Handle<Value>] = if quotation.capture_count()
+            == 0
+        {
+            &[]
+        } else {
+            // SAFETY: captured slots never contain header values
+            unsafe { transmute::values_as_handles(quotation.captured_slots()) }
+        };
 
-        let activation_object =
-            self.heap.allocate_quotation_activation(quotation, capture_handles);
+        let parent = if !quotation.parent.as_ptr().is_null() {
+            quotation.parent
+        } else if let Some(current) = self.activations.current() {
+            current.object
+        } else {
+            unsafe { Handle::null() }
+        };
+
+        let activation_object = self.heap.allocate_quotation_activation(
+            quotation,
+            parent,
+            capture_handles,
+        );
 
         self.activations
             .new_activation(activation_object, ActivationType::Quotation);
@@ -241,20 +251,28 @@ impl Interpreter {
         quotation: Handle<Quotation>,
         receiver: Handle<Value>,
     ) {
-        let capture_handles: &[Handle<Value>] =
-            if quotation.capture_count() == 0 {
-                &[]
-            } else {
-                // SAFETY: captured slots never contain header values
-                unsafe {
-                    transmute::values_as_handles(quotation.captured_slots())
-                }
-            };
+        let capture_handles: &[Handle<Value>] = if quotation.capture_count()
+            == 0
+        {
+            &[]
+        } else {
+            // SAFETY: captured slots never contain header values
+            unsafe { transmute::values_as_handles(quotation.captured_slots()) }
+        };
+
+        let parent = if !quotation.parent.as_ptr().is_null() {
+            quotation.parent
+        } else if let Some(current) = self.activations.current() {
+            current.object
+        } else {
+            unsafe { Handle::null() }
+        };
 
         let activation_object =
             self.heap.allocate_quotation_activation_with_receiver(
                 quotation,
                 receiver,
+                parent,
                 capture_handles,
             );
 
@@ -274,8 +292,13 @@ impl Interpreter {
         self.check_min_stack(slot_count)?;
 
         // SAFETY: stack depth verified above
-        let slots =
-            unsafe { self.state.stack_peek_slice_unchecked(slot_count) };
+        let slots = if map.has_named_params() {
+            // -@- methods consume inputs from the stack
+            unsafe { self.state.stack_pop_slice_unchecked(slot_count) }
+        } else {
+            // regular methods peek inputs from the stack
+            unsafe { self.state.stack_peek_slice_unchecked(slot_count) }
+        };
         // SAFETY: values are valid handles, no GC between peek and use
         let slots = unsafe { crate::transmute::values_as_handles(slots) };
 
@@ -689,67 +712,75 @@ impl Interpreter {
     ) -> Option<ExecutionResult> {
         // SAFETY: context is valid when called from the Send handler
         let mut activation = unsafe { self.context_unchecked().activation };
-        let map = activation.map;
 
-        // Fast bail: only check if this map has named params
-        if !map.has_named_params() {
-            return None;
-        }
+        while !activation.as_ptr().is_null() {
+            let map = activation.map;
 
-        for slot_desc in map.slots() {
-            if slot_desc.name.as_ptr() != selector.name.as_ptr() {
-                continue;
-            }
+            if map.has_named_params() {
+                for slot_desc in map.slots() {
+                    if slot_desc.name.as_ptr() != selector.name.as_ptr() {
+                        continue;
+                    }
 
-            let tags = slot_desc.tags();
+                    let tags = slot_desc.tags();
 
-            if tags.contains(SlotTags::ASSIGNMENT) {
-                // Setter: `a<<` — pop TOS as the value to store
-                let offset: usize = slot_desc
-                    .value
-                    .as_tagged_fixnum::<usize>()
-                    .expect("assignment slot must store offset")
-                    .into();
+                    if tags.contains(SlotTags::ASSIGNMENT) {
+                        // Setter: `a<<` — pop TOS as the value to store
+                        let offset: usize = slot_desc
+                            .value
+                            .as_tagged_fixnum::<usize>()
+                            .expect("assignment slot must store offset")
+                            .into();
 
-                // SAFETY: compiler guarantees a value on the stack for setters
-                let new_value = unsafe { self.state.pop_unchecked() };
+                        // SAFETY: compiler guarantees a value on the stack for setters
+                        let new_value = unsafe { self.state.pop_unchecked() };
 
-                if new_value.is_object() {
-                    // SAFETY: must be valid by protocol
-                    let val_obj =
-                        unsafe { new_value.as_heap_handle_unchecked() };
-                    self.heap.write_barrier(
-                        activation.as_heap_value_handle(),
-                        val_obj,
-                    );
+                        if new_value.is_object() {
+                            // SAFETY: must be valid by protocol
+                            let val_obj =
+                                unsafe { new_value.as_heap_handle_unchecked() };
+                            self.heap.write_barrier(
+                                activation.as_heap_value_handle(),
+                                val_obj,
+                            );
+                        }
+
+                        // SAFETY: offset is valid by construction (parser-generated)
+                        unsafe {
+                            activation.set_slot_unchecked(offset, new_value)
+                        };
+
+                        return Some(ExecutionResult::Normal);
+                    }
+
+                    if tags.contains(SlotTags::ASSIGNABLE) {
+                        // Getter: push the named parameter's value onto the stack
+                        let offset: usize = slot_desc
+                            .value
+                            .as_tagged_fixnum::<usize>()
+                            .expect("assignable slot must store offset")
+                            .into();
+
+                        // SAFETY: offset is valid by construction
+                        let value = unsafe {
+                            std::ptr::read(activation.slots_ptr().add(offset))
+                                .as_value()
+                        };
+                        self.state.push(value);
+                        return Some(ExecutionResult::Normal);
+                    }
+
+                    // Constant/other slot types in the activation — push value
+                    self.state.push(slot_desc.value);
+                    return Some(ExecutionResult::Normal);
                 }
-
-                // SAFETY: offset is valid by construction (parser-generated)
-                unsafe { activation.set_slot_unchecked(offset, new_value) };
-
-                return Some(ExecutionResult::Normal);
             }
 
-            if tags.contains(SlotTags::ASSIGNABLE) {
-                // Getter: push the named parameter's value onto the stack
-                let offset: usize = slot_desc
-                    .value
-                    .as_tagged_fixnum::<usize>()
-                    .expect("assignable slot must store offset")
-                    .into();
-
-                // SAFETY: offset is valid by construction
-                let value = unsafe {
-                    std::ptr::read(activation.slots_ptr().add(offset))
-                        .as_value()
-                };
-                self.state.push(value);
-                return Some(ExecutionResult::Normal);
+            if activation.activation_type == ActivationType::Method {
+                break;
             }
 
-            // Constant/other slot types in the activation — push value
-            self.state.push(slot_desc.value);
-            return Some(ExecutionResult::Normal);
+            activation = activation.parent;
         }
 
         None
@@ -1182,8 +1213,7 @@ impl Interpreter {
 
                         let mut explicit_iter = explicit_vals.iter();
                         let mut implicit_iter = implicit_vals.iter();
-                        let mut captures =
-                            Vec::with_capacity(capture_count);
+                        let mut captures = Vec::with_capacity(capture_count);
 
                         for slot_desc in map.slots() {
                             let tags = slot_desc.tags();
@@ -1205,9 +1235,7 @@ impl Interpreter {
                         }
 
                         self.heap.allocate_quotation_with_captures(
-                            map,
-                            activation,
-                            &captures,
+                            map, activation, &captures,
                         )
                     };
                     self.state.push(quotation.into());
@@ -1217,6 +1245,28 @@ impl Interpreter {
                 OpCode::Return => {
                     // Return has no operands
                     // No need to sync context as we are popping the frame
+                    if let Some(current) = self.activations.current() {
+                        if current.ty == ActivationType::Method {
+                            let map = current.object.map;
+                            if map.has_named_params() {
+                                let output_count = map.output_count();
+                                if output_count > 0 {
+                                    let start = map.input_count();
+                                    for idx in 0..output_count {
+                                        // SAFETY: indices are within activation slots
+                                        let val = std::ptr::read(
+                                            current
+                                                .object
+                                                .slots_ptr()
+                                                .add(start + idx),
+                                        );
+                                        self.state.push(val.as_value());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let _ = self.activations.pop();
                     ExecutionResult::ActivationChanged
                 }

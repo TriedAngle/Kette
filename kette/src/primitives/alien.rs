@@ -1,6 +1,6 @@
 use crate::{
-    primitives::inputs, Alien, Allocator, ExecutionResult, PrimitiveContext,
-    Value,
+    Alien, Allocator, ExecutionResult, PrimitiveContext, Value,
+    primitives::inputs,
 };
 
 const FIXNUM_MIN: i64 = -(1_i64 << 62);
