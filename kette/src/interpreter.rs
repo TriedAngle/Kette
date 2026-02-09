@@ -29,7 +29,7 @@ pub struct ExecutionContext {
     pub cp: *const Value,
     /// The 'self' value for the current frame
     pub receiver: Value,
-    /// Pointer to the start of the instructions (needed to calculate index for sync)
+    /// Pointer to the start of the instructions
     pub inst_base: *const u8,
 }
 
@@ -94,6 +94,7 @@ impl Interpreter {
 
     /// Initialize the heap's reference to execution state for GC rooting.
     /// Must be called after the Interpreter is at its final memory location.
+    /// Must not be moved afterwards!!!
     pub fn init_gc_roots(&mut self) {
         self.heap.init_state(&mut self.state, &mut self.activations);
     }
@@ -251,9 +252,7 @@ impl Interpreter {
         quotation: Handle<Quotation>,
         receiver: Handle<Value>,
     ) {
-        let capture_handles: &[Handle<Value>] = if quotation.capture_count()
-            == 0
-        {
+        let capture_handles = if quotation.capture_count() == 0 {
             &[]
         } else {
             // SAFETY: captured slots never contain header values
@@ -970,9 +969,9 @@ impl Interpreter {
                     #[cfg(feature = "inline-cache")]
                     let feedback_idx = self.context_unchecked_mut().read_u16();
                     #[cfg(not(feature = "inline-cache"))]
-                    let _ = self.context_unchecked_mut().read_u16(); // skip feedback_idx
+                    let _ = self.context_unchecked_mut().read_u16();
 
-                    // Now sync context so GC sees correct IP (after operands)
+                    // Now sync context so GC sees correct IP
                     self.sync_context();
 
                     // SAFETY: correctly setup by compiler

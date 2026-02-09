@@ -72,14 +72,14 @@ pub struct Code {
     pub const_count: u32,
     /// Size of instructions in bytes
     pub inst_size: u32,
-    /// Number of Send sites (for lazy feedback vector allocation)
+    /// Number of Send sites
     pub feedback_slot_count: u32,
     /// the original source code body parse result
     pub body: Handle<Array>,
     /// Feedback vector for inline caching (lazily allocated)
     pub feedback_vector: Handle<Array>,
 
-    // Memory Layout (DST pattern for flexible allocation):
+    // Memory Layout:
     // 1. [Value; const_count] - constant pool
     // 2. [u8; inst_size] - bytecode instructions
     data: [u8; 0],
@@ -108,7 +108,6 @@ impl Code {
         body: Handle<Array>,
         feedback_vector: Handle<Array>,
     ) {
-        // Note: Using ObjectType::Code for now. If a new type is needed, it should be added to ObjectType.
         self.header = Header::new_object(ObjectType::Code);
         self.const_count = constants.len() as u32;
         self.inst_size = instructions.len() as u32;
