@@ -1,0 +1,1021 @@
+/// Streaming parser for Self expression syntax.
+///
+/// Consumes tokens and produces [`Expr`] AST nodes.
+///
+/// # Comment preservation
+///
+/// Comments are **never discarded**.  Before an expression they are
+/// attached as [`Expr::leading_comments`].  At the end of a body they
+/// are emitted as [`ExprKind::Comment`] nodes for LSP reflection.
+use crate::ast::*;
+use crate::span::{Pos, Span};
+use crate::token::{Token, TokenKind};
+use std::collections::HashMap;
+
+// ═══════════════════════════════════════════════════════════════════
+// Error type
+// ═══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError {
+    pub message: String,
+    pub span: Span,
+}
+
+impl ParseError {
+    pub fn new(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            message: message.into(),
+            span,
+        }
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} at {}", self.message, self.span)
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+// ═══════════════════════════════════════════════════════════════════
+// Parser
+// ═══════════════════════════════════════════════════════════════════
+
+pub struct Parser<I: Iterator<Item = Token>> {
+    tokens: std::iter::Peekable<I>,
+    last_span: Span,
+    at_eof: bool,
+    /// Comments buffered while scanning for the next meaningful token.
+    pending_comments: Vec<Comment>,
+    op_precedence: HashMap<String, u8>,
+}
+
+impl<I: Iterator<Item = Token>> Parser<I> {
+    pub fn new(tokens: I) -> Self {
+        let mut op_precedence = HashMap::new();
+        op_precedence.insert("+".to_string(), 1);
+        op_precedence.insert("-".to_string(), 1);
+        op_precedence.insert("*".to_string(), 2);
+        op_precedence.insert("/".to_string(), 2);
+        Self {
+            tokens: tokens.peekable(),
+            last_span: Span::point(Pos::origin()),
+            at_eof: false,
+            pending_comments: Vec::new(),
+            op_precedence,
+        }
+    }
+
+    // ── Token helpers ─────────────────────────────────────────
+
+    fn peek_kind(&mut self) -> &TokenKind {
+        self.collect_comments();
+        match self.tokens.peek() {
+            Some(tok) => &tok.kind,
+            None => &TokenKind::Eof,
+        }
+    }
+
+    fn peek_span(&mut self) -> Span {
+        self.collect_comments();
+        match self.tokens.peek() {
+            Some(tok) => tok.span,
+            None => self.last_span,
+        }
+    }
+
+    fn collect_comments(&mut self) {
+        loop {
+            match self.tokens.peek() {
+                Some(tok) if tok.kind.is_comment() => {
+                    let tok = self.tokens.next().unwrap();
+                    self.last_span = tok.span;
+                    self.pending_comments.push(token_to_comment(&tok));
+                }
+                _ => break,
+            }
+        }
+    }
+
+    fn take_pending_comments(&mut self) -> Vec<Comment> {
+        std::mem::take(&mut self.pending_comments)
+    }
+
+    fn advance(&mut self) -> Token {
+        self.collect_comments();
+        match self.tokens.next() {
+            Some(tok) => {
+                self.last_span = tok.span;
+                if matches!(tok.kind, TokenKind::Eof) {
+                    self.at_eof = true;
+                }
+                tok
+            }
+            None => {
+                self.at_eof = true;
+                Token::new(TokenKind::Eof, self.last_span, "")
+            }
+        }
+    }
+
+    fn expect(&mut self, expected: &TokenKind) -> Result<Token, ParseError> {
+        let tok = self.advance();
+        if std::mem::discriminant(&tok.kind) == std::mem::discriminant(expected)
+        {
+            Ok(tok)
+        } else {
+            Err(ParseError::new(
+                format!(
+                    "expected {}, found {}",
+                    expected.name(),
+                    tok.kind.name()
+                ),
+                tok.span,
+            ))
+        }
+    }
+
+    fn check(&mut self, kind: &TokenKind) -> bool {
+        std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(kind)
+    }
+
+    // ── Comment attachment ────────────────────────────────────
+
+    fn parse_expression_with_comments(&mut self) -> Result<Expr, ParseError> {
+        let comments = self.take_pending_comments();
+        let expr = self.parse_expression()?;
+        Ok(expr.with_comments(comments))
+    }
+
+    // ── Expression: keyword level (lowest) ────────────────────
+
+    pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
+        self.parse_cascade_level()
+    }
+
+    fn parse_cascade_level(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_assignment_level()?;
+        if !matches!(self.peek_kind(), TokenKind::Semicolon) {
+            return Ok(expr);
+        }
+
+        if !self.is_message_expr(&expr) {
+            return Err(ParseError::new("expected cascade message", expr.span));
+        }
+
+        let receiver = self.cascade_receiver_from_expr(&expr);
+        let mut messages = vec![expr];
+
+        while matches!(self.peek_kind(), TokenKind::Semicolon) {
+            self.advance();
+            let msg = self.parse_cascade_message(receiver.clone())?;
+            messages.push(msg);
+        }
+
+        let start = receiver.span;
+        let end = messages.last().map(|e| e.span).unwrap_or(start);
+        Ok(Expr::new(
+            ExprKind::Cascade {
+                receiver: Box::new(receiver),
+                messages,
+            },
+            start.merge(end),
+        ))
+    }
+
+    fn parse_assignment_level(&mut self) -> Result<Expr, ParseError> {
+        let left = self.parse_keyword_level()?;
+        match self.peek_kind().clone() {
+            TokenKind::Assign | TokenKind::Equals => {
+                let op = self.advance();
+                let right = self.parse_assignment_level()?;
+                let kind = match op.kind {
+                    TokenKind::Assign => AssignKind::Assign,
+                    TokenKind::Equals => AssignKind::Init,
+                    _ => unreachable!(),
+                };
+                let span = left.span.merge(right.span);
+                Ok(Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(left),
+                        kind,
+                        value: Box::new(right),
+                    },
+                    span,
+                ))
+            }
+            _ => Ok(left),
+        }
+    }
+
+    fn cascade_receiver_from_expr(&self, expr: &Expr) -> Expr {
+        match &expr.kind {
+            ExprKind::UnaryMessage { receiver, .. } => (**receiver).clone(),
+            ExprKind::BinaryMessage { receiver, .. } => (**receiver).clone(),
+            ExprKind::KeywordMessage {
+                receiver: Some(receiver),
+                ..
+            } => (**receiver).clone(),
+            ExprKind::ImplicitUnary { .. }
+            | ExprKind::ImplicitBinary { .. }
+            | ExprKind::ImplicitKeyword { .. }
+            | ExprKind::Resend { .. }
+            | ExprKind::DirectedResend { .. } => {
+                Expr::new(ExprKind::SelfRef, expr.span)
+            }
+            _ => expr.clone(),
+        }
+    }
+
+    fn is_message_expr(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.kind,
+            ExprKind::UnaryMessage { .. }
+                | ExprKind::BinaryMessage { .. }
+                | ExprKind::KeywordMessage { .. }
+                | ExprKind::ImplicitUnary { .. }
+                | ExprKind::ImplicitBinary { .. }
+                | ExprKind::ImplicitKeyword { .. }
+                | ExprKind::Resend { .. }
+                | ExprKind::DirectedResend { .. }
+        )
+    }
+
+    fn parse_cascade_message(
+        &mut self,
+        receiver: Expr,
+    ) -> Result<Expr, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Identifier(_) => {
+                let expr = self.parse_unary_tail(receiver);
+                let expr = self.parse_binary_with_left(expr, 0)?;
+                if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+                    self.parse_keyword_tail(expr)
+                } else {
+                    Ok(expr)
+                }
+            }
+            TokenKind::Operator(_) => {
+                let expr = self.parse_binary_with_left(receiver, 0)?;
+                if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+                    self.parse_keyword_tail(expr)
+                } else {
+                    Ok(expr)
+                }
+            }
+            TokenKind::Keyword(_) => self.parse_keyword_tail(receiver),
+            _ => Err(ParseError::new(
+                "expected cascade message",
+                self.peek_span(),
+            )),
+        }
+    }
+
+    fn parse_resend_message(&mut self) -> Result<ResendMessage, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Identifier(_) => {
+                let first = self.advance();
+                let first_name = match first.kind {
+                    TokenKind::Identifier(s) => s,
+                    _ => unreachable!(),
+                };
+                let starts_message = matches!(
+                    self.peek_kind(),
+                    TokenKind::Identifier(_)
+                        | TokenKind::Operator(_)
+                        | TokenKind::Keyword(_)
+                );
+                if starts_message {
+                    let msg = self.parse_message_expression()?;
+                    Ok(ResendMessage::Directed {
+                        delegate: first_name,
+                        message: msg,
+                    })
+                } else {
+                    Ok(ResendMessage::Undirected(Expr::new(
+                        ExprKind::ImplicitUnary {
+                            selector: first_name,
+                        },
+                        first.span,
+                    )))
+                }
+            }
+            TokenKind::Operator(_) | TokenKind::Keyword(_) => {
+                let msg = self.parse_message_expression()?;
+                Ok(ResendMessage::Undirected(msg))
+            }
+            _ => Err(ParseError::new(
+                "expected resend message",
+                self.peek_span(),
+            )),
+        }
+    }
+
+    fn parse_message_expression(&mut self) -> Result<Expr, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Identifier(_) => {
+                let expr = self.parse_primary()?;
+                let expr = self.parse_unary_tail(expr);
+                let expr = self.parse_binary_with_left(expr, 0)?;
+                if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+                    self.parse_keyword_tail(expr)
+                } else {
+                    Ok(expr)
+                }
+            }
+            TokenKind::Operator(_) => {
+                let expr = self.parse_binary_with_min_precedence(0)?;
+                if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+                    self.parse_keyword_tail(expr)
+                } else {
+                    Ok(expr)
+                }
+            }
+            TokenKind::Keyword(_) => self.parse_implicit_keyword(),
+            _ => Err(ParseError::new("expected message", self.peek_span())),
+        }
+    }
+
+    fn parse_keyword_level(&mut self) -> Result<Expr, ParseError> {
+        let recv = self.parse_binary_level()?;
+        if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+            self.parse_keyword_tail(recv)
+        } else {
+            Ok(recv)
+        }
+    }
+
+    fn parse_keyword_tail(
+        &mut self,
+        receiver: Expr,
+    ) -> Result<Expr, ParseError> {
+        let start = receiver.span;
+        let mut pairs = Vec::new();
+
+        if let TokenKind::Keyword(kw) = self.peek_kind().clone() {
+            let kt = self.advance();
+            let arg = self.parse_binary_level()?;
+            pairs.push(KeywordPair {
+                keyword: kw,
+                span: kt.span.merge(arg.span),
+                argument: arg,
+            });
+        }
+        while let TokenKind::Keyword(kw) = self.peek_kind().clone() {
+            let kt = self.advance();
+            let arg = self.parse_binary_level()?;
+            pairs.push(KeywordPair {
+                keyword: kw,
+                span: kt.span.merge(arg.span),
+                argument: arg,
+            });
+        }
+
+        let end = pairs.last().map(|p| p.span).unwrap_or(start);
+        Ok(Expr::new(
+            ExprKind::KeywordMessage {
+                receiver: Some(Box::new(receiver)),
+                pairs,
+            },
+            start.merge(end),
+        ))
+    }
+
+    // ── Expression: binary level (medium) ─────────────────────
+
+    fn parse_binary_level(&mut self) -> Result<Expr, ParseError> {
+        self.parse_binary_with_min_precedence(0)
+    }
+
+    fn parse_binary_with_min_precedence(
+        &mut self,
+        min_prec: u8,
+    ) -> Result<Expr, ParseError> {
+        let left = self.parse_unary_level()?;
+        self.parse_binary_with_left(left, min_prec)
+    }
+
+    fn parse_binary_with_left(
+        &mut self,
+        mut left: Expr,
+        min_prec: u8,
+    ) -> Result<Expr, ParseError> {
+        loop {
+            let (op, prec) = match self.peek_kind().clone() {
+                TokenKind::Operator(op) => {
+                    let prec = self.operator_precedence(&op);
+                    (op, prec)
+                }
+                _ => break,
+            };
+            if prec < min_prec {
+                break;
+            }
+            self.advance();
+            let right = self.parse_binary_with_min_precedence(prec + 1)?;
+            let span = left.span.merge(right.span);
+            left = Expr::new(
+                ExprKind::BinaryMessage {
+                    receiver: Box::new(left),
+                    operator: op,
+                    argument: Box::new(right),
+                },
+                span,
+            );
+        }
+        Ok(left)
+    }
+
+    fn operator_precedence(&self, op: &str) -> u8 {
+        *self.op_precedence.get(op).unwrap_or(&1)
+    }
+
+    // ── Expression: unary level (highest) ─────────────────────
+
+    fn parse_unary_level(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.parse_primary()?;
+        Ok(self.parse_unary_tail(expr))
+    }
+
+    fn parse_unary_tail(&mut self, mut expr: Expr) -> Expr {
+        loop {
+            if let TokenKind::Identifier(_) = self.peek_kind() {
+                let tok = self.advance();
+                let sel = match tok.kind {
+                    TokenKind::Identifier(s) => s,
+                    _ => unreachable!(),
+                };
+                let span = expr.span.merge(tok.span);
+                expr = Expr::new(
+                    ExprKind::UnaryMessage {
+                        receiver: Box::new(expr),
+                        selector: sel,
+                    },
+                    span,
+                );
+            } else {
+                break;
+            }
+        }
+        expr
+    }
+
+    // ── Primary ───────────────────────────────────────────────
+
+    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        match self.peek_kind().clone() {
+            TokenKind::Integer(_) => {
+                let t = self.advance();
+                let v = match t.kind {
+                    TokenKind::Integer(v) => v,
+                    _ => unreachable!(),
+                };
+                Ok(Expr::new(ExprKind::Integer(v), t.span))
+            }
+            TokenKind::Float(_) => {
+                let t = self.advance();
+                let v = match t.kind {
+                    TokenKind::Float(v) => v,
+                    _ => unreachable!(),
+                };
+                Ok(Expr::new(ExprKind::Float(v), t.span))
+            }
+            TokenKind::String(_) => {
+                let t = self.advance();
+                let v = match t.kind {
+                    TokenKind::String(v) => v,
+                    _ => unreachable!(),
+                };
+                Ok(Expr::new(ExprKind::String(v), t.span))
+            }
+            TokenKind::SelfKw => {
+                let t = self.advance();
+                Ok(Expr::new(ExprKind::SelfRef, t.span))
+            }
+            TokenKind::Identifier(_) => {
+                let t = self.advance();
+                let n = match t.kind {
+                    TokenKind::Identifier(s) => s,
+                    _ => unreachable!(),
+                };
+                Ok(Expr::new(ExprKind::ImplicitUnary { selector: n }, t.span))
+            }
+            TokenKind::ResendKw => {
+                let t = self.advance();
+                let start = t.span;
+                let msg = self.parse_resend_message()?;
+                let span = start.merge(msg.span());
+                match msg {
+                    ResendMessage::Undirected(message) => Ok(Expr::new(
+                        ExprKind::Resend {
+                            message: Box::new(message),
+                        },
+                        span,
+                    )),
+                    ResendMessage::Directed { delegate, message } => {
+                        Ok(Expr::new(
+                            ExprKind::DirectedResend {
+                                delegate,
+                                message: Box::new(message),
+                            },
+                            span,
+                        ))
+                    }
+                }
+            }
+            TokenKind::ArrayStart => self.parse_array_literal(),
+            TokenKind::ByteArrayStart => self.parse_byte_array_literal(),
+            TokenKind::LParen => self.parse_paren_or_object(),
+            TokenKind::LBracket => self.parse_block(),
+            TokenKind::Caret => {
+                let t = self.advance();
+                let e = self.parse_expression()?;
+                let span = t.span.merge(e.span);
+                Ok(Expr::new(ExprKind::Return(Box::new(e)), span))
+            }
+            TokenKind::Keyword(_) => self.parse_implicit_keyword(),
+            TokenKind::Operator(_) => {
+                let t = self.advance();
+                let op = match t.kind {
+                    TokenKind::Operator(s) => s,
+                    _ => unreachable!(),
+                };
+                let arg = self.parse_unary_level()?;
+                let span = t.span.merge(arg.span);
+                Ok(Expr::new(
+                    ExprKind::ImplicitBinary {
+                        operator: op,
+                        argument: Box::new(arg),
+                    },
+                    span,
+                ))
+            }
+            TokenKind::Eof => Err(ParseError::new(
+                "unexpected end of input",
+                self.peek_span(),
+            )),
+            _ => {
+                let t = self.advance();
+                Err(ParseError::new(
+                    format!("unexpected token: {}", t.kind.name()),
+                    t.span,
+                ))
+            }
+        }
+    }
+
+    fn parse_array_literal(&mut self) -> Result<Expr, ParseError> {
+        let open = self.advance();
+        let start = open.span;
+        let mut elements = Vec::new();
+
+        if matches!(self.peek_kind(), TokenKind::RParen) {
+            let close = self.advance();
+            return Ok(Expr::new(
+                ExprKind::Array { elements },
+                start.merge(close.span),
+            ));
+        }
+
+        loop {
+            elements.push(self.parse_expression_with_comments()?);
+            if matches!(self.peek_kind(), TokenKind::Dot) {
+                self.advance();
+                if matches!(self.peek_kind(), TokenKind::RParen) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        let close = self.expect(&TokenKind::RParen)?;
+        Ok(Expr::new(
+            ExprKind::Array { elements },
+            start.merge(close.span),
+        ))
+    }
+
+    fn parse_byte_array_literal(&mut self) -> Result<Expr, ParseError> {
+        let open = self.advance();
+        let start = open.span;
+        let mut bytes = Vec::new();
+
+        if matches!(self.peek_kind(), TokenKind::RParen) {
+            let close = self.advance();
+            return Ok(Expr::new(
+                ExprKind::ByteArray { bytes },
+                start.merge(close.span),
+            ));
+        }
+
+        loop {
+            let expr = self.parse_expression_with_comments()?;
+            let value = self.eval_integer_expr(&expr).ok_or_else(|| {
+                ParseError::new("expected byte integer expression", expr.span)
+            })?;
+            if !(0..=255).contains(&value) {
+                return Err(ParseError::new(
+                    "byte value out of range (0..=255)",
+                    expr.span,
+                ));
+            }
+            bytes.push(value as u8);
+
+            if matches!(self.peek_kind(), TokenKind::Dot) {
+                self.advance();
+                if matches!(self.peek_kind(), TokenKind::RParen) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        let close = self.expect(&TokenKind::RParen)?;
+        Ok(Expr::new(
+            ExprKind::ByteArray { bytes },
+            start.merge(close.span),
+        ))
+    }
+
+    fn eval_integer_expr(&self, expr: &Expr) -> Option<i64> {
+        match &expr.kind {
+            ExprKind::Integer(v) => Some(*v),
+            ExprKind::Paren(inner) => self.eval_integer_expr(inner),
+            ExprKind::BinaryMessage {
+                receiver,
+                operator,
+                argument,
+            } => {
+                let left = self.eval_integer_expr(receiver)?;
+                let right = self.eval_integer_expr(argument)?;
+                match operator.as_str() {
+                    "+" => left.checked_add(right),
+                    "-" => left.checked_sub(right),
+                    "*" => left.checked_mul(right),
+                    "/" => left.checked_div(right),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_implicit_keyword(&mut self) -> Result<Expr, ParseError> {
+        let start = self.peek_span();
+        let mut pairs = Vec::new();
+        if let TokenKind::Keyword(kw) = self.peek_kind().clone() {
+            let kt = self.advance();
+            let arg = self.parse_binary_level()?;
+            pairs.push(KeywordPair {
+                keyword: kw,
+                span: kt.span.merge(arg.span),
+                argument: arg,
+            });
+        }
+        while let TokenKind::Keyword(kw) = self.peek_kind().clone() {
+            let kt = self.advance();
+            let arg = self.parse_binary_level()?;
+            pairs.push(KeywordPair {
+                keyword: kw,
+                span: kt.span.merge(arg.span),
+                argument: arg,
+            });
+        }
+        let end = pairs.last().map(|p| p.span).unwrap_or(start);
+        Ok(Expr::new(
+            ExprKind::ImplicitKeyword { pairs },
+            start.merge(end),
+        ))
+    }
+
+    // ── Compound: paren / object / block ──────────────────────
+
+    fn parse_paren_or_object(&mut self) -> Result<Expr, ParseError> {
+        let open = self.advance();
+        let start = open.span;
+
+        if matches!(self.peek_kind(), TokenKind::Pipe) {
+            return self.parse_object_body(start);
+        }
+        if matches!(self.peek_kind(), TokenKind::RParen) {
+            let close = self.advance();
+            return Ok(Expr::new(
+                ExprKind::Object {
+                    slots: vec![],
+                    body: vec![],
+                },
+                start.merge(close.span),
+            ));
+        }
+
+        let expr = self.parse_expression()?;
+        if matches!(self.peek_kind(), TokenKind::Dot) {
+            let mut body = vec![expr];
+            while matches!(self.peek_kind(), TokenKind::Dot) {
+                self.advance();
+                if matches!(self.peek_kind(), TokenKind::RParen) {
+                    break;
+                }
+                body.push(self.parse_expression_with_comments()?);
+            }
+            let close = self.expect(&TokenKind::RParen)?;
+            let span = start.merge(close.span);
+            if body.len() == 1 {
+                Ok(Expr::new(ExprKind::Paren(Box::new(body.remove(0))), span))
+            } else {
+                Ok(Expr::new(
+                    ExprKind::Object {
+                        slots: vec![],
+                        body,
+                    },
+                    span,
+                ))
+            }
+        } else {
+            let close = self.expect(&TokenKind::RParen)?;
+            Ok(Expr::new(
+                ExprKind::Paren(Box::new(expr)),
+                start.merge(close.span),
+            ))
+        }
+    }
+
+    fn parse_object_body(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.advance(); // first `|`
+        let slots = self.parse_slot_list()?;
+        self.expect(&TokenKind::Pipe)?;
+        let body = self.parse_code_body(&TokenKind::RParen)?;
+        let close = self.expect(&TokenKind::RParen)?;
+        Ok(Expr::new(
+            ExprKind::Object { slots, body },
+            start.merge(close.span),
+        ))
+    }
+
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        let open = self.advance();
+        let start = open.span;
+        let (mut args, mut locals) = (Vec::new(), Vec::new());
+
+        if matches!(self.peek_kind(), TokenKind::Pipe) {
+            self.advance();
+            for sd in self.parse_slot_list()? {
+                match sd.kind {
+                    SlotKind::Argument { name } => args.push(name),
+                    _ => locals.push(sd),
+                }
+            }
+            self.expect(&TokenKind::Pipe)?;
+        }
+
+        let body = self.parse_code_body(&TokenKind::RBracket)?;
+        let close = self.expect(&TokenKind::RBracket)?;
+        Ok(Expr::new(
+            ExprKind::Block { args, locals, body },
+            start.merge(close.span),
+        ))
+    }
+
+    fn parse_code_body(
+        &mut self,
+        terminator: &TokenKind,
+    ) -> Result<Vec<Expr>, ParseError> {
+        let mut exprs = Vec::new();
+        loop {
+            let _ = self.peek_kind(); // collect comments
+            if self.check(terminator) || self.at_eof {
+                for c in self.take_pending_comments() {
+                    let span = c.span;
+                    exprs.push(Expr::new(ExprKind::Comment(c), span));
+                }
+                break;
+            }
+            exprs.push(self.parse_expression_with_comments()?);
+            if matches!(self.peek_kind(), TokenKind::Dot) {
+                self.advance();
+            } else {
+                let _ = self.peek_kind();
+                for c in self.take_pending_comments() {
+                    let span = c.span;
+                    exprs.push(Expr::new(ExprKind::Comment(c), span));
+                }
+                break;
+            }
+        }
+        Ok(exprs)
+    }
+
+    // ── Slot parsing ──────────────────────────────────────────
+
+    fn parse_slot_list(&mut self) -> Result<Vec<SlotDescriptor>, ParseError> {
+        let mut slots = Vec::new();
+        loop {
+            if matches!(self.peek_kind(), TokenKind::Pipe) {
+                break;
+            }
+            if self.at_eof {
+                return Err(ParseError::new(
+                    "unexpected end of input in slot list",
+                    self.peek_span(),
+                ));
+            }
+            let comments = self.take_pending_comments();
+            let mut sd = self.parse_slot_descriptor()?;
+            sd.leading_comments = comments;
+            slots.push(sd);
+            if matches!(self.peek_kind(), TokenKind::Dot) {
+                self.advance();
+            }
+        }
+        Ok(slots)
+    }
+
+    fn parse_slot_descriptor(&mut self) -> Result<SlotDescriptor, ParseError> {
+        let start = self.peek_span();
+        match self.peek_kind().clone() {
+            TokenKind::ArgName(name) => {
+                let t = self.advance();
+                Ok(SlotDescriptor {
+                    kind: SlotKind::Argument { name },
+                    span: t.span,
+                    leading_comments: vec![],
+                })
+            }
+            TokenKind::Identifier(_name) => {
+                let nt = self.advance();
+                let name = match nt.kind {
+                    TokenKind::Identifier(s) => s,
+                    _ => unreachable!(),
+                };
+                let is_parent =
+                    if let TokenKind::Operator(op) = self.peek_kind().clone() {
+                        if op == "*" {
+                            self.advance();
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                match self.peek_kind().clone() {
+                    TokenKind::Equals => {
+                        self.advance();
+                        let init = self.parse_expression()?;
+                        let span = start.merge(init.span);
+                        Ok(SlotDescriptor {
+                            kind: SlotKind::ReadOnly {
+                                name,
+                                is_parent,
+                                initializer: Some(init),
+                            },
+                            span,
+                            leading_comments: vec![],
+                        })
+                    }
+                    TokenKind::Assign => {
+                        self.advance();
+                        let init = self.parse_expression()?;
+                        let span = start.merge(init.span);
+                        Ok(SlotDescriptor {
+                            kind: SlotKind::ReadWrite {
+                                name,
+                                is_parent,
+                                initializer: Some(init),
+                            },
+                            span,
+                            leading_comments: vec![],
+                        })
+                    }
+                    _ => Ok(SlotDescriptor {
+                        kind: SlotKind::ReadWrite {
+                            name,
+                            is_parent,
+                            initializer: None,
+                        },
+                        span: nt.span,
+                        leading_comments: vec![],
+                    }),
+                }
+            }
+            TokenKind::Keyword(kw) => {
+                let mut selector = String::new();
+                let mut arguments = Vec::new();
+                let _kt = self.advance();
+                selector.push_str(&kw);
+                if let TokenKind::Identifier(a) | TokenKind::ArgName(a) =
+                    self.peek_kind().clone()
+                {
+                    self.advance();
+                    arguments.push(a);
+                }
+                while let TokenKind::Keyword(ck) = self.peek_kind().clone() {
+                    self.advance();
+                    selector.push_str(&ck);
+                    if let TokenKind::Identifier(a) | TokenKind::ArgName(a) =
+                        self.peek_kind().clone()
+                    {
+                        self.advance();
+                        arguments.push(a);
+                    }
+                }
+                self.expect(&TokenKind::Equals)?;
+                let body = self.parse_expression()?;
+                let span = start.merge(body.span);
+                Ok(SlotDescriptor {
+                    kind: SlotKind::Method {
+                        selector,
+                        is_parent: false,
+                        arguments,
+                        body,
+                    },
+                    span,
+                    leading_comments: vec![],
+                })
+            }
+            TokenKind::Operator(op) => {
+                let _ot = self.advance();
+                let mut arguments = Vec::new();
+                if let TokenKind::Identifier(a) = self.peek_kind().clone() {
+                    self.advance();
+                    arguments.push(a);
+                }
+                self.expect(&TokenKind::Equals)?;
+                let body = self.parse_expression()?;
+                let span = start.merge(body.span);
+                Ok(SlotDescriptor {
+                    kind: SlotKind::Method {
+                        selector: op,
+                        is_parent: false,
+                        arguments,
+                        body,
+                    },
+                    span,
+                    leading_comments: vec![],
+                })
+            }
+            other => Err(ParseError::new(
+                format!("unexpected token in slot list: {}", other.name()),
+                self.peek_span(),
+            )),
+        }
+    }
+}
+
+fn token_to_comment(tok: &Token) -> Comment {
+    match &tok.kind {
+        TokenKind::LineComment(t) => Comment {
+            kind: CommentKind::Line,
+            text: t.clone(),
+            span: tok.span,
+        },
+        TokenKind::BlockComment(t) => Comment {
+            kind: CommentKind::Block,
+            text: t.clone(),
+            span: tok.span,
+        },
+        _ => unreachable!(),
+    }
+}
+
+enum ResendMessage {
+    Undirected(Expr),
+    Directed { delegate: String, message: Expr },
+}
+
+impl ResendMessage {
+    fn span(&self) -> Span {
+        match self {
+            ResendMessage::Undirected(expr) => expr.span,
+            ResendMessage::Directed { message, .. } => message.span,
+        }
+    }
+}
+
+impl<I: Iterator<Item = Token>> Iterator for Parser<I> {
+    type Item = Result<Expr, ParseError>;
+
+    fn next(&mut self) -> Option<Result<Expr, ParseError>> {
+        if self.at_eof {
+            return None;
+        }
+        while matches!(self.peek_kind(), TokenKind::Dot) {
+            self.advance();
+        }
+        let _ = self.peek_kind();
+        if matches!(self.peek_kind(), TokenKind::Eof) {
+            if !self.pending_comments.is_empty() {
+                let c = self.pending_comments.remove(0);
+                let span = c.span;
+                return Some(Ok(Expr::new(ExprKind::Comment(c), span)));
+            }
+            self.at_eof = true;
+            return None;
+        }
+        Some(self.parse_expression_with_comments())
+    }
+}
