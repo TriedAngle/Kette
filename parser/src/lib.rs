@@ -13,8 +13,8 @@
 //!  └────────┘  (impl Iterator)    └────────┘  (impl Iterator)
 //! ```
 //!
-//! ```rust,ignore
-//! use self_parser::{Lexer, Parser};
+//! ```rust
+//! use parser::{Lexer, Parser};
 //!
 //! let source = "5 factorial + 3";
 //! let lexer = Lexer::from_str(source);
@@ -30,9 +30,9 @@
 //!
 //! ## Streaming from a network socket
 //!
-//! ```rust,ignore
+//! ```rust, ignore
 //! use std::net::TcpStream;
-//! use self_parser::{Lexer, Parser};
+//! use parser::{Lexer, Parser};
 //!
 //! let stream = TcpStream::connect("127.0.0.1:9999").unwrap();
 //! let lexer = Lexer::new(stream);
@@ -119,9 +119,7 @@ mod tests {
     #[test]
     fn implicit_unary_from_name() {
         let e = parse_one("foo");
-        assert!(
-            matches!(e.kind, ExprKind::ImplicitUnary { ref selector } if selector == "foo")
-        );
+        assert!(matches!(e.kind, ExprKind::Ident(ref name) if name == "foo"));
     }
 
     #[test]
@@ -143,8 +141,6 @@ mod tests {
             _ => panic!("expected nested unary"),
         }
     }
-
-    // ── Binary messages ───────────────────────────────────────
 
     #[test]
     fn binary() {
@@ -277,9 +273,10 @@ mod tests {
     #[test]
     fn keyword_lowest_precedence() {
         // `i: 5 factorial + pi sine` → i: ((5 factorial) + (pi sine))
-        let e = parse_one("i: 5 factorial + pi sine");
+        let e = parse_one("self i: 5 factorial + pi sine");
         match &e.kind {
-            ExprKind::ImplicitKeyword { pairs } => {
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                assert!(matches!(receiver.kind, ExprKind::SelfRef));
                 assert_eq!(pairs.len(), 1);
                 assert_eq!(pairs[0].keyword, "i:");
                 assert!(matches!(
@@ -287,7 +284,7 @@ mod tests {
                     ExprKind::BinaryMessage { .. }
                 ));
             }
-            _ => panic!("expected implicit keyword"),
+            _ => panic!("expected keyword message"),
         }
     }
 
@@ -296,7 +293,7 @@ mod tests {
         let e = parse_one("5 min: 4 Max: 7");
         match &e.kind {
             ExprKind::KeywordMessage { receiver, pairs } => {
-                assert!(receiver.is_some());
+                assert!(matches!(receiver.kind, ExprKind::Integer(5)));
                 assert_eq!(pairs.len(), 2);
                 assert_eq!(pairs[0].keyword, "min:");
                 assert_eq!(pairs[1].keyword, "Max:");
@@ -310,7 +307,7 @@ mod tests {
         let e = parse_one("5 min: 4 max: 7");
         match &e.kind {
             ExprKind::KeywordMessage { receiver, pairs } => {
-                assert!(receiver.is_some());
+                assert!(matches!(receiver.kind, ExprKind::Integer(5)));
                 assert_eq!(pairs.len(), 2);
                 assert_eq!(pairs[0].keyword, "min:");
                 assert_eq!(pairs[1].keyword, "max:");
@@ -321,9 +318,10 @@ mod tests {
 
     #[test]
     fn keyword_message_with_assignment_args() {
-        let e = parse_one("foo: (x := 1) bar: (y = 2)");
+        let e = parse_one("self foo: (x := 1) bar: (y = 2)");
         match &e.kind {
-            ExprKind::ImplicitKeyword { pairs } => {
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                assert!(matches!(receiver.kind, ExprKind::SelfRef));
                 assert_eq!(pairs.len(), 2);
                 match &pairs[0].argument.kind {
                     ExprKind::Paren(inner) => match &inner.kind {
@@ -344,20 +342,21 @@ mod tests {
                     _ => panic!("expected paren"),
                 }
             }
-            _ => panic!("expected implicit keyword"),
+            _ => panic!("expected keyword message"),
         }
     }
 
     #[test]
     fn implicit_keyword_message_chain() {
-        let e = parse_one("min: 4 max: 7");
+        let e = parse_one("self min: 4 max: 7");
         match &e.kind {
-            ExprKind::ImplicitKeyword { pairs } => {
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                assert!(matches!(receiver.kind, ExprKind::SelfRef));
                 assert_eq!(pairs.len(), 2);
                 assert_eq!(pairs[0].keyword, "min:");
                 assert_eq!(pairs[1].keyword, "max:");
             }
-            _ => panic!("expected implicit keyword"),
+            _ => panic!("expected keyword message"),
         }
     }
 
@@ -449,76 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn array_literal_empty() {
-        let e = parse_one("@()");
-        assert!(
-            matches!(e.kind, ExprKind::Array { ref elements } if elements.is_empty())
-        );
-    }
-
-    #[test]
-    fn array_literal_single() {
-        let e = parse_one("@( 1 )");
-        match &e.kind {
-            ExprKind::Array { elements } => {
-                assert_eq!(elements.len(), 1);
-                assert!(matches!(elements[0].kind, ExprKind::Integer(1)));
-            }
-            _ => panic!("expected array"),
-        }
-    }
-
-    #[test]
-    fn array_literal_multiple_with_trailing_dot() {
-        let e = parse_one("@( 1. 2. 3. )");
-        match &e.kind {
-            ExprKind::Array { elements } => {
-                assert_eq!(elements.len(), 3);
-                assert!(matches!(elements[2].kind, ExprKind::Integer(3)));
-            }
-            _ => panic!("expected array"),
-        }
-    }
-
-    #[test]
-    fn byte_array_literal_empty() {
-        let e = parse_one("#( )");
-        assert!(
-            matches!(e.kind, ExprKind::ByteArray { ref bytes } if bytes.is_empty())
-        );
-    }
-
-    #[test]
-    fn byte_array_literal_values() {
-        let e = parse_one("#( 1. 2. 255. )");
-        match &e.kind {
-            ExprKind::ByteArray { bytes } => {
-                assert_eq!(bytes, &[1, 2, 255]);
-            }
-            _ => panic!("expected byte array"),
-        }
-    }
-
-    #[test]
-    fn byte_array_literal_expressions() {
-        let e = parse_one("#( 1 + 2. (3 * 4). )");
-        match &e.kind {
-            ExprKind::ByteArray { bytes } => {
-                assert_eq!(bytes, &[3, 12]);
-            }
-            _ => panic!("expected byte array"),
-        }
-    }
-
-    #[test]
-    fn byte_array_literal_invalid_value() {
-        assert!(parse("#( 256 )")[0].is_err());
-        assert!(parse("#( -1 )")[0].is_err());
-        assert!(parse("#( foo )")[0].is_err());
-        assert!(parse("#( 128 + 128 )")[0].is_err());
-    }
-
-    #[test]
     fn return_expr() {
         let e = parse_one("^ 42");
         assert!(
@@ -538,7 +467,7 @@ mod tests {
                 assert_eq!(*kind, AssignKind::Assign);
                 assert!(matches!(
                     target.kind,
-                    ExprKind::ImplicitUnary { ref selector } if selector == "x"
+                    ExprKind::Ident(ref name) if name == "x"
                 ));
                 assert!(matches!(value.kind, ExprKind::Integer(5)));
             }
@@ -558,7 +487,7 @@ mod tests {
                 assert_eq!(*kind, AssignKind::Init);
                 assert!(matches!(
                     target.kind,
-                    ExprKind::ImplicitUnary { ref selector } if selector == "x"
+                    ExprKind::Ident(ref name) if name == "x"
                 ));
                 assert!(matches!(value.kind, ExprKind::Integer(3)));
             }
@@ -574,8 +503,14 @@ mod tests {
                 assert_eq!(delegate, "parent");
                 assert!(matches!(
                     message.kind,
-                    ExprKind::ImplicitUnary { ref selector } if selector == "foo"
+                    ExprKind::UnaryMessage { ref selector, .. } if selector == "foo"
                 ));
+                match &message.kind {
+                    ExprKind::UnaryMessage { receiver, .. } => {
+                        assert!(matches!(receiver.kind, ExprKind::SelfRef));
+                    }
+                    _ => panic!("expected unary resend message"),
+                }
             }
             _ => panic!("expected directed resend"),
         }
@@ -583,16 +518,75 @@ mod tests {
 
     #[test]
     fn resend_unary_message() {
-        let e = parse_one("resend foo");
+        let e = parse_one("resend self foo");
         match &e.kind {
             ExprKind::Resend { message } => {
                 assert!(matches!(
                     message.kind,
-                    ExprKind::ImplicitUnary { ref selector } if selector == "foo"
+                    ExprKind::UnaryMessage { ref selector, .. } if selector == "foo"
                 ));
+                match &message.kind {
+                    ExprKind::UnaryMessage { receiver, .. } => {
+                        assert!(matches!(receiver.kind, ExprKind::SelfRef));
+                    }
+                    _ => panic!("expected unary resend message"),
+                }
             }
             _ => panic!("expected resend"),
         }
+    }
+
+    #[test]
+    fn keyword_after_binary_message() {
+        let e = parse_one("10 > 5 ifTrue: [ ]");
+        match &e.kind {
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].keyword, "ifTrue:");
+                assert!(matches!(
+                    pairs[0].argument.kind,
+                    ExprKind::Block { .. }
+                ));
+                assert!(matches!(
+                    receiver.kind,
+                    ExprKind::BinaryMessage { .. }
+                ));
+            }
+            _ => panic!("expected keyword message"),
+        }
+    }
+
+    #[test]
+    fn return_with_paren_binary() {
+        let e = parse_one("^ ( a & b )");
+        match &e.kind {
+            ExprKind::Return(inner) => match &inner.kind {
+                ExprKind::Paren(expr) => match &expr.kind {
+                    ExprKind::BinaryMessage {
+                        receiver,
+                        operator,
+                        argument,
+                    } => {
+                        assert_eq!(operator, "&");
+                        assert!(
+                            matches!(receiver.kind, ExprKind::Ident(ref name) if name == "a")
+                        );
+                        assert!(
+                            matches!(argument.kind, ExprKind::Ident(ref name) if name == "b")
+                        );
+                    }
+                    _ => panic!("expected binary message"),
+                },
+                _ => panic!("expected paren"),
+            },
+            _ => panic!("expected return"),
+        }
+    }
+
+    #[test]
+    fn whitespace_signed_number_is_invalid() {
+        assert!(parse("+ 50")[0].is_err());
+        assert!(parse("- 50")[0].is_err());
     }
 
     #[test]

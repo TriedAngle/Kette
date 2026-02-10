@@ -1,4 +1,4 @@
-/// Streaming lexer for Self language syntax.
+/// Streaming lexer
 ///
 /// The [`Lexer`] consumes bytes from any [`std::io::Read`] source —
 /// a file, a network socket, `stdin`, or an in-memory buffer — and
@@ -19,21 +19,14 @@
 /// | `// …`         | Line comment  | Runs to end of line          |
 /// | `/* … */`      | Block comment | **Nestable** (`/* /* */ */`) |
 ///
-/// # String syntax (modified Self)
-///
-/// Strings are delimited by **double quotes** (`"…"`) instead of the
-/// traditional Self single-quote.  The single quote (`'`) is freed for
-/// other uses (e.g. symbol literals in a future extension).
+/// # String syntax
+/// Strings are delimited by **double quotes** (`"…"`)
 use std::io::Read;
 
 use crate::span::{Pos, Span};
 use crate::token::{Token, TokenKind};
 
-// ═══════════════════════════════════════════════════════════════════
-// Operator character set
-// ═══════════════════════════════════════════════════════════════════
-
-/// Characters that may appear in Self binary operators.
+/// Characters that may appear binary operators.
 ///
 /// Compared to the original Self spec we **exclude**:
 /// - `|` — always the slot-list pipe delimiter
@@ -67,10 +60,6 @@ fn is_op_char(c: u8) -> bool {
             | b'\''
     )
 }
-
-// ═══════════════════════════════════════════════════════════════════
-// Read buffer — one-byte-at-a-time abstraction over Read
-// ═══════════════════════════════════════════════════════════════════
 
 /// Small wrapper that gives us `peek()` / `peek_ahead()` / `advance()`
 /// over any `Read`, with position tracking.
@@ -229,17 +218,13 @@ impl<R: Read> ReadBuf<R> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Lexer
-// ═══════════════════════════════════════════════════════════════════
-
 /// A streaming lexer for Self source code.
 ///
 /// Accepts any [`Read`] — files, sockets, pipes, `&[u8]`, `Cursor`, etc.
 ///
-/// ```rust,ignore
+/// ```rust
 /// use std::io::Cursor;
-/// use self_parser::Lexer;
+/// use parser::Lexer;
 ///
 /// let stream = Cursor::new(b"5 factorial + 3");
 /// let lexer = Lexer::new(stream);
@@ -301,10 +286,6 @@ impl<R: Read> Lexer<R> {
         self.rb.advance_char()
     }
 
-    // ───────────────────────────────────────────────────────────
-    //  Whitespace
-    // ───────────────────────────────────────────────────────────
-
     fn skip_whitespace(&mut self) {
         while let Some(b) = self.peek() {
             match b {
@@ -315,10 +296,6 @@ impl<R: Read> Lexer<R> {
             }
         }
     }
-
-    // ───────────────────────────────────────────────────────────
-    //  Comments:  // line   and   /* block (nestable) */
-    // ───────────────────────────────────────────────────────────
 
     /// Lex a line comment (`// ...` to end of line).
     fn lex_line_comment(&mut self) -> Token {
@@ -392,10 +369,6 @@ impl<R: Read> Lexer<R> {
         let span = Span::new(start, self.pos());
         Token::new(TokenKind::BlockComment(text), span, raw)
     }
-
-    // ───────────────────────────────────────────────────────────
-    //  String literals:  "..."
-    // ───────────────────────────────────────────────────────────
 
     /// Lex a string literal delimited by double-quotes.
     ///
@@ -472,10 +445,6 @@ impl<R: Read> Lexer<R> {
         Token::new(TokenKind::String(value), span, raw)
     }
 
-    // ───────────────────────────────────────────────────────────
-    //  Numbers
-    // ───────────────────────────────────────────────────────────
-
     fn digit_value(b: u8) -> Option<u32> {
         match b {
             b'0'..=b'9' => Some((b - b'0') as u32),
@@ -493,12 +462,18 @@ impl<R: Read> Lexer<R> {
         let mut raw = String::new();
 
         // Optional leading minus.
-        let negative = if self.peek() == Some(b'-') {
-            raw.push('-');
-            self.advance();
-            true
-        } else {
-            false
+        let negative = match self.peek() {
+            Some(b'-') => {
+                raw.push('-');
+                self.advance();
+                true
+            }
+            Some(b'+') => {
+                raw.push('+');
+                self.advance();
+                false
+            }
+            _ => false,
         };
 
         // Collect initial digit run.
@@ -687,10 +662,6 @@ impl<R: Read> Lexer<R> {
         }
     }
 
-    // ───────────────────────────────────────────────────────────
-    //  Identifiers, keywords, reserved words
-    // ───────────────────────────────────────────────────────────
-
     /// Lex an identifier, keyword, or reserved word.
     ///
     /// Identifiers start with a lowercase letter (Unicode `Lowercase_Letter`)
@@ -792,10 +763,6 @@ impl<R: Read> Lexer<R> {
         Token::new(TokenKind::ArgName(name), span, raw)
     }
 
-    // ───────────────────────────────────────────────────────────
-    //  Operators and the `:=` assignment
-    // ───────────────────────────────────────────────────────────
-
     /// Lex an operator.
     fn lex_operator(&mut self) -> Token {
         let start = self.pos();
@@ -821,10 +788,6 @@ impl<R: Read> Lexer<R> {
         Token::new(TokenKind::Operator(raw.clone()), span, raw)
     }
 
-    // ───────────────────────────────────────────────────────────
-    //  Main dispatch
-    // ───────────────────────────────────────────────────────────
-
     /// Produce the next token from the stream.
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
@@ -840,37 +803,14 @@ impl<R: Read> Lexer<R> {
         };
 
         match b {
-            // ── Comments ──────────────────────────────────────
             // Must check BEFORE operator lexing since `/` is an op-char.
             b'/' if self.peek_ahead(1) == Some(b'/') => self.lex_line_comment(),
             b'/' if self.peek_ahead(1) == Some(b'*') => {
                 self.lex_block_comment()
             }
 
-            // ── String literals ───────────────────────────────
             b'"' => self.lex_string(),
 
-            // ── Array starts ─────────────────────────────────
-            b'@' if self.peek_ahead(1) == Some(b'(') => {
-                self.advance();
-                self.advance();
-                Token::new(
-                    TokenKind::ArrayStart,
-                    Span::new(start, self.pos()),
-                    "@(",
-                )
-            }
-            b'#' if self.peek_ahead(1) == Some(b'(') => {
-                self.advance();
-                self.advance();
-                Token::new(
-                    TokenKind::ByteArrayStart,
-                    Span::new(start, self.pos()),
-                    "#(",
-                )
-            }
-
-            // ── Delimiters ────────────────────────────────────
             b'(' => {
                 self.advance();
                 Token::new(TokenKind::LParen, Span::new(start, self.pos()), "(")
@@ -895,7 +835,6 @@ impl<R: Read> Lexer<R> {
                     "]",
                 )
             }
-            // ── Pipe ──────────────────────────────────────────
             b'|' => {
                 if self.peek_ahead(1).map_or(false, is_op_char) {
                     self.lex_operator()
@@ -909,13 +848,11 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            // ── Dot ───────────────────────────────────────────
             b'.' => {
                 self.advance();
                 Token::new(TokenKind::Dot, Span::new(start, self.pos()), ".")
             }
 
-            // ── Semicolon ─────────────────────────────────────
             b';' => {
                 self.advance();
                 Token::new(
@@ -925,7 +862,6 @@ impl<R: Read> Lexer<R> {
                 )
             }
 
-            // ── Caret (return) ────────────────────────────────
             b'^' => {
                 if self
                     .peek_ahead(1)
@@ -942,7 +878,6 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            // ── Minus: could be negative number or operator ───
             b'-' => {
                 if matches!(self.peek_ahead(1), Some(d) if d.is_ascii_digit()) {
                     self.lex_number()
@@ -951,16 +886,20 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            // ── Numbers ───────────────────────────────────────
+            b'+' => {
+                if matches!(self.peek_ahead(1), Some(d) if d.is_ascii_digit()) {
+                    self.lex_number()
+                } else {
+                    self.lex_operator()
+                }
+            }
+
             b'0'..=b'9' => self.lex_number(),
 
-            // ── Identifiers, keywords, reserved words ─────────
             b'a'..=b'z' | b'_' => self.lex_identifier_or_keyword(),
 
-            // ── Capitalized identifiers / cap-keywords ────────
             b'A'..=b'Z' => self.lex_cap_identifier_or_keyword(),
 
-            // ── Assignment `:=` or argument names ─────────────
             b':' => {
                 if self.peek_ahead(1) == Some(b'=') {
                     self.advance();
@@ -975,7 +914,6 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            // ── Equals sign ───────────────────────────────────
             b'=' => {
                 if self.peek_ahead(1).map_or(false, is_op_char) {
                     self.lex_operator()
@@ -989,10 +927,8 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            // ── Other operator characters ─────────────────────
             _ if is_op_char(b) => self.lex_operator(),
 
-            // ── Non-ASCII Unicode identifiers ─────────────────
             // Multi-byte UTF-8 lead bytes (0xC0+) that decode to
             // Unicode letters are routed to identifier lexing.
             _ => {
@@ -1047,10 +983,6 @@ impl<R: Read> Iterator for Lexer<R> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,8 +995,6 @@ mod tests {
     fn kinds(src: &str) -> Vec<TokenKind> {
         tokens(src).into_iter().map(|t| t.kind).collect()
     }
-
-    // ── Basic literals ────────────────────────────────────────
 
     #[test]
     fn lex_integer() {
@@ -1142,11 +1072,54 @@ mod tests {
     }
 
     #[test]
+    fn lex_positive_integer() {
+        assert_eq!(kinds("+50"), vec![TokenKind::Integer(50), TokenKind::Eof]);
+    }
+
+    #[test]
+    fn lex_negative_float() {
+        assert_eq!(
+            kinds("-3.14"),
+            vec![TokenKind::Float(-3.14), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn lex_positive_float() {
+        assert_eq!(
+            kinds("+3.14"),
+            vec![TokenKind::Float(3.14), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn lex_plus_with_whitespace() {
+        assert_eq!(
+            kinds("+ 50"),
+            vec![
+                TokenKind::Operator("+".into()),
+                TokenKind::Integer(50),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_minus_with_whitespace() {
+        assert_eq!(
+            kinds("- 50"),
+            vec![
+                TokenKind::Operator("-".into()),
+                TokenKind::Integer(50),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
     fn lex_float_exp() {
         assert_eq!(kinds("1e10"), vec![TokenKind::Float(1e10), TokenKind::Eof]);
     }
-
-    // ── Strings (double-quoted) ───────────────────────────────
 
     #[test]
     fn lex_string() {
@@ -1171,8 +1144,6 @@ mod tests {
             vec![TokenKind::String("say \"hi\"".into()), TokenKind::Eof]
         );
     }
-
-    // ── Identifiers & keywords ────────────────────────────────
 
     #[test]
     fn lex_identifiers_and_keywords() {
@@ -1203,8 +1174,6 @@ mod tests {
             vec![TokenKind::ArgName("name".into()), TokenKind::Eof]
         );
     }
-
-    // ── Operators ─────────────────────────────────────────────
 
     #[test]
     fn lex_operators() {
@@ -1240,8 +1209,6 @@ mod tests {
             ]
         );
     }
-
-    // ── Comments ──────────────────────────────────────────────
 
     #[test]
     fn lex_line_comment() {
@@ -1286,8 +1253,6 @@ mod tests {
         );
     }
 
-    // ── Delimiters ────────────────────────────────────────────
-
     #[test]
     fn lex_delimiters() {
         assert_eq!(
@@ -1301,8 +1266,6 @@ mod tests {
             ]
         );
     }
-
-    // ── Complex expressions ───────────────────────────────────
 
     #[test]
     fn lex_complex_expression() {

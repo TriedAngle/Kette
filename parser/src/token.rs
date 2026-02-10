@@ -4,7 +4,6 @@ use crate::span::Span;
 /// The kind of a lexical token.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-    // ── Literals ──────────────────────────────────────────────
     /// Integer literal, e.g. `42`, `-7`, `16rFF`.
     Integer(i64),
     /// Floating-point literal, e.g. `3.14`, `1.5e10`.
@@ -12,7 +11,6 @@ pub enum TokenKind {
     /// String literal (contents without surrounding quotes), e.g. `"hello"`.
     String(std::string::String),
 
-    // ── Identifiers & keywords ────────────────────────────────
     /// A lowercase-starting identifier, e.g. `factorial`, `x`, `_IntAdd`.
     Identifier(std::string::String),
     /// A keyword (identifier + colon), e.g. `at:`, `Put:`, `min:`.
@@ -20,23 +18,16 @@ pub enum TokenKind {
     /// An argument name (colon + identifier), e.g. `:name`.
     ArgName(std::string::String),
 
-    // ── Reserved words ────────────────────────────────────────
     /// The reserved word `self`.
     SelfKw,
     /// The reserved word `resend`.
     ResendKw,
 
-    // ── Operators ─────────────────────────────────────────────
     /// A binary operator composed of op-chars, e.g. `+`, `<->`, `&&`.
     Operator(std::string::String),
     /// Assignment operator `:=`.
     Assign,
-    /// Array start `@(`.
-    ArrayStart,
-    /// Byte array start `#(`.
-    ByteArrayStart,
 
-    // ── Delimiters ────────────────────────────────────────────
     /// `(`
     LParen,
     /// `)`
@@ -56,14 +47,12 @@ pub enum TokenKind {
     /// `=` when used as slot initializer (read-only slot).
     Equals,
 
-    // ── Comments (preserved for LSP / tooling / reflection) ───
     /// A line comment: `// ...` (text does NOT include the leading `//`).
     LineComment(std::string::String),
     /// A block comment: `/* ... */` (text does NOT include delimiters).
     /// Block comments may nest.
     BlockComment(std::string::String),
 
-    // ── Special ───────────────────────────────────────────────
     /// End of input.
     Eof,
     /// An unrecognized character or malformed token.
@@ -83,8 +72,6 @@ impl TokenKind {
             Self::SelfKw => "`self`",
             Self::ResendKw => "`resend`",
             Self::Operator(_) => "operator",
-            Self::ArrayStart => "`@(`",
-            Self::ByteArrayStart => "`#(`",
             Self::Assign => "`:=`",
             Self::LParen => "`(`",
             Self::RParen => "`)`",

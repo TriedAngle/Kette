@@ -1,4 +1,4 @@
-/// Abstract syntax tree nodes for Self expressions.
+/// Abstract syntax tree nodes for expressions.
 ///
 /// The parser produces a stream of [`Expr`] nodes. Each node carries a
 /// [`Span`] so that downstream consumers (error reporting, IDE tooling,
@@ -18,9 +18,8 @@
 /// # Precedence encoding
 ///
 /// Distinct node variants for each message tier:
-///
 /// - [`ExprKind::UnaryMessage`]   — highest precedence
-/// - [`ExprKind::BinaryMessage`]  — medium precedence
+/// - [`ExprKind::BinaryMessage`]  — medium precedence (have precedence within their group too)
 /// - [`ExprKind::KeywordMessage`] — lowest precedence
 use crate::span::Span;
 
@@ -72,7 +71,6 @@ impl Expr {
 /// The different forms a Self expression can take.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
-    // ── Literals ──────────────────────────────────────────────
     /// Integer literal.
     Integer(i64),
     /// Floating-point literal.
@@ -80,11 +78,11 @@ pub enum ExprKind {
     /// String literal.
     String(String),
 
-    // ── Names ─────────────────────────────────────────────────
     /// `self` keyword.
     SelfRef,
+    /// A lexical identifier.
+    Ident(String),
 
-    // ── Messages ──────────────────────────────────────────────
     /// A unary message send: `receiver selector`.
     ///
     /// Precedence: highest.  Associativity: left-to-right.
@@ -106,25 +104,11 @@ pub enum ExprKind {
     ///
     /// Precedence: lowest.  Associativity: right-to-left.
     KeywordMessage {
-        receiver: Option<Box<Expr>>,
+        receiver: Box<Expr>,
         /// Each pair is (keyword, argument-expression).
         pairs: Vec<KeywordPair>,
     },
 
-    // ── Implicit-receiver messages ────────────────────────────
-    /// An implicit-receiver unary send.
-    ImplicitUnary { selector: String },
-
-    /// An implicit-receiver binary send, e.g. `+ 3`.
-    ImplicitBinary {
-        operator: String,
-        argument: Box<Expr>,
-    },
-
-    /// An implicit-receiver keyword send, e.g. `max: 5`.
-    ImplicitKeyword { pairs: Vec<KeywordPair> },
-
-    // ── Resends ───────────────────────────────────────────────
     /// Undirected resend: `resend.selector ...`
     Resend { message: Box<Expr> },
 
@@ -134,7 +118,6 @@ pub enum ExprKind {
         message: Box<Expr>,
     },
 
-    // ── Compound expressions ──────────────────────────────────
     /// A parenthesized expression: `( expr )`.
     Paren(Box<Expr>),
 
@@ -170,18 +153,10 @@ pub enum ExprKind {
         messages: Vec<Expr>,
     },
 
-    /// An array literal: `{ expr. expr. ... }`.
-    Array { elements: Vec<Expr> },
-
-    /// A byte array literal: `#{ 1. 2. 3 }`.
-    ByteArray { bytes: Vec<u8> },
-
-    // ── Comments as AST nodes ─────────────────────────────────
     /// A free-standing comment that doesn't attach to an expression.
     /// This allows the full source to be reconstructed / reflected.
     Comment(Comment),
 
-    // ── Errors ────────────────────────────────────────────────
     /// A parse error — included in the AST so the stream is never
     /// interrupted; downstream can decide whether to bail out.
     Error(String),
@@ -270,6 +245,7 @@ impl DotBuilder {
             ExprKind::Float(v) => format!("Float({})", v),
             ExprKind::String(v) => format!("String(\"{}\")", v),
             ExprKind::SelfRef => "SelfRef".to_string(),
+            ExprKind::Ident(name) => format!("Ident({})", name),
             ExprKind::UnaryMessage { selector, .. } => {
                 format!("UnaryMessage({})", selector)
             }
@@ -277,13 +253,6 @@ impl DotBuilder {
                 format!("BinaryMessage({})", operator)
             }
             ExprKind::KeywordMessage { .. } => "KeywordMessage".to_string(),
-            ExprKind::ImplicitUnary { selector } => {
-                format!("ImplicitUnary({})", selector)
-            }
-            ExprKind::ImplicitBinary { operator, .. } => {
-                format!("ImplicitBinary({})", operator)
-            }
-            ExprKind::ImplicitKeyword { .. } => "ImplicitKeyword".to_string(),
             ExprKind::Resend { .. } => "Resend".to_string(),
             ExprKind::DirectedResend { delegate, .. } => {
                 format!("DirectedResend({})", delegate)
@@ -294,8 +263,6 @@ impl DotBuilder {
             ExprKind::Return(_) => "Return".to_string(),
             ExprKind::Sequence(_) => "Sequence".to_string(),
             ExprKind::Cascade { .. } => "Cascade".to_string(),
-            ExprKind::Array { .. } => "Array".to_string(),
-            ExprKind::ByteArray { .. } => "ByteArray".to_string(),
             ExprKind::Assignment { kind, .. } => match kind {
                 AssignKind::Assign => "Assignment(:=)".to_string(),
                 AssignKind::Init => "Assignment(=)".to_string(),
@@ -329,24 +296,8 @@ impl DotBuilder {
                 self.add_edge(id, arg, Some("argument"));
             }
             ExprKind::KeywordMessage { receiver, pairs } => {
-                if let Some(receiver) = receiver {
-                    let recv = self.walk_expr(receiver);
-                    self.add_edge(id, recv, Some("receiver"));
-                }
-                for pair in pairs {
-                    let arg = self.walk_expr(&pair.argument);
-                    self.add_edge(
-                        id,
-                        arg,
-                        Some(&format!("arg:{}", pair.keyword)),
-                    );
-                }
-            }
-            ExprKind::ImplicitBinary { argument, .. } => {
-                let arg = self.walk_expr(argument);
-                self.add_edge(id, arg, Some("argument"));
-            }
-            ExprKind::ImplicitKeyword { pairs } => {
+                let recv = self.walk_expr(receiver);
+                self.add_edge(id, recv, Some("receiver"));
                 for pair in pairs {
                     let arg = self.walk_expr(&pair.argument);
                     self.add_edge(
@@ -416,18 +367,6 @@ impl DotBuilder {
                 for (i, msg) in messages.iter().enumerate() {
                     let child = self.walk_expr(msg);
                     self.add_edge(id, child, Some(&format!("message[{}]", i)));
-                }
-            }
-            ExprKind::Array { elements } => {
-                for (i, expr) in elements.iter().enumerate() {
-                    let child = self.walk_expr(expr);
-                    self.add_edge(id, child, Some(&format!("elem[{}]", i)));
-                }
-            }
-            ExprKind::ByteArray { bytes } => {
-                for (i, b) in bytes.iter().enumerate() {
-                    let child = self.add_node(&format!("Byte({})", b));
-                    self.add_edge(id, child, Some(&format!("byte[{}]", i)));
                 }
             }
             ExprKind::Assignment { target, value, .. } => {

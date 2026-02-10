@@ -12,10 +12,6 @@ use crate::span::{Pos, Span};
 use crate::token::{Token, TokenKind};
 use std::collections::HashMap;
 
-// ═══════════════════════════════════════════════════════════════════
-// Error type
-// ═══════════════════════════════════════════════════════════════════
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub message: String,
@@ -38,10 +34,6 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
-
-// ═══════════════════════════════════════════════════════════════════
-// Parser
-// ═══════════════════════════════════════════════════════════════════
 
 pub struct Parser<I: Iterator<Item = Token>> {
     tokens: std::iter::Peekable<I>,
@@ -67,8 +59,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             op_precedence,
         }
     }
-
-    // ── Token helpers ─────────────────────────────────────────
 
     fn peek_kind(&mut self) -> &TokenKind {
         self.collect_comments();
@@ -141,15 +131,11 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(kind)
     }
 
-    // ── Comment attachment ────────────────────────────────────
-
     fn parse_expression_with_comments(&mut self) -> Result<Expr, ParseError> {
         let comments = self.take_pending_comments();
         let expr = self.parse_expression()?;
         Ok(expr.with_comments(comments))
     }
-
-    // ── Expression: keyword level (lowest) ────────────────────
 
     pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
         self.parse_cascade_level()
@@ -214,15 +200,8 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         match &expr.kind {
             ExprKind::UnaryMessage { receiver, .. } => (**receiver).clone(),
             ExprKind::BinaryMessage { receiver, .. } => (**receiver).clone(),
-            ExprKind::KeywordMessage {
-                receiver: Some(receiver),
-                ..
-            } => (**receiver).clone(),
-            ExprKind::ImplicitUnary { .. }
-            | ExprKind::ImplicitBinary { .. }
-            | ExprKind::ImplicitKeyword { .. }
-            | ExprKind::Resend { .. }
-            | ExprKind::DirectedResend { .. } => {
+            ExprKind::KeywordMessage { receiver, .. } => (**receiver).clone(),
+            ExprKind::Resend { .. } | ExprKind::DirectedResend { .. } => {
                 Expr::new(ExprKind::SelfRef, expr.span)
             }
             _ => expr.clone(),
@@ -235,9 +214,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             ExprKind::UnaryMessage { .. }
                 | ExprKind::BinaryMessage { .. }
                 | ExprKind::KeywordMessage { .. }
-                | ExprKind::ImplicitUnary { .. }
-                | ExprKind::ImplicitBinary { .. }
-                | ExprKind::ImplicitKeyword { .. }
                 | ExprKind::Resend { .. }
                 | ExprKind::DirectedResend { .. }
         )
@@ -274,67 +250,42 @@ impl<I: Iterator<Item = Token>> Parser<I> {
     }
 
     fn parse_resend_message(&mut self) -> Result<ResendMessage, ParseError> {
-        match self.peek_kind().clone() {
+        let delegate_span = self.peek_span();
+        let delegate = match self.peek_kind().clone() {
+            TokenKind::SelfKw => {
+                self.advance();
+                None
+            }
             TokenKind::Identifier(_) => {
-                let first = self.advance();
-                let first_name = match first.kind {
-                    TokenKind::Identifier(s) => s,
+                let token = self.advance();
+                match token.kind {
+                    TokenKind::Identifier(name) => Some(name),
                     _ => unreachable!(),
-                };
-                let starts_message = matches!(
-                    self.peek_kind(),
-                    TokenKind::Identifier(_)
-                        | TokenKind::Operator(_)
-                        | TokenKind::Keyword(_)
-                );
-                if starts_message {
-                    let msg = self.parse_message_expression()?;
-                    Ok(ResendMessage::Directed {
-                        delegate: first_name,
-                        message: msg,
-                    })
-                } else {
-                    Ok(ResendMessage::Undirected(Expr::new(
-                        ExprKind::ImplicitUnary {
-                            selector: first_name,
-                        },
-                        first.span,
-                    )))
                 }
             }
-            TokenKind::Operator(_) | TokenKind::Keyword(_) => {
-                let msg = self.parse_message_expression()?;
-                Ok(ResendMessage::Undirected(msg))
+            _ => {
+                return Err(ParseError::new(
+                    "expected `self` or parent name after resend",
+                    delegate_span,
+                ));
             }
-            _ => Err(ParseError::new(
-                "expected resend message",
-                self.peek_span(),
-            )),
-        }
-    }
+        };
 
-    fn parse_message_expression(&mut self) -> Result<Expr, ParseError> {
-        match self.peek_kind().clone() {
-            TokenKind::Identifier(_) => {
-                let expr = self.parse_primary()?;
-                let expr = self.parse_unary_tail(expr);
-                let expr = self.parse_binary_with_left(expr, 0)?;
-                if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
-                    self.parse_keyword_tail(expr)
-                } else {
-                    Ok(expr)
-                }
-            }
-            TokenKind::Operator(_) => {
-                let expr = self.parse_binary_with_min_precedence(0)?;
-                if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
-                    self.parse_keyword_tail(expr)
-                } else {
-                    Ok(expr)
-                }
-            }
-            TokenKind::Keyword(_) => self.parse_implicit_keyword(),
-            _ => Err(ParseError::new("expected message", self.peek_span())),
+        let receiver = Expr::new(ExprKind::SelfRef, delegate_span);
+        let message = self.parse_cascade_message(receiver)?;
+        if !self.is_message_expr(&message) {
+            return Err(ParseError::new(
+                "expected resend message",
+                message.span,
+            ));
+        }
+
+        match delegate {
+            Some(name) => Ok(ResendMessage::Directed {
+                delegate: name,
+                message,
+            }),
+            None => Ok(ResendMessage::Undirected(message)),
         }
     }
 
@@ -376,14 +327,12 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         let end = pairs.last().map(|p| p.span).unwrap_or(start);
         Ok(Expr::new(
             ExprKind::KeywordMessage {
-                receiver: Some(Box::new(receiver)),
+                receiver: Box::new(receiver),
                 pairs,
             },
             start.merge(end),
         ))
     }
-
-    // ── Expression: binary level (medium) ─────────────────────
 
     fn parse_binary_level(&mut self) -> Result<Expr, ParseError> {
         self.parse_binary_with_min_precedence(0)
@@ -432,8 +381,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         *self.op_precedence.get(op).unwrap_or(&1)
     }
 
-    // ── Expression: unary level (highest) ─────────────────────
-
     fn parse_unary_level(&mut self) -> Result<Expr, ParseError> {
         let expr = self.parse_primary()?;
         Ok(self.parse_unary_tail(expr))
@@ -461,8 +408,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         }
         expr
     }
-
-    // ── Primary ───────────────────────────────────────────────
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
@@ -500,7 +445,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Identifier(s) => s,
                     _ => unreachable!(),
                 };
-                Ok(Expr::new(ExprKind::ImplicitUnary { selector: n }, t.span))
+                Ok(Expr::new(ExprKind::Ident(n), t.span))
             }
             TokenKind::ResendKw => {
                 let t = self.advance();
@@ -525,8 +470,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     }
                 }
             }
-            TokenKind::ArrayStart => self.parse_array_literal(),
-            TokenKind::ByteArrayStart => self.parse_byte_array_literal(),
             TokenKind::LParen => self.parse_paren_or_object(),
             TokenKind::LBracket => self.parse_block(),
             TokenKind::Caret => {
@@ -535,21 +478,11 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 let span = t.span.merge(e.span);
                 Ok(Expr::new(ExprKind::Return(Box::new(e)), span))
             }
-            TokenKind::Keyword(_) => self.parse_implicit_keyword(),
-            TokenKind::Operator(_) => {
-                let t = self.advance();
-                let op = match t.kind {
-                    TokenKind::Operator(s) => s,
-                    _ => unreachable!(),
-                };
-                let arg = self.parse_unary_level()?;
-                let span = t.span.merge(arg.span);
-                Ok(Expr::new(
-                    ExprKind::ImplicitBinary {
-                        operator: op,
-                        argument: Box::new(arg),
-                    },
-                    span,
+            TokenKind::Keyword(_) | TokenKind::Operator(_) => {
+                let _ = self.advance();
+                Err(ParseError::new(
+                    "expected explicit receiver before message",
+                    self.peek_span(),
                 ))
             }
             TokenKind::Eof => Err(ParseError::new(
@@ -565,134 +498,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             }
         }
     }
-
-    fn parse_array_literal(&mut self) -> Result<Expr, ParseError> {
-        let open = self.advance();
-        let start = open.span;
-        let mut elements = Vec::new();
-
-        if matches!(self.peek_kind(), TokenKind::RParen) {
-            let close = self.advance();
-            return Ok(Expr::new(
-                ExprKind::Array { elements },
-                start.merge(close.span),
-            ));
-        }
-
-        loop {
-            elements.push(self.parse_expression_with_comments()?);
-            if matches!(self.peek_kind(), TokenKind::Dot) {
-                self.advance();
-                if matches!(self.peek_kind(), TokenKind::RParen) {
-                    break;
-                }
-                continue;
-            }
-            break;
-        }
-
-        let close = self.expect(&TokenKind::RParen)?;
-        Ok(Expr::new(
-            ExprKind::Array { elements },
-            start.merge(close.span),
-        ))
-    }
-
-    fn parse_byte_array_literal(&mut self) -> Result<Expr, ParseError> {
-        let open = self.advance();
-        let start = open.span;
-        let mut bytes = Vec::new();
-
-        if matches!(self.peek_kind(), TokenKind::RParen) {
-            let close = self.advance();
-            return Ok(Expr::new(
-                ExprKind::ByteArray { bytes },
-                start.merge(close.span),
-            ));
-        }
-
-        loop {
-            let expr = self.parse_expression_with_comments()?;
-            let value = self.eval_integer_expr(&expr).ok_or_else(|| {
-                ParseError::new("expected byte integer expression", expr.span)
-            })?;
-            if !(0..=255).contains(&value) {
-                return Err(ParseError::new(
-                    "byte value out of range (0..=255)",
-                    expr.span,
-                ));
-            }
-            bytes.push(value as u8);
-
-            if matches!(self.peek_kind(), TokenKind::Dot) {
-                self.advance();
-                if matches!(self.peek_kind(), TokenKind::RParen) {
-                    break;
-                }
-                continue;
-            }
-            break;
-        }
-
-        let close = self.expect(&TokenKind::RParen)?;
-        Ok(Expr::new(
-            ExprKind::ByteArray { bytes },
-            start.merge(close.span),
-        ))
-    }
-
-    fn eval_integer_expr(&self, expr: &Expr) -> Option<i64> {
-        match &expr.kind {
-            ExprKind::Integer(v) => Some(*v),
-            ExprKind::Paren(inner) => self.eval_integer_expr(inner),
-            ExprKind::BinaryMessage {
-                receiver,
-                operator,
-                argument,
-            } => {
-                let left = self.eval_integer_expr(receiver)?;
-                let right = self.eval_integer_expr(argument)?;
-                match operator.as_str() {
-                    "+" => left.checked_add(right),
-                    "-" => left.checked_sub(right),
-                    "*" => left.checked_mul(right),
-                    "/" => left.checked_div(right),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn parse_implicit_keyword(&mut self) -> Result<Expr, ParseError> {
-        let start = self.peek_span();
-        let mut pairs = Vec::new();
-        if let TokenKind::Keyword(kw) = self.peek_kind().clone() {
-            let kt = self.advance();
-            let arg = self.parse_binary_level()?;
-            pairs.push(KeywordPair {
-                keyword: kw,
-                span: kt.span.merge(arg.span),
-                argument: arg,
-            });
-        }
-        while let TokenKind::Keyword(kw) = self.peek_kind().clone() {
-            let kt = self.advance();
-            let arg = self.parse_binary_level()?;
-            pairs.push(KeywordPair {
-                keyword: kw,
-                span: kt.span.merge(arg.span),
-                argument: arg,
-            });
-        }
-        let end = pairs.last().map(|p| p.span).unwrap_or(start);
-        Ok(Expr::new(
-            ExprKind::ImplicitKeyword { pairs },
-            start.merge(end),
-        ))
-    }
-
-    // ── Compound: paren / object / block ──────────────────────
 
     fn parse_paren_or_object(&mut self) -> Result<Expr, ParseError> {
         let open = self.advance();
@@ -808,8 +613,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         }
         Ok(exprs)
     }
-
-    // ── Slot parsing ──────────────────────────────────────────
 
     fn parse_slot_list(&mut self) -> Result<Vec<SlotDescriptor>, ParseError> {
         let mut slots = Vec::new();
