@@ -597,7 +597,7 @@ impl<R: Read> Lexer<R> {
                             ),
                             span,
                             raw,
-                        )
+                        );
                     }
                 };
                 value = match value
@@ -610,7 +610,7 @@ impl<R: Read> Lexer<R> {
                             TokenKind::Error("radix literal overflow".into()),
                             span,
                             raw,
-                        )
+                        );
                     }
                 };
             }
@@ -1320,8 +1320,6 @@ mod tests {
         );
     }
 
-    // ── Span tracking ─────────────────────────────────────────
-
     #[test]
     fn span_tracking() {
         let toks = tokens("ab cd");
@@ -1338,8 +1336,6 @@ mod tests {
         assert_eq!(toks[1].span.start.column, 1);
     }
 
-    // ── Read-based streaming ──────────────────────────────────
-
     #[test]
     fn lex_from_cursor() {
         let stream = Cursor::new(b"42 + 1" as &[u8]);
@@ -1354,8 +1350,6 @@ mod tests {
             ]
         );
     }
-
-    // ── Unicode / UTF-8 identifiers ───────────────────────────
 
     #[test]
     fn lex_unicode_lowercase_identifier() {

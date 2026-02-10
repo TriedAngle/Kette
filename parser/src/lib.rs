@@ -49,7 +49,6 @@ pub mod parser;
 pub mod span;
 pub mod token;
 
-// Re-exports for convenience.
 pub use ast::{
     Comment, CommentKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotKind,
 };
@@ -268,8 +267,6 @@ mod tests {
         }
     }
 
-    // ── Precedence ────────────────────────────────────────────
-
     #[test]
     fn unary_higher_than_binary() {
         // `3 factorial + 4` → (3 factorial) + 4
@@ -293,8 +290,6 @@ mod tests {
             _ => panic!("expected implicit keyword"),
         }
     }
-
-    // ── Keyword messages ──────────────────────────────────────
 
     #[test]
     fn keyword_message() {
@@ -365,8 +360,6 @@ mod tests {
             _ => panic!("expected implicit keyword"),
         }
     }
-
-    // ── Compound ──────────────────────────────────────────────
 
     #[test]
     fn parens() {
@@ -602,8 +595,6 @@ mod tests {
         }
     }
 
-    // ── Span tracking ─────────────────────────────────────────
-
     #[test]
     fn span_tracking() {
         let e = parse_one("42");
@@ -612,15 +603,11 @@ mod tests {
         assert_eq!(e.span.end.column, 3);
     }
 
-    // ── Multiple top-level exprs ──────────────────────────────
-
     #[test]
     fn multiple_exprs() {
         let exprs = parse_ok("3 + 4. 5 factorial");
         assert_eq!(exprs.len(), 2);
     }
-
-    // ── Comment preservation ──────────────────────────────────
 
     #[test]
     fn comment_attached_to_expr() {
@@ -674,9 +661,9 @@ mod tests {
             ExprKind::Object { body, .. } => {
                 // body should have the expression and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(body
-                    .iter()
-                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
+                assert!(
+                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
+                );
             }
             _ => panic!("expected object"),
         }
