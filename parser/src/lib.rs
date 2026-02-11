@@ -50,7 +50,8 @@ pub mod span;
 pub mod token;
 
 pub use ast::{
-    Comment, CommentKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotKind,
+    Comment, CommentKind, Expr, ExprKind, KeywordPair, SlotDescriptor,
+    SlotSelector,
 };
 pub use lexer::Lexer;
 pub use parser::{ParseError, Parser};
@@ -335,7 +336,7 @@ mod tests {
                 match &pairs[1].argument.kind {
                     ExprKind::Paren(inner) => match &inner.kind {
                         ExprKind::Assignment { kind, .. } => {
-                            assert_eq!(*kind, AssignKind::Init);
+                            assert_eq!(*kind, AssignKind::Const);
                         }
                         _ => panic!("expected assignment"),
                     },
@@ -368,31 +369,18 @@ mod tests {
 
     #[test]
     fn empty_object() {
-        let e = parse_one("()");
+        let e = parse_one("{}");
         assert!(
-            matches!(e.kind, ExprKind::Object { ref slots, ref body } if slots.is_empty() && body.is_empty())
+            matches!(e.kind, ExprKind::Object { ref slots } if slots.is_empty())
         );
     }
 
     #[test]
     fn object_with_slots() {
-        let e = parse_one("( | x := 5. y := 10 | )");
+        let e = parse_one("{ x := 5. y := 10 }");
         match &e.kind {
-            ExprKind::Object { slots, body } => {
+            ExprKind::Object { slots } => {
                 assert_eq!(slots.len(), 2);
-                assert!(body.is_empty());
-            }
-            _ => panic!("expected object"),
-        }
-    }
-
-    #[test]
-    fn object_with_code() {
-        let e = parse_one("( | x = 3 | x print )");
-        match &e.kind {
-            ExprKind::Object { slots, body } => {
-                assert_eq!(slots.len(), 1);
-                assert_eq!(body.len(), 1);
             }
             _ => panic!("expected object"),
         }
@@ -400,11 +388,10 @@ mod tests {
 
     #[test]
     fn block() {
-        let e = parse_one("[ | :k | k print ]");
+        let e = parse_one("[ | k | k print ]");
         match &e.kind {
-            ExprKind::Block { args, locals, body } => {
+            ExprKind::Block { args, body } => {
                 assert_eq!(args, &["k"]);
-                assert!(locals.is_empty());
                 assert_eq!(body.len(), 1);
             }
             _ => panic!("expected block"),
@@ -413,34 +400,22 @@ mod tests {
 
     #[test]
     fn block_with_slot_initializers() {
-        let e = parse_one("[ | x := 1. y = 2 | x ]");
+        let e = parse_one("[ x := 1. y = 2. x ]");
         match &e.kind {
-            ExprKind::Block { args, locals, .. } => {
+            ExprKind::Block { args, body } => {
                 assert!(args.is_empty());
-                assert_eq!(locals.len(), 2);
-                match &locals[0].kind {
-                    SlotKind::ReadWrite {
-                        name, initializer, ..
-                    } => {
-                        assert_eq!(name, "x");
-                        assert!(matches!(
-                            initializer.as_ref().unwrap().kind,
-                            ExprKind::Integer(1)
-                        ));
+                assert_eq!(body.len(), 3);
+                match &body[0].kind {
+                    ExprKind::Assignment { kind, .. } => {
+                        assert_eq!(*kind, AssignKind::Assign);
                     }
-                    _ => panic!("expected read-write slot"),
+                    _ => panic!("expected assignment"),
                 }
-                match &locals[1].kind {
-                    SlotKind::ReadOnly {
-                        name, initializer, ..
-                    } => {
-                        assert_eq!(name, "y");
-                        assert!(matches!(
-                            initializer.as_ref().unwrap().kind,
-                            ExprKind::Integer(2)
-                        ));
+                match &body[1].kind {
+                    ExprKind::Assignment { kind, .. } => {
+                        assert_eq!(*kind, AssignKind::Const);
                     }
-                    _ => panic!("expected read-only slot"),
+                    _ => panic!("expected assignment"),
                 }
             }
             _ => panic!("expected block"),
@@ -484,7 +459,7 @@ mod tests {
                 kind,
                 value,
             } => {
-                assert_eq!(*kind, AssignKind::Init);
+                assert_eq!(*kind, AssignKind::Const);
                 assert!(matches!(
                     target.kind,
                     ExprKind::Ident(ref name) if name == "x"
@@ -638,9 +613,9 @@ mod tests {
 
     #[test]
     fn comment_in_object_slot() {
-        let e = parse_one("( | // doc for x\n x := 5 | )");
+        let e = parse_one("{ // doc for x\n x := 5 }");
         match &e.kind {
-            ExprKind::Object { slots, .. } => {
+            ExprKind::Object { slots } => {
                 assert_eq!(slots.len(), 1);
                 assert_eq!(slots[0].leading_comments.len(), 1);
             }
@@ -650,16 +625,16 @@ mod tests {
 
     #[test]
     fn comment_in_code_body() {
-        let e = parse_one("( | x = 1 | x print /* end */ )");
+        let e = parse_one("[ x = 1. x print /* end */ ]");
         match &e.kind {
-            ExprKind::Object { body, .. } => {
-                // body should have the expression and then the trailing comment
+            ExprKind::Block { body, .. } => {
+                // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
                 assert!(
                     body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
                 );
             }
-            _ => panic!("expected object"),
+            _ => panic!("expected block"),
         }
     }
 }

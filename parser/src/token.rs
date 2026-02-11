@@ -36,6 +36,10 @@ pub enum TokenKind {
     LBracket,
     /// `]`
     RBracket,
+    /// `{`
+    LBrace,
+    /// `}`
+    RBrace,
     /// `|` — slot list delimiter.
     Pipe,
     /// `.` — expression separator / slot separator.
@@ -77,6 +81,8 @@ impl TokenKind {
             Self::RParen => "`)`",
             Self::LBracket => "`[`",
             Self::RBracket => "`]`",
+            Self::LBrace => "`{`",
+            Self::RBrace => "`}`",
             Self::Pipe => "`|`",
             Self::Dot => "`.`",
             Self::Semicolon => "`;`",

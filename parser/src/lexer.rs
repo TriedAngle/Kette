@@ -835,6 +835,14 @@ impl<R: Read> Lexer<R> {
                     "]",
                 )
             }
+            b'{' => {
+                self.advance();
+                Token::new(TokenKind::LBrace, Span::new(start, self.pos()), "{")
+            }
+            b'}' => {
+                self.advance();
+                Token::new(TokenKind::RBrace, Span::new(start, self.pos()), "}")
+            }
             b'|' => {
                 if self.peek_ahead(1).map_or(false, is_op_char) {
                     self.lex_operator()
@@ -1256,12 +1264,14 @@ mod tests {
     #[test]
     fn lex_delimiters() {
         assert_eq!(
-            kinds("( | | )"),
+            kinds("[ | | ] { }"),
             vec![
-                TokenKind::LParen,
+                TokenKind::LBracket,
                 TokenKind::Pipe,
                 TokenKind::Pipe,
-                TokenKind::RParen,
+                TokenKind::RBracket,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );

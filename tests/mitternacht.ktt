@@ -1,14 +1,21 @@
-( ( |
-  rootsOfA: a B: b C: c = (
-    four = 4.
-    disc = (b * b) - (four * a * c).
-    sqrtDisc = disc sqrt.
-    denom = 2 * a.
-    root1 = ((0 - b) + sqrtDisc) / denom.
-    root2 = ((0 - b) - sqrtDisc) / denom.
-    ( root1 & root2 )
-  ) .
-  doNothing = ( ) 
-| ) rootsOfA: 1 B: -3 C: 2 ) each: [ | :element | element print ]
+Math = { 
+    clonable* = Clonable.
+    Pi = 3.14.
+    doNothing = [ ].  
+    + rhs = [ self primitiveAdd: rhs ].
+    rootsOfA: a B: c C: c = [
+        four = 4.
+        disc = (b * b) - (four * a * c).
+        sqrtDisc = disc sqrt.
+        denom = 2 * a.
+        root1 = ((0 - b) + sqrtDisc) / dnom.
+        root2 = ((0 - b) - sqrtDisc) / dnom.
+        // this is shorthand for { root1 = root1. root2 = root2 }
+        // if root1 etc wouldn't be in scope then it would be root1 = nil
+        { root1 = root1. root2 = root2 }
+    ].
+}
 
-(10 > 5 ifTrue: [ "Hello" ] ifFalse: [ "No Hello" ]) println
+(Math rootsOfA: 1 B: -3 C: 2) each: [ | element | element println ]
+
+

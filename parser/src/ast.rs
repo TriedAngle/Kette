@@ -121,18 +121,11 @@ pub enum ExprKind {
     /// A parenthesized expression: `( expr )`.
     Paren(Box<Expr>),
 
-    /// A block literal: `[ | slots | code ]`.
-    Block {
-        args: Vec<String>,
-        locals: Vec<SlotDescriptor>,
-        body: Vec<Expr>,
-    },
+    /// A block literal: `[ | args | code ]`.
+    Block { args: Vec<String>, body: Vec<Expr> },
 
-    /// An object literal: `( | slots | code )`.
-    Object {
-        slots: Vec<SlotDescriptor>,
-        body: Vec<Expr>,
-    },
+    /// An object literal: `{ slots }`.
+    Object { slots: Vec<SlotDescriptor> },
 
     /// Return expression: `^ expr`.
     Return(Box<Expr>),
@@ -176,7 +169,7 @@ pub enum AssignKind {
     /// `:=` (assign to read-write slot).
     Assign,
     /// `=` (initialize read-only slot).
-    Init,
+    Const,
 }
 
 pub fn to_dot(exprs: &[Expr]) -> String {
@@ -265,7 +258,7 @@ impl DotBuilder {
             ExprKind::Cascade { .. } => "Cascade".to_string(),
             ExprKind::Assignment { kind, .. } => match kind {
                 AssignKind::Assign => "Assignment(:=)".to_string(),
-                AssignKind::Init => "Assignment(=)".to_string(),
+                AssignKind::Const => "Assignment(=)".to_string(),
             },
             ExprKind::Comment(c) => match c.kind {
                 CommentKind::Line => "Comment(Line)".to_string(),
@@ -319,7 +312,7 @@ impl DotBuilder {
                 let inner = self.walk_expr(inner);
                 self.add_edge(id, inner, Some("expr"));
             }
-            ExprKind::Block { args, locals, body } => {
+            ExprKind::Block { args, body } => {
                 if !args.is_empty() {
                     let args_id = self.add_node("Args");
                     self.add_edge(id, args_id, Some("args"));
@@ -332,23 +325,15 @@ impl DotBuilder {
                         );
                     }
                 }
-                for (i, slot) in locals.iter().enumerate() {
-                    let slot_id = self.walk_slot(slot);
-                    self.add_edge(id, slot_id, Some(&format!("local[{}]", i)));
-                }
                 for (i, expr) in body.iter().enumerate() {
                     let child = self.walk_expr(expr);
                     self.add_edge(id, child, Some(&format!("body[{}]", i)));
                 }
             }
-            ExprKind::Object { slots, body } => {
+            ExprKind::Object { slots } => {
                 for (i, slot) in slots.iter().enumerate() {
                     let slot_id = self.walk_slot(slot);
                     self.add_edge(id, slot_id, Some(&format!("slot[{}]", i)));
-                }
-                for (i, expr) in body.iter().enumerate() {
-                    let child = self.walk_expr(expr);
-                    self.add_edge(id, child, Some(&format!("body[{}]", i)));
                 }
             }
             ExprKind::Return(inner) => {
@@ -383,69 +368,32 @@ impl DotBuilder {
     }
 
     fn walk_slot(&mut self, slot: &SlotDescriptor) -> usize {
-        let label = match &slot.kind {
-            SlotKind::ReadOnly {
-                name, is_parent, ..
-            } => {
-                if *is_parent {
-                    format!("Slot(ReadOnly, parent, {})", name)
-                } else {
-                    format!("Slot(ReadOnly, {})", name)
-                }
-            }
-            SlotKind::ReadWrite {
-                name, is_parent, ..
-            } => {
-                if *is_parent {
-                    format!("Slot(ReadWrite, parent, {})", name)
-                } else {
-                    format!("Slot(ReadWrite, {})", name)
-                }
-            }
-            SlotKind::Argument { name } => format!("Slot(Arg, {})", name),
-            SlotKind::Method {
-                selector,
-                is_parent,
-                arguments: _,
-                ..
-            } => {
-                if *is_parent {
-                    format!("Slot(Method, parent, {})", selector)
-                } else {
-                    format!("Slot(Method, {})", selector)
-                }
-            }
+        let (selector, kind_label) = match &slot.selector {
+            SlotSelector::Unary(sel) => (sel.as_str(), "Unary"),
+            SlotSelector::Binary(sel) => (sel.as_str(), "Binary"),
+            SlotSelector::Keyword(sel) => (sel.as_str(), "Keyword"),
+        };
+        let mutability = if slot.mutable { "Mutable" } else { "Immutable" };
+        let label = if slot.is_parent {
+            format!(
+                "Slot({}, {}, parent, {})",
+                kind_label, mutability, selector
+            )
+        } else {
+            format!("Slot({}, {}, {})", kind_label, mutability, selector)
         };
 
         let id = self.add_node(&label);
-        match &slot.kind {
-            SlotKind::ReadOnly { initializer, .. }
-            | SlotKind::ReadWrite { initializer, .. } => {
-                if let Some(init) = initializer {
-                    let child = self.walk_expr(init);
-                    self.add_edge(id, child, Some("initializer"));
-                }
+        if !slot.params.is_empty() {
+            let args_id = self.add_node("Args");
+            self.add_edge(id, args_id, Some("args"));
+            for (i, arg) in slot.params.iter().enumerate() {
+                let arg_id = self.add_node(&format!("Arg({})", arg));
+                self.add_edge(args_id, arg_id, Some(&format!("arg[{}]", i)));
             }
-            SlotKind::Method {
-                arguments, body, ..
-            } => {
-                if !arguments.is_empty() {
-                    let args_id = self.add_node("Args");
-                    self.add_edge(id, args_id, Some("args"));
-                    for (i, arg) in arguments.iter().enumerate() {
-                        let arg_id = self.add_node(&format!("Arg({})", arg));
-                        self.add_edge(
-                            args_id,
-                            arg_id,
-                            Some(&format!("arg[{}]", i)),
-                        );
-                    }
-                }
-                let body_id = self.walk_expr(body);
-                self.add_edge(id, body_id, Some("body"));
-            }
-            SlotKind::Argument { .. } => {}
         }
+        let value_id = self.walk_expr(&slot.value);
+        self.add_edge(id, value_id, Some("value"));
         id
     }
 }
@@ -465,37 +413,25 @@ fn escape_label(input: &str) -> String {
     out
 }
 
-/// A slot descriptor within an object or block literal.
+/// A slot descriptor within an object literal.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlotDescriptor {
-    pub kind: SlotKind,
+    pub selector: SlotSelector,
+    pub params: Vec<String>,
+    pub mutable: bool,
+    pub is_parent: bool,
+    pub value: Expr,
     pub span: Span,
     /// Comments that appeared immediately before this slot.
     pub leading_comments: Vec<Comment>,
 }
 
-/// The different kinds of slots that can appear in an object literal.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SlotKind {
-    /// Read-only data slot: `name = expr`.
-    ReadOnly {
-        name: String,
-        is_parent: bool,
-        initializer: Option<Expr>,
-    },
-    /// Read-write (assignable) data slot: `name := expr` or bare `name`.
-    ReadWrite {
-        name: String,
-        is_parent: bool,
-        initializer: Option<Expr>,
-    },
-    /// Argument slot: `:name`.
-    Argument { name: String },
-    /// A slot containing a method.
-    Method {
-        selector: String,
-        is_parent: bool,
-        arguments: Vec<String>,
-        body: Expr,
-    },
+pub enum SlotSelector {
+    /// Unary selector: `name`.
+    Unary(String),
+    /// Binary selector: `+`.
+    Binary(String),
+    /// Keyword selector: `foo:bar:`.
+    Keyword(String),
 }
