@@ -113,10 +113,18 @@ pub enum Op {
     /// Jump if the accumulator is falsy.
     /// Operands: `offset:i16`
     JumpIfFalse,
+
+    /// Resend a message to the parent. Same operands as [`Send`](Op::Send).
+    /// Operands: `message_idx:u16`, `reg:u8` (wide: `u16`), `argc:u8`, `feedback_idx:u16`
+    Resend,
+
+    /// Directed resend: resend via a named parent slot.
+    /// Operands: `message_idx:u16`, `reg:u8` (wide: `u16`), `argc:u8`, `feedback_idx:u16`, `delegate_idx:u16`
+    DirectedResend,
 }
 
 impl Op {
-    pub const COUNT: usize = Op::JumpIfFalse as usize + 1;
+    pub const COUNT: usize = Op::DirectedResend as usize + 1;
 
     /// Convert a raw byte to an opcode without a bounds check.
     ///
@@ -149,6 +157,8 @@ impl Op {
                 | Op::MovFromTemp
                 | Op::MovToAssoc
                 | Op::MovFromAssoc
+                | Op::Resend
+                | Op::DirectedResend
         )
     }
 }

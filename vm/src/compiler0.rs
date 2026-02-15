@@ -1,0 +1,1798 @@
+use std::collections::HashSet;
+
+use bytecode::BytecodeBuilder;
+use parser::ast::{
+    AssignKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotSelector,
+};
+use parser::span::Span;
+
+// ── Error ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CompileError {
+    pub message: String,
+    pub span: Option<Span>,
+}
+
+impl CompileError {
+    fn new(msg: impl Into<String>, span: Span) -> Self {
+        Self {
+            message: msg.into(),
+            span: Some(span),
+        }
+    }
+    #[allow(dead_code)]
+    fn no_span(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            span: None,
+        }
+    }
+}
+
+impl std::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(span) = &self.span {
+            write!(
+                f,
+                "{}:{}: {}",
+                span.start.line, span.start.column, self.message
+            )
+        } else {
+            write!(f, "{}", self.message)
+        }
+    }
+}
+
+// ── Scope types ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeKind {
+    TopLevel,
+    Object,
+    Block,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VarLoc {
+    Local(u16),
+    Temp(u16, u16),
+    Global(u16),
+}
+
+#[derive(Debug, Clone)]
+struct VarInfo {
+    reg: u16,
+    #[allow(dead_code)]
+    mutable: bool,
+    captured: bool,
+    temp_idx: Option<u16>,
+}
+
+#[derive(Debug)]
+struct Scope {
+    #[allow(dead_code)]
+    kind: ScopeKind,
+    locals: Vec<(String, VarInfo)>,
+    param_count: u16,
+    next_reg: u16,
+    max_reg: u16,
+    temp_count: u16,
+    feedback_count: u16,
+}
+
+impl Scope {
+    fn new(kind: ScopeKind) -> Self {
+        Self {
+            kind,
+            locals: Vec::new(),
+            param_count: 0,
+            next_reg: 1, // r0 = self
+            max_reg: 1,
+            temp_count: 0,
+            feedback_count: 0,
+        }
+    }
+
+    fn declare_local(&mut self, name: String, mutable: bool) -> u16 {
+        if let Some((_, info)) = self.locals.iter().find(|(n, _)| *n == name) {
+            return info.reg;
+        }
+        let reg = self.next_reg;
+        self.next_reg += 1;
+        if self.next_reg > self.max_reg {
+            self.max_reg = self.next_reg;
+        }
+        self.locals.push((
+            name,
+            VarInfo {
+                reg,
+                mutable,
+                captured: false,
+                temp_idx: None,
+            },
+        ));
+        reg
+    }
+
+    fn declare_param(&mut self, name: String) -> u16 {
+        let reg = self.declare_local(name, false);
+        self.param_count += 1;
+        reg
+    }
+
+    fn alloc_temp(&mut self) -> u16 {
+        let reg = self.next_reg;
+        self.next_reg += 1;
+        if self.next_reg > self.max_reg {
+            self.max_reg = self.next_reg;
+        }
+        reg
+    }
+
+    fn find_local(&self, name: &str) -> Option<&VarInfo> {
+        self.locals
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
+    }
+
+    #[allow(dead_code)]
+    fn find_local_mut(&mut self, name: &str) -> Option<&mut VarInfo> {
+        self.locals
+            .iter_mut()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
+    }
+
+    #[allow(dead_code)]
+    fn has_local(&self, name: &str) -> bool {
+        self.locals.iter().any(|(n, _)| n == name)
+    }
+
+    /// Mark a local variable as captured. Returns `true` if the variable
+    /// was found (and marked), `false` otherwise.
+    fn mark_captured(&mut self, name: &str) -> bool {
+        for (n, var) in &mut self.locals {
+            if n == name {
+                var.captured = true;
+                if var.temp_idx.is_none() {
+                    let idx = self.temp_count;
+                    self.temp_count += 1;
+                    var.temp_idx = Some(idx);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    fn next_feedback(&mut self) -> u16 {
+        let fb = self.feedback_count;
+        self.feedback_count += 1;
+        fb
+    }
+
+    fn reg_mark(&self) -> u16 {
+        self.next_reg
+    }
+
+    fn restore_regs(&mut self, mark: u16) {
+        self.next_reg = mark;
+    }
+}
+
+// ── Output types ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CodeDesc {
+    pub bytecode: Vec<u8>,
+    pub constants: Vec<ConstEntry>,
+    pub register_count: u16,
+    pub arg_count: u16,
+    pub temp_count: u16,
+    pub feedback_count: u16,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConstEntry {
+    Fixnum(i64),
+    Float(f64),
+    String(String),
+    Symbol(String),
+    Assoc(String),
+    Code(CodeDesc),
+    Map(MapDesc),
+}
+
+#[derive(Debug, Clone)]
+pub struct MapDesc {
+    pub slots: Vec<SlotDesc>,
+    pub value_count: u32,
+    pub code: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SlotDesc {
+    pub flags: u16,
+    pub name: String,
+    pub value: SlotValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum SlotValue {
+    Constant(ConstEntry),
+    Offset(u32),
+}
+
+// Slot flag constants matching object::SlotFlags
+const SLOT_ASSIGNABLE: u16 = 1 << 0;
+const SLOT_ASSIGNMENT: u16 = 1 << 1;
+const SLOT_CONSTANT: u16 = 1 << 2;
+const SLOT_ENUMERABLE: u16 = 1 << 3;
+const SLOT_PARENT: u16 = 1 << 4;
+
+// ── Compile frame ───────────────────────────────────────────────────
+
+struct CompileFrame {
+    scope: Scope,
+    builder: BytecodeBuilder,
+    constants: Vec<ConstEntry>,
+}
+
+// ── Compiler ────────────────────────────────────────────────────────
+
+pub struct Compiler {
+    frames: Vec<CompileFrame>,
+}
+
+impl Compiler {
+    fn new() -> Self {
+        Self { frames: Vec::new() }
+    }
+
+    // ── Public API ──────────────────────────────────────────────
+
+    pub fn compile(exprs: &[Expr]) -> Result<CodeDesc, CompileError> {
+        let mut c = Compiler::new();
+        c.compile_program(exprs)
+    }
+
+    fn compile_program(
+        &mut self,
+        exprs: &[Expr],
+    ) -> Result<CodeDesc, CompileError> {
+        self.push_frame(ScopeKind::TopLevel);
+        self.prescan_locals(exprs);
+        self.analyze_captures(exprs, &[]);
+        self.compile_body(exprs)?;
+        self.builder().local_return();
+        Ok(self.pop_frame())
+    }
+
+    // ── Frame management ────────────────────────────────────────
+
+    fn push_frame(&mut self, kind: ScopeKind) {
+        self.frames.push(CompileFrame {
+            scope: Scope::new(kind),
+            builder: BytecodeBuilder::new(),
+            constants: Vec::new(),
+        });
+    }
+
+    fn pop_frame(&mut self) -> CodeDesc {
+        let frame = self.frames.pop().expect("no frame to pop");
+        CodeDesc {
+            bytecode: frame.builder.into_bytes(),
+            register_count: frame.scope.max_reg,
+            arg_count: frame.scope.param_count,
+            temp_count: frame.scope.temp_count,
+            feedback_count: frame.scope.feedback_count,
+            constants: frame.constants,
+        }
+    }
+
+    fn frame(&self) -> &CompileFrame {
+        self.frames.last().expect("no active frame")
+    }
+
+    fn frame_mut(&mut self) -> &mut CompileFrame {
+        self.frames.last_mut().expect("no active frame")
+    }
+
+    fn scope(&self) -> &Scope {
+        &self.frame().scope
+    }
+
+    fn scope_mut(&mut self) -> &mut Scope {
+        &mut self.frame_mut().scope
+    }
+
+    fn builder(&mut self) -> &mut BytecodeBuilder {
+        &mut self.frame_mut().builder
+    }
+
+    // ── Constant pool ───────────────────────────────────────────
+
+    fn add_constant(&mut self, entry: ConstEntry) -> u16 {
+        let constants = &mut self.frame_mut().constants;
+        let idx = constants.len() as u16;
+        constants.push(entry);
+        idx
+    }
+
+    fn add_symbol(&mut self, name: &str) -> u16 {
+        let constants = &self.frame().constants;
+        for (i, c) in constants.iter().enumerate() {
+            if let ConstEntry::Symbol(s) = c {
+                if s == name {
+                    return i as u16;
+                }
+            }
+        }
+        self.add_constant(ConstEntry::Symbol(name.to_string()))
+    }
+
+    fn add_assoc(&mut self, name: &str) -> u16 {
+        let constants = &self.frame().constants;
+        for (i, c) in constants.iter().enumerate() {
+            if let ConstEntry::Assoc(s) = c {
+                if s == name {
+                    return i as u16;
+                }
+            }
+        }
+        self.add_constant(ConstEntry::Assoc(name.to_string()))
+    }
+
+    fn add_string_const(&mut self, s: &str) -> u16 {
+        self.add_constant(ConstEntry::String(s.to_string()))
+    }
+
+    // ── Prescan: discover local variables ───────────────────────
+
+    fn prescan_locals(&mut self, body: &[Expr]) {
+        for expr in body {
+            self.prescan_expr(expr);
+        }
+    }
+
+    fn prescan_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Assignment { target, kind, .. } => {
+                if let ExprKind::Ident(name) = &target.kind {
+                    let mutable = *kind == AssignKind::Assign;
+                    self.scope_mut().declare_local(name.clone(), mutable);
+                }
+            }
+            ExprKind::Sequence(exprs) => {
+                for e in exprs {
+                    self.prescan_expr(e);
+                }
+            }
+            ExprKind::Paren(inner) => self.prescan_expr(inner),
+            ExprKind::Cascade { messages, .. } => {
+                for msg in messages {
+                    self.prescan_expr(msg);
+                }
+            }
+            // Don't recurse into Object or Block (different scopes)
+            _ => {}
+        }
+    }
+
+    // ── Capture analysis ────────────────────────────────────────
+
+    fn analyze_captures(&mut self, body: &[Expr], shadows: &[HashSet<String>]) {
+        for expr in body {
+            self.analyze_capture_expr(expr, shadows);
+        }
+    }
+
+    fn analyze_capture_expr(
+        &mut self,
+        expr: &Expr,
+        shadows: &[HashSet<String>],
+    ) {
+        match &expr.kind {
+            ExprKind::Ident(name) => {
+                // Check if shadowed by any nested scope
+                for shadow in shadows.iter().rev() {
+                    if shadow.contains(name.as_str()) {
+                        return;
+                    }
+                }
+                if shadows.is_empty() {
+                    // Directly in current scope — local ref, not a capture
+                    return;
+                }
+                // Inside a nested scope; check if this references a local
+                // in the current or an enclosing scope
+                self.mark_captured_if_found(name);
+            }
+            ExprKind::Block { args, body } => {
+                let mut shadow = HashSet::new();
+                for arg in args {
+                    shadow.insert(arg.clone());
+                }
+                Self::collect_assignment_names(body, &mut shadow);
+                let mut new_shadows = shadows.to_vec();
+                new_shadows.push(shadow);
+                self.analyze_captures(body, &new_shadows);
+            }
+            ExprKind::Object { slots, body }
+                if !body.is_empty()
+                    || slots.iter().any(|s| !s.params.is_empty()) =>
+            {
+                // Method object — creates its own scope
+                let mut shadow = HashSet::new();
+                for slot in slots {
+                    shadow.insert(slot_selector_name(slot));
+                    for param in &slot.params {
+                        shadow.insert(param.clone());
+                    }
+                }
+                Self::collect_assignment_names(body, &mut shadow);
+                let mut new_shadows = shadows.to_vec();
+                new_shadows.push(shadow);
+                self.analyze_captures(body, &new_shadows);
+                for slot in slots {
+                    self.analyze_capture_expr(&slot.value, &new_shadows);
+                }
+            }
+            ExprKind::Object { slots, .. } => {
+                // Data object — no new scope
+                for slot in slots {
+                    self.analyze_capture_expr(&slot.value, shadows);
+                }
+            }
+            ExprKind::UnaryMessage { receiver, .. } => {
+                self.analyze_capture_expr(receiver, shadows);
+            }
+            ExprKind::BinaryMessage {
+                receiver, argument, ..
+            } => {
+                self.analyze_capture_expr(receiver, shadows);
+                self.analyze_capture_expr(argument, shadows);
+            }
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                self.analyze_capture_expr(receiver, shadows);
+                for pair in pairs {
+                    self.analyze_capture_expr(&pair.argument, shadows);
+                }
+            }
+            ExprKind::Assignment { target, value, .. } => {
+                self.analyze_capture_expr(target, shadows);
+                self.analyze_capture_expr(value, shadows);
+            }
+            ExprKind::Return(inner) | ExprKind::Paren(inner) => {
+                self.analyze_capture_expr(inner, shadows);
+            }
+            ExprKind::Sequence(exprs) => {
+                self.analyze_captures(exprs, shadows);
+            }
+            ExprKind::Cascade { receiver, messages } => {
+                self.analyze_capture_expr(receiver, shadows);
+                for msg in messages {
+                    self.analyze_capture_expr(msg, shadows);
+                }
+            }
+            ExprKind::Resend { message }
+            | ExprKind::DirectedResend { message, .. } => {
+                self.analyze_capture_expr(message, shadows);
+            }
+            // Leaves: Integer, Float, String, SelfRef, Comment, Error
+            _ => {}
+        }
+    }
+
+    fn mark_captured_if_found(&mut self, name: &str) {
+        let depth = self.frames.len();
+        if depth == 0 {
+            return;
+        }
+        // Check current scope first
+        if self.frames[depth - 1].scope.mark_captured(name) {
+            return;
+        }
+        // Check enclosing scopes
+        for i in (0..depth - 1).rev() {
+            if self.frames[i].scope.mark_captured(name) {
+                return;
+            }
+        }
+        // Not found — global, nothing to mark
+    }
+
+    fn collect_assignment_names(body: &[Expr], out: &mut HashSet<String>) {
+        for expr in body {
+            match &expr.kind {
+                ExprKind::Assignment { target, .. } => {
+                    if let ExprKind::Ident(name) = &target.kind {
+                        out.insert(name.clone());
+                    }
+                }
+                ExprKind::Sequence(exprs) => {
+                    Self::collect_assignment_names(exprs, out);
+                }
+                ExprKind::Paren(inner) => {
+                    Self::collect_assignment_names(
+                        std::slice::from_ref(inner.as_ref()),
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ── Variable resolution ─────────────────────────────────────
+
+    fn resolve(&mut self, name: &str) -> VarLoc {
+        let depth = self.frames.len();
+
+        // Check current scope
+        if let Some(var) = self.frames[depth - 1].scope.find_local(name) {
+            if var.captured {
+                return VarLoc::Temp(0, var.temp_idx.unwrap());
+            }
+            return VarLoc::Local(var.reg);
+        }
+
+        // Check enclosing scopes
+        for i in (0..depth - 1).rev() {
+            if let Some(var) = self.frames[i].scope.find_local(name) {
+                if var.captured {
+                    return VarLoc::Temp(0, var.temp_idx.unwrap());
+                }
+                // Found in enclosing but not marked as captured — shouldn't
+                // happen if capture analysis ran correctly. Treat as global.
+                break;
+            }
+        }
+
+        // Global: add assoc to constant pool
+        let idx = self.add_assoc(name);
+        VarLoc::Global(idx)
+    }
+
+    // ── Body compilation ────────────────────────────────────────
+
+    fn compile_body(&mut self, body: &[Expr]) -> Result<(), CompileError> {
+        let non_comment: Vec<&Expr> = body
+            .iter()
+            .filter(|e| !matches!(e.kind, ExprKind::Comment(_)))
+            .collect();
+
+        if non_comment.is_empty() {
+            // Empty body — load self as default return
+            self.builder().load_local(0);
+            return Ok(());
+        }
+
+        for (i, expr) in non_comment.iter().enumerate() {
+            let mark = self.scope().reg_mark();
+            self.compile_expr(expr)?;
+            // Reset temp registers after each statement (except the last,
+            // whose value stays in the accumulator)
+            if i < non_comment.len() - 1 {
+                self.scope_mut().restore_regs(mark);
+            }
+        }
+        Ok(())
+    }
+
+    // ── Expression compilation ──────────────────────────────────
+
+    fn compile_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
+        match &expr.kind {
+            ExprKind::Integer(v) => {
+                if let Ok(v32) = i32::try_from(*v) {
+                    self.builder().load_smi(v32);
+                } else {
+                    let idx = self.add_constant(ConstEntry::Fixnum(*v));
+                    self.builder().load_constant(idx);
+                }
+            }
+            ExprKind::Float(v) => {
+                let idx = self.add_constant(ConstEntry::Float(*v));
+                self.builder().load_constant(idx);
+            }
+            ExprKind::String(s) => {
+                let idx = self.add_string_const(s);
+                self.builder().load_constant(idx);
+            }
+            ExprKind::SelfRef => {
+                self.builder().load_local(0);
+            }
+            ExprKind::Ident(name) => {
+                self.compile_ident(name);
+            }
+            ExprKind::UnaryMessage { receiver, selector } => {
+                self.compile_unary_message(receiver, selector)?;
+            }
+            ExprKind::BinaryMessage {
+                receiver,
+                operator,
+                argument,
+            } => {
+                self.compile_binary_message(receiver, operator, argument)?;
+            }
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                self.compile_keyword_message(receiver, pairs)?;
+            }
+            ExprKind::Assignment {
+                target,
+                kind,
+                value,
+            } => {
+                self.compile_assignment(target, *kind, value)?;
+            }
+            ExprKind::Return(inner) => {
+                self.compile_expr(inner)?;
+                self.builder().return_();
+            }
+            ExprKind::Paren(inner) => {
+                self.compile_expr(inner)?;
+            }
+            ExprKind::Sequence(exprs) => {
+                self.compile_body(exprs)?;
+            }
+            ExprKind::Object { slots, body } => {
+                self.compile_object(slots, body, &[])?;
+            }
+            ExprKind::Block { args, body } => {
+                self.compile_block(args, body)?;
+            }
+            ExprKind::Cascade { receiver, messages } => {
+                self.compile_cascade(receiver, messages)?;
+            }
+            ExprKind::Resend { message } => {
+                self.compile_resend(message, None)?;
+            }
+            ExprKind::DirectedResend { delegate, message } => {
+                self.compile_resend(message, Some(delegate))?;
+            }
+            ExprKind::Comment(_) => {
+                // Skip
+            }
+            ExprKind::Error(msg) => {
+                return Err(CompileError::new(msg.as_str(), expr.span));
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_ident(&mut self, name: &str) {
+        match self.resolve(name) {
+            VarLoc::Local(reg) => self.builder().load_local(reg),
+            VarLoc::Temp(arr, idx) => self.builder().load_temp(arr, idx),
+            VarLoc::Global(const_idx) => self.builder().load_assoc(const_idx),
+        }
+    }
+
+    // ── Message compilation ─────────────────────────────────────
+
+    fn compile_unary_message(
+        &mut self,
+        receiver: &Expr,
+        selector: &str,
+    ) -> Result<(), CompileError> {
+        self.compile_expr(receiver)?;
+        let sel_idx = self.add_symbol(selector);
+        let fb = self.scope_mut().next_feedback();
+        self.builder().send(sel_idx, 0, 0, fb);
+        Ok(())
+    }
+
+    fn compile_binary_message(
+        &mut self,
+        receiver: &Expr,
+        operator: &str,
+        argument: &Expr,
+    ) -> Result<(), CompileError> {
+        self.compile_expr(receiver)?;
+        let tmp_recv = self.scope_mut().alloc_temp();
+        self.builder().store_local(tmp_recv);
+
+        self.compile_expr(argument)?;
+        let tmp_arg = self.scope_mut().alloc_temp();
+        self.builder().store_local(tmp_arg);
+
+        self.builder().load_local(tmp_recv);
+        let op_idx = self.add_symbol(operator);
+        let fb = self.scope_mut().next_feedback();
+        self.builder().send(op_idx, tmp_arg, 1, fb);
+        Ok(())
+    }
+
+    fn compile_keyword_message(
+        &mut self,
+        receiver: &Expr,
+        pairs: &[KeywordPair],
+    ) -> Result<(), CompileError> {
+        self.compile_expr(receiver)?;
+        let tmp_recv = self.scope_mut().alloc_temp();
+        self.builder().store_local(tmp_recv);
+
+        let first_arg_reg = self.scope().next_reg;
+        for pair in pairs {
+            self.compile_expr(&pair.argument)?;
+            let tmp = self.scope_mut().alloc_temp();
+            self.builder().store_local(tmp);
+        }
+
+        self.builder().load_local(tmp_recv);
+        let selector: String =
+            pairs.iter().map(|p| p.keyword.as_str()).collect();
+        let sel_idx = self.add_symbol(&selector);
+        let fb = self.scope_mut().next_feedback();
+        self.builder()
+            .send(sel_idx, first_arg_reg, pairs.len() as u8, fb);
+        Ok(())
+    }
+
+    /// Compile just the message-send portion of a message expression,
+    /// assuming the receiver is already in the accumulator.
+    fn compile_message_tail(&mut self, msg: &Expr) -> Result<(), CompileError> {
+        match &msg.kind {
+            ExprKind::UnaryMessage { selector, .. } => {
+                let sel_idx = self.add_symbol(selector);
+                let fb = self.scope_mut().next_feedback();
+                self.builder().send(sel_idx, 0, 0, fb);
+            }
+            ExprKind::BinaryMessage {
+                argument, operator, ..
+            } => {
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+
+                self.compile_expr(argument)?;
+                let tmp_arg = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_arg);
+
+                self.builder().load_local(tmp_recv);
+                let op_idx = self.add_symbol(operator);
+                let fb = self.scope_mut().next_feedback();
+                self.builder().send(op_idx, tmp_arg, 1, fb);
+            }
+            ExprKind::KeywordMessage { pairs, .. } => {
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+
+                let first_arg_reg = self.scope().next_reg;
+                for pair in pairs {
+                    self.compile_expr(&pair.argument)?;
+                    let tmp = self.scope_mut().alloc_temp();
+                    self.builder().store_local(tmp);
+                }
+
+                self.builder().load_local(tmp_recv);
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                let sel_idx = self.add_symbol(&selector);
+                let fb = self.scope_mut().next_feedback();
+                self.builder().send(
+                    sel_idx,
+                    first_arg_reg,
+                    pairs.len() as u8,
+                    fb,
+                );
+            }
+            _ => {
+                // Shouldn't happen in a well-formed cascade
+                self.compile_expr(msg)?;
+            }
+        }
+        Ok(())
+    }
+
+    // ── Assignment ──────────────────────────────────────────────
+
+    fn compile_assignment(
+        &mut self,
+        target: &Expr,
+        _kind: AssignKind,
+        value: &Expr,
+    ) -> Result<(), CompileError> {
+        self.compile_expr(value)?;
+        match &target.kind {
+            ExprKind::Ident(name) => {
+                let loc = self.resolve(name);
+                match loc {
+                    VarLoc::Local(reg) => self.builder().store_local(reg),
+                    VarLoc::Temp(arr, idx) => {
+                        self.builder().store_temp(arr, idx)
+                    }
+                    VarLoc::Global(const_idx) => {
+                        self.builder().store_assoc(const_idx)
+                    }
+                }
+            }
+            _ => {
+                return Err(CompileError::new(
+                    "assignment target must be an identifier",
+                    target.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    // ── Cascade ─────────────────────────────────────────────────
+
+    fn compile_cascade(
+        &mut self,
+        receiver: &Expr,
+        messages: &[Expr],
+    ) -> Result<(), CompileError> {
+        self.compile_expr(receiver)?;
+        let tmp_recv = self.scope_mut().alloc_temp();
+        self.builder().store_local(tmp_recv);
+
+        for msg in messages {
+            self.builder().load_local(tmp_recv);
+            self.compile_message_tail(msg)?;
+        }
+        Ok(())
+    }
+
+    // ── Resend ──────────────────────────────────────────────────
+
+    fn compile_resend(
+        &mut self,
+        message: &Expr,
+        delegate: Option<&String>,
+    ) -> Result<(), CompileError> {
+        match &message.kind {
+            ExprKind::UnaryMessage { selector, .. } => {
+                let sel_idx = self.add_symbol(selector);
+                let fb = self.scope_mut().next_feedback();
+                if let Some(del) = delegate {
+                    let del_idx = self.add_symbol(del);
+                    self.builder().directed_resend(sel_idx, 0, 0, fb, del_idx);
+                } else {
+                    self.builder().resend(sel_idx, 0, 0, fb);
+                }
+            }
+            ExprKind::BinaryMessage {
+                argument, operator, ..
+            } => {
+                self.compile_expr(argument)?;
+                let arg_reg = self.scope_mut().alloc_temp();
+                self.builder().store_local(arg_reg);
+
+                let sel_idx = self.add_symbol(operator);
+                let fb = self.scope_mut().next_feedback();
+                if let Some(del) = delegate {
+                    let del_idx = self.add_symbol(del);
+                    self.builder()
+                        .directed_resend(sel_idx, arg_reg, 1, fb, del_idx);
+                } else {
+                    self.builder().resend(sel_idx, arg_reg, 1, fb);
+                }
+            }
+            ExprKind::KeywordMessage { pairs, .. } => {
+                let first_arg_reg = self.scope().next_reg;
+                for pair in pairs {
+                    self.compile_expr(&pair.argument)?;
+                    let tmp = self.scope_mut().alloc_temp();
+                    self.builder().store_local(tmp);
+                }
+
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                let sel_idx = self.add_symbol(&selector);
+                let fb = self.scope_mut().next_feedback();
+                let argc = pairs.len() as u8;
+                if let Some(del) = delegate {
+                    let del_idx = self.add_symbol(del);
+                    self.builder().directed_resend(
+                        sel_idx,
+                        first_arg_reg,
+                        argc,
+                        fb,
+                        del_idx,
+                    );
+                } else {
+                    self.builder().resend(sel_idx, first_arg_reg, argc, fb);
+                }
+            }
+            _ => {
+                return Err(CompileError::new(
+                    "resend requires a message expression",
+                    message.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    // ── Object compilation ──────────────────────────────────────
+
+    fn compile_object(
+        &mut self,
+        slots: &[SlotDescriptor],
+        body: &[Expr],
+        parent_params: &[String],
+    ) -> Result<(), CompileError> {
+        let is_method = !body.is_empty() || !parent_params.is_empty();
+
+        if is_method {
+            self.compile_method_object(slots, body, parent_params)
+        } else {
+            self.compile_data_object(slots)
+        }
+    }
+
+    fn compile_data_object(
+        &mut self,
+        slots: &[SlotDescriptor],
+    ) -> Result<(), CompileError> {
+        // Count assignable (mutable) slots for value_count
+        let mut value_count: u32 = 0;
+        let mut slot_descs = Vec::new();
+        let mut value_regs = Vec::new();
+
+        // Byte offset for assignable values
+        // Values start at offset 16 (after Header + map pointer)
+        let values_base_offset: u32 = 16;
+
+        for slot in slots {
+            let name = slot_selector_name(slot);
+            let is_parent = slot.is_parent;
+            let base_flags =
+                SLOT_ENUMERABLE | if is_parent { SLOT_PARENT } else { 0 };
+
+            if slot.mutable {
+                // Mutable slot: ASSIGNABLE reader + ASSIGNMENT writer
+                let offset = values_base_offset + value_count * 8;
+
+                // Compile the value expression → temp register
+                self.compile_expr(&slot.value)?;
+                let tmp = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp);
+                value_regs.push(tmp);
+
+                // Reader slot
+                slot_descs.push(SlotDesc {
+                    flags: base_flags | SLOT_ASSIGNABLE,
+                    name: name.clone(),
+                    value: SlotValue::Offset(offset),
+                });
+
+                // Writer slot (name: appended)
+                slot_descs.push(SlotDesc {
+                    flags: base_flags | SLOT_ASSIGNMENT,
+                    name: format!("{}:", name),
+                    value: SlotValue::Offset(offset),
+                });
+
+                value_count += 1;
+            } else {
+                // Immutable slot: check if value is a nested method object
+                let has_params = !slot.params.is_empty();
+                let is_method_value = has_params
+                    || matches!(&slot.value.kind, ExprKind::Object { body, .. } if !body.is_empty());
+
+                if is_method_value {
+                    // This slot's value is a method — compile as nested CodeDesc
+                    let code_desc = self.compile_nested_method(slot)?;
+                    slot_descs.push(SlotDesc {
+                        flags: base_flags | SLOT_CONSTANT,
+                        name,
+                        value: SlotValue::Constant(ConstEntry::Code(code_desc)),
+                    });
+                } else {
+                    // Constant slot: value goes directly in the map
+                    let const_entry = self.expr_to_const_entry(&slot.value)?;
+                    slot_descs.push(SlotDesc {
+                        flags: base_flags | SLOT_CONSTANT,
+                        name,
+                        value: SlotValue::Constant(const_entry),
+                    });
+                }
+            }
+        }
+
+        let map_desc = MapDesc {
+            slots: slot_descs,
+            value_count,
+            code: None,
+        };
+        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
+
+        let first_value_reg = if value_regs.is_empty() {
+            0
+        } else {
+            value_regs[0]
+        };
+        self.builder().create_object(map_idx, first_value_reg);
+
+        Ok(())
+    }
+
+    fn compile_method_object(
+        &mut self,
+        slots: &[SlotDescriptor],
+        body: &[Expr],
+        parent_params: &[String],
+    ) -> Result<(), CompileError> {
+        // Enter a new scope for the method
+        self.push_frame(ScopeKind::Object);
+
+        // Register params
+        for param in parent_params {
+            self.scope_mut().declare_param(param.clone());
+        }
+
+        // Register slot names as locals
+        for slot in slots {
+            let name = slot_selector_name(slot);
+            let mutable = slot.mutable;
+            self.scope_mut().declare_local(name, mutable);
+        }
+
+        // Prescan body for additional locals
+        self.prescan_locals(body);
+
+        // Analyze captures (walks into nested scopes)
+        self.analyze_captures(body, &[]);
+
+        // Also analyze captures in slot values
+        for slot in slots {
+            self.analyze_capture_expr(&slot.value, &[]);
+        }
+
+        // Compile slot initializers
+        for slot in slots {
+            self.compile_expr(&slot.value)?;
+            let name = slot_selector_name(slot);
+            let loc = self.resolve(&name);
+            match loc {
+                VarLoc::Local(reg) => self.builder().store_local(reg),
+                VarLoc::Temp(arr, idx) => self.builder().store_temp(arr, idx),
+                VarLoc::Global(ci) => self.builder().store_assoc(ci),
+            }
+        }
+
+        // Compile body
+        self.compile_body(body)?;
+        self.builder().local_return();
+
+        let code_desc = self.pop_frame();
+
+        // Build MapDesc for the method object
+        let code_idx = self.add_constant(ConstEntry::Code(code_desc));
+        let mut slot_descs = Vec::new();
+
+        for slot in slots {
+            let name = slot_selector_name(slot);
+            let is_parent = slot.is_parent;
+            let base_flags =
+                SLOT_ENUMERABLE | if is_parent { SLOT_PARENT } else { 0 };
+
+            // All slots in a method object are constant (stored in map)
+            slot_descs.push(SlotDesc {
+                flags: base_flags | SLOT_CONSTANT,
+                name,
+                value: SlotValue::Constant(ConstEntry::Symbol(
+                    "slot".to_string(),
+                )),
+            });
+        }
+
+        let map_desc = MapDesc {
+            slots: slot_descs,
+            value_count: 0,
+            code: Some(code_idx as usize),
+        };
+        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
+        self.builder().create_object(map_idx, 0);
+
+        Ok(())
+    }
+
+    fn compile_nested_method(
+        &mut self,
+        slot: &SlotDescriptor,
+    ) -> Result<CodeDesc, CompileError> {
+        match &slot.value.kind {
+            ExprKind::Object {
+                slots: inner_slots,
+                body,
+            } => {
+                self.push_frame(ScopeKind::Object);
+
+                for param in &slot.params {
+                    self.scope_mut().declare_param(param.clone());
+                }
+
+                for inner_slot in inner_slots {
+                    let name = slot_selector_name(inner_slot);
+                    self.scope_mut().declare_local(name, inner_slot.mutable);
+                }
+
+                self.prescan_locals(body);
+                self.analyze_captures(body, &[]);
+
+                for inner_slot in inner_slots {
+                    self.compile_expr(&inner_slot.value)?;
+                    let name = slot_selector_name(inner_slot);
+                    let loc = self.resolve(&name);
+                    match loc {
+                        VarLoc::Local(reg) => self.builder().store_local(reg),
+                        VarLoc::Temp(arr, idx) => {
+                            self.builder().store_temp(arr, idx)
+                        }
+                        VarLoc::Global(ci) => self.builder().store_assoc(ci),
+                    }
+                }
+
+                self.compile_body(body)?;
+                self.builder().local_return();
+
+                Ok(self.pop_frame())
+            }
+            _ => {
+                // Slot value is not an Object — compile as a simple method
+                // that returns the expression result
+                self.push_frame(ScopeKind::Object);
+
+                for param in &slot.params {
+                    self.scope_mut().declare_param(param.clone());
+                }
+
+                self.compile_expr(&slot.value)?;
+                self.builder().local_return();
+
+                Ok(self.pop_frame())
+            }
+        }
+    }
+
+    /// Try to produce a ConstEntry from a simple expression (literals only).
+    fn expr_to_const_entry(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<ConstEntry, CompileError> {
+        match &expr.kind {
+            ExprKind::Integer(v) => Ok(ConstEntry::Fixnum(*v)),
+            ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
+            ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
+            ExprKind::Object { slots, body } if body.is_empty() => {
+                // Nested data object as a constant — build a MapDesc
+                let mut slot_descs = Vec::new();
+                for slot in slots {
+                    let name = slot_selector_name(slot);
+                    let const_val = self.expr_to_const_entry(&slot.value)?;
+                    slot_descs.push(SlotDesc {
+                        flags: SLOT_CONSTANT | SLOT_ENUMERABLE,
+                        name,
+                        value: SlotValue::Constant(const_val),
+                    });
+                }
+                Ok(ConstEntry::Map(MapDesc {
+                    slots: slot_descs,
+                    value_count: 0,
+                    code: None,
+                }))
+            }
+            ExprKind::Block { args, body } => {
+                // A block as a constant slot value
+                let code = self.compile_block_inner(args, body)?;
+                Ok(ConstEntry::Code(code))
+            }
+            _ => {
+                // Non-trivial expression: compile it as a mini method that
+                // evaluates the expression and returns it
+                self.push_frame(ScopeKind::Object);
+                self.compile_expr(expr)?;
+                self.builder().local_return();
+                Ok(ConstEntry::Code(self.pop_frame()))
+            }
+        }
+    }
+
+    // ── Block compilation ───────────────────────────────────────
+
+    fn compile_block(
+        &mut self,
+        args: &[String],
+        body: &[Expr],
+    ) -> Result<(), CompileError> {
+        let code_desc = self.compile_block_inner(args, body)?;
+
+        let code_idx = self.add_constant(ConstEntry::Code(code_desc));
+        let map_desc = MapDesc {
+            slots: Vec::new(),
+            value_count: 0,
+            code: Some(code_idx as usize),
+        };
+        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
+        self.builder().create_block(map_idx);
+
+        Ok(())
+    }
+
+    fn compile_block_inner(
+        &mut self,
+        args: &[String],
+        body: &[Expr],
+    ) -> Result<CodeDesc, CompileError> {
+        self.push_frame(ScopeKind::Block);
+
+        for arg in args {
+            self.scope_mut().declare_param(arg.clone());
+        }
+
+        self.prescan_locals(body);
+        self.analyze_captures(body, &[]);
+
+        self.compile_body(body)?;
+        self.builder().local_return();
+
+        Ok(self.pop_frame())
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+fn slot_selector_name(slot: &SlotDescriptor) -> String {
+    match &slot.selector {
+        SlotSelector::Unary(s) => s.clone(),
+        SlotSelector::Binary(s) => s.clone(),
+        SlotSelector::Keyword(s) => s.clone(),
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytecode::{BytecodeDecoder, Instruction};
+    use parser::{Lexer, Parser};
+
+    fn parse_source(src: &str) -> Vec<Expr> {
+        let lexer = Lexer::from_str(src);
+        Parser::new(lexer)
+            .map(|r| r.expect("parse error"))
+            .collect()
+    }
+
+    fn compile_source(src: &str) -> CodeDesc {
+        let exprs = parse_source(src);
+        Compiler::compile(&exprs).expect("compile error")
+    }
+
+    fn decode(code: &CodeDesc) -> Vec<Instruction> {
+        BytecodeDecoder::new(&code.bytecode).collect()
+    }
+
+    // ── Milestone 1: Literals ───────────────────────────────────
+
+    #[test]
+    fn compile_small_integer() {
+        let code = compile_source("42");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![Instruction::LoadSmi { value: 42 }, Instruction::LocalReturn,]
+        );
+    }
+
+    #[test]
+    fn compile_negative_integer() {
+        let code = compile_source("-7");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![Instruction::LoadSmi { value: -7 }, Instruction::LocalReturn,]
+        );
+    }
+
+    #[test]
+    fn compile_float() {
+        let code = compile_source("3.14");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadConstant { idx: 0 },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(code.constants[0], ConstEntry::Float(v) if (v - 3.14).abs() < 1e-10)
+        );
+    }
+
+    #[test]
+    fn compile_string() {
+        let code = compile_source("\"hello\"");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadConstant { idx: 0 },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::String(s) if s == "hello")
+        );
+    }
+
+    #[test]
+    fn compile_self() {
+        let code = compile_source("self");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![Instruction::LoadLocal { reg: 0 }, Instruction::LocalReturn,]
+        );
+    }
+
+    #[test]
+    fn compile_sequence() {
+        let code = compile_source("1. 2. 3");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 1 },
+                Instruction::LoadSmi { value: 2 },
+                Instruction::LoadSmi { value: 3 },
+                Instruction::LocalReturn,
+            ]
+        );
+    }
+
+    // ── Milestone 2: Locals + Messages ──────────────────────────
+
+    #[test]
+    fn compile_assignment_and_load() {
+        let code = compile_source("x = 5. x");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 5 },
+                Instruction::StoreLocal { reg: 1 }, // x = r1
+                Instruction::LoadLocal { reg: 1 },
+                Instruction::LocalReturn,
+            ]
+        );
+    }
+
+    #[test]
+    fn compile_unary_message() {
+        let code = compile_source("5 factorial");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 5 },
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 0,
+                    argc: 0,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::Symbol(s) if s == "factorial")
+        );
+    }
+
+    #[test]
+    fn compile_binary_message() {
+        let code = compile_source("3 + 4");
+        let instrs = decode(&code);
+        // r0=self, r1=tmp_recv, r2=tmp_arg
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 3 },
+                Instruction::StoreLocal { reg: 1 }, // save receiver
+                Instruction::LoadSmi { value: 4 },
+                Instruction::StoreLocal { reg: 2 }, // save arg
+                Instruction::LoadLocal { reg: 1 },  // receiver to acc
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 2,
+                    argc: 1,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::Symbol(s) if s == "+")
+        );
+    }
+
+    #[test]
+    fn compile_keyword_message() {
+        let code = compile_source("5 min: 3");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 5 },
+                Instruction::StoreLocal { reg: 1 }, // save receiver
+                Instruction::LoadSmi { value: 3 },
+                Instruction::StoreLocal { reg: 2 }, // save arg
+                Instruction::LoadLocal { reg: 1 },  // receiver to acc
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 2,
+                    argc: 1,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::Symbol(s) if s == "min:")
+        );
+    }
+
+    #[test]
+    fn compile_multi_keyword_message() {
+        let code = compile_source("self foo: 1 Bar: 2");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadLocal { reg: 0 },  // self
+                Instruction::StoreLocal { reg: 1 }, // save receiver
+                Instruction::LoadSmi { value: 1 },
+                Instruction::StoreLocal { reg: 2 }, // arg 1
+                Instruction::LoadSmi { value: 2 },
+                Instruction::StoreLocal { reg: 3 }, // arg 2
+                Instruction::LoadLocal { reg: 1 },  // receiver to acc
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 2,
+                    argc: 2,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::Symbol(s) if s == "foo:Bar:")
+        );
+    }
+
+    #[test]
+    fn compile_local_assignment_and_binary() {
+        let code = compile_source("x = 5. x + 3");
+        let instrs = decode(&code);
+        // r1 = x (from prescan)
+        // After "x = 5": r1 holds 5
+        // For "x + 3": r2 = tmp_recv, r3 = tmp_arg
+        assert_eq!(
+            instrs,
+            vec![
+                // x = 5
+                Instruction::LoadSmi { value: 5 },
+                Instruction::StoreLocal { reg: 1 },
+                // x + 3
+                Instruction::LoadLocal { reg: 1 },
+                Instruction::StoreLocal { reg: 2 }, // save x (receiver)
+                Instruction::LoadSmi { value: 3 },
+                Instruction::StoreLocal { reg: 3 }, // save 3 (arg)
+                Instruction::LoadLocal { reg: 2 },  // x back to acc
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 3,
+                    argc: 1,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+    }
+
+    #[test]
+    fn compile_return() {
+        let code = compile_source("^ 42");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 42 },
+                Instruction::Return,
+                Instruction::LocalReturn,
+            ]
+        );
+    }
+
+    #[test]
+    fn compile_paren() {
+        let code = compile_source("(3 + 4)");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 3 },
+                Instruction::StoreLocal { reg: 1 },
+                Instruction::LoadSmi { value: 4 },
+                Instruction::StoreLocal { reg: 2 },
+                Instruction::LoadLocal { reg: 1 },
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 2,
+                    argc: 1,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+    }
+
+    // ── Milestone 3: Objects ────────────────────────────────────
+
+    #[test]
+    fn compile_empty_data_object() {
+        let code = compile_source("{}");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::CreateObject {
+                    map_idx: 0,
+                    values_reg: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::Map(m) if m.slots.is_empty())
+        );
+    }
+
+    #[test]
+    fn compile_data_object_const_slot() {
+        let code = compile_source("{ x = 5 }");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::CreateObject {
+                    map_idx: 0,
+                    values_reg: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        let map = match &code.constants[0] {
+            ConstEntry::Map(m) => m,
+            _ => panic!("expected map"),
+        };
+        assert_eq!(map.slots.len(), 1);
+        assert_eq!(map.slots[0].name, "x");
+        assert!(map.slots[0].flags & SLOT_CONSTANT != 0);
+        assert!(matches!(
+            &map.slots[0].value,
+            SlotValue::Constant(ConstEntry::Fixnum(5))
+        ));
+    }
+
+    #[test]
+    fn compile_data_object_mutable_slot() {
+        let code = compile_source("{ x := 5 }");
+        let instrs = decode(&code);
+        // Compile 5 → store in tmp register → CreateObject
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadSmi { value: 5 },
+                Instruction::StoreLocal { reg: 1 }, // tmp for value
+                Instruction::CreateObject {
+                    map_idx: 0,
+                    values_reg: 1
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+        let map = match &code.constants[0] {
+            ConstEntry::Map(m) => m,
+            _ => panic!("expected map"),
+        };
+        assert_eq!(map.slots.len(), 2); // reader + writer
+        assert_eq!(map.value_count, 1);
+        assert_eq!(map.slots[0].name, "x");
+        assert!(map.slots[0].flags & SLOT_ASSIGNABLE != 0);
+        assert_eq!(map.slots[1].name, "x:");
+        assert!(map.slots[1].flags & SLOT_ASSIGNMENT != 0);
+    }
+
+    // ── Milestone 4: Blocks ─────────────────────────────────────
+
+    #[test]
+    fn compile_empty_block() {
+        let code = compile_source("[]");
+        let instrs = decode(&code);
+        // CreateBlock with map_idx pointing to a Map constant
+        assert_eq!(instrs.len(), 2); // CreateBlock + LocalReturn
+        assert!(matches!(instrs[0], Instruction::CreateBlock { .. }));
+        assert_eq!(instrs[1], Instruction::LocalReturn);
+    }
+
+    #[test]
+    fn compile_block_with_args() {
+        let code = compile_source("[ | x | x + 1 ]");
+        let instrs = decode(&code);
+        assert!(matches!(instrs[0], Instruction::CreateBlock { .. }));
+
+        // Check the block's CodeDesc
+        let block_code = find_code_const(&code.constants);
+        assert_eq!(block_code.arg_count, 1);
+        let block_instrs = decode(block_code);
+        // x is r1 (param), tmp_recv=r2, tmp_arg=r3
+        assert_eq!(
+            block_instrs,
+            vec![
+                Instruction::LoadLocal { reg: 1 },  // x
+                Instruction::StoreLocal { reg: 2 }, // save receiver
+                Instruction::LoadSmi { value: 1 },
+                Instruction::StoreLocal { reg: 3 }, // save arg
+                Instruction::LoadLocal { reg: 2 },  // receiver to acc
+                Instruction::Send {
+                    message_idx: 0,
+                    reg: 3,
+                    argc: 1,
+                    feedback_idx: 0
+                },
+                Instruction::LocalReturn,
+            ]
+        );
+    }
+
+    #[test]
+    fn compile_block_captures_local() {
+        let code = compile_source("y = 10. [ y + 1 ]");
+        // y is declared in top-level scope. The block captures y.
+        // y should be accessed via LoadTemp in both scopes.
+        let instrs = decode(&code);
+
+        // In top-level: y is captured → stored via StoreTemp
+        assert_eq!(instrs[0], Instruction::LoadSmi { value: 10 });
+        assert_eq!(
+            instrs[1],
+            Instruction::StoreTemp {
+                array_idx: 0,
+                idx: 0
+            }
+        );
+
+        // Block creation
+        assert!(matches!(instrs[2], Instruction::CreateBlock { .. }));
+
+        // Inside the block: y accessed via LoadTemp
+        let block_code = find_code_const(&code.constants);
+        let block_instrs = decode(block_code);
+        assert_eq!(
+            block_instrs[0],
+            Instruction::LoadTemp {
+                array_idx: 0,
+                idx: 0
+            }
+        );
+    }
+
+    // ── Milestone 5: Globals + Cascade ──────────────────────────
+
+    #[test]
+    fn compile_global_ident() {
+        let code = compile_source("Console");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![Instruction::LoadAssoc { idx: 0 }, Instruction::LocalReturn,]
+        );
+        assert!(
+            matches!(&code.constants[0], ConstEntry::Assoc(s) if s == "Console")
+        );
+    }
+
+    #[test]
+    fn compile_cascade() {
+        let code = compile_source("3 factorial; print");
+        let instrs = decode(&code);
+        // Compile receiver (3), save to tmp
+        assert_eq!(instrs[0], Instruction::LoadSmi { value: 3 });
+        assert_eq!(instrs[1], Instruction::StoreLocal { reg: 1 }); // save recv
+
+        // First cascade message: load recv, send factorial
+        assert_eq!(instrs[2], Instruction::LoadLocal { reg: 1 });
+        assert!(matches!(instrs[3], Instruction::Send { argc: 0, .. }));
+
+        // Second cascade message: load recv, send print
+        assert_eq!(instrs[4], Instruction::LoadLocal { reg: 1 });
+        assert!(matches!(instrs[5], Instruction::Send { argc: 0, .. }));
+    }
+
+    #[test]
+    fn compile_resend_unary() {
+        let code = compile_source("resend self foo");
+        let instrs = decode(&code);
+        assert!(matches!(instrs[0], Instruction::Resend { argc: 0, .. }));
+    }
+
+    #[test]
+    fn compile_directed_resend() {
+        let code = compile_source("resend parent foo");
+        let instrs = decode(&code);
+        assert!(matches!(
+            instrs[0],
+            Instruction::DirectedResend { argc: 0, .. }
+        ));
+    }
+
+    // ── Register allocation ─────────────────────────────────────
+
+    #[test]
+    fn registers_reused_across_statements() {
+        let code = compile_source("1 + 2. 3 + 4");
+        // Both binary messages should use the same temp registers
+        // because they're in separate statements
+        assert!(code.register_count <= 4); // self + 2 temps (reused) + some margin
+    }
+
+    #[test]
+    fn constant_pool_deduplication() {
+        let code = compile_source("x + x");
+        // The symbol "+" should appear only once
+        let symbol_count = code
+            .constants
+            .iter()
+            .filter(|c| matches!(c, ConstEntry::Symbol(s) if s == "+"))
+            .count();
+        assert_eq!(symbol_count, 1);
+    }
+
+    // ── Integration ─────────────────────────────────────────────
+
+    #[test]
+    fn compile_complex_expression() {
+        // Just verify it doesn't panic
+        let _code = compile_source("x = 5. y = x + 3. y factorial");
+    }
+
+    #[test]
+    fn compile_nested_message() {
+        // (5 + 3) factorial
+        let _code = compile_source("(5 + 3) factorial");
+    }
+
+    #[test]
+    fn compile_unary_chain() {
+        let code = compile_source("5 factorial print");
+        let instrs = decode(&code);
+        // 5 factorial → Send factorial
+        // result print → Send print
+        assert_eq!(instrs[0], Instruction::LoadSmi { value: 5 });
+        assert!(matches!(instrs[1], Instruction::Send { argc: 0, .. }));
+        assert!(matches!(instrs[2], Instruction::Send { argc: 0, .. }));
+    }
+
+    // ── Helper ──────────────────────────────────────────────────
+
+    fn find_code_const(constants: &[ConstEntry]) -> &CodeDesc {
+        for c in constants {
+            if let ConstEntry::Code(code) = c {
+                return code;
+            }
+        }
+        panic!("no Code constant found");
+    }
+}

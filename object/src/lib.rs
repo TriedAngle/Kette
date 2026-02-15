@@ -5,6 +5,7 @@ mod slot;
 mod map;
 mod objects;
 mod special;
+mod lookup;
 
 pub use value::Value;
 pub use handle::Tagged;
@@ -13,11 +14,14 @@ pub use slot::{Slot, SlotFlags};
 pub use map::{Map, init_map, map_allocation_size};
 pub use objects::{
     SlotObject, slot_object_allocation_size,
-    Array, ByteArray,
-    Code, Block,
-    BigNum, Alien, Str, Ratio,
+    Array, init_array, ByteArray, init_byte_array,
+    Code, code_allocation_size, init_code,
+    Block,
+    BigNum, Alien, VMString, init_str, Ratio,
+    Float, init_float, float_allocation_size,
 };
 pub use special::SpecialObjects;
+pub use lookup::{lookup, LookupResult, VisitedLink};
 
 #[cfg(test)]
 mod tests {
@@ -103,6 +107,7 @@ mod tests {
             ObjectType::Alien,
             ObjectType::Str,
             ObjectType::Ratio,
+            ObjectType::Float,
         ]
         .iter()
         .enumerate()
@@ -181,5 +186,68 @@ mod tests {
     fn slot_object_allocation_sizes() {
         assert_eq!(slot_object_allocation_size(0), 16);
         assert_eq!(slot_object_allocation_size(3), 16 + 3 * 8);
+    }
+
+    // ── VMString layout ────────────────────────────────────────────────
+
+    #[test]
+    fn str_size() {
+        // Header(8) + length(8) + data(8) = 24
+        assert_eq!(size_of::<VMString>(), 24);
+    }
+
+    #[test]
+    fn str_init_and_read() {
+        let content = b"hello";
+        // Allocate backing ByteArray: content + NUL terminator
+        let ba_size = size_of::<ByteArray>() + content.len() + 1;
+        let mut ba_buf = vec![0u8; ba_size];
+        let ba_ptr = ba_buf.as_mut_ptr() as *mut ByteArray;
+        unsafe {
+            init_byte_array(ba_ptr, (content.len() + 1) as u64);
+            let dest = ba_ptr.add(1) as *mut u8;
+            core::ptr::copy_nonoverlapping(content.as_ptr(), dest, content.len());
+            *dest.add(content.len()) = 0; // NUL terminator
+
+            // Allocate Str pointing to the ByteArray
+            let ba_val = Value::from_ptr(ba_ptr);
+            let mut str_buf = vec![0u8; size_of::<VMString>()];
+            let str_ptr = str_buf.as_mut_ptr() as *mut VMString;
+            init_str(str_ptr, content.len() as u64, ba_val);
+
+            let s = &*str_ptr;
+            assert_eq!(s.header.object_type(), ObjectType::Str);
+            assert_eq!(s.len(), 5);
+            assert!(!s.is_empty());
+            assert_eq!(s.as_bytes(), b"hello");
+            assert_eq!(s.as_str(), "hello");
+            // NUL terminator present in the backing ByteArray
+            assert_eq!(*s.as_c_ptr().add(5), 0);
+        }
+    }
+
+    #[test]
+    fn str_empty() {
+        // Backing ByteArray with just the NUL byte
+        let ba_size = size_of::<ByteArray>() + 1;
+        let mut ba_buf = vec![0xFFu8; ba_size];
+        let ba_ptr = ba_buf.as_mut_ptr() as *mut ByteArray;
+        unsafe {
+            init_byte_array(ba_ptr, 1);
+            let dest = ba_ptr.add(1) as *mut u8;
+            *dest = 0; // NUL terminator
+
+            let ba_val = Value::from_ptr(ba_ptr);
+            let mut str_buf = vec![0u8; size_of::<VMString>()];
+            let str_ptr = str_buf.as_mut_ptr() as *mut VMString;
+            init_str(str_ptr, 0, ba_val);
+
+            let s = &*str_ptr;
+            assert_eq!(s.len(), 0);
+            assert!(s.is_empty());
+            assert_eq!(s.as_bytes(), b"");
+            assert_eq!(s.as_str(), "");
+            assert_eq!(*s.as_c_ptr(), 0);
+        }
     }
 }

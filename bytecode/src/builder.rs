@@ -146,6 +146,44 @@ impl BytecodeBuilder {
         self.emit_u16(feedback_idx);
     }
 
+    /// `Resend <message_idx:u16> <reg> <argc:u8> <feedback_idx:u16>`.
+    ///
+    /// Resend to parent. Same layout as [`send`](Self::send).
+    pub fn resend(&mut self, message_idx: u16, reg: u16, argc: u8, feedback_idx: u16) {
+        let wide = Self::needs_wide(reg);
+        if wide {
+            self.emit_op(Op::Wide);
+        }
+        self.emit_op(Op::Resend);
+        self.emit_u16(message_idx);
+        self.emit_reg(reg, wide);
+        self.emit_u8(argc);
+        self.emit_u16(feedback_idx);
+    }
+
+    /// `DirectedResend <message_idx:u16> <reg> <argc:u8> <feedback_idx:u16> <delegate_idx:u16>`.
+    ///
+    /// Directed resend via a named parent slot.
+    pub fn directed_resend(
+        &mut self,
+        message_idx: u16,
+        reg: u16,
+        argc: u8,
+        feedback_idx: u16,
+        delegate_idx: u16,
+    ) {
+        let wide = Self::needs_wide(reg);
+        if wide {
+            self.emit_op(Op::Wide);
+        }
+        self.emit_op(Op::DirectedResend);
+        self.emit_u16(message_idx);
+        self.emit_reg(reg, wide);
+        self.emit_u8(argc);
+        self.emit_u16(feedback_idx);
+        self.emit_u16(delegate_idx);
+    }
+
     /// `LoadLocal <reg>` — load local register into accumulator.
     pub fn load_local(&mut self, reg: u16) {
         let wide = Self::needs_wide(reg);

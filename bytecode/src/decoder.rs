@@ -194,6 +194,23 @@ impl<'a> BytecodeDecoder<'a> {
             Op::Jump => Instruction::Jump { offset: self.read_i16() },
             Op::JumpIfTrue => Instruction::JumpIfTrue { offset: self.read_i16() },
             Op::JumpIfFalse => Instruction::JumpIfFalse { offset: self.read_i16() },
+
+            Op::Resend => {
+                let message_idx = self.read_u16();
+                let reg = self.read_reg(wide);
+                let argc = self.read_u8();
+                let feedback_idx = self.read_u16();
+                Instruction::Resend { message_idx, reg, argc, feedback_idx }
+            }
+
+            Op::DirectedResend => {
+                let message_idx = self.read_u16();
+                let reg = self.read_reg(wide);
+                let argc = self.read_u8();
+                let feedback_idx = self.read_u16();
+                let delegate_idx = self.read_u16();
+                Instruction::DirectedResend { message_idx, reg, argc, feedback_idx, delegate_idx }
+            }
         }
     }
 

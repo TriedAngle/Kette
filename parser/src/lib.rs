@@ -370,17 +370,34 @@ mod tests {
     #[test]
     fn empty_object() {
         let e = parse_one("{}");
-        assert!(
-            matches!(e.kind, ExprKind::Object { ref slots } if slots.is_empty())
-        );
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert!(slots.is_empty());
+                assert!(body.is_empty());
+            }
+            _ => panic!("expected object"),
+        }
     }
 
     #[test]
     fn object_with_slots() {
         let e = parse_one("{ x := 5. y := 10 }");
         match &e.kind {
-            ExprKind::Object { slots } => {
+            ExprKind::Object { slots, body } => {
                 assert_eq!(slots.len(), 2);
+                assert!(body.is_empty());
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn object_with_slots_and_body() {
+        let e = parse_one("{ x = 5. x print }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert_eq!(body.len(), 1);
             }
             _ => panic!("expected object"),
         }
@@ -615,7 +632,7 @@ mod tests {
     fn comment_in_object_slot() {
         let e = parse_one("{ // doc for x\n x := 5 }");
         match &e.kind {
-            ExprKind::Object { slots } => {
+            ExprKind::Object { slots, .. } => {
                 assert_eq!(slots.len(), 1);
                 assert_eq!(slots[0].leading_comments.len(), 1);
             }

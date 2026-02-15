@@ -124,8 +124,18 @@ pub enum ExprKind {
     /// A block literal: `[ | args | code ]`.
     Block { args: Vec<String>, body: Vec<Expr> },
 
-    /// An object literal: `{ slots }`.
-    Object { slots: Vec<SlotDescriptor> },
+    /// An object literal: `{ slots. code. }`.
+    ///
+    /// Unifies objects and method bodies into a single construct.
+    /// - `slots` are named bindings: `name = value`, `keyword: arg = value`, etc.
+    /// - `body` contains bare expressions (code to execute; last is return value)
+    ///
+    /// Method parameters come from the enclosing [`SlotDescriptor`], not from
+    /// the object itself.
+    Object {
+        slots: Vec<SlotDescriptor>,
+        body: Vec<Expr>,
+    },
 
     /// Return expression: `^ expr`.
     Return(Box<Expr>),
@@ -330,10 +340,14 @@ impl DotBuilder {
                     self.add_edge(id, child, Some(&format!("body[{}]", i)));
                 }
             }
-            ExprKind::Object { slots } => {
+            ExprKind::Object { slots, body } => {
                 for (i, slot) in slots.iter().enumerate() {
                     let slot_id = self.walk_slot(slot);
                     self.add_edge(id, slot_id, Some(&format!("slot[{}]", i)));
+                }
+                for (i, expr) in body.iter().enumerate() {
+                    let child = self.walk_expr(expr);
+                    self.add_edge(id, child, Some(&format!("body[{}]", i)));
                 }
             }
             ExprKind::Return(inner) => {

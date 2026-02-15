@@ -1,0 +1,11 @@
+[package]
+name = "vm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+object = { path = "../object" }
+heap = { path = "../heap" }
+bytecode = { path = "../bytecode" }
+parser = { path = "../parser" }
+clap = { version = "4.5.53", features = ["derive"] }

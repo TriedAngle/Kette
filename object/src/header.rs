@@ -14,10 +14,11 @@ pub enum ObjectType {
     Alien,
     Str,
     Ratio,
+    Float,
 }
 
 impl ObjectType {
-    pub const COUNT: usize = Self::Ratio as usize + 1;
+    pub const COUNT: usize = Self::Float as usize + 1;
 }
 
 /// GC / bookkeeping flags stored atomically in the header.

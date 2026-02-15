@@ -31,6 +31,8 @@ pub enum Instruction {
     Jump { offset: i16 },
     JumpIfTrue { offset: i16 },
     JumpIfFalse { offset: i16 },
+    Resend { message_idx: u16, reg: u16, argc: u8, feedback_idx: u16 },
+    DirectedResend { message_idx: u16, reg: u16, argc: u8, feedback_idx: u16, delegate_idx: u16 },
 }
 
 impl fmt::Display for Instruction {
@@ -69,6 +71,12 @@ impl fmt::Display for Instruction {
             Self::Jump { offset } => write!(f, "Jump {offset:+}"),
             Self::JumpIfTrue { offset } => write!(f, "JumpIfTrue {offset:+}"),
             Self::JumpIfFalse { offset } => write!(f, "JumpIfFalse {offset:+}"),
+            Self::Resend { message_idx, reg, argc, feedback_idx } => {
+                write!(f, "Resend #{message_idx} r{reg} {argc} ~{feedback_idx}")
+            }
+            Self::DirectedResend { message_idx, reg, argc, feedback_idx, delegate_idx } => {
+                write!(f, "DirectedResend #{message_idx} r{reg} {argc} ~{feedback_idx} #{delegate_idx}")
+            }
         }
     }
 }

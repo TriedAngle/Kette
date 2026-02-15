@@ -537,12 +537,213 @@ impl<I: Iterator<Item = Token>> Parser<I> {
     fn parse_object_literal(&mut self) -> Result<Expr, ParseError> {
         let open = self.advance();
         let start = open.span;
-        let slots = self.parse_slot_list(&TokenKind::RBrace)?;
+
+        // Parse body: interleaved slot definitions and bare expressions.
+        // - `ident =`/`:=`/`*` at statement start → slot definition
+        // - `keyword:`/`operator` at statement start → slot definition
+        //   (these can't start an expression without a receiver)
+        // - anything else → bare expression (goes to body)
+        let mut slots = Vec::new();
+        let mut body = Vec::new();
+
+        loop {
+            let _ = self.peek_kind(); // collect comments
+            if self.check(&TokenKind::RBrace) || self.at_eof {
+                for c in self.take_pending_comments() {
+                    let span = c.span;
+                    body.push(Expr::new(ExprKind::Comment(c), span));
+                }
+                break;
+            }
+
+            let comments = self.take_pending_comments();
+
+            match self.peek_kind().clone() {
+                TokenKind::Identifier(_) => {
+                    // Could be a slot definition or the start of an expression.
+                    // Consume the identifier and look at what follows.
+                    let ident_tok = self.advance();
+                    let name = match ident_tok.kind {
+                        TokenKind::Identifier(s) => s,
+                        _ => unreachable!(),
+                    };
+
+                    match self.peek_kind().clone() {
+                        TokenKind::Equals => {
+                            // Unary const slot: name = expr
+                            let t = self.advance();
+                            let value = self.parse_expression()?;
+                            let span =
+                                ident_tok.span.merge(t.span).merge(value.span);
+                            slots.push(SlotDescriptor {
+                                selector: SlotSelector::Unary(name),
+                                params: vec![],
+                                mutable: false,
+                                is_parent: false,
+                                value,
+                                span,
+                                leading_comments: comments,
+                            });
+                        }
+                        TokenKind::Assign => {
+                            // Unary mutable slot: name := expr
+                            let t = self.advance();
+                            let value = self.parse_expression()?;
+                            let span =
+                                ident_tok.span.merge(t.span).merge(value.span);
+                            slots.push(SlotDescriptor {
+                                selector: SlotSelector::Unary(name),
+                                params: vec![],
+                                mutable: true,
+                                is_parent: false,
+                                value,
+                                span,
+                                leading_comments: comments,
+                            });
+                        }
+                        TokenKind::Operator(ref op) if op == "*" => {
+                            // Parent slot: name* = expr
+                            self.advance();
+                            let (mutable, op_span) =
+                                match self.peek_kind().clone() {
+                                    TokenKind::Equals => {
+                                        let t = self.advance();
+                                        (false, t.span)
+                                    }
+                                    TokenKind::Assign => {
+                                        let t = self.advance();
+                                        (true, t.span)
+                                    }
+                                    _ => {
+                                        return Err(ParseError::new(
+                                            "expected `=` or `:=` after parent slot",
+                                            self.peek_span(),
+                                        ));
+                                    }
+                                };
+                            let value = self.parse_expression()?;
+                            let span = ident_tok
+                                .span
+                                .merge(op_span)
+                                .merge(value.span);
+                            slots.push(SlotDescriptor {
+                                selector: SlotSelector::Unary(name),
+                                params: vec![],
+                                mutable,
+                                is_parent: true,
+                                value,
+                                span,
+                                leading_comments: comments,
+                            });
+                        }
+                        _ => {
+                            // Not a slot — parse as expression from the
+                            // already-consumed identifier.
+                            let ident_expr = Expr::new(
+                                ExprKind::Ident(name),
+                                ident_tok.span,
+                            )
+                            .with_comments(comments);
+                            let expr =
+                                self.continue_expression_from(ident_expr)?;
+                            body.push(expr);
+                        }
+                    }
+                }
+                TokenKind::Keyword(_) | TokenKind::Operator(_) => {
+                    // Keywords and operators at statement position are always
+                    // slot definitions (they can't start an expression without
+                    // a receiver).
+                    let mut sd = self.parse_slot_descriptor()?;
+                    sd.leading_comments = comments;
+                    slots.push(sd);
+                }
+                _ => {
+                    // Everything else is a bare expression.
+                    let expr =
+                        self.parse_expression()?.with_comments(comments);
+                    body.push(expr);
+                }
+            }
+
+            // Consume statement separator
+            if matches!(self.peek_kind(), TokenKind::Dot) {
+                self.advance();
+            } else {
+                let _ = self.peek_kind();
+                for c in self.take_pending_comments() {
+                    let span = c.span;
+                    body.push(Expr::new(ExprKind::Comment(c), span));
+                }
+                break;
+            }
+        }
+
         let close = self.expect(&TokenKind::RBrace)?;
         Ok(Expr::new(
-            ExprKind::Object { slots },
+            ExprKind::Object { slots, body },
             start.merge(close.span),
         ))
+    }
+
+    /// Continue parsing an expression given a pre-parsed primary token.
+    /// Chains through: unary → binary → keyword → assignment → cascade.
+    fn continue_expression_from(
+        &mut self,
+        primary: Expr,
+    ) -> Result<Expr, ParseError> {
+        let expr = self.parse_unary_tail(primary);
+        let expr = self.parse_binary_with_left(expr, 0)?;
+        let expr = if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+            self.parse_keyword_tail(expr)?
+        } else {
+            expr
+        };
+        // Assignment level
+        let expr = match self.peek_kind().clone() {
+            TokenKind::Assign | TokenKind::Equals => {
+                let op = self.advance();
+                let right = self.parse_assignment_level()?;
+                let kind = match op.kind {
+                    TokenKind::Assign => AssignKind::Assign,
+                    TokenKind::Equals => AssignKind::Const,
+                    _ => unreachable!(),
+                };
+                let span = expr.span.merge(right.span);
+                Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(expr),
+                        kind,
+                        value: Box::new(right),
+                    },
+                    span,
+                )
+            }
+            _ => expr,
+        };
+        // Cascade level
+        if matches!(self.peek_kind(), TokenKind::Semicolon)
+            && self.is_message_expr(&expr)
+        {
+            let receiver = self.cascade_receiver_from_expr(&expr);
+            let mut messages = vec![expr];
+            while matches!(self.peek_kind(), TokenKind::Semicolon) {
+                self.advance();
+                let msg = self.parse_cascade_message(receiver.clone())?;
+                messages.push(msg);
+            }
+            let start = receiver.span;
+            let end = messages.last().map(|e| e.span).unwrap_or(start);
+            Ok(Expr::new(
+                ExprKind::Cascade {
+                    receiver: Box::new(receiver),
+                    messages,
+                },
+                start.merge(end),
+            ))
+        } else {
+            Ok(expr)
+        }
     }
 
     fn parse_block(&mut self) -> Result<Expr, ParseError> {
@@ -608,39 +809,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             }
         }
         Ok(exprs)
-    }
-
-    fn parse_slot_list(
-        &mut self,
-        terminator: &TokenKind,
-    ) -> Result<Vec<SlotDescriptor>, ParseError> {
-        let mut slots = Vec::new();
-        loop {
-            if self.check(terminator) {
-                break;
-            }
-            if self.at_eof {
-                return Err(ParseError::new(
-                    "unexpected end of input in slot list",
-                    self.peek_span(),
-                ));
-            }
-            let comments = self.take_pending_comments();
-            let mut sd = self.parse_slot_descriptor()?;
-            sd.leading_comments = comments;
-            slots.push(sd);
-            if matches!(self.peek_kind(), TokenKind::Dot) {
-                self.advance();
-                if self.check(terminator) {
-                    break;
-                }
-                continue;
-            }
-            if self.check(terminator) {
-                break;
-            }
-        }
-        Ok(slots)
     }
 
     fn parse_slot_descriptor(&mut self) -> Result<SlotDescriptor, ParseError> {

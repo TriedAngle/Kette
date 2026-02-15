@@ -38,9 +38,18 @@ pub struct SpecialObjects {
     /// Methods / slots for [`Alien`](crate::Alien) objects.
     pub alien_traits: Value,
 
-    /// Methods / slots for [`Str`](crate::Str) objects.
+    /// Methods / slots for [`VMString`](crate::VMString) objects.
     pub string_traits: Value,
 
     /// Methods / slots for [`Ratio`](crate::Ratio) objects.
     pub ratio_traits: Value,
+
+    /// Methods / slots for fixnum (tagged integer) values.
+    pub fixnum_traits: Value,
+
+    /// Methods / slots for [`Code`](crate::Code) objects.
+    pub code_traits: Value,
+
+    /// Methods / slots for [`Float`](crate::Float) objects.
+    pub float_traits: Value,
 }

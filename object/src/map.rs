@@ -20,7 +20,7 @@ pub struct Map {
     /// Nil or tagged reference to a [`Code`](crate::Code) object.
     pub code: Value,
     slot_count: u32,
-    _pad: u32,
+    value_count: u32,
 }
 
 const _: () = assert!(size_of::<Map>() == 32);
@@ -29,6 +29,11 @@ impl Map {
     #[inline(always)]
     pub fn slot_count(&self) -> u32 {
         self.slot_count
+    }
+
+    #[inline(always)]
+    pub fn value_count(&self) -> u32 {
+        self.value_count
     }
 
     /// Byte size of the entire map including inline slots.
@@ -73,6 +78,7 @@ impl core::fmt::Debug for Map {
             .field("map", &self.map)
             .field("code", &self.code)
             .field("slot_count", &self.slot_count)
+            .field("value_count", &self.value_count)
             .finish()
     }
 }
@@ -94,12 +100,13 @@ pub unsafe fn init_map(
     map_map: Value,
     code: Value,
     slot_count: u32,
+    value_count: u32,
 ) {
     ptr.write(Map {
         header: Header::new(ObjectType::Map),
         map: map_map,
         code,
         slot_count,
-        _pad: 0,
+        value_count,
     });
 }
