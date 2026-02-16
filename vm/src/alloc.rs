@@ -181,6 +181,8 @@ pub unsafe fn alloc_block(
     proxy: &mut HeapProxy,
     roots: &mut dyn RootProvider,
     map: Value,
+    env: Value,
+    self_value: Value,
 ) -> Tagged<Block> {
     let size = size_of::<Block>();
     let layout = Layout::from_size_align(size, 8).unwrap();
@@ -192,6 +194,8 @@ pub unsafe fn alloc_block(
         Block {
             header: Header::new(ObjectType::Block),
             map,
+            env,
+            self_value,
         },
     );
 

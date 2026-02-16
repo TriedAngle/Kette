@@ -93,6 +93,8 @@ pub unsafe fn trace_object(
         ObjectType::Block => {
             let block = &mut *(obj as *mut Block);
             visitor(&mut block.map);
+            visitor(&mut block.env);
+            visitor(&mut block.self_value);
         }
         ObjectType::Array => {
             let array = &*(obj as *const Array);

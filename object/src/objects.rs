@@ -321,7 +321,7 @@ pub unsafe fn init_code(
 /// A block (closure) capturing its enclosing environment.
 ///
 /// ```text
-/// [Header 8B] [map: Value 8B]
+/// [Header 8B] [map: Value 8B] [env: Value 8B] [self: Value 8B]
 /// ```
 ///
 /// A block points to a [`Map`](crate::Map) whose `code` field holds the
@@ -332,9 +332,13 @@ pub struct Block {
     pub header: Header,
     /// Tagged reference to this block's [`Map`](crate::Map).
     pub map: Value,
+    /// Tagged reference to the captured environment (temp array) or nil.
+    pub env: Value,
+    /// Tagged reference to the captured receiver (`self`).
+    pub self_value: Value,
 }
 
-const _: () = assert!(size_of::<Block>() == 16);
+const _: () = assert!(size_of::<Block>() == 32);
 
 // ── Primitive types (body TBD) ─────────────────────────────────────
 //

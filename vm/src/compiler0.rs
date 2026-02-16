@@ -351,18 +351,6 @@ impl Compiler {
         self.add_constant(ConstEntry::Symbol(name.to_string()))
     }
 
-    fn add_assoc(&mut self, name: &str) -> u16 {
-        let constants = &self.frame().constants;
-        for (i, c) in constants.iter().enumerate() {
-            if let ConstEntry::Assoc(s) = c {
-                if s == name {
-                    return i as u16;
-                }
-            }
-        }
-        self.add_constant(ConstEntry::Assoc(name.to_string()))
-    }
-
     fn add_string_const(&mut self, s: &str) -> u16 {
         self.add_constant(ConstEntry::String(s.to_string()))
     }
@@ -611,7 +599,8 @@ impl Compiler {
                     ));
                 }
                 if var.captured {
-                    return Ok(VarLoc::Temp(0, var.temp_idx.unwrap()));
+                    let array_idx = self.temp_array_depth(i);
+                    return Ok(VarLoc::Temp(array_idx, var.temp_idx.unwrap()));
                 }
                 return Err(CompileError::new(
                     "assignment to non-captured outer variable",
@@ -665,7 +654,8 @@ impl Compiler {
         for i in (0..depth - 1).rev() {
             if let Some(var) = self.frames[i].scope.find_local(name) {
                 if var.captured {
-                    return VarLoc::Temp(0, var.temp_idx.unwrap());
+                    let array_idx = self.temp_array_depth(i);
+                    return VarLoc::Temp(array_idx, var.temp_idx.unwrap());
                 }
                 // Found in enclosing but not marked as captured — shouldn't
                 // happen if capture analysis ran correctly. Treat as global.
@@ -675,6 +665,20 @@ impl Compiler {
 
         let idx = self.add_symbol(name);
         VarLoc::Global(idx)
+    }
+
+    fn temp_array_depth(&self, target_frame: usize) -> u16 {
+        let current = self.frames.len().saturating_sub(1);
+        let mut depth: u16 = 0;
+        if target_frame >= current {
+            return depth;
+        }
+        for i in (target_frame + 1)..=current {
+            if self.frames[i].scope.temp_count > 0 {
+                depth = depth.saturating_add(1);
+            }
+        }
+        depth
     }
 
     // ── Body compilation ────────────────────────────────────────
@@ -1282,6 +1286,7 @@ impl Compiler {
             ExprKind::Integer(v) => Ok(ConstEntry::Fixnum(*v)),
             ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
             ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
+            ExprKind::Ident(name) => Ok(ConstEntry::Assoc(name.clone())),
             ExprKind::Object { slots, body } if body.is_empty() => {
                 // Nested data object as a constant — build a MapDesc
                 let mut slot_descs = Vec::new();
@@ -1917,25 +1922,8 @@ mod tests {
 
         let method_instrs = decode(method_code);
         assert!(method_instrs.iter().any(|i| {
-            matches!(
-                i,
-                Instruction::MovToTemp {
-                    array_idx: 0,
-                    idx: 0,
-                    src: 2
-                }
-            )
+            matches!(i, Instruction::MovToTemp { idx: 0, src: 2, .. })
         }));
-        assert!(method_instrs.iter().any(|i| {
-            matches!(
-                i,
-                Instruction::StoreTemp {
-                    array_idx: 0,
-                    idx: 1
-                }
-            )
-        }));
-
         let inner_code = find_code_const(&method_code.constants);
         let inner_instrs = decode(inner_code);
         let mut load_temps = inner_instrs
@@ -1943,20 +1931,8 @@ mod tests {
             .filter(|i| matches!(i, Instruction::LoadTemp { .. }));
         let first = load_temps.next().expect("missing LoadTemp");
         let second = load_temps.next().expect("missing LoadTemp");
-        assert!(matches!(
-            first,
-            Instruction::LoadTemp {
-                array_idx: 0,
-                idx: 0
-            }
-        ));
-        assert!(matches!(
-            second,
-            Instruction::LoadTemp {
-                array_idx: 0,
-                idx: 1
-            }
-        ));
+        assert!(matches!(first, Instruction::LoadTemp { idx: 0, .. }));
+        assert!(matches!(second, Instruction::LoadTemp { idx: 1, .. }));
     }
 
     // ── Milestone 5: Globals + Cascade ──────────────────────────

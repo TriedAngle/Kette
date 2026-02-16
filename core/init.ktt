@@ -13,11 +13,13 @@ Object extend: Object With: {
 }.
 
 Object extend: false With: {
+    parent* = Object.
     ifTrue: t IfFalse: f = { f call }.
     toString = { "false" }.
 }.
 
 Object extend: true With: {
+    parent* = Object.
     toString = { "true" }.
 }.
 

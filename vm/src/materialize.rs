@@ -219,10 +219,11 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
 
             for slot in slots {
                 if slot.name.raw() == self.roots.scratch[sym_idx].raw() {
-                    // Found — return the assoc object stored in this slot
                     let assoc = slot.value;
-                    self.roots.scratch.pop(); // clean up sym
-                    return assoc;
+                    let assoc_obj: &SlotObject = assoc.as_ref();
+                    let value = assoc_obj.read_value(SlotObject::VALUES_OFFSET);
+                    self.roots.scratch.pop();
+                    return value;
                 }
             }
         }
@@ -234,7 +235,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
 
         self.grow_dictionary(assoc_idx, sym_idx);
 
-        let result = self.roots.scratch[assoc_idx];
+        let result = self.nil();
         // Clean up: remove assoc and sym from scratch
         // sym_idx < assoc_idx, so remove assoc first
         self.roots.scratch.pop(); // assoc
@@ -546,16 +547,8 @@ mod tests {
         let code_val = materialize(&mut vm, &desc);
         unsafe {
             let code: &Code = code_val.as_ref();
-            let assoc_val = code.constant(0);
-            assert!(assoc_val.is_ref());
-
-            // The assoc is a SlotObject with assoc_map
-            let assoc: &SlotObject = assoc_val.as_ref();
-            assert_eq!(assoc.header.object_type(), object::ObjectType::Slots);
-
-            // Its inline value (offset 16) should be nil
-            let inline_val = assoc.read_value(SlotObject::VALUES_OFFSET);
-            assert_eq!(inline_val.raw(), vm.special.nil.raw());
+            let value = code.constant(0);
+            assert_eq!(value.raw(), vm.special.nil.raw());
 
             // Dictionary should have one additional slot now
             let dict: &SlotObject = vm.dictionary.as_ref();
@@ -563,7 +556,7 @@ mod tests {
             assert_eq!(map.slot_count(), base_slots + 1);
             let mut found = false;
             for slot in map.slots() {
-                if slot.value.raw() == assoc_val.raw() {
+                if slot.name.raw() == vm.intern_table["myGlobal"].raw() {
                     found = true;
                     break;
                 }
@@ -602,9 +595,9 @@ mod tests {
         unsafe {
             let c1: &Code = code1.as_ref();
             let c2: &Code = code2.as_ref();
-            let assoc1 = c1.constant(0);
-            let assoc2 = c2.constant(0);
-            assert_eq!(assoc1.raw(), assoc2.raw());
+            let value1 = c1.constant(0);
+            let value2 = c2.constant(0);
+            assert_eq!(value1.raw(), value2.raw());
 
             // Dictionary should still have only one additional slot
             let dict: &SlotObject = vm.dictionary.as_ref();
@@ -715,13 +708,12 @@ mod tests {
         let code_val = materialize(&mut vm, &desc);
         unsafe {
             let code: &Code = code_val.as_ref();
-            // All three should be distinct assoc objects
             let a = code.constant(0);
             let b = code.constant(1);
             let c = code.constant(2);
-            assert_ne!(a.raw(), b.raw());
-            assert_ne!(b.raw(), c.raw());
-            assert_ne!(a.raw(), c.raw());
+            assert_eq!(a.raw(), vm.special.nil.raw());
+            assert_eq!(b.raw(), vm.special.nil.raw());
+            assert_eq!(c.raw(), vm.special.nil.raw());
 
             // Dictionary should have 3 additional slots
             let dict: &SlotObject = vm.dictionary.as_ref();

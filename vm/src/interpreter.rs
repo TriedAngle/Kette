@@ -362,7 +362,7 @@ fn push_method_frame(
 
     let temp_array = if code.temp_count() > 0 {
         state.acc = receiver;
-        alloc_temp_array(vm, state, code.temp_count())?
+        alloc_temp_array(vm, state, code.temp_count(), nil)?
     } else {
         nil
     };
@@ -392,6 +392,7 @@ fn push_block_frame(
     code_val: Value,
     receiver: Value,
     args_source: (usize, u16, u8),
+    parent_env: Value,
 ) -> Result<(), RuntimeError> {
     if state.frames.len() >= MAX_FRAMES {
         return Err(RuntimeError::StackOverflow);
@@ -421,8 +422,12 @@ fn push_block_frame(
 
     let method_frame_idx = find_enclosing_method_idx(&state.frames)
         .unwrap_or_else(|| state.frames.len().saturating_sub(1));
-    let temp_array =
-        find_enclosing_temp_array(vm, &state.frames).unwrap_or(nil);
+    let temp_array = if code.temp_count() > 0 {
+        state.acc = receiver;
+        alloc_temp_array(vm, state, code.temp_count(), parent_env)?
+    } else {
+        parent_env
+    };
     let (holder, holder_slot_index) = find_enclosing_holder(vm, &state.frames);
 
     state.frames.push(Frame {
@@ -445,6 +450,7 @@ fn push_block_frame_with_args(
     code_val: Value,
     receiver: Value,
     args: &[Value],
+    parent_env: Value,
 ) -> Result<(), RuntimeError> {
     if state.frames.len() >= MAX_FRAMES {
         return Err(RuntimeError::StackOverflow);
@@ -470,13 +476,11 @@ fn push_block_frame_with_args(
         }
     }
 
-    let parent_temp =
-        find_enclosing_temp_array(vm, &state.frames).unwrap_or(nil);
     let temp_array = if code.temp_count() > 0 {
         state.acc = receiver;
-        alloc_temp_array(vm, state, code.temp_count())?
+        alloc_temp_array(vm, state, code.temp_count(), parent_env)?
     } else {
-        parent_temp
+        parent_env
     };
 
     let method_frame_idx = state.frames.len();
@@ -509,13 +513,15 @@ pub(crate) fn dispatch_send(
     let message = unsafe { code.constant(message_idx as u32) };
     if is_block_value(receiver)? && is_block_call_selector(message, argc) {
         let block_code = block_code(receiver, vm.special.nil)?;
-        let receiver_self = state.frames[frame_idx].registers[0];
+        let block_env = block_env(receiver, vm.special.nil)?;
+        let receiver_self = block_self(receiver)?;
         return push_block_frame(
             vm,
             state,
             block_code,
             receiver_self,
             (frame_idx, reg, argc),
+            block_env,
         );
     }
     let result = unsafe { object::lookup(receiver, message, &vm.special) };
@@ -547,9 +553,16 @@ pub(crate) fn call_block(
         });
     }
     let block_code = block_code(receiver, vm.special.nil)?;
-    let frame_idx = state.frames.len() - 1;
-    let receiver_self = state.frames[frame_idx].registers[0];
-    push_block_frame_with_args(vm, state, block_code, receiver_self, args)?;
+    let block_env = block_env(receiver, vm.special.nil)?;
+    let receiver_self = block_self(receiver)?;
+    push_block_frame_with_args(
+        vm,
+        state,
+        block_code,
+        receiver_self,
+        args,
+        block_env,
+    )?;
     Ok(state.acc)
 }
 
@@ -751,13 +764,19 @@ fn create_block(
     let code: &Code = unsafe { code_val.as_ref() };
     let map_val = unsafe { code.constant(block_idx as u32) };
     let _map = unsafe { &*expect_map(map_val)? };
-
-    let mut scratch = vec![map_val];
+    let (env, self_value) = state
+        .frames
+        .last()
+        .map(|f| (f.temp_array, f.registers[0]))
+        .unwrap_or((vm.special.nil, vm.special.nil));
+    let mut scratch = vec![map_val, env, self_value];
     let block = with_roots(vm, state, &mut scratch, |proxy, roots| {
         let size = size_of::<Block>();
         let layout = Layout::from_size_align(size, 8).unwrap();
         let ptr = proxy.allocate(layout, roots);
         let map_val = roots.scratch[0];
+        let env_val = roots.scratch[1];
+        let self_val = roots.scratch[2];
         let block_ptr = ptr.as_ptr() as *mut Block;
         unsafe {
             ptr::write(
@@ -765,6 +784,8 @@ fn create_block(
                 Block {
                     header: Header::new(ObjectType::Block),
                     map: map_val,
+                    env: env_val,
+                    self_value: self_val,
                 },
             );
             Value::from_ptr(block_ptr)
@@ -778,19 +799,21 @@ fn alloc_temp_array(
     vm: &mut VM,
     state: &mut InterpreterState,
     len: u16,
+    parent: Value,
 ) -> Result<Value, RuntimeError> {
     let mut scratch = Vec::new();
     let arr = with_roots(vm, state, &mut scratch, |proxy, roots| {
-        let size = size_of::<Array>() + len as usize * size_of::<Value>();
+        let size = size_of::<Array>() + (len as usize + 1) * size_of::<Value>();
         let layout = Layout::from_size_align(size, 8).unwrap();
         let ptr = proxy.allocate(layout, roots);
         let arr_ptr = ptr.as_ptr() as *mut Array;
         unsafe {
-            init_array(arr_ptr, len as u64);
+            init_array(arr_ptr, len as u64 + 1);
             let nil = roots.special.nil;
             let elems = arr_ptr.add(1) as *mut Value;
+            *elems = parent;
             for i in 0..len as usize {
-                *elems.add(i) = nil;
+                *elems.add(i + 1) = nil;
             }
         }
         Value::from_ptr(arr_ptr)
@@ -897,7 +920,8 @@ fn load_temp(
     let array =
         get_temp_array(&state.frames[frame_idx], array_idx, vm.special.nil)?;
     let array = unsafe { &*expect_array(array)? };
-    if idx as u64 >= array.len() {
+    let value_idx = idx as u64 + 1;
+    if value_idx >= array.len() {
         return Err(RuntimeError::TypeError {
             expected: "temp index",
             got: Value::from_i64(idx as i64),
@@ -905,7 +929,7 @@ fn load_temp(
     }
     unsafe {
         let elems = (array as *const Array).add(1) as *const Value;
-        Ok(*elems.add(idx as usize))
+        Ok(*elems.add(value_idx as usize))
     }
 }
 
@@ -920,7 +944,8 @@ fn store_temp(
     let array_val =
         get_temp_array(&state.frames[frame_idx], array_idx, vm.special.nil)?;
     let array = unsafe { &*expect_array(array_val)? };
-    if idx as u64 >= array.len() {
+    let value_idx = idx as u64 + 1;
+    if value_idx >= array.len() {
         return Err(RuntimeError::TypeError {
             expected: "temp index",
             got: Value::from_i64(idx as i64),
@@ -928,7 +953,7 @@ fn store_temp(
     }
     unsafe {
         let elems = (array as *const Array).add(1) as *mut Value;
-        *elems.add(idx as usize) = value;
+        *elems.add(value_idx as usize) = value;
     }
     if value.is_ref() {
         vm.heap_proxy.write_barrier(array_val, value);
@@ -941,19 +966,43 @@ fn get_temp_array(
     array_idx: u16,
     nil: Value,
 ) -> Result<Value, RuntimeError> {
-    if array_idx != 0 {
-        return Err(RuntimeError::TypeError {
-            expected: "temp array index",
-            got: Value::from_i64(array_idx as i64),
-        });
-    }
     if frame.temp_array.raw() == nil.raw() {
         return Err(RuntimeError::TypeError {
             expected: "temp array",
             got: frame.temp_array,
         });
     }
-    Ok(frame.temp_array)
+    let mut array = frame.temp_array;
+    let mut depth = array_idx;
+    while depth > 0 {
+        array = temp_array_parent(array, nil)?;
+        depth -= 1;
+    }
+    Ok(array)
+}
+
+fn temp_array_parent(
+    array_val: Value,
+    nil: Value,
+) -> Result<Value, RuntimeError> {
+    let array = unsafe { &*expect_array(array_val)? };
+    if array.len() == 0 {
+        return Err(RuntimeError::TypeError {
+            expected: "temp array parent",
+            got: array_val,
+        });
+    }
+    unsafe {
+        let elems = (array as *const Array).add(1) as *const Value;
+        let parent = *elems;
+        if parent.raw() == nil.raw() {
+            return Err(RuntimeError::TypeError {
+                expected: "temp array parent",
+                got: parent,
+            });
+        }
+        Ok(parent)
+    }
 }
 
 fn copy_args_from_frame(
@@ -1072,6 +1121,20 @@ fn block_code(block_val: Value, nil: Value) -> Result<Value, RuntimeError> {
         });
     }
     Ok(map.code)
+}
+
+fn block_env(block_val: Value, nil: Value) -> Result<Value, RuntimeError> {
+    let block = unsafe { &*expect_block(block_val)? };
+    let env = block.env;
+    if env.raw() == nil.raw() {
+        return Ok(nil);
+    }
+    Ok(env)
+}
+
+fn block_self(block_val: Value) -> Result<Value, RuntimeError> {
+    let block = unsafe { &*expect_block(block_val)? };
+    Ok(block.self_value)
 }
 
 fn lookup_resend(
@@ -1195,17 +1258,6 @@ fn write_holder_value(
 
 fn find_enclosing_method_idx(frames: &[Frame]) -> Option<usize> {
     frames.iter().rposition(|f| !f.is_block)
-}
-
-fn find_enclosing_temp_array(vm: &VM, frames: &[Frame]) -> Option<Value> {
-    let nil = vm.special.nil.raw();
-    frames.iter().rev().find_map(|frame| {
-        if frame.temp_array.raw() != nil {
-            Some(frame.temp_array)
-        } else {
-            None
-        }
-    })
 }
 
 fn find_enclosing_holder(vm: &VM, frames: &[Frame]) -> (Value, u32) {
@@ -1854,6 +1906,153 @@ mod tests {
         let value = run_source("x = 5. [ x ]. x").expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 5);
+    }
+
+    #[test]
+    fn interpret_while_true_block_capture() {
+        let result = run_source_with_vm(
+            "Object _Extend: Object With: { \
+                extend: target With: source = { self _Extend: target With: source } \
+            }. \
+            Object extend: Object With: { \
+                ifTrue: t IfFalse: f = { t call }. \
+                ifTrue: t = { self ifTrue: t IfFalse: [ none ] }. \
+                ifFalse: f = { self ifTrue: [ none ] IfFalse: f } \
+            }. \
+            Object extend: false With: { \
+                parent* = Object. \
+                ifTrue: t IfFalse: f = { f call } \
+            }. \
+            Object extend: true With: { parent* = Object }. \
+            Object extend: Fixnum With: { \
+                parent* = Object. \
+                <= rhs = { rhs leFixnum: self }. \
+                leFixnum: lhs = { lhs _FixnumLe: self }. \
+                + rhs = { rhs addFixnum: self }. \
+                addFixnum: lhs = { lhs _FixnumAdd: self } \
+            }. \
+            Object extend: Block With: { \
+                parent* = Object. \
+                whileTrue: body = { \
+                    self call ifTrue: [ \
+                        body call. \
+                        self whileTrue: body \
+                    ] IfFalse: [ none ] \
+                } \
+            }. \
+            i := 0. cond := [ i <= 1 ]. cond whileTrue: [ i := i + 1 ]",
+        );
+        let (vm, value) = result.expect("interpret error");
+        assert_eq!(value.raw(), vm.special.nil.raw());
+    }
+
+    #[test]
+    fn interpret_nested_temp_chain() {
+        let value = run_source(
+            "i := 0. [ j := 1. [ i := i _FixnumAdd: j ] call. i ] call",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn extend_block_adds_while_true() {
+        let (vm, _value) = run_source_with_vm(
+            "Object _Extend: Object With: { \
+                extend: target With: source = { self _Extend: target With: source } \
+            }. \
+            Object extend: Block With: { \
+                parent* = Object. \
+                whileTrue: body = { none } \
+            }. \
+            none",
+        )
+        .expect("interpret error");
+
+        let block_traits = vm.special.block_traits;
+        let obj: &SlotObject = unsafe { block_traits.as_ref() };
+        let map: &Map = unsafe { obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } == "whileTrue:" {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "whileTrue: slot not found on Block");
+    }
+
+    #[test]
+    fn block_literal_returns_block() {
+        let (_vm, value) =
+            run_source_with_vm("i := 0. cond := [ i <= 1 ]. cond")
+                .expect("interpret error");
+        let header: &Header = unsafe { value.as_ref() };
+        assert_eq!(header.object_type(), ObjectType::Block);
+    }
+
+    #[test]
+    fn setup_with_while_true_installs_slot() {
+        let (vm, value) = run_source_with_vm(
+            "Object _Extend: Object With: { \
+                extend: target With: source = { self _Extend: target With: source } \
+            }. \
+            Object extend: Object With: { \
+                ifTrue: t IfFalse: f = { t call }. \
+                ifTrue: t = { self ifTrue: t IfFalse: [ none ] }. \
+                ifFalse: f = { self ifTrue: [ none ] IfFalse: f } \
+            }. \
+            Object extend: false With: { \
+                parent* = Object. \
+                ifTrue: t IfFalse: f = { f call } \
+            }. \
+            Object extend: true With: { parent* = Object }. \
+            Object extend: Block With: { \
+                parent* = Object. \
+                whileTrue: body = { \
+                    self call ifTrue: [ \
+                        body call. \
+                        self whileTrue: body \
+                    ] IfFalse: [ none ] \
+                } \
+            }. \
+            i := 0. cond := [ i <= 1 ]. cond",
+        )
+        .expect("interpret error");
+
+        let header: &Header = unsafe { value.as_ref() };
+        assert_eq!(header.object_type(), ObjectType::Block);
+
+        let block_traits = vm.special.block_traits;
+        let obj: &SlotObject = unsafe { block_traits.as_ref() };
+        let map: &Map = unsafe { obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } == "whileTrue:" {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "whileTrue: slot not found on Block");
+    }
+
+    #[test]
+    fn interpret_simple_while_true_call() {
+        let value = run_source(
+            "Object _Extend: Object With: { \
+                extend: target With: source = { self _Extend: target With: source } \
+            }. \
+            Object extend: Block With: { \
+                parent* = Object. \
+                whileTrue: body = { none } \
+            }. \
+            cond := [ 1 ]. cond whileTrue: [ none ]",
+        )
+        .expect("interpret error");
+        assert!(value.is_ref());
     }
 
     #[test]
