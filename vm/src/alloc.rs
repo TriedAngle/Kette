@@ -4,9 +4,10 @@ use std::ptr;
 use heap::{HeapProxy, RootProvider};
 use object::{
     code_allocation_size, float_allocation_size, init_array, init_byte_array,
-    init_code, init_float, init_map, map_allocation_size,
-    slot_object_allocation_size, Array, Block, ByteArray, Code, Float, Header,
-    Map, ObjectType, Slot, SlotFlags, SlotObject, Tagged, Value,
+    init_code, init_float, init_map, init_ratio, map_allocation_size,
+    slot_object_allocation_size, Array, BigNum, Block, ByteArray, Code, Float,
+    Header, Map, MapFlags, ObjectType, Ratio, Slot, SlotFlags, SlotObject,
+    Tagged, Value,
 };
 
 /// Allocate a [`Map`] with inline slots.
@@ -14,12 +15,14 @@ use object::{
 /// # Safety
 ///
 /// The caller must ensure `map_map` and `code` are valid tagged values,
-/// and `slots` contains valid [`Slot`] entries.
+/// `flags` matches the contents of `code`, and `slots` contains valid
+/// [`Slot`] entries.
 pub unsafe fn alloc_map(
     proxy: &mut HeapProxy,
     roots: &mut dyn RootProvider,
     map_map: Value,
     code: Value,
+    flags: MapFlags,
     slots: &[Slot],
     value_count: u32,
 ) -> Tagged<Map> {
@@ -29,7 +32,7 @@ pub unsafe fn alloc_map(
     let ptr = proxy.allocate(layout, roots);
 
     let map_ptr = ptr.as_ptr() as *mut Map;
-    init_map(map_ptr, map_map, code, slot_count, value_count);
+    init_map(map_ptr, map_map, code, flags, slot_count, value_count);
 
     if !slots.is_empty() {
         let slots_dst = map_ptr.add(1) as *mut Slot;
@@ -215,6 +218,67 @@ pub unsafe fn alloc_float(
     Tagged::from_value(Value::from_ptr(float_ptr))
 }
 
+/// Allocate a [`BigNum`] from raw limbs.
+///
+/// # Safety
+///
+/// All values must be rooted before calling.
+pub unsafe fn alloc_bignum_from_limbs(
+    proxy: &mut HeapProxy,
+    roots: &mut dyn RootProvider,
+    sign: i8,
+    limbs: &[u64],
+) -> Tagged<BigNum> {
+    let layout = BigNum::required_layout(limbs.len());
+    let ptr = proxy.allocate(layout, roots);
+    let bn_ptr = ptr.as_ptr() as *mut BigNum;
+    (*bn_ptr).init(sign, limbs);
+    Tagged::from_value(Value::from_ptr(bn_ptr))
+}
+
+/// Allocate a [`BigNum`] from a signed 128-bit integer.
+///
+/// # Safety
+///
+/// All values must be rooted before calling.
+pub unsafe fn alloc_bignum_from_i128(
+    proxy: &mut HeapProxy,
+    roots: &mut dyn RootProvider,
+    value: i128,
+) -> Tagged<BigNum> {
+    if value == 0 {
+        return alloc_bignum_from_limbs(proxy, roots, 0, &[]);
+    }
+
+    let sign = if value < 0 { -1 } else { 1 };
+    let mut mag = value.unsigned_abs();
+    let mut limbs = Vec::new();
+    while mag != 0 {
+        limbs.push((mag & u64::MAX as u128) as u64);
+        mag >>= 64;
+    }
+    alloc_bignum_from_limbs(proxy, roots, sign, &limbs)
+}
+
+/// Allocate a [`Ratio`] object.
+///
+/// # Safety
+///
+/// All values must be rooted before calling.
+pub unsafe fn alloc_ratio(
+    proxy: &mut HeapProxy,
+    roots: &mut dyn RootProvider,
+    numerator: Value,
+    denominator: Value,
+) -> Tagged<Ratio> {
+    let size = size_of::<Ratio>();
+    let layout = Layout::from_size_align(size, 8).unwrap();
+    let ptr = proxy.allocate(layout, roots);
+    let ratio_ptr = ptr.as_ptr() as *mut Ratio;
+    init_ratio(ratio_ptr, numerator, denominator);
+    Tagged::from_value(Value::from_ptr(ratio_ptr))
+}
+
 /// Create a new Map that is `old_map` plus one additional CONSTANT slot.
 ///
 /// Returns the new Map value. The caller must update the object's `.map`
@@ -237,6 +301,7 @@ pub unsafe fn add_constant_slot(
     let old_slot_count = old.slot_count();
     let old_value_count = old.value_count();
     let old_code = old.code;
+    let old_flags = old.flags();
     let old_slots = old.slots();
 
     // Build new slot array: old slots + new constant slot
@@ -252,7 +317,14 @@ pub unsafe fn add_constant_slot(
     let ptr = proxy.allocate(layout, roots);
 
     let map_ptr = ptr.as_ptr() as *mut Map;
-    init_map(map_ptr, map_map, old_code, new_slot_count, old_value_count);
+    init_map(
+        map_ptr,
+        map_map,
+        old_code,
+        old_flags,
+        new_slot_count,
+        old_value_count,
+    );
 
     let slots_dst = map_ptr.add(1) as *mut Slot;
     ptr::copy_nonoverlapping(slots.as_ptr(), slots_dst, slots.len());
@@ -279,6 +351,7 @@ pub unsafe fn remove_constant_slot(
     let old_slot_count = old.slot_count();
     let old_value_count = old.value_count();
     let old_code = old.code;
+    let old_flags = old.flags();
     let old_slots = old.slots();
 
     debug_assert!(slot_index < old_slot_count);
@@ -296,7 +369,69 @@ pub unsafe fn remove_constant_slot(
     let ptr = proxy.allocate(layout, roots);
 
     let map_ptr = ptr.as_ptr() as *mut Map;
-    init_map(map_ptr, map_map, old_code, new_slot_count, old_value_count);
+    init_map(
+        map_ptr,
+        map_map,
+        old_code,
+        old_flags,
+        new_slot_count,
+        old_value_count,
+    );
+
+    if !slots.is_empty() {
+        let slots_dst = map_ptr.add(1) as *mut Slot;
+        ptr::copy_nonoverlapping(slots.as_ptr(), slots_dst, slots.len());
+    }
+
+    Value::from_ptr(map_ptr)
+}
+
+/// Create a new Map by appending constant slots to `old_map`.
+///
+/// # Safety
+///
+/// `old_map` must be a valid tagged reference to a [`Map`]. `map_map` must be
+/// a valid tagged map. `new_slots` must contain only CONSTANT slots, and all
+/// values must be rooted before calling.
+pub unsafe fn append_constant_slots(
+    proxy: &mut HeapProxy,
+    roots: &mut dyn RootProvider,
+    old_map: Value,
+    map_map: Value,
+    new_slots: &[Slot],
+) -> Value {
+    let old: &Map = old_map.as_ref();
+    let old_slot_count = old.slot_count();
+    let old_value_count = old.value_count();
+    let old_code = old.code;
+    let old_flags = old.flags();
+    let old_slots = old.slots();
+
+    for slot in new_slots {
+        debug_assert!(slot.is_constant());
+    }
+
+    let new_slot_count = old_slot_count + new_slots.len() as u32;
+    let mut slots = Vec::with_capacity(new_slot_count as usize);
+    for s in old_slots {
+        slots.push(*s);
+    }
+    for s in new_slots {
+        slots.push(*s);
+    }
+
+    let size = map_allocation_size(new_slot_count);
+    let layout = Layout::from_size_align(size, 8).unwrap();
+    let ptr = proxy.allocate(layout, roots);
+    let map_ptr = ptr.as_ptr() as *mut Map;
+    init_map(
+        map_ptr,
+        map_map,
+        old_code,
+        old_flags,
+        new_slot_count,
+        old_value_count,
+    );
 
     if !slots.is_empty() {
         let slots_dst = map_ptr.add(1) as *mut Slot;

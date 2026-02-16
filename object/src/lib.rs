@@ -1,27 +1,25 @@
-mod value;
 mod handle;
 mod header;
-mod slot;
+mod lookup;
 mod map;
 mod objects;
+mod slot;
 mod special;
-mod lookup;
+mod value;
 
-pub use value::Value;
 pub use handle::Tagged;
 pub use header::{Header, HeaderFlags, ObjectType};
-pub use slot::{Slot, SlotFlags};
-pub use map::{Map, init_map, map_allocation_size};
-pub use objects::{
-    SlotObject, slot_object_allocation_size,
-    Array, init_array, ByteArray, init_byte_array,
-    Code, code_allocation_size, init_code,
-    Block,
-    BigNum, Alien, VMString, init_str, Ratio,
-    Float, init_float, float_allocation_size,
-};
-pub use special::SpecialObjects;
 pub use lookup::{lookup, LookupResult, VisitedLink};
+pub use map::{init_map, map_allocation_size, Map, MapFlags};
+pub use objects::{
+    code_allocation_size, float_allocation_size, init_array, init_byte_array,
+    init_code, init_float, init_ratio, init_str, slot_object_allocation_size,
+    Alien, Array, BigNum, Block, ByteArray, Code, Float, Ratio, SlotObject,
+    VMString,
+};
+pub use slot::{Slot, SlotFlags};
+pub use special::SpecialObjects;
+pub use value::Value;
 
 #[cfg(test)]
 mod tests {
@@ -170,9 +168,9 @@ mod tests {
 
     #[test]
     fn map_allocation_sizes() {
-        assert_eq!(map_allocation_size(0), 32);
-        assert_eq!(map_allocation_size(1), 32 + 24);
-        assert_eq!(map_allocation_size(3), 32 + 3 * 24);
+        assert_eq!(map_allocation_size(0), 40);
+        assert_eq!(map_allocation_size(1), 40 + 24);
+        assert_eq!(map_allocation_size(3), 40 + 3 * 24);
     }
 
     // ── SlotObject layout ──────────────────────────────────────────
@@ -206,7 +204,11 @@ mod tests {
         unsafe {
             init_byte_array(ba_ptr, (content.len() + 1) as u64);
             let dest = ba_ptr.add(1) as *mut u8;
-            core::ptr::copy_nonoverlapping(content.as_ptr(), dest, content.len());
+            core::ptr::copy_nonoverlapping(
+                content.as_ptr(),
+                dest,
+                content.len(),
+            );
             *dest.add(content.len()) = 0; // NUL terminator
 
             // Allocate Str pointing to the ByteArray

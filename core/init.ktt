@@ -1,239 +1,335 @@
-$[ 
-(|
-    LanguageVersion = "0.1.0" .
-    std = (|
-        traits = (| 
-            clonable = (| 
-                clone = (| -- new | self (clone) ) .
-                clone! = (| -- new | self (cloneBoa) ) .
-                copy = (| -- copy | self clone ) .
-                copy! = (| -- copy | self cloneBoa ) .
-            |) .
-            oddball = (| 
-                copy = (| -- self | self ) .
-            |) .
-            fixnum = 0 parent* .
-            float = 0.0 parent* .
-            bignum = 0 fixnum>bignum parent* .
-            string = "incredible" parent* .
-            bytearray = "incredible" string>bytearray parent* .
-            quotation = [ ] parent* .
-            number = (| |) .
-            callable = (| |) .
-            boolean = (| |) .
-            true = (| |) .
-            false = (| |) .
-        |) .
-        collections = (| |) .
-    |) .
-    signal = (| value -- | (signal) ) .
-    unwind = (| activation -- | (unwind) ) .
-    t = 0 0 fixnum= . 
-    f = 0 1 fixnum= .
-|) universe addTraitSlots ]
+Object _Extend: Object With: { 
+    extend: target With: source = {
+        self _Extend: target With: source
+    }
+}.
 
-(| addBoolAbilities = (| -- |
-    (| parent* = std traits oddball |) std traits boolean addTraitSlots
-    (| parent* = std traits boolean |) std traits true addTraitSlots
-    (| parent* = std traits boolean |) std traits false addTraitSlots
+Object extend: Object With: {
+    ifTrue: t IfFalse: f = { t call }.
+    ifTrue: t = { self ifTrue: t IfFalse: [ none ] }.
+    ifFalse: f = { self ifTrue: [ none ] IfFalse: f }.
+    && rhs = { self ifTrue: [ rhs ] IfFalse: [ self ] }.
+    || rhs = { self ifTrue: [ self ] IfFalse: [ rhs ] }.
+}.
 
-    (| parent* = std traits true |) t addTraitSlots
-    (| parent* = std traits false |) f addTraitSlots
-    
-    (| 
-        not = (| -- ? | f ) .
-        && = (| other -- ? | ) . 
-        >string = "t" .
-    |) std traits true addTraitSlots
+Object extend: false With: {
+    ifTrue: t IfFalse: f = { f call }.
+    toString = { "false" }.
+}.
 
-    (| 
-        not = (| -- ? | t ) .
-        && = (| other -- ? | drop self ) .
-        >string = "f" .
-    |) std traits false addTraitSlots 
-) |)  addBoolAbilities
-
-(| 
-    defaultBehavior* = (| parent* = std traits true |)
-|) universe addTraitSlots
+Object extend: true With: {
+    toString = { "true" }.
+}.
 
 
-(|  parent* = std traits clonable .
-    abs = (| -- new | self positive? [ self ] [ self neg ] if ) .
-|) std traits number addTraitSlots
+Object extend: Fixnum With: { 
+    parent* = Object.
+    + rhs = { rhs addFixnum: self }.
+    - rhs = { rhs subFixnum: self }.
+    * rhs = { rhs mulFixnum: self }.
+    / rhs = { rhs divFixnum: self }.
+    % rhs = { rhs modFixnum: self }.
+    addFixnum: lhs = { lhs _FixnumAdd: self }.
+    subFixnum: lhs = { lhs _FixnumSub: self }.
+    mulFixnum: lhs = { lhs _FixnumMul: self }.
+    divFixnum: lhs = { lhs _FixnumDiv: self }.
+    modFixnum: lhs = { lhs _FixnumMod: self }.
 
-(|
-    clonable* = std traits clonable .
-    number* = std traits number .
-    + = (| lhs -- new | dup fixnum? [ self fixnum+ ] [ drop /* TODO: handle this */ ] if ) .
-    - = (| lhs -- new | dup fixnum? [ self fixnum- ] [ drop /* TODO: handle this */ ] if ) .
-    * = (| lhs -- new | dup fixnum? [ self fixnum* ] [ drop /* TODO: handle this */ ] if ) .
-    / = (| lhs -- new | dup fixnum? [ self fixnum/ ] [ drop /* TODO: handle this */ ] if ) .
-    % = (| lhs -- new | dup fixnum? [ self fixnum% ] [ drop /* TODO: handle this */ ] if ) .
-    neg = (| -- -self | self fixnumNeg ) .
-    bit& = (| lhs -- ? | self fixnumBitAnd ) .
-    bit| = (| lhs -- ? | self fixnumBitOr ) .
-    = = (| lhs -- ? | self fixnum= ) .
-    != = (| lhs -- ? | self fixnum!= ) .
-    < = (| lhs -- ? | self fixnum< ) .
-    > = (| lhs -- ? | self fixnum> ) .
-    <= = (| lhs -- ? | self fixnum<= ) .
-    >= = (| lhs -- ? | self fixnum>= ) .
-    positive? = (| -- ? | self 0 > ) .
-    >bignum = (| -- new | self fixnum>bignum ) .
-    >string = (| -- str | self fixnum>string ) .
-|) std traits fixnum addTraitSlots
+    addBignum: lhs = { lhs _BignumAdd: (self _FixnumToBignum) }.
+    subBignum: lhs = { lhs _BignumSub: (self _FixnumToBignum) }.
+    mulBignum: lhs = { lhs _BignumMul: (self _FixnumToBignum) }.
+    divBignum: lhs = { lhs _BignumDiv: (self _FixnumToBignum) }.
+    modBignum: lhs = { lhs _BignumMod: (self _FixnumToBignum) }.
 
-(|
-    clonable* = std traits clonable .
-    number* = std traits number .
-    + = (| lhs -- new | dup float? [ self float+ ] [ drop /* TODO: handle this */ ] if ) .
-    - = (| lhs -- new | dup float? [ self float- ] [ drop /* TODO: handle this */ ] if ) .
-    * = (| lhs -- new | dup float? [ self float* ] [ drop /* TODO: handle this */ ] if ) .
-    / = (| lhs -- new | dup float? [ self float/ ] [ drop /* TODO: handle this */ ] if ) .
-    % = (| lhs -- new | dup float? [ self float% ] [ drop /* TODO: handle this */ ] if ) .
-    ^ = (| lhs -- new | dup float? [ self float^ ] [ drop /* TODO: handle this */ ] if ) .
-    sqrt = (| -- sqrt | self floatSqrt ) .
-    e^ = (| -- new | self floate^ ) .
-    2^ = (| -- new | self float2^ ) .
-    neg = (| -- -self | self floatNeg ) .
-    sin  = (| -- res | self floatSin ) .
-    cos  = (| -- res | self floatCos ) .
-    tan  = (| -- res | self floatTan ) .
-    asin = (| -- res | self floatAsin ) .
-    acos = (| -- res | self floatAcos ) .
-    atan = (| -- res | self floatAtan ) .
-    = = (| lhs -- ? | self float= ) .
-    != = (| lhs -- ? | self float!= ) .
-    < = (| lhs -- ? | self float< ) .
-    > = (| lhs -- ? | self float> ) .
-    <= = (| lhs -- ? | self float<= ) .
-    >= = (| lhs -- ? | self float>= ) .
-    positive? = (| -- ? | self 0.0 > ) .
-    >bignum = (| -- new | self float>bignum ) .
-    >string = (| -- str | self float>string ) .
-|) std traits float addTraitSlots
+    addRatio: lhs = { lhs _RatioAdd: (self _FixnumToRatio) }.
+    subRatio: lhs = { lhs _RatioSub: (self _FixnumToRatio) }.
+    mulRatio: lhs = { lhs _RatioMul: (self _FixnumToRatio) }.
+    divRatio: lhs = { lhs _RatioDiv: (self _FixnumToRatio) }.
 
-(|
-    clonable* = std traits clonable .
-    number* = std traits number .
-    + = (| lhs -- new | self bignum+ ) .
-    - = (| lhs -- new | self bignum- ) .
-    * = (| lhs -- new | self bignum* ) .
-    neg = (| -- -self | self bignumNeg ) .
-    = = (| lhs -- ? | self bignum= ) .
-    != = (| lhs -- ? | self bignum!= ) .
-    < = (| lhs -- ? | self bignum< ) .
-    > = (| lhs -- ? | self bignum> ) .
-    <= = (| lhs -- ? | self bignum<= ) .
-    >= = (| lhs -- ? | self bignum>= ) .
-|) std traits bignum addTraitSlots
+    addFloat: lhs = { lhs _FloatAdd: (self _FixnumToFloat) }.
+    subFloat: lhs = { lhs _FloatSub: (self _FixnumToFloat) }.
+    mulFloat: lhs = { lhs _FloatMul: (self _FixnumToFloat) }.
+    divFloat: lhs = { lhs _FloatDiv: (self _FixnumToFloat) }.
+    modFloat: lhs = { lhs _FloatMod: (self _FixnumToFloat) }.
 
-(| 
-    clonable* = std traits clonable .
-    print = (| -- | self (print) ) .
-    println = (| -- | self (println) ) . 
-    size = (| -- | self (bytearraySize) ) .
-    newWithSize = (| size -- new | self (bytearrayNew) ) .
-    nth = (| idx -- value | self (bytearrayAt) ) .
-    set-nth = (| vale . idx -- | self (bytearrayAtPut) ) .
-    memset = (| offset . count . value -- | self (bytearrayMemset) ) .
-    memcpy = (| offset . src . srcOffset . count -- | self (bytearrayMemcpy) ) .
-    memcpyFull = (| offset . src -- | 0 over size self memcpy ) .  
-    + = (| lhs -- new | 
-        dup self [ size ] bi@ + // lhs ns 
-        std traits bytearray newWithSize // lhs new 
-        [ 0 -rot memcpyFull ] 2keep // lhs new
-        [ size self ] dip 
-        [ memcpyFull ] keep ) .
-    >string = (| -- str | self bytearray>string ) .
-|) std traits bytearray addTraitSlots
+    toString = { self _FixnumToString }.
+    toStringRadix: r = { self _FixnumToStringRadix: r }.
 
-(| 
-    clonable* = std traits clonable .
-    print = (| -- | self (print) ) .
-    println = (| -- | self (println) ) .
-    size = (| -- | self stringSize ) .
-    >bytearray = (| -- ba | self string>bytearray ) .
-    >message = (| -- msg | self string>message ) .
-    >string = (| -- str | self ) .
-|) std traits string addTraitSlots
+    == rhs = { rhs eqFixnum: self }.
+    != rhs = { rhs neFixnum: self }.
+    < rhs = { rhs ltFixnum: self }.
+    <= rhs = { rhs leFixnum: self }.
+    > rhs = { rhs gtFixnum: self }.
+    >= rhs = { rhs geFixnum: self }.
 
-(| 
-    call = f  .
-    if =  
-        (| ? . trueBranch -- ... | swap [ call ] [ drop self call ] if ) .
-    when = (| ? -- ... | self [ ] if ) .
-    unless = (| ? -- ... | [ ] self if ) .
-    dip = // takes x, calls self, puts back x 
-        (| x -- . x | [ self call ] dip ) .
-    keep = // calls self with x, then puts back x
-        (| x -- . x | dup [ self call ] dip ) .
-    bi = // applies p to x, then self to x 
-        (| x . p -- ..a | keep self call ) .
-    bi* = // appplies p to x, then self to y
-        (| x . y . p -- ..a | dip self call ) .
-    bi@ = // applies self to x, then y
-        (| x . y -- ..a | self dup bi* ) .
-    2dip = // removes x and y from stack then call self
-        (| . x . y -- . x . y | [ self dip ] dip ) .
-    2keep = // calls self with x and y then put x and y back
-        (| . x . y -- . x . y | 2dup self 2dip ) .
-    2bi = // applies p to x and y then self to x and y
-        (| x . y . p -- | 2keep self call ) .
-    tri = (| x . q . p -- | [ keep ] dip keep self call ) .
-    each[a..b) = (| from . to -- |  // call self from->to
-        2dup < [ [ drop self call ] 2keep [ 1 + ] dip self each[a..b) ] [ 2drop ] if ) .
-    curry = (| obj -- curried | self std curried clone! ) .
-    compose = (| quot -- curried | self std composed clone! ) .
-|) std traits callable addTraitSlots
+    eqFixnum: lhs = { lhs _FixnumEq: self }.
+    neFixnum: lhs = { lhs _FixnumNe: self }.
+    ltFixnum: lhs = { lhs _FixnumLt: self }.
+    leFixnum: lhs = { lhs _FixnumLe: self }.
+    gtFixnum: lhs = { lhs _FixnumGt: self }.
+    geFixnum: lhs = { lhs _FixnumGe: self }.
 
-(| 
-    curried = (| 
-        parent* = std traits clonable .
-        callable* = std traits callable .
-        obj . callable .
-        call = (| -- | self obj self callable call ) .
-    |) . 
-    composed = (|
-        parent* = std traits clonable .
-        callable* = std traits callable .
-        callable1 . callable2 .
-        call = (| -- | self callable1 call self callable2 call ) .
-    |) .
-|) std addTraitSlots 
+    eqBignum: lhs = { lhs _BignumEq: (self _FixnumToBignum) }.
+    neBignum: lhs = { lhs _BignumNe: (self _FixnumToBignum) }.
+    ltBignum: lhs = { lhs _BignumLt: (self _FixnumToBignum) }.
+    leBignum: lhs = { lhs _BignumLe: (self _FixnumToBignum) }.
+    gtBignum: lhs = { lhs _BignumGt: (self _FixnumToBignum) }.
+    geBignum: lhs = { lhs _BignumGe: (self _FixnumToBignum) }.
 
-(|
-    clonable* = std traits clonable .
-    callable* = std traits callable .
-    call = (| -- ... | self (call) ) .
-    withHandler = (| proto . handler -- | self (withHandler) ) .
-|) std traits quotation addTraitSlots
+    eqRatio: lhs = { lhs _RatioEq: (self _FixnumToRatio) }.
+    neRatio: lhs = { lhs _RatioNe: (self _FixnumToRatio) }.
+    ltRatio: lhs = { lhs _RatioLt: (self _FixnumToRatio) }.
+    leRatio: lhs = { lhs _RatioLe: (self _FixnumToRatio) }.
+    gtRatio: lhs = { lhs _RatioGt: (self _FixnumToRatio) }.
+    geRatio: lhs = { lhs _RatioGe: (self _FixnumToRatio) }.
 
-$[ 
-(| box = (| 
-    parent* = std traits clonable . 
-    value . 
-    >box = (| value -- boxed | self clone! ) .
-    box> = (| -- inner | self value ) .
-|) |) std addTraitSlots
+    eqFloat: lhs = { lhs _FloatEq: (self _FixnumToFloat) }.
+    neFloat: lhs = { lhs _FloatNe: (self _FixnumToFloat) }.
+    ltFloat: lhs = { lhs _FloatLt: (self _FixnumToFloat) }.
+    leFloat: lhs = { lhs _FloatLe: (self _FixnumToFloat) }.
+    gtFloat: lhs = { lhs _FloatGt: (self _FixnumToFloat) }.
+    geFloat: lhs = { lhs _FloatGe: (self _FixnumToFloat) }.
+}.
 
-(| 
-    \ = (| accum -- accum | self parseNext std box >box over push ) .
-    t = (| accum -- accum | t over push ) .
-    f = (| accum -- accum | f over push ) .
-|) parsers addTraitSlots 
-]
+Object extend: Bignum With: {
+    parent* = Object.
+    + rhs = { rhs addBignum: self }.
+    - rhs = { rhs subBignum: self }.
+    * rhs = { rhs mulBignum: self }.
+    / rhs = { rhs divBignum: self }.
+    % rhs = { rhs modBignum: self }.
 
-(| array = { } parent* |) std traits addTraitSlots
+    addFixnum: lhs = { (lhs _FixnumToBignum) _BignumAdd: self }.
+    subFixnum: lhs = { (lhs _FixnumToBignum) _BignumSub: self }.
+    mulFixnum: lhs = { (lhs _FixnumToBignum) _BignumMul: self }.
+    divFixnum: lhs = { (lhs _FixnumToBignum) _BignumDiv: self }.
+    modFixnum: lhs = { (lhs _FixnumToBignum) _BignumMod: self }.
 
-(| array = { } |) std addTraitSlots
+    addBignum: lhs = { lhs _BignumAdd: self }.
+    subBignum: lhs = { lhs _BignumSub: self }.
+    mulBignum: lhs = { lhs _BignumMul: self }.
+    divBignum: lhs = { lhs _BignumDiv: self }.
+    modBignum: lhs = { lhs _BignumMod: self }.
 
-(| 
-    clonable* = std traits clonable .
-    size = (| -- | self (arraySize) ) .
-    nthUnchecked = (| i -- e | self (arrayAt) ) .
-    setNthUnchecked = (| e . i -- | self (arrayAtPut) ) .
-    newWithSizeFill = (| size . fill -- new | self (arrayNew) ) .
-    copyRemoveAll = (| -- new | self size f self newWithSizeFill ) .
-|) std traits array addTraitSlots
+    addRatio: lhs = { lhs _RatioAdd: (self _BignumToRatio) }.
+    subRatio: lhs = { lhs _RatioSub: (self _BignumToRatio) }.
+    mulRatio: lhs = { lhs _RatioMul: (self _BignumToRatio) }.
+    divRatio: lhs = { lhs _RatioDiv: (self _BignumToRatio) }.
+
+    addFloat: lhs = { lhs _FloatAdd: (self _BignumToFloat) }.
+    subFloat: lhs = { lhs _FloatSub: (self _BignumToFloat) }.
+    mulFloat: lhs = { lhs _FloatMul: (self _BignumToFloat) }.
+    divFloat: lhs = { lhs _FloatDiv: (self _BignumToFloat) }.
+    modFloat: lhs = { lhs _FloatMod: (self _BignumToFloat) }.
+
+    == rhs = { rhs eqBignum: self }.
+    != rhs = { rhs neBignum: self }.
+    < rhs = { rhs ltBignum: self }.
+    <= rhs = { rhs leBignum: self }.
+    > rhs = { rhs gtBignum: self }.
+    >= rhs = { rhs geBignum: self }.
+
+    eqFixnum: lhs = { (lhs _FixnumToBignum) _BignumEq: self }.
+    neFixnum: lhs = { (lhs _FixnumToBignum) _BignumNe: self }.
+    ltFixnum: lhs = { (lhs _FixnumToBignum) _BignumLt: self }.
+    leFixnum: lhs = { (lhs _FixnumToBignum) _BignumLe: self }.
+    gtFixnum: lhs = { (lhs _FixnumToBignum) _BignumGt: self }.
+    geFixnum: lhs = { (lhs _FixnumToBignum) _BignumGe: self }.
+
+    eqBignum: lhs = { lhs _BignumEq: self }.
+    neBignum: lhs = { lhs _BignumNe: self }.
+    ltBignum: lhs = { lhs _BignumLt: self }.
+    leBignum: lhs = { lhs _BignumLe: self }.
+    gtBignum: lhs = { lhs _BignumGt: self }.
+    geBignum: lhs = { lhs _BignumGe: self }.
+
+    eqRatio: lhs = { lhs _RatioEq: (self _BignumToRatio) }.
+    neRatio: lhs = { lhs _RatioNe: (self _BignumToRatio) }.
+    ltRatio: lhs = { lhs _RatioLt: (self _BignumToRatio) }.
+    leRatio: lhs = { lhs _RatioLe: (self _BignumToRatio) }.
+    gtRatio: lhs = { lhs _RatioGt: (self _BignumToRatio) }.
+    geRatio: lhs = { lhs _RatioGe: (self _BignumToRatio) }.
+
+    eqFloat: lhs = { lhs _FloatEq: (self _BignumToFloat) }.
+    neFloat: lhs = { lhs _FloatNe: (self _BignumToFloat) }.
+    ltFloat: lhs = { lhs _FloatLt: (self _BignumToFloat) }.
+    leFloat: lhs = { lhs _FloatLe: (self _BignumToFloat) }.
+    gtFloat: lhs = { lhs _FloatGt: (self _BignumToFloat) }.
+    geFloat: lhs = { lhs _FloatGe: (self _BignumToFloat) }.
+
+    toString = { self _BignumToString }.
+}.
+
+Object extend: Ratio With: {
+    parent* = Object.
+    + rhs = { rhs addRatio: self }.
+    - rhs = { rhs subRatio: self }.
+    * rhs = { rhs mulRatio: self }.
+    / rhs = { rhs divRatio: self }.
+
+    addFixnum: lhs = { (lhs _FixnumToRatio) _RatioAdd: self }.
+    subFixnum: lhs = { (lhs _FixnumToRatio) _RatioSub: self }.
+    mulFixnum: lhs = { (lhs _FixnumToRatio) _RatioMul: self }.
+    divFixnum: lhs = { (lhs _FixnumToRatio) _RatioDiv: self }.
+
+    addBignum: lhs = { (lhs _BignumToRatio) _RatioAdd: self }.
+    subBignum: lhs = { (lhs _BignumToRatio) _RatioSub: self }.
+    mulBignum: lhs = { (lhs _BignumToRatio) _RatioMul: self }.
+    divBignum: lhs = { (lhs _BignumToRatio) _RatioDiv: self }.
+
+    addRatio: lhs = { lhs _RatioAdd: self }.
+    subRatio: lhs = { lhs _RatioSub: self }.
+    mulRatio: lhs = { lhs _RatioMul: self }.
+    divRatio: lhs = { lhs _RatioDiv: self }.
+
+    addFloat: lhs = { lhs _FloatAdd: (self _RatioToFloat) }.
+    subFloat: lhs = { lhs _FloatSub: (self _RatioToFloat) }.
+    mulFloat: lhs = { lhs _FloatMul: (self _RatioToFloat) }.
+    divFloat: lhs = { lhs _FloatDiv: (self _RatioToFloat) }.
+
+    == rhs = { rhs eqRatio: self }.
+    != rhs = { rhs neRatio: self }.
+    < rhs = { rhs ltRatio: self }.
+    <= rhs = { rhs leRatio: self }.
+    > rhs = { rhs gtRatio: self }.
+    >= rhs = { rhs geRatio: self }.
+
+    eqFixnum: lhs = { (lhs _FixnumToRatio) _RatioEq: self }.
+    neFixnum: lhs = { (lhs _FixnumToRatio) _RatioNe: self }.
+    ltFixnum: lhs = { (lhs _FixnumToRatio) _RatioLt: self }.
+    leFixnum: lhs = { (lhs _FixnumToRatio) _RatioLe: self }.
+    gtFixnum: lhs = { (lhs _FixnumToRatio) _RatioGt: self }.
+    geFixnum: lhs = { (lhs _FixnumToRatio) _RatioGe: self }.
+
+    eqBignum: lhs = { (lhs _BignumToRatio) _RatioEq: self }.
+    neBignum: lhs = { (lhs _BignumToRatio) _RatioNe: self }.
+    ltBignum: lhs = { (lhs _BignumToRatio) _RatioLt: self }.
+    leBignum: lhs = { (lhs _BignumToRatio) _RatioLe: self }.
+    gtBignum: lhs = { (lhs _BignumToRatio) _RatioGt: self }.
+    geBignum: lhs = { (lhs _BignumToRatio) _RatioGe: self }.
+
+    eqRatio: lhs = { lhs _RatioEq: self }.
+    neRatio: lhs = { lhs _RatioNe: self }.
+    ltRatio: lhs = { lhs _RatioLt: self }.
+    leRatio: lhs = { lhs _RatioLe: self }.
+    gtRatio: lhs = { lhs _RatioGt: self }.
+    geRatio: lhs = { lhs _RatioGe: self }.
+
+    eqFloat: lhs = { lhs _FloatEq: (self _RatioToFloat) }.
+    neFloat: lhs = { lhs _FloatNe: (self _RatioToFloat) }.
+    ltFloat: lhs = { lhs _FloatLt: (self _RatioToFloat) }.
+    leFloat: lhs = { lhs _FloatLe: (self _RatioToFloat) }.
+    gtFloat: lhs = { lhs _FloatGt: (self _RatioToFloat) }.
+    geFloat: lhs = { lhs _FloatGe: (self _RatioToFloat) }.
+
+    numerator = { self _RatioNumerator }.
+    denominator = { self _RatioDenominator }.
+    toString = { self _RatioToString }.
+}.
+
+Object extend: Float With: {
+    parent* = Object.
+    epsilon = 1e-9.
+    + rhs = { rhs addFloat: self }.
+    - rhs = { rhs subFloat: self }.
+    * rhs = { rhs mulFloat: self }.
+    / rhs = { rhs divFloat: self }.
+    % rhs = { rhs modFloat: self }.
+
+    addFixnum: lhs = { (lhs _FixnumToFloat) _FloatAdd: self }.
+    subFixnum: lhs = { (lhs _FixnumToFloat) _FloatSub: self }.
+    mulFixnum: lhs = { (lhs _FixnumToFloat) _FloatMul: self }.
+    divFixnum: lhs = { (lhs _FixnumToFloat) _FloatDiv: self }.
+    modFixnum: lhs = { (lhs _FixnumToFloat) _FloatMod: self }.
+
+    addBignum: lhs = { (lhs _BignumToFloat) _FloatAdd: self }.
+    subBignum: lhs = { (lhs _BignumToFloat) _FloatSub: self }.
+    mulBignum: lhs = { (lhs _BignumToFloat) _FloatMul: self }.
+    divBignum: lhs = { (lhs _BignumToFloat) _FloatDiv: self }.
+    modBignum: lhs = { (lhs _BignumToFloat) _FloatMod: self }.
+
+    addRatio: lhs = { (lhs _RatioToFloat) _FloatAdd: self }.
+    subRatio: lhs = { (lhs _RatioToFloat) _FloatSub: self }.
+    mulRatio: lhs = { (lhs _RatioToFloat) _FloatMul: self }.
+    divRatio: lhs = { (lhs _RatioToFloat) _FloatDiv: self }.
+
+    addFloat: lhs = { lhs _FloatAdd: self }.
+    subFloat: lhs = { lhs _FloatSub: self }.
+    mulFloat: lhs = { lhs _FloatMul: self }.
+    divFloat: lhs = { lhs _FloatDiv: self }.
+    modFloat: lhs = { lhs _FloatMod: self }.
+
+    == rhs = { rhs eqFloat: self }.
+    != rhs = { rhs neFloat: self }.
+    < rhs = { rhs ltFloat: self }.
+    <= rhs = { rhs leFloat: self }.
+    > rhs = { rhs gtFloat: self }.
+    >= rhs = { rhs geFloat: self }.
+    ~= rhs = { self equals: rhs WithEpsilon: epsilon }.
+
+    equals: rhs WithEpsilon: e = { self _FloatApproxEq: rhs WithEpsilon: e }.
+
+    eqFixnum: lhs = { (lhs _FixnumToFloat) _FloatEq: self }.
+    neFixnum: lhs = { (lhs _FixnumToFloat) _FloatNe: self }.
+    ltFixnum: lhs = { (lhs _FixnumToFloat) _FloatLt: self }.
+    leFixnum: lhs = { (lhs _FixnumToFloat) _FloatLe: self }.
+    gtFixnum: lhs = { (lhs _FixnumToFloat) _FloatGt: self }.
+    geFixnum: lhs = { (lhs _FixnumToFloat) _FloatGe: self }.
+
+    eqBignum: lhs = { (lhs _BignumToFloat) _FloatEq: self }.
+    neBignum: lhs = { (lhs _BignumToFloat) _FloatNe: self }.
+    ltBignum: lhs = { (lhs _BignumToFloat) _FloatLt: self }.
+    leBignum: lhs = { (lhs _BignumToFloat) _FloatLe: self }.
+    gtBignum: lhs = { (lhs _BignumToFloat) _FloatGt: self }.
+    geBignum: lhs = { (lhs _BignumToFloat) _FloatGe: self }.
+
+    eqRatio: lhs = { (lhs _RatioToFloat) _FloatEq: self }.
+    neRatio: lhs = { (lhs _RatioToFloat) _FloatNe: self }.
+    ltRatio: lhs = { (lhs _RatioToFloat) _FloatLt: self }.
+    leRatio: lhs = { (lhs _RatioToFloat) _FloatLe: self }.
+    gtRatio: lhs = { (lhs _RatioToFloat) _FloatGt: self }.
+    geRatio: lhs = { (lhs _RatioToFloat) _FloatGe: self }.
+
+    eqFloat: lhs = { lhs _FloatEq: self }.
+    neFloat: lhs = { lhs _FloatNe: self }.
+    ltFloat: lhs = { lhs _FloatLt: self }.
+    leFloat: lhs = { lhs _FloatLe: self }.
+    gtFloat: lhs = { lhs _FloatGt: self }.
+    geFloat: lhs = { lhs _FloatGe: self }.
+
+    toString = { self _FloatToString }.
+    toStringDigits: d = { self _FloatToStringDigits: d }.
+}.
+
+Object extend: Block With: {
+    parent* = Object.
+    whileTrue: body = {
+        self call ifTrue: [ 
+            body call.
+            self whileTrue: body
+        ] IfFalse: [
+            none 
+        ]
+    }.
+}.
+
+Object extend: String With: {
+    parent* = Object.
+    print = { self _Print }.
+    println = { self _PrintLn }.
+    length = { self _StringLength }.
+    toByteArray = { self _StringToByteArray }.
+}.
+
+Object extend: ByteArray With: {
+    parent* = Object.
+    size = { self _ByteArraySize }.
+}.
+
+i := 0.
+[ i <= 10 ] whileTrue: [
+    i toString println.
+    i := i + 1
+].
+
+(10 + 20.5 + 20/30) toString println

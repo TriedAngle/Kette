@@ -604,28 +604,28 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                         TokenKind::Operator(ref op) if op == "*" => {
                             // Parent slot: name* = expr
                             self.advance();
-                            let (mutable, op_span) =
-                                match self.peek_kind().clone() {
-                                    TokenKind::Equals => {
-                                        let t = self.advance();
-                                        (false, t.span)
-                                    }
-                                    TokenKind::Assign => {
-                                        let t = self.advance();
-                                        (true, t.span)
-                                    }
-                                    _ => {
-                                        return Err(ParseError::new(
+                            let (mutable, op_span) = match self
+                                .peek_kind()
+                                .clone()
+                            {
+                                TokenKind::Equals => {
+                                    let t = self.advance();
+                                    (false, t.span)
+                                }
+                                TokenKind::Assign => {
+                                    let t = self.advance();
+                                    (true, t.span)
+                                }
+                                _ => {
+                                    return Err(ParseError::new(
                                             "expected `=` or `:=` after parent slot",
                                             self.peek_span(),
                                         ));
-                                    }
-                                };
+                                }
+                            };
                             let value = self.parse_expression()?;
-                            let span = ident_tok
-                                .span
-                                .merge(op_span)
-                                .merge(value.span);
+                            let span =
+                                ident_tok.span.merge(op_span).merge(value.span);
                             slots.push(SlotDescriptor {
                                 selector: SlotSelector::Unary(name),
                                 params: vec![],
@@ -660,8 +660,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 }
                 _ => {
                     // Everything else is a bare expression.
-                    let expr =
-                        self.parse_expression()?.with_comments(comments);
+                    let expr = self.parse_expression()?.with_comments(comments);
                     body.push(expr);
                 }
             }

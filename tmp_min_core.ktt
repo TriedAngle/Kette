@@ -1,0 +1,48 @@
+Object _Extend: Object With: {
+    extend: target With: source = {
+        self _Extend: target With: source
+    }
+}.
+
+Object extend: Object With: {
+    ifTrue: t IfFalse: f = { t call }.
+    ifTrue: t = { self ifTrue: t IfFalse: [ none ] }.
+    ifFalse: f = { self ifTrue: [ none ] IfFalse: f }.
+}.
+
+Object extend: false With: {
+    ifTrue: t IfFalse: f = { f call }.
+    toString = { "false" }.
+}.
+
+Object extend: true With: {
+    toString = { "true" }.
+}.
+
+Object extend: String With: {
+    println = { self _PrintLn }.
+}.
+
+Object extend: Block With: {
+    parent* = Object.
+    whileTrue: body = {
+        self call ifTrue: [
+            body call.
+            self whileTrue: body
+        ] IfFalse: [
+            none
+        ]
+    }.
+}.
+
+Object extend: Fixnum With: {
+    parent* = Object.
+    <= rhs = { rhs leFixnum: self }.
+    leFixnum: lhs = { lhs _FixnumLe: self }.
+}.
+
+i := 0.
+[ i <= 1 ] whileTrue: [
+    i toString println.
+    i := i _FixnumAdd: 1
+].

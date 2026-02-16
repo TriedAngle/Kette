@@ -7,7 +7,7 @@ use bytecode::{Instruction, Op};
 use heap::{HeapProxy, RootProvider};
 use object::{
     init_array, slot_object_allocation_size, Array, Block, Code, Header, Map,
-    ObjectType, Slot, SlotObject, Value,
+    ObjectType, Slot, SlotObject, VMString, Value,
 };
 
 use crate::VM;
@@ -20,6 +20,8 @@ pub enum RuntimeError {
     NonLocalReturnExpired,
     StackOverflow,
     TypeError { expected: &'static str, got: Value },
+    Unimplemented { message: &'static str },
+    UndefinedGlobal { name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -34,19 +36,19 @@ struct Frame {
     holder_slot_index: u32,
 }
 
-struct InterpreterState {
+pub struct InterpreterState {
     acc: Value,
     frames: Vec<Frame>,
 }
 
-struct InterpreterRoots<'a> {
+pub(crate) struct InterpreterRoots<'a> {
     acc: &'a mut Value,
     frames: &'a mut [Frame],
     special: &'a mut object::SpecialObjects,
     intern_table: &'a mut HashMap<String, Value>,
     assoc_map: &'a mut Value,
     dictionary: &'a mut Value,
-    scratch: &'a mut Vec<Value>,
+    pub(crate) scratch: &'a mut Vec<Value>,
 }
 
 impl RootProvider for InterpreterRoots<'_> {
@@ -200,7 +202,7 @@ fn run(
                 set_register(frame, dst, value)?;
             }
             Instruction::LoadAssoc { idx } => {
-                let value = load_assoc(code_val, idx)?;
+                let value = load_assoc(vm, code_val, idx)?;
                 state.acc = value;
             }
             Instruction::StoreAssoc { idx } => {
@@ -215,7 +217,7 @@ fn run(
                 store_assoc(vm, code_val, idx, value)?;
             }
             Instruction::MovFromAssoc { dst, idx } => {
-                let value = load_assoc(code_val, idx)?;
+                let value = load_assoc(vm, code_val, idx)?;
                 let frame = &mut state.frames[frame_idx];
                 set_register(frame, dst, value)?;
             }
@@ -437,7 +439,62 @@ fn push_block_frame(
     Ok(())
 }
 
-fn dispatch_send(
+fn push_block_frame_with_args(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    code_val: Value,
+    receiver: Value,
+    args: &[Value],
+) -> Result<(), RuntimeError> {
+    if state.frames.len() >= MAX_FRAMES {
+        return Err(RuntimeError::StackOverflow);
+    }
+
+    let code = unsafe { &*expect_code(code_val)? };
+    let arg_count = code.arg_count() as usize;
+    if args.len() != arg_count {
+        return Err(RuntimeError::TypeError {
+            expected: "argument count",
+            got: Value::from_i64(args.len() as i64),
+        });
+    }
+
+    let reg_count = code.register_count() as usize;
+    let nil = vm.special.nil;
+    let mut registers = vec![nil; reg_count.max(1)];
+    registers[0] = receiver;
+    for (i, arg) in args.iter().enumerate() {
+        let idx = i + 1;
+        if idx < registers.len() {
+            registers[idx] = *arg;
+        }
+    }
+
+    let parent_temp =
+        find_enclosing_temp_array(vm, &state.frames).unwrap_or(nil);
+    let temp_array = if code.temp_count() > 0 {
+        state.acc = receiver;
+        alloc_temp_array(vm, state, code.temp_count())?
+    } else {
+        parent_temp
+    };
+
+    let method_frame_idx = state.frames.len();
+    state.frames.push(Frame {
+        code: code_val,
+        pc: 0,
+        registers,
+        temp_array,
+        is_block: true,
+        method_frame_idx,
+        holder: vm.special.nil,
+        holder_slot_index: 0,
+    });
+
+    Ok(())
+}
+
+pub(crate) fn dispatch_send(
     vm: &mut VM,
     state: &mut InterpreterState,
     frame_idx: usize,
@@ -448,7 +505,9 @@ fn dispatch_send(
 ) -> Result<(), RuntimeError> {
     let receiver = state.acc;
 
-    if is_block_value(receiver)? {
+    let code: &Code = unsafe { code_val.as_ref() };
+    let message = unsafe { code.constant(message_idx as u32) };
+    if is_block_value(receiver)? && is_block_call_selector(message, argc) {
         let block_code = block_code(receiver, vm.special.nil)?;
         let receiver_self = state.frames[frame_idx].registers[0];
         return push_block_frame(
@@ -459,9 +518,6 @@ fn dispatch_send(
             (frame_idx, reg, argc),
         );
     }
-
-    let code: &Code = unsafe { code_val.as_ref() };
-    let message = unsafe { code.constant(message_idx as u32) };
     let result = unsafe { object::lookup(receiver, message, &vm.special) };
     match result {
         object::LookupResult::None => {
@@ -476,6 +532,63 @@ fn dispatch_send(
             vm, state, frame_idx, receiver, holder, slot, slot_index, reg, argc,
         ),
     }
+}
+
+pub(crate) fn call_block(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    if !is_block_value(receiver)? {
+        return Err(RuntimeError::TypeError {
+            expected: "block",
+            got: receiver,
+        });
+    }
+    let block_code = block_code(receiver, vm.special.nil)?;
+    let frame_idx = state.frames.len() - 1;
+    let receiver_self = state.frames[frame_idx].registers[0];
+    push_block_frame_with_args(vm, state, block_code, receiver_self, args)?;
+    Ok(state.acc)
+}
+
+fn is_block_call_selector(message: Value, argc: u8) -> bool {
+    let name = match message_name(message) {
+        Some(name) => name,
+        None => return false,
+    };
+    if argc == 0 {
+        return name == "call";
+    }
+    if argc > 8 {
+        return false;
+    }
+    let expected = block_call_selector(argc as usize);
+    name == expected
+}
+
+fn message_name(message: Value) -> Option<String> {
+    if !message.is_ref() {
+        return None;
+    }
+    let header: &Header = unsafe { message.as_ref() };
+    if header.object_type() != ObjectType::Str {
+        return None;
+    }
+    let s: &VMString = unsafe { message.as_ref() };
+    Some(unsafe { s.as_str() }.to_string())
+}
+
+fn block_call_selector(argc: usize) -> String {
+    if argc == 0 {
+        return "call".to_string();
+    }
+    let mut out = String::from("call:");
+    for _ in 1..argc {
+        out.push_str("With:");
+    }
+    out
 }
 
 fn dispatch_resend(
@@ -535,16 +648,38 @@ fn dispatch_slot(
         return Ok(());
     }
 
-    if let Some(code_val) = extract_code(slot.value, vm.special.nil)? {
-        return push_method_frame(
-            vm,
-            state,
-            code_val,
-            receiver,
-            Some((frame_idx, reg, argc)),
-            holder,
-            slot_index,
-        );
+    if let Some(target) = extract_method_target(slot.value, vm.special.nil)? {
+        match target {
+            MethodTarget::Code(code_val) => {
+                return push_method_frame(
+                    vm,
+                    state,
+                    code_val,
+                    receiver,
+                    Some((frame_idx, reg, argc)),
+                    holder,
+                    slot_index,
+                );
+            }
+            MethodTarget::Primitive(index) => {
+                let primitive = vm.primitives.get(index).ok_or(
+                    RuntimeError::TypeError {
+                        expected: "primitive index",
+                        got: Value::from_i64(index as i64),
+                    },
+                )?;
+                if primitive.arity != argc {
+                    return Err(RuntimeError::TypeError {
+                        expected: "argument count",
+                        got: Value::from_i64(argc as i64),
+                    });
+                }
+                let args =
+                    collect_args_from_frame(state, frame_idx, reg, argc)?;
+                state.acc = (primitive.func)(vm, state, receiver, &args)?;
+                return Ok(());
+            }
+        }
     }
 
     state.acc = slot.value;
@@ -664,11 +799,76 @@ fn alloc_temp_array(
     Ok(arr)
 }
 
-fn load_assoc(code_val: Value, idx: u16) -> Result<Value, RuntimeError> {
+fn load_assoc(
+    vm: &VM,
+    code_val: Value,
+    idx: u16,
+) -> Result<Value, RuntimeError> {
     let code: &Code = unsafe { code_val.as_ref() };
-    let assoc = unsafe { code.constant(idx as u32) };
-    let assoc_obj = unsafe { &*expect_slot_object(assoc)? };
-    unsafe { Ok(assoc_obj.read_value(SlotObject::VALUES_OFFSET)) }
+    let assoc_or_name = unsafe { code.constant(idx as u32) };
+
+    if assoc_or_name.is_ref() {
+        let header: &Header = unsafe { assoc_or_name.as_ref() };
+        match header.object_type() {
+            ObjectType::Slots => {
+                let assoc_obj = unsafe { &*expect_slot_object(assoc_or_name)? };
+                return unsafe {
+                    Ok(assoc_obj.read_value(SlotObject::VALUES_OFFSET))
+                };
+            }
+            ObjectType::Str => {
+                if let Some(value) = lookup_assoc_value(vm, assoc_or_name)? {
+                    return Ok(value);
+                }
+
+                let name = symbol_to_string(assoc_or_name)
+                    .unwrap_or_else(|| "<symbol>".to_string());
+                return Err(RuntimeError::UndefinedGlobal { name });
+            }
+            _ => {}
+        }
+    }
+
+    Err(RuntimeError::TypeError {
+        expected: "assoc or symbol",
+        got: assoc_or_name,
+    })
+}
+
+fn lookup_assoc_value(
+    vm: &VM,
+    name: Value,
+) -> Result<Option<Value>, RuntimeError> {
+    let dict = vm.dictionary;
+    unsafe {
+        let dict_obj: &SlotObject = dict.as_ref();
+        let map: &Map = dict_obj.map.as_ref();
+        let slots = map.slots();
+        for slot in slots {
+            if slot.name.raw() == name.raw() {
+                let assoc = slot.value;
+                let assoc_obj = &*expect_slot_object(assoc)?;
+                return Ok(Some(
+                    assoc_obj.read_value(SlotObject::VALUES_OFFSET),
+                ));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn symbol_to_string(sym: Value) -> Option<String> {
+    if !sym.is_ref() {
+        return None;
+    }
+
+    let header: &Header = unsafe { sym.as_ref() };
+    if header.object_type() != ObjectType::Str {
+        return None;
+    }
+
+    let s: &VMString = unsafe { sym.as_ref() };
+    Some(unsafe { s.as_str() }.to_string())
 }
 
 fn store_assoc(
@@ -785,23 +985,69 @@ fn copy_args_from_frame(
     Ok(())
 }
 
-fn extract_code(
+fn collect_args_from_frame(
+    state: &InterpreterState,
+    frame_idx: usize,
+    reg: u16,
+    argc: u8,
+) -> Result<Vec<Value>, RuntimeError> {
+    let start = reg as usize;
+    let end = start + argc as usize;
+    let regs = &state.frames[frame_idx].registers;
+    if end > regs.len() {
+        return Err(RuntimeError::TypeError {
+            expected: "argument register range",
+            got: Value::from_i64(end as i64),
+        });
+    }
+    Ok(regs[start..end].to_vec())
+}
+
+enum MethodTarget {
+    Code(Value),
+    Primitive(usize),
+}
+
+fn extract_method_target(
     value: Value,
     nil: Value,
-) -> Result<Option<Value>, RuntimeError> {
+) -> Result<Option<MethodTarget>, RuntimeError> {
     if !value.is_ref() {
         return Ok(None);
     }
     let header: &Header = unsafe { value.as_ref() };
     match header.object_type() {
-        ObjectType::Code => Ok(Some(value)),
+        ObjectType::Code => Ok(Some(MethodTarget::Code(value))),
         ObjectType::Slots => {
             let obj: &SlotObject = unsafe { value.as_ref() };
             let map: &Map = unsafe { obj.map.as_ref() };
-            if map.code.raw() != nil.raw() {
-                Ok(Some(map.code))
+            if !map.has_code() {
+                return Ok(None);
+            }
+            if map.is_primitive() {
+                let code = map.code;
+                if !code.is_fixnum() {
+                    return Err(RuntimeError::TypeError {
+                        expected: "primitive index",
+                        got: code,
+                    });
+                }
+                let idx = unsafe { code.to_i64() };
+                if idx < 0 {
+                    return Err(RuntimeError::TypeError {
+                        expected: "primitive index",
+                        got: code,
+                    });
+                }
+                Ok(Some(MethodTarget::Primitive(idx as usize)))
             } else {
-                Ok(None)
+                if map.code.raw() == nil.raw() {
+                    return Err(RuntimeError::TypeError {
+                        expected: "method code",
+                        got: map.code,
+                    });
+                }
+                Ok(Some(MethodTarget::Code(map.code)))
             }
         }
         _ => Ok(None),
@@ -1150,7 +1396,7 @@ fn expect_array(value: Value) -> Result<*const Array, RuntimeError> {
     Ok(value.ref_bits() as *const Array)
 }
 
-fn with_roots<T>(
+pub(crate) fn with_roots<T>(
     vm: &mut VM,
     state: &mut InterpreterState,
     scratch: &mut Vec<Value>,
@@ -1173,6 +1419,57 @@ fn with_roots<T>(
         scratch,
     };
     f(proxy, &mut roots)
+}
+
+pub(crate) fn primitive_extend_with(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    target: Value,
+    source: Value,
+) -> Result<Value, RuntimeError> {
+    let target_ptr = expect_slot_object_mut(target)?;
+    let source_ptr = expect_slot_object(source)?;
+
+    let source_obj = unsafe { &*source_ptr };
+    let source_map_val = source_obj.map;
+    let source_map: &Map = unsafe { source_map_val.as_ref() };
+    if source_map.has_code() {
+        return Err(RuntimeError::Unimplemented {
+            message: "extend: source has code",
+        });
+    }
+    if source_map.value_count() != 0 {
+        return Err(RuntimeError::Unimplemented {
+            message: "extend: assignable slot",
+        });
+    }
+
+    let mut new_slots: Vec<Slot> = Vec::new();
+    for slot in unsafe { source_map.slots() } {
+        if !slot.is_constant() {
+            return Err(RuntimeError::Unimplemented {
+                message: "extend: assignable slot",
+            });
+        }
+        new_slots.push(*slot);
+    }
+
+    let mut scratch = vec![target, source, source_map_val];
+    let new_map = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+        let map_map = roots.special.map_map;
+        crate::alloc::append_constant_slots(
+            proxy,
+            roots,
+            (*target_ptr).map,
+            map_map,
+            &new_slots,
+        )
+    });
+
+    let target_obj = unsafe { &mut *target_ptr };
+    target_obj.map = new_map;
+    vm.heap_proxy.write_barrier(target, new_map);
+    Ok(target)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1397,7 +1694,7 @@ mod tests {
     use crate::materialize::materialize;
     use crate::special::bootstrap;
     use heap::HeapSettings;
-    use object::{ObjectType, SlotFlags, VMString};
+    use object::{Map, ObjectType, SlotFlags, VMString};
     use parser::{Lexer, Parser};
 
     fn test_settings() -> HeapSettings {
@@ -1426,6 +1723,15 @@ mod tests {
         let mut vm = bootstrap(test_settings());
         let code_val = materialize(&mut vm, &code_desc);
         interpret(&mut vm, code_val)
+    }
+
+    fn run_source_with_vm(src: &str) -> Result<(VM, Value), RuntimeError> {
+        let exprs = parse_source(src);
+        let code_desc = Compiler::compile(&exprs).expect("compile error");
+        let mut vm = bootstrap(test_settings());
+        let code_val = materialize(&mut vm, &code_desc);
+        let value = interpret(&mut vm, code_val)?;
+        Ok((vm, value))
     }
 
     fn run_source_with_receiver(
@@ -1551,9 +1857,252 @@ mod tests {
     }
 
     #[test]
+    fn interpret_block_updates_captured_mutable() {
+        let value = run_source("i := 0. [ i := i _FixnumAdd: 1 ] call. i")
+            .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn interpret_nested_block_reads_capture() {
+        let value =
+            run_source("i := 0. [ [ i ] call ] call").expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 0);
+    }
+
+    #[test]
+    fn interpret_block_le_on_capture() {
+        let (vm, value) = run_source_with_vm(
+            "Object _Extend: Fixnum With: { \
+                <= rhs = { rhs leFixnum: self }. \
+                leFixnum: lhs = { lhs _FixnumLe: self } \
+            }. \
+            i := 0. [ i <= 1 ] call",
+        )
+        .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
+    }
+
+    #[test]
     fn interpret_non_local_return() {
         let value = run_source("^ 42").expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    fn lookup_dictionary_value(vm: &VM, name: &str) -> Option<Value> {
+        let sym = vm.intern_table.get(name)?;
+        unsafe {
+            let dict_obj: &SlotObject = vm.dictionary.as_ref();
+            let map: &Map = dict_obj.map.as_ref();
+            for slot in map.slots() {
+                if slot.name.raw() == sym.raw() {
+                    let assoc_obj: &SlotObject = slot.value.as_ref();
+                    return Some(
+                        assoc_obj.read_value(SlotObject::VALUES_OFFSET),
+                    );
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn interpret_fixnum_add_primitive() {
+        let value = run_source("1 _FixnumAdd: 2").expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 3);
+    }
+
+    #[test]
+    fn fixnum_traits_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let fixnum_traits = vm.special.fixnum_traits;
+        let obj: &SlotObject = unsafe { fixnum_traits.as_ref() };
+        let map: &Map = unsafe { obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_FixnumAdd:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            assert!(method_map.code.is_fixnum());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "fixnum_add");
+            assert_eq!(prim.arity, 1);
+        }
+        assert!(found, "_FixnumAdd: slot not found");
+    }
+
+    #[test]
+    fn bignum_traits_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let traits_obj: &SlotObject =
+            unsafe { vm.special.bignum_traits.as_ref() };
+        let map: &Map = unsafe { traits_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_BignumAdd:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "bignum_add");
+        }
+        assert!(found, "_BignumAdd: slot not found");
+    }
+
+    #[test]
+    fn ratio_traits_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let traits_obj: &SlotObject =
+            unsafe { vm.special.ratio_traits.as_ref() };
+        let map: &Map = unsafe { traits_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_RatioAdd:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "ratio_add");
+        }
+        assert!(found, "_RatioAdd: slot not found");
+    }
+
+    #[test]
+    fn float_traits_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let traits_obj: &SlotObject =
+            unsafe { vm.special.float_traits.as_ref() };
+        let map: &Map = unsafe { traits_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_FloatAdd:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "float_add");
+        }
+        assert!(found, "_FloatAdd: slot not found");
+    }
+
+    #[test]
+    fn compare_fixnum_primitives() {
+        let (vm, value) =
+            run_source_with_vm("1 _FixnumEq: 1").expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
+
+        let (vm, value) =
+            run_source_with_vm("1 _FixnumLt: 2").expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
+
+        let (vm, value) =
+            run_source_with_vm("2 _FixnumGt: 3").expect("interpret error");
+        assert_eq!(value.raw(), vm.special.false_obj.raw());
+    }
+
+    #[test]
+    fn compare_bignum_primitives() {
+        let (vm, value) = run_source_with_vm(
+            "(1 _FixnumToBignum) _BignumLt: (2 _FixnumToBignum)",
+        )
+        .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
+    }
+
+    #[test]
+    fn compare_ratio_primitives() {
+        let (vm, value) =
+            run_source_with_vm("(1 _FixnumDiv: 2) _RatioLt: (1 _FixnumDiv: 3)")
+                .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.false_obj.raw());
+    }
+
+    #[test]
+    fn compare_float_primitives() {
+        let (vm, value) =
+            run_source_with_vm("1.0 _FloatApproxEq: 1.0001 WithEpsilon: 0.001")
+                .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
+    }
+
+    #[test]
+    fn dictionary_has_object_binding() {
+        let vm = bootstrap(test_settings());
+        let object_value =
+            lookup_dictionary_value(&vm, "Object").expect("Object missing");
+        let object_obj: &SlotObject = unsafe { object_value.as_ref() };
+        let object_map: &Map = unsafe { object_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { object_map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } == "_Extend:With:" {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "Object missing _Extend:With:");
+    }
+
+    #[test]
+    fn dictionary_fixnum_matches_traits() {
+        let vm = bootstrap(test_settings());
+        let fixnum_value =
+            lookup_dictionary_value(&vm, "Fixnum").expect("Fixnum missing");
+        assert_eq!(fixnum_value.raw(), vm.special.fixnum_traits.raw());
+    }
+
+    #[test]
+    fn extend_with_adds_constant_slots() {
+        let value =
+            run_source("o = { }. Object _Extend: o With: { x = 7 }. o x")
+                .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 7);
+    }
+
+    #[test]
+    fn extend_with_rejects_assignable_slots() {
+        let err = run_source("o = { }. Object _Extend: o With: { x := 7 }")
+            .expect_err("expected error");
+        match err {
+            RuntimeError::Unimplemented { .. } => {}
+            other => panic!("expected Unimplemented, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extend_with_rejects_code() {
+        let err = run_source("o = { }. Object _Extend: o With: { x = 1. 2 }")
+            .expect_err("expected error");
+        assert!(matches!(err, RuntimeError::Unimplemented { .. }));
     }
 }

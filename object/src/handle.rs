@@ -16,7 +16,10 @@ pub struct Tagged<T> {
 impl<T> Tagged<T> {
     #[inline(always)]
     pub fn from_value(value: Value) -> Self {
-        Self { value, _marker: PhantomData }
+        Self {
+            value,
+            _marker: PhantomData,
+        }
     }
 
     #[inline(always)]

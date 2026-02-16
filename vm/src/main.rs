@@ -8,7 +8,7 @@ use std::{
 use heap::HeapSettings;
 use parser::{Lexer, Parser};
 
-use vm::{compiler0::Compiler, interpreter, materialize, special, VM};
+use vm::{compiler0, interpreter, materialize, special, VM};
 
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -38,7 +38,7 @@ fn main() {
 
         match execute_source(&mut vm, &source_code) {
             Ok(value) => {
-                println!("{:?}", value);
+                print_value(&mut vm, value);
             }
             Err(err) => {
                 eprintln!("Error executing {}: {}", filename, err);
@@ -80,7 +80,7 @@ fn run_repl(vm: &mut VM) {
                 }
 
                 match execute_source(vm, &input_buffer) {
-                    Ok(value) => println!("{:?}", value),
+                    Ok(value) => print_value(vm, value),
                     Err(err) => eprintln!("Error: {}", err),
                 }
             }
@@ -94,13 +94,64 @@ fn run_repl(vm: &mut VM) {
 
 fn execute_source(vm: &mut VM, source: &str) -> Result<object::Value, String> {
     let lexer = Lexer::from_str(source);
-    let exprs: Vec<parser::ast::Expr> = Parser::new(lexer)
-        .map(|r| r.map_err(|e| e.to_string()))
-        .collect::<Result<_, _>>()?;
 
-    let code_desc = Compiler::compile(&exprs).map_err(|e| e.to_string())?;
+    let results: Vec<_> = Parser::new(lexer).collect();
+
+    let errors: Vec<String> = results
+        .iter()
+        .filter_map(|r| r.as_ref().err())
+        .map(|e| e.to_string())
+        .collect();
+
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    let exprs: Vec<parser::ast::Expr> =
+        results.into_iter().map(|r| r.unwrap()).collect();
+
+    let code_desc =
+        compiler0::Compiler::compile(&exprs).map_err(|e| e.to_string())?;
     let code = materialize::materialize(vm, &code_desc);
+
     interpreter::interpret(vm, code).map_err(format_runtime_error)
+}
+
+fn print_value(vm: &mut VM, value: object::Value) {
+    if let Some(text) = value_to_string(value) {
+        println!("{}", text);
+        return;
+    }
+
+    if let Some(text) = try_to_string(vm, value) {
+        println!("{}", text);
+        return;
+    }
+
+    println!("{:?}", value);
+}
+
+fn try_to_string(vm: &mut VM, value: object::Value) -> Option<String> {
+    let mut builder = bytecode::BytecodeBuilder::new();
+    builder.load_constant(0);
+    builder.send(1, 0, 0, 0);
+    builder.local_return();
+
+    let code_desc = compiler0::CodeDesc {
+        bytecode: builder.into_bytes(),
+        constants: vec![
+            compiler0::ConstEntry::Value(value),
+            compiler0::ConstEntry::Symbol("toString".to_string()),
+        ],
+        register_count: 1,
+        arg_count: 0,
+        temp_count: 0,
+        feedback_count: 1,
+    };
+
+    let code = materialize::materialize(vm, &code_desc);
+    let result = interpreter::interpret(vm, code).ok()?;
+    value_to_string(result)
 }
 
 fn format_runtime_error(err: interpreter::RuntimeError) -> String {
@@ -116,6 +167,9 @@ fn format_runtime_error(err: interpreter::RuntimeError) -> String {
             format!(
                 "MessageNotUnderstood {{ receiver: {recv}, message: {msg} }}"
             )
+        }
+        interpreter::RuntimeError::UndefinedGlobal { name } => {
+            format!("UndefinedGlobal {{ name: {name} }}")
         }
         other => format!("{:?}", other),
     }

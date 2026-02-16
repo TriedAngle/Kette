@@ -392,6 +392,70 @@ mod tests {
     }
 
     #[test]
+    fn object_with_single_slot_no_dot() {
+        let e = parse_one("{ x = 7 }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert!(body.is_empty());
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn object_with_single_slot_trailing_dot() {
+        let e = parse_one("{ x = 7. }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert!(body.is_empty());
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn object_with_mutable_slot_no_dot() {
+        let e = parse_one("{ x := 7 }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert!(body.is_empty());
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn object_with_mutable_slot_trailing_dot() {
+        let e = parse_one("{ x := 7. }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert!(body.is_empty());
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn object_slot_value_expression() {
+        let e = parse_one("{ x = 7 + 7 }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert!(body.is_empty());
+                assert!(matches!(
+                    slots[0].value.kind,
+                    ExprKind::BinaryMessage { .. }
+                ));
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
     fn object_with_slots_and_body() {
         let e = parse_one("{ x = 5. x print }");
         match &e.kind {
@@ -400,6 +464,24 @@ mod tests {
                 assert_eq!(body.len(), 1);
             }
             _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn keyword_arg_object_slots_only() {
+        let e = parse_one("Object _Extend: o With: { x := 7 }");
+        match &e.kind {
+            ExprKind::KeywordMessage { pairs, .. } => {
+                assert_eq!(pairs.len(), 2);
+                match &pairs[1].argument.kind {
+                    ExprKind::Object { slots, body } => {
+                        assert_eq!(slots.len(), 1);
+                        assert!(body.is_empty());
+                    }
+                    _ => panic!("expected object literal argument"),
+                }
+            }
+            _ => panic!("expected keyword message"),
         }
     }
 
@@ -647,9 +729,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(
-                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
-                );
+                assert!(body
+                    .iter()
+                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
             }
             _ => panic!("expected block"),
         }

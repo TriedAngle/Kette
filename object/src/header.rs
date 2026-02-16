@@ -137,7 +137,12 @@ impl Header {
     /// Returns `Ok(current)` on success, `Err(actual)` on failure.
     #[inline(always)]
     pub fn compare_exchange_age(&self, current: u8, new: u8) -> Result<u8, u8> {
-        self.age.compare_exchange(current, new, Ordering::Relaxed, Ordering::Relaxed)
+        self.age.compare_exchange(
+            current,
+            new,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        )
     }
 
     /// Atomically OR flags and return the *previous* flags value.

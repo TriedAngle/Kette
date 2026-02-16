@@ -8,8 +8,8 @@ Math = {
         disc = (b * b) - (four * a * c).
         sqrtDisc = disc sqrt.
         denom = 2 * a.
-        root1 = ((0 - b) + sqrtDisc) / dnom.
-        root2 = ((0 - b) - sqrtDisc) / dnom.
+        root1 = ((0 - b) + sqrtDisc) / denom.
+        root2 = ((0 - b) - sqrtDisc) / denom.
         // this is shorthand for { root1 = root1. root2 = root2 }
         // if root1 etc wouldn't be in scope then it would be root1 = nil
         { root1. root2 }

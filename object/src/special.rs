@@ -11,7 +11,6 @@ use crate::Value;
 /// reference (`&SpecialObjects`) to subsystems that need it.
 pub struct SpecialObjects {
     // ── Singletons ─────────────────────────────────────────────────
-
     /// The canonical `nil` object.
     pub nil: Value,
 
@@ -24,8 +23,13 @@ pub struct SpecialObjects {
     /// The map that describes all other maps (self-referential).
     pub map_map: Value,
 
-    // ── Trait maps for map-less primitives ──────────────────────────
+    /// The root Object prototype.
+    pub object: Value,
 
+    /// Methods / slots for [`Block`](crate::Block) objects.
+    pub block_traits: Value,
+
+    // ── Trait maps for map-less primitives ──────────────────────────
     /// Methods / slots for [`Array`](crate::Array) objects.
     pub array_traits: Value,
 

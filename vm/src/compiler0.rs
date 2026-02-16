@@ -1,12 +1,11 @@
 use std::collections::HashSet;
 
 use bytecode::BytecodeBuilder;
+use object::Value;
 use parser::ast::{
     AssignKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotSelector,
 };
 use parser::span::Span;
-
-// ── Error ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct CompileError {
@@ -43,8 +42,6 @@ impl std::fmt::Display for CompileError {
         }
     }
 }
-
-// ── Scope types ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScopeKind {
@@ -201,6 +198,7 @@ pub enum ConstEntry {
     Fixnum(i64),
     Float(f64),
     String(String),
+    Value(Value),
     Symbol(String),
     Assoc(String),
     Code(CodeDesc),
@@ -314,6 +312,24 @@ impl Compiler {
         &mut self.frame_mut().builder
     }
 
+    fn emit_captured_param_inits(&mut self, params: &[String]) {
+        for param in params {
+            let Some(var) = self.scope().find_local(param) else {
+                continue;
+            };
+            let captured = var.captured;
+            let idx = var.temp_idx;
+            let reg = var.reg;
+            if !captured {
+                continue;
+            }
+            let Some(idx) = idx else {
+                continue;
+            };
+            self.builder().mov_to_temp(0, idx, reg);
+        }
+    }
+
     // ── Constant pool ───────────────────────────────────────────
 
     fn add_constant(&mut self, entry: ConstEntry) -> u16 {
@@ -363,6 +379,11 @@ impl Compiler {
         match &expr.kind {
             ExprKind::Assignment { target, kind, .. } => {
                 if let ExprKind::Ident(name) = &target.kind {
+                    if *kind == AssignKind::Assign
+                        && self.has_local_in_enclosing_scopes(name)
+                    {
+                        return;
+                    }
                     let mutable = *kind == AssignKind::Assign;
                     self.scope_mut().declare_local(name.clone(), mutable);
                 }
@@ -417,7 +438,7 @@ impl Compiler {
                 for arg in args {
                     shadow.insert(arg.clone());
                 }
-                Self::collect_assignment_names(body, &mut shadow);
+                self.collect_assignment_names_filtered(body, &mut shadow);
                 let mut new_shadows = shadows.to_vec();
                 new_shadows.push(shadow);
                 self.analyze_captures(body, &new_shadows);
@@ -528,9 +549,108 @@ impl Compiler {
         }
     }
 
+    fn collect_assignment_names_filtered(
+        &self,
+        body: &[Expr],
+        out: &mut HashSet<String>,
+    ) {
+        for expr in body {
+            match &expr.kind {
+                ExprKind::Assignment { target, .. } => {
+                    if let ExprKind::Ident(name) = &target.kind {
+                        if !self.has_local_in_any_scope(name) {
+                            out.insert(name.clone());
+                        }
+                    }
+                }
+                ExprKind::Sequence(exprs) => {
+                    self.collect_assignment_names_filtered(exprs, out);
+                }
+                ExprKind::Paren(inner) => {
+                    self.collect_assignment_names_filtered(
+                        std::slice::from_ref(inner.as_ref()),
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     // ── Variable resolution ─────────────────────────────────────
 
-    fn resolve(&mut self, name: &str) -> VarLoc {
+    fn resolve_for_store(
+        &mut self,
+        name: &str,
+        kind: AssignKind,
+        span: Span,
+    ) -> Result<VarLoc, CompileError> {
+        let depth = self.frames.len();
+
+        // Check current scope
+        if let Some(var) = self.frames[depth - 1].scope.find_local(name) {
+            if kind == AssignKind::Assign && !var.mutable {
+                return Err(CompileError::new(
+                    "cannot assign to constant",
+                    span,
+                ));
+            }
+            if var.captured {
+                return Ok(VarLoc::Temp(0, var.temp_idx.unwrap()));
+            }
+            return Ok(VarLoc::Local(var.reg));
+        }
+
+        // Check enclosing scopes
+        for i in (0..depth - 1).rev() {
+            if let Some(var) = self.frames[i].scope.find_local(name) {
+                if kind == AssignKind::Assign && !var.mutable {
+                    return Err(CompileError::new(
+                        "cannot assign to constant",
+                        span,
+                    ));
+                }
+                if var.captured {
+                    return Ok(VarLoc::Temp(0, var.temp_idx.unwrap()));
+                }
+                return Err(CompileError::new(
+                    "assignment to non-captured outer variable",
+                    span,
+                ));
+            }
+        }
+
+        if kind == AssignKind::Assign {
+            let reg = self.scope_mut().declare_local(name.to_string(), true);
+            return Ok(VarLoc::Local(reg));
+        }
+
+        let reg = self.scope_mut().declare_local(name.to_string(), false);
+        Ok(VarLoc::Local(reg))
+    }
+
+    fn has_local_in_enclosing_scopes(&self, name: &str) -> bool {
+        if self.frames.len() <= 1 {
+            return false;
+        }
+        for i in (0..self.frames.len() - 1).rev() {
+            if self.frames[i].scope.find_local(name).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn has_local_in_any_scope(&self, name: &str) -> bool {
+        for frame in self.frames.iter().rev() {
+            if frame.scope.find_local(name).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn resolve_for_load(&mut self, name: &str) -> VarLoc {
         let depth = self.frames.len();
 
         // Check current scope
@@ -553,8 +673,7 @@ impl Compiler {
             }
         }
 
-        // Global: add assoc to constant pool
-        let idx = self.add_assoc(name);
+        let idx = self.add_symbol(name);
         VarLoc::Global(idx)
     }
 
@@ -666,7 +785,7 @@ impl Compiler {
     }
 
     fn compile_ident(&mut self, name: &str) {
-        match self.resolve(name) {
+        match self.resolve_for_load(name) {
             VarLoc::Local(reg) => self.builder().load_local(reg),
             VarLoc::Temp(arr, idx) => self.builder().load_temp(arr, idx),
             VarLoc::Global(const_idx) => self.builder().load_assoc(const_idx),
@@ -717,11 +836,13 @@ impl Compiler {
         let tmp_recv = self.scope_mut().alloc_temp();
         self.builder().store_local(tmp_recv);
 
-        let first_arg_reg = self.scope().next_reg;
-        for pair in pairs {
+        let mut arg_regs = Vec::with_capacity(pairs.len());
+        for _ in pairs {
+            arg_regs.push(self.scope_mut().alloc_temp());
+        }
+        for (pair, &arg_reg) in pairs.iter().zip(arg_regs.iter()) {
             self.compile_expr(&pair.argument)?;
-            let tmp = self.scope_mut().alloc_temp();
-            self.builder().store_local(tmp);
+            self.builder().store_local(arg_reg);
         }
 
         self.builder().load_local(tmp_recv);
@@ -729,6 +850,7 @@ impl Compiler {
             pairs.iter().map(|p| p.keyword.as_str()).collect();
         let sel_idx = self.add_symbol(&selector);
         let fb = self.scope_mut().next_feedback();
+        let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
         self.builder()
             .send(sel_idx, first_arg_reg, pairs.len() as u8, fb);
         Ok(())
@@ -762,11 +884,13 @@ impl Compiler {
                 let tmp_recv = self.scope_mut().alloc_temp();
                 self.builder().store_local(tmp_recv);
 
-                let first_arg_reg = self.scope().next_reg;
-                for pair in pairs {
+                let mut arg_regs = Vec::with_capacity(pairs.len());
+                for _ in pairs {
+                    arg_regs.push(self.scope_mut().alloc_temp());
+                }
+                for (pair, &arg_reg) in pairs.iter().zip(arg_regs.iter()) {
                     self.compile_expr(&pair.argument)?;
-                    let tmp = self.scope_mut().alloc_temp();
-                    self.builder().store_local(tmp);
+                    self.builder().store_local(arg_reg);
                 }
 
                 self.builder().load_local(tmp_recv);
@@ -774,6 +898,7 @@ impl Compiler {
                     pairs.iter().map(|p| p.keyword.as_str()).collect();
                 let sel_idx = self.add_symbol(&selector);
                 let fb = self.scope_mut().next_feedback();
+                let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
                 self.builder().send(
                     sel_idx,
                     first_arg_reg,
@@ -794,13 +919,13 @@ impl Compiler {
     fn compile_assignment(
         &mut self,
         target: &Expr,
-        _kind: AssignKind,
+        kind: AssignKind,
         value: &Expr,
     ) -> Result<(), CompileError> {
         self.compile_expr(value)?;
         match &target.kind {
             ExprKind::Ident(name) => {
-                let loc = self.resolve(name);
+                let loc = self.resolve_for_store(name, kind, target.span)?;
                 match loc {
                     VarLoc::Local(reg) => self.builder().store_local(reg),
                     VarLoc::Temp(arr, idx) => {
@@ -1041,6 +1166,8 @@ impl Compiler {
         // Analyze captures (walks into nested scopes)
         self.analyze_captures(body, &[]);
 
+        self.emit_captured_param_inits(parent_params);
+
         // Also analyze captures in slot values
         for slot in slots {
             self.analyze_capture_expr(&slot.value, &[]);
@@ -1050,12 +1177,8 @@ impl Compiler {
         for slot in slots {
             self.compile_expr(&slot.value)?;
             let name = slot_selector_name(slot);
-            let loc = self.resolve(&name);
-            match loc {
-                VarLoc::Local(reg) => self.builder().store_local(reg),
-                VarLoc::Temp(arr, idx) => self.builder().store_temp(arr, idx),
-                VarLoc::Global(ci) => self.builder().store_assoc(ci),
-            }
+            let reg = self.scope().find_local(&name).expect("slot local").reg;
+            self.builder().store_local(reg);
         }
 
         // Compile body
@@ -1118,17 +1241,14 @@ impl Compiler {
                 self.prescan_locals(body);
                 self.analyze_captures(body, &[]);
 
+                self.emit_captured_param_inits(&slot.params);
+
                 for inner_slot in inner_slots {
                     self.compile_expr(&inner_slot.value)?;
                     let name = slot_selector_name(inner_slot);
-                    let loc = self.resolve(&name);
-                    match loc {
-                        VarLoc::Local(reg) => self.builder().store_local(reg),
-                        VarLoc::Temp(arr, idx) => {
-                            self.builder().store_temp(arr, idx)
-                        }
-                        VarLoc::Global(ci) => self.builder().store_assoc(ci),
-                    }
+                    let reg =
+                        self.scope().find_local(&name).expect("slot local").reg;
+                    self.builder().store_local(reg);
                 }
 
                 self.compile_body(body)?;
@@ -1230,6 +1350,8 @@ impl Compiler {
 
         self.prescan_locals(body);
         self.analyze_captures(body, &[]);
+
+        self.emit_captured_param_inits(args);
 
         self.compile_body(body)?;
         self.builder().local_return();
@@ -1472,6 +1594,30 @@ mod tests {
     }
 
     #[test]
+    fn compile_keyword_message_arg_registers_with_complex_arg() {
+        let code = compile_source("Object _Extend: o With: { x := 7 }");
+        let instrs = decode(&code);
+        let send_pos = instrs
+            .iter()
+            .rposition(|i| matches!(i, Instruction::Send { argc: 2, .. }))
+            .expect("missing send");
+        let send_reg = match instrs[send_pos] {
+            Instruction::Send { reg, .. } => reg,
+            _ => unreachable!(),
+        };
+        assert_eq!(send_reg, 2);
+
+        let mut last_store = None;
+        for instr in instrs[..send_pos].iter().rev() {
+            if let Instruction::StoreLocal { reg } = instr {
+                last_store = Some(*reg);
+                break;
+            }
+        }
+        assert_eq!(last_store, Some(3));
+    }
+
+    #[test]
     fn compile_local_assignment_and_binary() {
         let code = compile_source("x = 5. x + 3");
         let instrs = decode(&code);
@@ -1689,6 +1835,130 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compile_block_param_not_captured() {
+        let code = compile_source("[ | x | x ]");
+        let block_code = find_code_const(&code.constants);
+        assert_eq!(block_code.arg_count, 1);
+        assert_eq!(block_code.temp_count, 0);
+        let instrs = decode(block_code);
+        assert_eq!(
+            instrs,
+            vec![Instruction::LoadLocal { reg: 1 }, Instruction::LocalReturn,]
+        );
+    }
+
+    #[test]
+    fn compile_block_param_captured() {
+        let code = compile_source("[ | x | [ x ] ]");
+        let block_code = find_code_const(&code.constants);
+        assert_eq!(block_code.arg_count, 1);
+        assert_eq!(block_code.temp_count, 1);
+        let block_instrs = decode(block_code);
+        assert!(matches!(
+            block_instrs[0],
+            Instruction::MovToTemp {
+                array_idx: 0,
+                idx: 0,
+                src: 1
+            }
+        ));
+
+        let inner_code = find_code_const(&block_code.constants);
+        let inner_instrs = decode(inner_code);
+        assert_eq!(
+            inner_instrs[0],
+            Instruction::LoadTemp {
+                array_idx: 0,
+                idx: 0
+            }
+        );
+    }
+
+    #[test]
+    fn compile_block_assignment_updates_capture() {
+        let code = compile_source("x := 0. [ x := 1 ]");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
+        assert!(instrs.iter().any(|i| {
+            matches!(
+                i,
+                Instruction::StoreTemp {
+                    array_idx: 0,
+                    idx: 0
+                }
+            )
+        }));
+    }
+
+    #[test]
+    fn compile_assignment_to_constant_is_error() {
+        let exprs = parse_source("x = 1. x := 2");
+        let err = Compiler::compile(&exprs).expect_err("expected error");
+        assert!(err.message.contains("cannot assign to constant"));
+    }
+
+    #[test]
+    fn compile_block_inherits_self() {
+        let code = compile_source("[ self ]");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
+        assert_eq!(
+            instrs,
+            vec![Instruction::LoadLocal { reg: 0 }, Instruction::LocalReturn,]
+        );
+    }
+
+    #[test]
+    fn compile_method_captures_param_and_local() {
+        let code = compile_source("{ do: x With: y = { z = x. [ y + z ] } }");
+        let method_code = find_code_const_by_args(&code.constants, 2);
+        assert_eq!(method_code.temp_count, 2);
+
+        let method_instrs = decode(method_code);
+        assert!(method_instrs.iter().any(|i| {
+            matches!(
+                i,
+                Instruction::MovToTemp {
+                    array_idx: 0,
+                    idx: 0,
+                    src: 2
+                }
+            )
+        }));
+        assert!(method_instrs.iter().any(|i| {
+            matches!(
+                i,
+                Instruction::StoreTemp {
+                    array_idx: 0,
+                    idx: 1
+                }
+            )
+        }));
+
+        let inner_code = find_code_const(&method_code.constants);
+        let inner_instrs = decode(inner_code);
+        let mut load_temps = inner_instrs
+            .iter()
+            .filter(|i| matches!(i, Instruction::LoadTemp { .. }));
+        let first = load_temps.next().expect("missing LoadTemp");
+        let second = load_temps.next().expect("missing LoadTemp");
+        assert!(matches!(
+            first,
+            Instruction::LoadTemp {
+                array_idx: 0,
+                idx: 0
+            }
+        ));
+        assert!(matches!(
+            second,
+            Instruction::LoadTemp {
+                array_idx: 0,
+                idx: 1
+            }
+        ));
+    }
+
     // ── Milestone 5: Globals + Cascade ──────────────────────────
 
     #[test]
@@ -1700,7 +1970,7 @@ mod tests {
             vec![Instruction::LoadAssoc { idx: 0 }, Instruction::LocalReturn,]
         );
         assert!(
-            matches!(&code.constants[0], ConstEntry::Assoc(s) if s == "Console")
+            matches!(&code.constants[0], ConstEntry::Symbol(s) if s == "Console")
         );
     }
 
@@ -1794,5 +2064,43 @@ mod tests {
             }
         }
         panic!("no Code constant found");
+    }
+
+    fn find_code_const_by_args(
+        constants: &[ConstEntry],
+        arg_count: u16,
+    ) -> &CodeDesc {
+        fn search<'a>(
+            entry: &'a ConstEntry,
+            arg_count: u16,
+        ) -> Option<&'a CodeDesc> {
+            match entry {
+                ConstEntry::Code(code) => {
+                    if code.arg_count == arg_count {
+                        Some(code)
+                    } else {
+                        None
+                    }
+                }
+                ConstEntry::Map(map) => {
+                    for slot in &map.slots {
+                        if let SlotValue::Constant(c) = &slot.value {
+                            if let Some(found) = search(c, arg_count) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+
+        for c in constants {
+            if let Some(found) = search(c, arg_count) {
+                return found;
+            }
+        }
+        panic!("no Code constant found with arg_count {arg_count}");
     }
 }

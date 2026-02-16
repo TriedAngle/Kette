@@ -1,6 +1,6 @@
 use crate::header::ObjectType;
 use crate::map::Map;
-use crate::objects::{Block, SlotObject};
+use crate::objects::SlotObject;
 use crate::slot::Slot;
 use crate::special::SpecialObjects;
 use crate::Value;
@@ -92,16 +92,7 @@ unsafe fn lookup_value(
             lookup_in_slot_object(obj, receiver, name, specials, visited)
         }
         ObjectType::Block => {
-            // Block has the same header+map prefix as SlotObject.
-            let obj: &Block = receiver.as_ref();
-            let as_slot_obj = &*(obj as *const Block as *const SlotObject);
-            lookup_in_slot_object(
-                as_slot_obj,
-                receiver,
-                name,
-                specials,
-                visited,
-            )
+            lookup_value(specials.block_traits, name, specials, visited)
         }
         ObjectType::Map => {
             let map: &Map = receiver.as_ref();
@@ -319,6 +310,8 @@ mod tests {
             true_obj: nil,
             false_obj: nil,
             map_map: nil,
+            object: nil,
+            block_traits: nil,
             array_traits: nil,
             bytearray_traits: nil,
             bignum_traits: nil,
@@ -342,7 +335,14 @@ mod tests {
         let value_count =
             slots.iter().filter(|s| s.is_assignable()).count() as u32;
         unsafe {
-            init_map(ptr, map_map, Value::from_i64(0), count, value_count);
+            init_map(
+                ptr,
+                map_map,
+                Value::from_i64(0),
+                crate::MapFlags::NONE,
+                count,
+                value_count,
+            );
             let slot_dst = ptr.add(1) as *mut Slot;
             for (i, slot) in slots.iter().enumerate() {
                 slot_dst.add(i).write(*slot);

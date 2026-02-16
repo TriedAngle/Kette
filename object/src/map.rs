@@ -6,7 +6,8 @@ use crate::Value;
 ///
 /// Layout in memory:
 /// ```text
-/// [Header 8B] [map: Value 8B] [code: Value 8B] [slot_count: u32 4B] [_pad 4B]
+/// [Header 8B] [map: Value 8B] [code: Value 8B] [flags: u64 8B]
+/// [slot_count: u32 4B] [value_count: u32 4B]
 /// [Slot_0 24B] [Slot_1 24B] ... [Slot_N-1 24B]
 /// ```
 ///
@@ -17,13 +18,39 @@ pub struct Map {
     pub header: Header,
     /// Tagged reference to this map's own map (→ `map_map`).
     pub map: Value,
-    /// Nil or tagged reference to a [`Code`](crate::Code) object.
+    /// Tagged reference to a [`Code`](crate::Code) object or primitive index
+    /// (as fixnum) depending on [`MapFlags`].
     pub code: Value,
+    /// Map metadata flags (see [`MapFlags`]).
+    pub flags: u64,
     slot_count: u32,
     value_count: u32,
 }
 
-const _: () = assert!(size_of::<Map>() == 32);
+const _: () = assert!(size_of::<Map>() == 40);
+
+/// Map-level flags controlling method dispatch and metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct MapFlags(pub u64);
+
+impl MapFlags {
+    pub const NONE: Self = Self(0);
+    /// This map has a callable body in `code` (code pointer or primitive index).
+    pub const HAS_CODE: Self = Self(1 << 0);
+    /// `code` is a primitive index (fixnum) instead of a `Code` object.
+    pub const PRIMITIVE: Self = Self(1 << 1);
+
+    #[inline(always)]
+    pub const fn contains(self, flag: Self) -> bool {
+        self.0 & flag.0 == flag.0
+    }
+
+    #[inline(always)]
+    pub const fn with(self, flag: Self) -> Self {
+        Self(self.0 | flag.0)
+    }
+}
 
 impl Map {
     #[inline(always)]
@@ -34,6 +61,22 @@ impl Map {
     #[inline(always)]
     pub fn value_count(&self) -> u32 {
         self.value_count
+    }
+
+    #[inline(always)]
+    pub fn flags(&self) -> MapFlags {
+        MapFlags(self.flags)
+    }
+
+    #[inline(always)]
+    pub fn has_code(&self) -> bool {
+        self.flags().contains(MapFlags::HAS_CODE)
+    }
+
+    #[inline(always)]
+    pub fn is_primitive(&self) -> bool {
+        self.flags()
+            .contains(MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE))
     }
 
     /// Byte size of the entire map including inline slots.
@@ -77,6 +120,7 @@ impl core::fmt::Debug for Map {
             .field("header", &self.header)
             .field("map", &self.map)
             .field("code", &self.code)
+            .field("flags", &self.flags())
             .field("slot_count", &self.slot_count)
             .field("value_count", &self.value_count)
             .finish()
@@ -99,6 +143,7 @@ pub unsafe fn init_map(
     ptr: *mut Map,
     map_map: Value,
     code: Value,
+    flags: MapFlags,
     slot_count: u32,
     value_count: u32,
 ) {
@@ -106,6 +151,7 @@ pub unsafe fn init_map(
         header: Header::new(ObjectType::Map),
         map: map_map,
         code,
+        flags: flags.0,
         slot_count,
         value_count,
     });

@@ -345,6 +345,99 @@ const _: () = assert!(size_of::<Block>() == 16);
 #[repr(C)]
 pub struct BigNum {
     pub header: Header,
+    pub sign: i8,
+    _pad: [u8; 7],
+    len: u64,
+    data: [u64; 0],
+}
+
+const _: () = assert!(size_of::<BigNum>() == 24);
+
+impl BigNum {
+    pub const FIXNUM_MAX: i64 = (1_i64 << 62) - 1;
+
+    pub fn init(&mut self, sign: i8, limbs: &[u64]) {
+        self.header = Header::new(ObjectType::BigNum);
+        let len = limbs.len();
+        if len == 0 {
+            self.sign = 0;
+            self.len = 0;
+            return;
+        }
+
+        self.sign = sign;
+        self.len = len as u64;
+        let dest = self.data.as_mut_ptr();
+        unsafe { std::ptr::copy_nonoverlapping(limbs.as_ptr(), dest, len) };
+    }
+
+    pub fn init_zeroed(&mut self, sign: i8, len: usize) {
+        self.header = Header::new(ObjectType::BigNum);
+        if len == 0 {
+            self.sign = 0;
+            self.len = 0;
+            return;
+        }
+        self.sign = sign;
+        self.len = len as u64;
+        let dest = self.data.as_mut_ptr();
+        unsafe { std::ptr::write_bytes(dest, 0, len) };
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline(always)]
+    pub fn limbs(&self) -> &[u64] {
+        let len = self.len();
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), len) }
+    }
+
+    #[inline(always)]
+    pub fn limbs_mut(&mut self) -> &mut [u64] {
+        let len = self.len();
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr(), len) }
+    }
+
+    pub fn to_fixnum_checked(&self) -> Option<i64> {
+        let len = self.len();
+        if len == 0 {
+            return Some(0);
+        }
+        if len != 1 {
+            return None;
+        }
+        let limb = self.limbs()[0];
+        match self.sign {
+            0 => Some(0),
+            1 => {
+                if limb <= Self::FIXNUM_MAX as u64 {
+                    Some(limb as i64)
+                } else {
+                    None
+                }
+            }
+            -1 => {
+                let max_mag = 1_u64 << 62;
+                if limb <= max_mag {
+                    Some(-(limb as i64))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn required_layout(len: usize) -> std::alloc::Layout {
+        let base = std::alloc::Layout::new::<Self>();
+        let limbs =
+            std::alloc::Layout::array::<u64>(len).expect("create layout");
+        let (layout, _) = base.extend(limbs).expect("extend layout");
+        layout
+    }
 }
 
 /// Foreign (FFI) pointer wrapper.
@@ -446,6 +539,22 @@ pub unsafe fn init_str(ptr: *mut VMString, length: u64, data: Value) {
 #[repr(C)]
 pub struct Ratio {
     pub header: Header,
+    pub numerator: Value,
+    pub denominator: Value,
+}
+
+const _: () = assert!(size_of::<Ratio>() == 24);
+
+pub unsafe fn init_ratio(
+    ptr: *mut Ratio,
+    numerator: Value,
+    denominator: Value,
+) {
+    ptr.write(Ratio {
+        header: Header::new(ObjectType::Ratio),
+        numerator,
+        denominator,
+    });
 }
 
 // ── Float ─────────────────────────────────────────────────────────

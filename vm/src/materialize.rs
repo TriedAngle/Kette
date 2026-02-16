@@ -5,7 +5,7 @@ use std::ptr;
 use heap::{HeapProxy, RootProvider};
 use object::{
     code_allocation_size, init_code, init_map, init_str, map_allocation_size,
-    Code, Map, Slot, SlotFlags, SlotObject, VMString, Value,
+    Code, Map, MapFlags, Slot, SlotFlags, SlotObject, VMString, Value,
 };
 
 use crate::alloc::{add_constant_slot, alloc_byte_array, alloc_float};
@@ -140,6 +140,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
                 tagged.value()
             }
             ConstEntry::String(s) => self.alloc_str_value(s.as_bytes()),
+            ConstEntry::Value(value) => *value,
             ConstEntry::Symbol(s) => self.intern(s),
             ConstEntry::Assoc(name) => self.resolve_assoc(name),
             ConstEntry::Code(desc) => self.materialize_code(desc),
@@ -156,6 +157,11 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         let code = match desc.code {
             Some(idx) => self.roots.scratch[materialized[idx]],
             None => self.nil(),
+        };
+        let flags = if desc.code.is_some() {
+            MapFlags::HAS_CODE
+        } else {
+            MapFlags::NONE
         };
 
         // Build slot array
@@ -182,7 +188,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             let map_ptr = ptr.as_ptr() as *mut Map;
             // Re-read map_map after allocation
             let mm = self.map_map();
-            init_map(map_ptr, mm, code, slot_count, desc.value_count);
+            init_map(map_ptr, mm, code, flags, slot_count, desc.value_count);
 
             if !slots.is_empty() {
                 let slots_dst = map_ptr.add(1) as *mut Slot;
@@ -359,6 +365,7 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     scratch.push(vm.special.fixnum_traits); // 12
     scratch.push(vm.special.code_traits); // 13
     scratch.push(vm.special.float_traits); // 14
+    scratch.push(vm.special.block_traits); // 15
 
     let mut roots = MaterializeRoots {
         scratch,
@@ -393,6 +400,7 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     vm.special.fixnum_traits = roots.scratch[12];
     vm.special.code_traits = roots.scratch[13];
     vm.special.float_traits = roots.scratch[14];
+    vm.special.block_traits = roots.scratch[15];
 
     result
 }
@@ -423,6 +431,14 @@ mod tests {
     fn empty_bytecode() -> Vec<u8> {
         // A minimal bytecode: just LocalReturn (opcode 0x03)
         vec![0x03]
+    }
+
+    fn dict_slot_count(vm: &VM) -> u32 {
+        unsafe {
+            let dict: &SlotObject = vm.dictionary.as_ref();
+            let map: &Map = dict.map.as_ref();
+            map.slot_count()
+        }
     }
 
     #[test]
@@ -518,6 +534,7 @@ mod tests {
     #[test]
     fn materialize_assoc_creates() {
         let mut vm = bootstrap(test_settings());
+        let base_slots = dict_slot_count(&vm);
         let desc = CodeDesc {
             bytecode: empty_bytecode(),
             constants: vec![ConstEntry::Assoc("myGlobal".to_string())],
@@ -540,18 +557,25 @@ mod tests {
             let inline_val = assoc.read_value(SlotObject::VALUES_OFFSET);
             assert_eq!(inline_val.raw(), vm.special.nil.raw());
 
-            // Dictionary should have one slot now
+            // Dictionary should have one additional slot now
             let dict: &SlotObject = vm.dictionary.as_ref();
             let map: &Map = dict.map.as_ref();
-            assert_eq!(map.slot_count(), 1);
-            let slot = map.slot(0);
-            assert_eq!(slot.value.raw(), assoc_val.raw());
+            assert_eq!(map.slot_count(), base_slots + 1);
+            let mut found = false;
+            for slot in map.slots() {
+                if slot.value.raw() == assoc_val.raw() {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(found, "assoc not found in dictionary");
         }
     }
 
     #[test]
     fn materialize_assoc_reuses() {
         let mut vm = bootstrap(test_settings());
+        let base_slots = dict_slot_count(&vm);
 
         // First materialization creates the assoc
         let desc1 = CodeDesc {
@@ -582,10 +606,10 @@ mod tests {
             let assoc2 = c2.constant(0);
             assert_eq!(assoc1.raw(), assoc2.raw());
 
-            // Dictionary should still have only one slot
+            // Dictionary should still have only one additional slot
             let dict: &SlotObject = vm.dictionary.as_ref();
             let map: &Map = dict.map.as_ref();
-            assert_eq!(map.slot_count(), 1);
+            assert_eq!(map.slot_count(), base_slots + 1);
         }
     }
 
@@ -675,6 +699,7 @@ mod tests {
     #[test]
     fn materialize_dictionary_growth() {
         let mut vm = bootstrap(test_settings());
+        let base_slots = dict_slot_count(&vm);
         let desc = CodeDesc {
             bytecode: empty_bytecode(),
             constants: vec![
@@ -698,10 +723,10 @@ mod tests {
             assert_ne!(b.raw(), c.raw());
             assert_ne!(a.raw(), c.raw());
 
-            // Dictionary should have 3 slots
+            // Dictionary should have 3 additional slots
             let dict: &SlotObject = vm.dictionary.as_ref();
             let map: &Map = dict.map.as_ref();
-            assert_eq!(map.slot_count(), 3);
+            assert_eq!(map.slot_count(), base_slots + 3);
         }
     }
 
@@ -738,6 +763,7 @@ mod tests {
                 &mut roots,
                 mm,
                 n,
+                MapFlags::NONE,
                 &[],
                 0,
             )
@@ -798,6 +824,7 @@ mod tests {
                 &mut roots,
                 mm,
                 n,
+                MapFlags::NONE,
                 &slots,
                 0,
             )

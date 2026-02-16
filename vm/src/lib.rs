@@ -1,16 +1,17 @@
 pub mod alloc;
-pub mod special;
 pub mod compiler0;
-pub mod materialize;
 pub mod interpreter;
+pub mod materialize;
+pub mod primitives;
+pub mod special;
 
 use std::collections::HashMap;
 
-use object::{
-    Header, Map, ObjectType, SlotObject, Array, Code, Block, VMString,
-    Value, SpecialObjects,
-};
 use heap::{HeapProxy, RootProvider};
+use object::{
+    Array, Block, Code, Header, Map, ObjectType, SlotObject, SpecialObjects,
+    VMString, Value,
+};
 
 /// The VM owns a heap proxy and the bootstrapped special objects.
 pub struct VM {
@@ -18,6 +19,8 @@ pub struct VM {
     pub special: SpecialObjects,
     /// Interned symbols: Rust string → heap VMString Value.
     pub intern_table: HashMap<String, Value>,
+    /// Registered primitive descriptors.
+    pub primitives: Vec<primitives::PrimitiveDesc>,
     /// Shared map for all assoc objects (0 named slots, value_count=1).
     pub assoc_map: Value,
     /// The global dictionary object (SlotObject whose map has one CONSTANT
@@ -31,6 +34,8 @@ impl RootProvider for VM {
         visitor(&mut self.special.true_obj);
         visitor(&mut self.special.false_obj);
         visitor(&mut self.special.map_map);
+        visitor(&mut self.special.object);
+        visitor(&mut self.special.block_traits);
         visitor(&mut self.special.array_traits);
         visitor(&mut self.special.bytearray_traits);
         visitor(&mut self.special.bignum_traits);
@@ -53,7 +58,10 @@ impl RootProvider for VM {
 /// # Safety
 ///
 /// `obj` must point to a valid, live heap object with a valid [`Header`].
-pub unsafe fn trace_object(obj: *const u8, visitor: &mut dyn FnMut(&mut Value)) {
+pub unsafe fn trace_object(
+    obj: *const u8,
+    visitor: &mut dyn FnMut(&mut Value),
+) {
     let header = &*(obj as *const Header);
     match header.object_type() {
         ObjectType::Slots => {
@@ -90,7 +98,8 @@ pub unsafe fn trace_object(obj: *const u8, visitor: &mut dyn FnMut(&mut Value)) 
             let array = &*(obj as *const Array);
             let count = array.len() as usize;
             // Elements start right after the Array struct (header + length)
-            let elems_base = (obj as *mut u8).add(size_of::<Array>()) as *mut Value;
+            let elems_base =
+                (obj as *mut u8).add(size_of::<Array>()) as *mut Value;
             for i in 0..count {
                 visitor(&mut *elems_base.add(i));
             }
@@ -99,7 +108,8 @@ pub unsafe fn trace_object(obj: *const u8, visitor: &mut dyn FnMut(&mut Value)) 
             let code = &*(obj as *const Code);
             let count = code.constant_count() as usize;
             // Constants start right after the Code struct
-            let consts_base = (obj as *mut u8).add(size_of::<Code>()) as *mut Value;
+            let consts_base =
+                (obj as *mut u8).add(size_of::<Code>()) as *mut Value;
             for i in 0..count {
                 visitor(&mut *consts_base.add(i));
             }
@@ -111,9 +121,13 @@ pub unsafe fn trace_object(obj: *const u8, visitor: &mut dyn FnMut(&mut Value)) 
         ObjectType::ByteArray
         | ObjectType::BigNum
         | ObjectType::Alien
-        | ObjectType::Ratio
         | ObjectType::Float => {
             // No reference fields
+        }
+        ObjectType::Ratio => {
+            let ratio = &mut *(obj as *mut object::Ratio);
+            visitor(&mut ratio.numerator);
+            visitor(&mut ratio.denominator);
         }
     }
 }
