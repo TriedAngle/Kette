@@ -1,12 +1,14 @@
-mod op;
-mod instruction;
 mod builder;
 mod decoder;
+mod instruction;
+mod op;
+pub mod source_map;
 
-pub use op::Op;
-pub use instruction::Instruction;
 pub use builder::{BytecodeBuilder, Label};
 pub use decoder::BytecodeDecoder;
+pub use instruction::Instruction;
+pub use op::Op;
+pub use source_map::{source_map_lookup, SourceMapBuilder};
 
 #[cfg(test)]
 mod tests {
@@ -34,22 +36,43 @@ mod tests {
         b.local_return();
         b.return_();
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadConstant { idx: 42 },
-            Instruction::LoadLocal { reg: 5 },
-            Instruction::StoreLocal { reg: 10 },
-            Instruction::Send { message_idx: 100, reg: 3, argc: 2, feedback_idx: 500 },
-            Instruction::CreateObject { map_idx: 7, values_reg: 1 },
-            Instruction::CreateBlock { block_idx: 99 },
-            Instruction::LoadStack { offset: 0xDEAD_BEEF },
-            Instruction::StoreStack { offset: 0xCAFE_BABE },
-            Instruction::LoadTemp { array_idx: 10, idx: 20 },
-            Instruction::StoreTemp { array_idx: 30, idx: 40 },
-            Instruction::LoadAssoc { idx: 55 },
-            Instruction::StoreAssoc { idx: 66 },
-            Instruction::LocalReturn,
-            Instruction::Return,
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadConstant { idx: 42 },
+                Instruction::LoadLocal { reg: 5 },
+                Instruction::StoreLocal { reg: 10 },
+                Instruction::Send {
+                    message_idx: 100,
+                    reg: 3,
+                    argc: 2,
+                    feedback_idx: 500
+                },
+                Instruction::CreateObject {
+                    map_idx: 7,
+                    values_reg: 1
+                },
+                Instruction::CreateBlock { block_idx: 99 },
+                Instruction::LoadStack {
+                    offset: 0xDEAD_BEEF
+                },
+                Instruction::StoreStack {
+                    offset: 0xCAFE_BABE
+                },
+                Instruction::LoadTemp {
+                    array_idx: 10,
+                    idx: 20
+                },
+                Instruction::StoreTemp {
+                    array_idx: 30,
+                    idx: 40
+                },
+                Instruction::LoadAssoc { idx: 55 },
+                Instruction::StoreAssoc { idx: 66 },
+                Instruction::LocalReturn,
+                Instruction::Return,
+            ]
+        );
     }
 
     #[test]
@@ -60,12 +83,23 @@ mod tests {
         b.send(1, 500, 4, 2);
         b.create_object(0, 400);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadLocal { reg: 300 },
-            Instruction::StoreLocal { reg: 1000 },
-            Instruction::Send { message_idx: 1, reg: 500, argc: 4, feedback_idx: 2 },
-            Instruction::CreateObject { map_idx: 0, values_reg: 400 },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadLocal { reg: 300 },
+                Instruction::StoreLocal { reg: 1000 },
+                Instruction::Send {
+                    message_idx: 1,
+                    reg: 500,
+                    argc: 4,
+                    feedback_idx: 2
+                },
+                Instruction::CreateObject {
+                    map_idx: 0,
+                    values_reg: 400
+                },
+            ]
+        );
     }
 
     #[test]
@@ -77,12 +111,15 @@ mod tests {
         b.bind(label);
         b.local_return();
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadConstant { idx: 0 },
-            Instruction::JumpIfFalse { offset: 3 },
-            Instruction::LoadConstant { idx: 1 },
-            Instruction::LocalReturn,
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadConstant { idx: 0 },
+                Instruction::JumpIfFalse { offset: 3 },
+                Instruction::LoadConstant { idx: 1 },
+                Instruction::LocalReturn,
+            ]
+        );
     }
 
     #[test]
@@ -92,24 +129,34 @@ mod tests {
         b.load_local(0);
         b.jump_back(loop_top);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadLocal { reg: 0 },
-            Instruction::Jump { offset: -5 },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadLocal { reg: 0 },
+                Instruction::Jump { offset: -5 },
+            ]
+        );
     }
 
     #[test]
     fn display_instructions() {
         assert_eq!(
-            Instruction::Send { message_idx: 5, reg: 3, argc: 2, feedback_idx: 10 }.to_string(),
+            Instruction::Send {
+                message_idx: 5,
+                reg: 3,
+                argc: 2,
+                feedback_idx: 10
+            }
+            .to_string(),
             "Send #5 r3 2 ~10"
         );
+        assert_eq!(Instruction::Jump { offset: -7 }.to_string(), "Jump -7");
         assert_eq!(
-            Instruction::Jump { offset: -7 }.to_string(),
-            "Jump -7"
-        );
-        assert_eq!(
-            Instruction::LoadTemp { array_idx: 1, idx: 2 }.to_string(),
+            Instruction::LoadTemp {
+                array_idx: 1,
+                idx: 2
+            }
+            .to_string(),
             "LoadTemp #1[2]"
         );
     }
@@ -125,15 +172,32 @@ mod tests {
         b.mov_to_assoc(50, 12);
         b.mov_from_assoc(15, 60);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::Mov { dst: 3, src: 7 },
-            Instruction::MovToStack { offset: 0x1000, src: 5 },
-            Instruction::MovFromStack { dst: 10, offset: 0x2000 },
-            Instruction::MovToTemp { array_idx: 1, idx: 2, src: 8 },
-            Instruction::MovFromTemp { dst: 9, array_idx: 3, idx: 4 },
-            Instruction::MovToAssoc { idx: 50, src: 12 },
-            Instruction::MovFromAssoc { dst: 15, idx: 60 },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::Mov { dst: 3, src: 7 },
+                Instruction::MovToStack {
+                    offset: 0x1000,
+                    src: 5
+                },
+                Instruction::MovFromStack {
+                    dst: 10,
+                    offset: 0x2000
+                },
+                Instruction::MovToTemp {
+                    array_idx: 1,
+                    idx: 2,
+                    src: 8
+                },
+                Instruction::MovFromTemp {
+                    dst: 9,
+                    array_idx: 3,
+                    idx: 4
+                },
+                Instruction::MovToAssoc { idx: 50, src: 12 },
+                Instruction::MovFromAssoc { dst: 15, idx: 60 },
+            ]
+        );
     }
 
     #[test]
@@ -148,16 +212,33 @@ mod tests {
         b.mov_to_assoc(10, 900);
         b.mov_from_assoc(1000, 20);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::Mov { dst: 300, src: 5 },
-            Instruction::Mov { dst: 2, src: 400 },
-            Instruction::MovToStack { offset: 0x10, src: 500 },
-            Instruction::MovFromStack { dst: 600, offset: 0x20 },
-            Instruction::MovToTemp { array_idx: 1, idx: 2, src: 700 },
-            Instruction::MovFromTemp { dst: 800, array_idx: 3, idx: 4 },
-            Instruction::MovToAssoc { idx: 10, src: 900 },
-            Instruction::MovFromAssoc { dst: 1000, idx: 20 },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::Mov { dst: 300, src: 5 },
+                Instruction::Mov { dst: 2, src: 400 },
+                Instruction::MovToStack {
+                    offset: 0x10,
+                    src: 500
+                },
+                Instruction::MovFromStack {
+                    dst: 600,
+                    offset: 0x20
+                },
+                Instruction::MovToTemp {
+                    array_idx: 1,
+                    idx: 2,
+                    src: 700
+                },
+                Instruction::MovFromTemp {
+                    dst: 800,
+                    array_idx: 3,
+                    idx: 4
+                },
+                Instruction::MovToAssoc { idx: 10, src: 900 },
+                Instruction::MovFromAssoc { dst: 1000, idx: 20 },
+            ]
+        );
     }
 
     #[test]
@@ -167,7 +248,12 @@ mod tests {
             "Mov r1, r2"
         );
         assert_eq!(
-            Instruction::MovToTemp { array_idx: 5, idx: 3, src: 7 }.to_string(),
+            Instruction::MovToTemp {
+                array_idx: 5,
+                idx: 3,
+                src: 7
+            }
+            .to_string(),
             "MovToTemp #5[3], r7"
         );
         assert_eq!(
@@ -198,12 +284,15 @@ mod tests {
         b.load_smi(-128);
         b.load_smi(-1);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadSmi { value: 0 },
-            Instruction::LoadSmi { value: 127 },
-            Instruction::LoadSmi { value: -128 },
-            Instruction::LoadSmi { value: -1 },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadSmi { value: 0 },
+                Instruction::LoadSmi { value: 127 },
+                Instruction::LoadSmi { value: -128 },
+                Instruction::LoadSmi { value: -1 },
+            ]
+        );
     }
 
     #[test]
@@ -222,12 +311,15 @@ mod tests {
         b.load_smi(32767);
         b.load_smi(-32768);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadSmi { value: 128 },
-            Instruction::LoadSmi { value: -129 },
-            Instruction::LoadSmi { value: 32767 },
-            Instruction::LoadSmi { value: -32768 },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadSmi { value: 128 },
+                Instruction::LoadSmi { value: -129 },
+                Instruction::LoadSmi { value: 32767 },
+                Instruction::LoadSmi { value: -32768 },
+            ]
+        );
     }
 
     #[test]
@@ -247,12 +339,15 @@ mod tests {
         b.load_smi(i32::MAX);
         b.load_smi(i32::MIN);
 
-        assert_eq!(decode_all(&b.into_bytes()), vec![
-            Instruction::LoadSmi { value: 32768 },
-            Instruction::LoadSmi { value: -32769 },
-            Instruction::LoadSmi { value: i32::MAX },
-            Instruction::LoadSmi { value: i32::MIN },
-        ]);
+        assert_eq!(
+            decode_all(&b.into_bytes()),
+            vec![
+                Instruction::LoadSmi { value: 32768 },
+                Instruction::LoadSmi { value: -32769 },
+                Instruction::LoadSmi { value: i32::MAX },
+                Instruction::LoadSmi { value: i32::MIN },
+            ]
+        );
     }
 
     #[test]
@@ -266,8 +361,14 @@ mod tests {
 
     #[test]
     fn load_smi_display() {
-        assert_eq!(Instruction::LoadSmi { value: 42 }.to_string(), "LoadSmi 42");
-        assert_eq!(Instruction::LoadSmi { value: -1 }.to_string(), "LoadSmi -1");
+        assert_eq!(
+            Instruction::LoadSmi { value: 42 }.to_string(),
+            "LoadSmi 42"
+        );
+        assert_eq!(
+            Instruction::LoadSmi { value: -1 }.to_string(),
+            "LoadSmi -1"
+        );
     }
 
     #[test]

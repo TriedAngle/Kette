@@ -11,8 +11,8 @@ use crate::Value;
 /// reference (`&SpecialObjects`) to subsystems that need it.
 pub struct SpecialObjects {
     // ── Singletons ─────────────────────────────────────────────────
-    /// The canonical `nil` object.
-    pub nil: Value,
+    /// The canonical `None` object.
+    pub none: Value,
 
     /// The canonical `true` object.
     pub true_obj: Value,

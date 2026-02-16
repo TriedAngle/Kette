@@ -4,23 +4,29 @@ Object _Extend: Object With: {
     }
 }.
 
-Object extend: Object With: {
-    ifTrue: t IfFalse: f = { t call }.
+Boolean = { 
+    parent* = Object.
+    ifTrue: t ifFalse: f = { t call }.
     ifTrue: t = { self ifTrue: t IfFalse: [ none ] }.
     ifFalse: f = { self ifTrue: [ none ] IfFalse: f }.
     && rhs = { self ifTrue: [ rhs ] IfFalse: [ self ] }.
     || rhs = { self ifTrue: [ self ] IfFalse: [ rhs ] }.
 }.
 
+Object extend: Object With: { 
+    truthyness* = Boolean.
+}.
+
 Object extend: false With: {
-    parent* = Object.
+    parent* = Boolean.
     ifTrue: t IfFalse: f = { f call }.
     toString = { "false" }.
 }.
 
 Object extend: true With: {
-    parent* = Object.
+    parent* = Boolean.
     toString = { "true" }.
+    ifTrue: t IfFalse: f = { t call }.
 }.
 
 
@@ -267,7 +273,7 @@ Object extend: Float With: {
     <= rhs = { rhs leFloat: self }.
     > rhs = { rhs gtFloat: self }.
     >= rhs = { rhs geFloat: self }.
-    ~= rhs = { self equals: rhs WithEpsilon: epsilon }.
+    ~= rhs = { self equals: rhs WithEpsilon: self epsilon }.
 
     equals: rhs WithEpsilon: e = { self _FloatApproxEq: rhs WithEpsilon: e }.
 
@@ -335,3 +341,15 @@ i := 0.
 ].
 
 (10 + 20.5 + 20/30) toString println
+
+2.0 ~= 3.0.
+
+Point = {
+    x := 0.
+    y := 0.
+    moveByX: dx Y: dy = { self x: (self x + dx). self y: (self y + dy) }.
+}.
+
+Point moveByX: 10 Y: 20.
+Point moveByX: 40 Y: 20.
+Point x

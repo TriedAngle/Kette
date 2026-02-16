@@ -140,7 +140,7 @@ pub unsafe fn alloc_code(
 ) -> Tagged<Code> {
     let constant_count = constants.len() as u32;
     let bytecode_len = bytecode.len() as u32;
-    let size = code_allocation_size(constant_count, bytecode_len);
+    let size = code_allocation_size(constant_count, bytecode_len, 0);
     let layout = Layout::from_size_align(size, 8).unwrap();
     let ptr = proxy.allocate(layout, roots);
 
@@ -152,6 +152,7 @@ pub unsafe fn alloc_code(
         arg_count,
         bytecode_len,
         temp_count,
+        0,
     );
 
     if !constants.is_empty() {

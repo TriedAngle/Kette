@@ -302,25 +302,25 @@ mod tests {
         Map, SlotFlags, SlotObject,
     };
 
-    /// Dummy specials where all trait objects point to nil (fixnum 0).
+    /// Dummy specials where all trait objects point to None (fixnum 0).
     fn dummy_specials() -> SpecialObjects {
-        let nil = Value::from_i64(0);
+        let none = Value::from_i64(0);
         SpecialObjects {
-            nil,
-            true_obj: nil,
-            false_obj: nil,
-            map_map: nil,
-            object: nil,
-            block_traits: nil,
-            array_traits: nil,
-            bytearray_traits: nil,
-            bignum_traits: nil,
-            alien_traits: nil,
-            string_traits: nil,
-            ratio_traits: nil,
-            fixnum_traits: nil,
-            code_traits: nil,
-            float_traits: nil,
+            none,
+            true_obj: none,
+            false_obj: none,
+            map_map: none,
+            object: none,
+            block_traits: none,
+            array_traits: none,
+            bytearray_traits: none,
+            bignum_traits: none,
+            alien_traits: none,
+            string_traits: none,
+            ratio_traits: none,
+            fixnum_traits: none,
+            code_traits: none,
+            float_traits: none,
         }
     }
 
@@ -382,7 +382,7 @@ mod tests {
         let slot_value = Value::from_i64(42);
 
         let slot = Slot::new(SlotFlags::CONSTANT, name, slot_value);
-        let (_map_buf, map_val) = alloc_map(specials.nil, &[slot]);
+        let (_map_buf, map_val) = alloc_map(specials.none, &[slot]);
         let (_obj_buf, obj_val) = alloc_slot_object(map_val, &[]);
 
         unsafe {
@@ -416,7 +416,7 @@ mod tests {
             name,
             Value::from_i64(offset as i64),
         );
-        let (_map_buf, map_val) = alloc_map(specials.nil, &[slot]);
+        let (_map_buf, map_val) = alloc_map(specials.none, &[slot]);
         // The first inline value at VALUES_OFFSET.
         let (_obj_buf, obj_val) = alloc_slot_object(map_val, &[stored_value]);
 
@@ -442,7 +442,7 @@ mod tests {
         let parent_slot =
             Slot::new(SlotFlags::CONSTANT, parent_name, parent_value);
         let (_parent_map_buf, parent_map_val) =
-            alloc_map(specials.nil, &[parent_slot]);
+            alloc_map(specials.none, &[parent_slot]);
         let (_parent_buf, parent_val) = alloc_slot_object(parent_map_val, &[]);
 
         // Child object has a CONSTANT | PARENT slot pointing to parent.
@@ -452,7 +452,7 @@ mod tests {
             parent_val,
         );
         let (_child_map_buf, child_map_val) =
-            alloc_map(specials.nil, &[parent_link]);
+            alloc_map(specials.none, &[parent_link]);
         let (_child_buf, child_val) = alloc_slot_object(child_map_val, &[]);
 
         unsafe {
@@ -488,7 +488,7 @@ mod tests {
             Value::from_i64(1), // parent link name
             Value::from_i64(0), // placeholder
         );
-        let (mut map_a_buf, map_a_val) = alloc_map(specials.nil, &[slot_a]);
+        let (mut map_a_buf, map_a_val) = alloc_map(specials.none, &[slot_a]);
 
         // Allocate map B: CONSTANT | PARENT slot (value will be patched).
         let slot_b = Slot::new(
@@ -496,7 +496,7 @@ mod tests {
             Value::from_i64(2), // parent link name
             Value::from_i64(0), // placeholder
         );
-        let (mut map_b_buf, map_b_val) = alloc_map(specials.nil, &[slot_b]);
+        let (mut map_b_buf, map_b_val) = alloc_map(specials.none, &[slot_b]);
 
         let (_obj_a_buf, obj_a_val) = alloc_slot_object(map_a_val, &[]);
         let (_obj_b_buf, obj_b_val) = alloc_slot_object(map_b_val, &[]);
@@ -565,7 +565,7 @@ mod tests {
             Value::from_i64(999),
             Value::from_i64(1),
         );
-        let (_map_buf, map_val) = alloc_map(specials.nil, &[slot]);
+        let (_map_buf, map_val) = alloc_map(specials.none, &[slot]);
         let (_obj_buf, obj_val) = alloc_slot_object(map_val, &[]);
 
         unsafe {
@@ -586,7 +586,7 @@ mod tests {
         let parent_slot =
             Slot::new(SlotFlags::CONSTANT, target_name, target_value);
         let (_parent_map_buf, parent_map_val) =
-            alloc_map(specials.nil, &[parent_slot]);
+            alloc_map(specials.none, &[parent_slot]);
         let (_parent_buf, parent_val) = alloc_slot_object(parent_map_val, &[]);
 
         // Child has an ASSIGNABLE | PARENT slot.
@@ -598,7 +598,7 @@ mod tests {
             Value::from_i64(offset as i64),
         );
         let (_child_map_buf, child_map_val) =
-            alloc_map(specials.nil, &[parent_link]);
+            alloc_map(specials.none, &[parent_link]);
         // Inline value 0 = the parent reference.
         let (_child_buf, child_val) =
             alloc_slot_object(child_map_val, &[parent_val]);
@@ -662,7 +662,7 @@ mod tests {
         let mut code_buf = vec![0u8; size_of::<crate::Code>()];
         let code_ptr = code_buf.as_mut_ptr() as *mut crate::Code;
         unsafe {
-            crate::init_code(code_ptr, 0, 0, 0, 0, 0);
+            crate::init_code(code_ptr, 0, 0, 0, 0, 0, 0);
         }
         let code_val = Value::from_ptr(code_buf.as_ptr());
 

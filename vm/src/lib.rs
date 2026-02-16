@@ -30,7 +30,7 @@ pub struct VM {
 
 impl RootProvider for VM {
     fn visit_roots(&mut self, visitor: &mut dyn FnMut(&mut Value)) {
-        visitor(&mut self.special.nil);
+        visitor(&mut self.special.none);
         visitor(&mut self.special.true_obj);
         visitor(&mut self.special.false_obj);
         visitor(&mut self.special.map_map);

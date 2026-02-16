@@ -110,7 +110,10 @@ impl<'a> BytecodeDecoder<'a> {
             Op::CreateObject => {
                 let map_idx = self.read_u16();
                 let values_reg = self.read_reg(wide);
-                Instruction::CreateObject { map_idx, values_reg }
+                Instruction::CreateObject {
+                    map_idx,
+                    values_reg,
+                }
             }
 
             Op::CreateBlock => {
@@ -123,14 +126,27 @@ impl<'a> BytecodeDecoder<'a> {
                 let reg = self.read_reg(wide);
                 let argc = self.read_u8();
                 let feedback_idx = self.read_u16();
-                Instruction::Send { message_idx, reg, argc, feedback_idx }
+                Instruction::Send {
+                    message_idx,
+                    reg,
+                    argc,
+                    feedback_idx,
+                }
             }
 
-            Op::LoadLocal => Instruction::LoadLocal { reg: self.read_reg(wide) },
-            Op::StoreLocal => Instruction::StoreLocal { reg: self.read_reg(wide) },
+            Op::LoadLocal => Instruction::LoadLocal {
+                reg: self.read_reg(wide),
+            },
+            Op::StoreLocal => Instruction::StoreLocal {
+                reg: self.read_reg(wide),
+            },
 
-            Op::LoadStack => Instruction::LoadStack { offset: self.read_u32() },
-            Op::StoreStack => Instruction::StoreStack { offset: self.read_u32() },
+            Op::LoadStack => Instruction::LoadStack {
+                offset: self.read_u32(),
+            },
+            Op::StoreStack => Instruction::StoreStack {
+                offset: self.read_u32(),
+            },
 
             Op::LoadTemp => {
                 let array_idx = self.read_u16();
@@ -144,8 +160,12 @@ impl<'a> BytecodeDecoder<'a> {
                 Instruction::StoreTemp { array_idx, idx }
             }
 
-            Op::LoadAssoc => Instruction::LoadAssoc { idx: self.read_u16() },
-            Op::StoreAssoc => Instruction::StoreAssoc { idx: self.read_u16() },
+            Op::LoadAssoc => Instruction::LoadAssoc {
+                idx: self.read_u16(),
+            },
+            Op::StoreAssoc => Instruction::StoreAssoc {
+                idx: self.read_u16(),
+            },
 
             Op::Mov => {
                 let dst = self.read_reg(wide);
@@ -169,14 +189,22 @@ impl<'a> BytecodeDecoder<'a> {
                 let array_idx = self.read_u16();
                 let idx = self.read_u16();
                 let src = self.read_reg(wide);
-                Instruction::MovToTemp { array_idx, idx, src }
+                Instruction::MovToTemp {
+                    array_idx,
+                    idx,
+                    src,
+                }
             }
 
             Op::MovFromTemp => {
                 let dst = self.read_reg(wide);
                 let array_idx = self.read_u16();
                 let idx = self.read_u16();
-                Instruction::MovFromTemp { dst, array_idx, idx }
+                Instruction::MovFromTemp {
+                    dst,
+                    array_idx,
+                    idx,
+                }
             }
 
             Op::MovToAssoc => {
@@ -191,16 +219,27 @@ impl<'a> BytecodeDecoder<'a> {
                 Instruction::MovFromAssoc { dst, idx }
             }
 
-            Op::Jump => Instruction::Jump { offset: self.read_i16() },
-            Op::JumpIfTrue => Instruction::JumpIfTrue { offset: self.read_i16() },
-            Op::JumpIfFalse => Instruction::JumpIfFalse { offset: self.read_i16() },
+            Op::Jump => Instruction::Jump {
+                offset: self.read_i16(),
+            },
+            Op::JumpIfTrue => Instruction::JumpIfTrue {
+                offset: self.read_i16(),
+            },
+            Op::JumpIfFalse => Instruction::JumpIfFalse {
+                offset: self.read_i16(),
+            },
 
             Op::Resend => {
                 let message_idx = self.read_u16();
                 let reg = self.read_reg(wide);
                 let argc = self.read_u8();
                 let feedback_idx = self.read_u16();
-                Instruction::Resend { message_idx, reg, argc, feedback_idx }
+                Instruction::Resend {
+                    message_idx,
+                    reg,
+                    argc,
+                    feedback_idx,
+                }
             }
 
             Op::DirectedResend => {
@@ -209,7 +248,13 @@ impl<'a> BytecodeDecoder<'a> {
                 let argc = self.read_u8();
                 let feedback_idx = self.read_u16();
                 let delegate_idx = self.read_u16();
-                Instruction::DirectedResend { message_idx, reg, argc, feedback_idx, delegate_idx }
+                Instruction::DirectedResend {
+                    message_idx,
+                    reg,
+                    argc,
+                    feedback_idx,
+                    delegate_idx,
+                }
             }
         }
     }
@@ -224,7 +269,10 @@ impl<'a> BytecodeDecoder<'a> {
 
     #[inline(always)]
     unsafe fn read_u16(&mut self) -> u16 {
-        debug_assert!(self.pos + 2 <= self.bytes.len(), "read_u16 out of bounds");
+        debug_assert!(
+            self.pos + 2 <= self.bytes.len(),
+            "read_u16 out of bounds"
+        );
         let ptr = self.bytes.as_ptr().add(self.pos) as *const u16;
         let v = u16::from_le(ptr.read_unaligned());
         self.pos += 2;
@@ -238,7 +286,10 @@ impl<'a> BytecodeDecoder<'a> {
 
     #[inline(always)]
     unsafe fn read_u32(&mut self) -> u32 {
-        debug_assert!(self.pos + 4 <= self.bytes.len(), "read_u32 out of bounds");
+        debug_assert!(
+            self.pos + 4 <= self.bytes.len(),
+            "read_u32 out of bounds"
+        );
         let ptr = self.bytes.as_ptr().add(self.pos) as *const u32;
         let v = u32::from_le(ptr.read_unaligned());
         self.pos += 4;

@@ -13,14 +13,14 @@ use std::{
     ops::Deref,
     ptr::{self, NonNull},
     sync::{
+        atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
 use object::{Header, HeaderFlags, Value};
 
-use crate::{OS_PAGE_SIZE, SenseBarrier, system};
+use crate::{system, SenseBarrier, OS_PAGE_SIZE};
 
 // ── Public API types ──────────────────────────────────────────────────
 
@@ -33,7 +33,8 @@ use crate::{OS_PAGE_SIZE, SenseBarrier, system};
 /// # Safety
 ///
 /// `obj` must point to a valid, live heap object with a valid [`Header`].
-pub type TraceFn = unsafe fn(obj: *const u8, visitor: &mut dyn FnMut(&mut Value));
+pub type TraceFn =
+    unsafe fn(obj: *const u8, visitor: &mut dyn FnMut(&mut Value));
 
 /// Consumers implement this to provide GC roots.
 ///
@@ -1421,18 +1422,12 @@ impl HeapProxy {
 
     #[cfg(test)]
     #[cold]
-    fn execute_gc(
-        &mut self,
-        roots: &mut dyn RootProvider,
-    ) {
+    fn execute_gc(&mut self, roots: &mut dyn RootProvider) {
         self.execute_gc_with_reason(GcStatus::MinorRequested, true, roots);
     }
 
     /// Collect GC inputs: snapshot VM roots and merge with the local remembered set.
-    fn collect_gc_inputs(
-        &mut self,
-        roots: &mut dyn RootProvider,
-    ) -> RootSet {
+    fn collect_gc_inputs(&mut self, roots: &mut dyn RootProvider) -> RootSet {
         let mut root_values = Vec::new();
         roots.visit_roots(&mut |value| {
             root_values.push(*value);
@@ -1527,7 +1522,10 @@ mod tests {
     use object::ObjectType;
 
     /// A no-op trace function for objects with no reference fields.
-    unsafe fn null_trace(_obj: *const u8, _visitor: &mut dyn FnMut(&mut Value)) {
+    unsafe fn null_trace(
+        _obj: *const u8,
+        _visitor: &mut dyn FnMut(&mut Value),
+    ) {
         // Test objects have no reference fields
     }
 
@@ -1675,7 +1673,10 @@ mod tests {
         let status_b = heap.get_object_line_status(ptr_b.as_ptr());
 
         assert_eq!(status_a, epoch, "Root object line must be marked");
-        assert_eq!(status_b, epoch, "Dead object line must be marked from a (same line)");
+        assert_eq!(
+            status_b, epoch,
+            "Dead object line must be marked from a (same line)"
+        );
         assert_eq!(header_a.age(), 1, "Root object must be marked");
         assert_ne!(header_b.age(), 1, "Dead object must not be marked");
     }
@@ -1886,7 +1887,11 @@ mod tests {
             *header = Header::new(ObjectType::Array);
         }
 
-        proxy.execute_gc_with_reason(GcStatus::MajorRequested, true, &mut roots);
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
 
         let status = heap.blocks[first_block].status.load(Ordering::Relaxed);
         assert_eq!(
@@ -1906,7 +1911,11 @@ mod tests {
         let header = unsafe { &mut *(ptr.as_ptr() as *mut Header) };
         *header = Header::new(ObjectType::Array);
 
-        proxy.execute_gc_with_reason(GcStatus::MajorRequested, true, &mut roots);
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
 
         let large_objects =
             heap.large_objects.lock().expect("TODO: handle poisoning");
@@ -1985,9 +1994,8 @@ mod tests {
             }
 
             let old_ptr = value.ref_bits() as *mut u8;
-            let new_ptr = proxy
-                .allocate_on_block(layout)
-                .expect("block has space");
+            let new_ptr =
+                proxy.allocate_on_block(layout).expect("block has space");
 
             // copy object data (header + payload) to the new location
             unsafe {

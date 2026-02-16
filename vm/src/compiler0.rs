@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use bytecode::BytecodeBuilder;
+use bytecode::{BytecodeBuilder, SourceMapBuilder};
 use object::Value;
 use parser::ast::{
     AssignKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotSelector,
@@ -191,6 +191,7 @@ pub struct CodeDesc {
     pub arg_count: u16,
     pub temp_count: u16,
     pub feedback_count: u16,
+    pub source_map: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +239,7 @@ struct CompileFrame {
     scope: Scope,
     builder: BytecodeBuilder,
     constants: Vec<ConstEntry>,
+    source_map: SourceMapBuilder,
 }
 
 // ── Compiler ────────────────────────────────────────────────────────
@@ -277,6 +279,7 @@ impl Compiler {
             scope: Scope::new(kind),
             builder: BytecodeBuilder::new(),
             constants: Vec::new(),
+            source_map: SourceMapBuilder::new(),
         });
     }
 
@@ -289,6 +292,7 @@ impl Compiler {
             temp_count: frame.scope.temp_count,
             feedback_count: frame.scope.feedback_count,
             constants: frame.constants,
+            source_map: frame.source_map.finish(),
         }
     }
 
@@ -310,6 +314,17 @@ impl Compiler {
 
     fn builder(&mut self) -> &mut BytecodeBuilder {
         &mut self.frame_mut().builder
+    }
+
+    /// Record a source map entry mapping the current bytecode offset to a span.
+    fn note(&mut self, span: Span) {
+        let frame = self.frames.last_mut().expect("no active frame");
+        let pc = frame.builder.current_offset() as u32;
+        frame.source_map.add(
+            pc,
+            span.start.offset as u32,
+            span.end.offset as u32,
+        );
     }
 
     fn emit_captured_param_inits(&mut self, params: &[String]) {
@@ -710,6 +725,7 @@ impl Compiler {
     // ── Expression compilation ──────────────────────────────────
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
+        self.note(expr.span);
         match &expr.kind {
             ExprKind::Integer(v) => {
                 if let Ok(v32) = i32::try_from(*v) {
@@ -734,17 +750,19 @@ impl Compiler {
                 self.compile_ident(name);
             }
             ExprKind::UnaryMessage { receiver, selector } => {
-                self.compile_unary_message(receiver, selector)?;
+                self.compile_unary_message(receiver, selector, expr.span)?;
             }
             ExprKind::BinaryMessage {
                 receiver,
                 operator,
                 argument,
             } => {
-                self.compile_binary_message(receiver, operator, argument)?;
+                self.compile_binary_message(
+                    receiver, operator, argument, expr.span,
+                )?;
             }
             ExprKind::KeywordMessage { receiver, pairs } => {
-                self.compile_keyword_message(receiver, pairs)?;
+                self.compile_keyword_message(receiver, pairs, expr.span)?;
             }
             ExprKind::Assignment {
                 target,
@@ -773,10 +791,10 @@ impl Compiler {
                 self.compile_cascade(receiver, messages)?;
             }
             ExprKind::Resend { message } => {
-                self.compile_resend(message, None)?;
+                self.compile_resend(message, None, expr.span)?;
             }
             ExprKind::DirectedResend { delegate, message } => {
-                self.compile_resend(message, Some(delegate))?;
+                self.compile_resend(message, Some(delegate), expr.span)?;
             }
             ExprKind::Comment(_) => {
                 // Skip
@@ -802,10 +820,12 @@ impl Compiler {
         &mut self,
         receiver: &Expr,
         selector: &str,
+        msg_span: Span,
     ) -> Result<(), CompileError> {
         self.compile_expr(receiver)?;
         let sel_idx = self.add_symbol(selector);
         let fb = self.scope_mut().next_feedback();
+        self.note(msg_span);
         self.builder().send(sel_idx, 0, 0, fb);
         Ok(())
     }
@@ -815,6 +835,7 @@ impl Compiler {
         receiver: &Expr,
         operator: &str,
         argument: &Expr,
+        msg_span: Span,
     ) -> Result<(), CompileError> {
         self.compile_expr(receiver)?;
         let tmp_recv = self.scope_mut().alloc_temp();
@@ -827,6 +848,7 @@ impl Compiler {
         self.builder().load_local(tmp_recv);
         let op_idx = self.add_symbol(operator);
         let fb = self.scope_mut().next_feedback();
+        self.note(msg_span);
         self.builder().send(op_idx, tmp_arg, 1, fb);
         Ok(())
     }
@@ -835,6 +857,7 @@ impl Compiler {
         &mut self,
         receiver: &Expr,
         pairs: &[KeywordPair],
+        msg_span: Span,
     ) -> Result<(), CompileError> {
         self.compile_expr(receiver)?;
         let tmp_recv = self.scope_mut().alloc_temp();
@@ -855,6 +878,7 @@ impl Compiler {
         let sel_idx = self.add_symbol(&selector);
         let fb = self.scope_mut().next_feedback();
         let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
+        self.note(msg_span);
         self.builder()
             .send(sel_idx, first_arg_reg, pairs.len() as u8, fb);
         Ok(())
@@ -867,6 +891,7 @@ impl Compiler {
             ExprKind::UnaryMessage { selector, .. } => {
                 let sel_idx = self.add_symbol(selector);
                 let fb = self.scope_mut().next_feedback();
+                self.note(msg.span);
                 self.builder().send(sel_idx, 0, 0, fb);
             }
             ExprKind::BinaryMessage {
@@ -882,6 +907,7 @@ impl Compiler {
                 self.builder().load_local(tmp_recv);
                 let op_idx = self.add_symbol(operator);
                 let fb = self.scope_mut().next_feedback();
+                self.note(msg.span);
                 self.builder().send(op_idx, tmp_arg, 1, fb);
             }
             ExprKind::KeywordMessage { pairs, .. } => {
@@ -903,6 +929,7 @@ impl Compiler {
                 let sel_idx = self.add_symbol(&selector);
                 let fb = self.scope_mut().next_feedback();
                 let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
+                self.note(msg.span);
                 self.builder().send(
                     sel_idx,
                     first_arg_reg,
@@ -974,11 +1001,13 @@ impl Compiler {
         &mut self,
         message: &Expr,
         delegate: Option<&String>,
+        resend_span: Span,
     ) -> Result<(), CompileError> {
         match &message.kind {
             ExprKind::UnaryMessage { selector, .. } => {
                 let sel_idx = self.add_symbol(selector);
                 let fb = self.scope_mut().next_feedback();
+                self.note(resend_span);
                 if let Some(del) = delegate {
                     let del_idx = self.add_symbol(del);
                     self.builder().directed_resend(sel_idx, 0, 0, fb, del_idx);
@@ -995,6 +1024,7 @@ impl Compiler {
 
                 let sel_idx = self.add_symbol(operator);
                 let fb = self.scope_mut().next_feedback();
+                self.note(resend_span);
                 if let Some(del) = delegate {
                     let del_idx = self.add_symbol(del);
                     self.builder()
@@ -1016,6 +1046,7 @@ impl Compiler {
                 let sel_idx = self.add_symbol(&selector);
                 let fb = self.scope_mut().next_feedback();
                 let argc = pairs.len() as u8;
+                self.note(resend_span);
                 if let Some(del) = delegate {
                     let del_idx = self.add_symbol(del);
                     self.builder().directed_resend(

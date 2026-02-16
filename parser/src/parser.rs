@@ -618,9 +618,9 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 }
                                 _ => {
                                     return Err(ParseError::new(
-                                            "expected `=` or `:=` after parent slot",
-                                            self.peek_span(),
-                                        ));
+                                        "expected `=` or `:=` after parent slot",
+                                        self.peek_span(),
+                                    ));
                                 }
                             };
                             let value = self.parse_expression()?;

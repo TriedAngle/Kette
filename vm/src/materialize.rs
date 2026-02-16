@@ -36,15 +36,15 @@ struct MaterializeEnv<'a, 'b> {
     proxy: &'a mut HeapProxy,
     roots: &'a mut MaterializeRoots<'b>,
     // Indices into roots.scratch for well-known values
-    nil_idx: usize,
+    none_idx: usize,
     map_map_idx: usize,
     assoc_map_idx: usize,
     dictionary_idx: usize,
 }
 
 impl<'a, 'b> MaterializeEnv<'a, 'b> {
-    fn nil(&self) -> Value {
-        self.roots.scratch[self.nil_idx]
+    fn none(&self) -> Value {
+        self.roots.scratch[self.none_idx]
     }
 
     fn map_map(&self) -> Value {
@@ -85,7 +85,13 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         // Allocate the Code object
         let constant_count = constants.len() as u32;
         let bytecode_len = desc.bytecode.len() as u32;
-        let size = code_allocation_size(constant_count, bytecode_len);
+        let source_map_len =
+            desc.source_map.len().min(u16::MAX as usize) as u16;
+        let size = code_allocation_size(
+            constant_count,
+            bytecode_len,
+            source_map_len as u32,
+        );
         let layout = Layout::from_size_align(size, 8).unwrap();
         let ptr = self.proxy.allocate(layout, self.roots);
 
@@ -98,6 +104,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
                 desc.arg_count,
                 bytecode_len,
                 desc.temp_count,
+                source_map_len,
             );
 
             // Re-read constants from scratch after allocation (GC safety)
@@ -108,14 +115,23 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
                 }
             }
 
+            let bc_dst =
+                (code_ptr.add(1) as *mut Value).add(constants.len()) as *mut u8;
+
             if !desc.bytecode.is_empty() {
-                let bc_dst = (code_ptr.add(1) as *mut Value)
-                    .add(constants.len())
-                    as *mut u8;
                 ptr::copy_nonoverlapping(
                     desc.bytecode.as_ptr(),
                     bc_dst,
                     desc.bytecode.len(),
+                );
+            }
+
+            if source_map_len > 0 {
+                let sm_dst = bc_dst.add(desc.bytecode.len());
+                ptr::copy_nonoverlapping(
+                    desc.source_map.as_ptr(),
+                    sm_dst,
+                    source_map_len as usize,
                 );
             }
 
@@ -156,7 +172,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         // Resolve the code reference (if any)
         let code = match desc.code {
             Some(idx) => self.roots.scratch[materialized[idx]],
-            None => self.nil(),
+            None => self.none(),
         };
         let flags = if desc.code.is_some() {
             MapFlags::HAS_CODE
@@ -235,7 +251,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
 
         self.grow_dictionary(assoc_idx, sym_idx);
 
-        let result = self.nil();
+        let result = self.none();
         // Clean up: remove assoc and sym from scratch
         // sym_idx < assoc_idx, so remove assoc first
         self.roots.scratch.pop(); // assoc
@@ -244,16 +260,16 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
     }
 
     fn create_assoc(&mut self) -> Value {
-        // An assoc is a SlotObject with assoc_map and one inline value (nil)
+        // An assoc is a SlotObject with assoc_map and one inline value (None)
         let size = object::slot_object_allocation_size(1);
         let layout = Layout::from_size_align(size, 8).unwrap();
         let ptr = self.proxy.allocate(layout, self.roots);
 
         unsafe {
             let obj_ptr = ptr.as_ptr() as *mut SlotObject;
-            // Re-read assoc_map and nil after allocation (GC safety)
+            // Re-read assoc_map and None after allocation (GC safety)
             let am = self.assoc_map();
-            let n = self.nil();
+            let n = self.none();
             ptr::write(
                 obj_ptr,
                 SlotObject {
@@ -261,7 +277,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
                     map: am,
                 },
             );
-            // Write the inline value (nil)
+            // Write the inline value (None)
             let vals_dst = obj_ptr.add(1) as *mut Value;
             *vals_dst = n;
 
@@ -342,8 +358,8 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     // Snapshot VM specials into scratch so they survive GC
     let mut scratch = Vec::with_capacity(32);
 
-    let nil_idx = scratch.len();
-    scratch.push(vm.special.nil);
+    let none_idx = scratch.len();
+    scratch.push(vm.special.none);
 
     let map_map_idx = scratch.len();
     scratch.push(vm.special.map_map);
@@ -377,7 +393,7 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
         let mut env = MaterializeEnv {
             proxy: &mut vm.heap_proxy,
             roots: &mut roots,
-            nil_idx,
+            none_idx,
             map_map_idx,
             assoc_map_idx,
             dictionary_idx,
@@ -386,7 +402,7 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     };
 
     // Write back potentially-moved values to VM
-    vm.special.nil = roots.scratch[nil_idx];
+    vm.special.none = roots.scratch[none_idx];
     vm.special.map_map = roots.scratch[map_map_idx];
     vm.assoc_map = roots.scratch[assoc_map_idx];
     vm.dictionary = roots.scratch[dictionary_idx];
@@ -452,6 +468,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         assert!(code_val.is_ref());
@@ -474,6 +491,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
@@ -497,6 +515,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
@@ -521,6 +540,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
@@ -543,12 +563,13 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
             let code: &Code = code_val.as_ref();
             let value = code.constant(0);
-            assert_eq!(value.raw(), vm.special.nil.raw());
+            assert_eq!(value.raw(), vm.special.none.raw());
 
             // Dictionary should have one additional slot now
             let dict: &SlotObject = vm.dictionary.as_ref();
@@ -578,6 +599,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code1 = materialize(&mut vm, &desc1);
 
@@ -589,6 +611,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code2 = materialize(&mut vm, &desc2);
 
@@ -616,6 +639,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let desc = CodeDesc {
             bytecode: empty_bytecode(),
@@ -624,6 +648,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
@@ -650,6 +675,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let map_desc = MapDesc {
             slots: vec![SlotDesc {
@@ -670,6 +696,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
@@ -704,6 +731,7 @@ mod tests {
             arg_count: 0,
             temp_count: 0,
             feedback_count: 0,
+            source_map: vec![],
         };
         let code_val = materialize(&mut vm, &desc);
         unsafe {
@@ -711,9 +739,9 @@ mod tests {
             let a = code.constant(0);
             let b = code.constant(1);
             let c = code.constant(2);
-            assert_eq!(a.raw(), vm.special.nil.raw());
-            assert_eq!(b.raw(), vm.special.nil.raw());
-            assert_eq!(c.raw(), vm.special.nil.raw());
+            assert_eq!(a.raw(), vm.special.none.raw());
+            assert_eq!(b.raw(), vm.special.none.raw());
+            assert_eq!(c.raw(), vm.special.none.raw());
 
             // Dictionary should have 3 additional slots
             let dict: &SlotObject = vm.dictionary.as_ref();
@@ -743,9 +771,9 @@ mod tests {
 
         unsafe {
             let map_map = vm.special.map_map;
-            let nil = vm.special.nil;
+            let none = vm.special.none;
             let mut roots = TestRoots {
-                values: vec![map_map, nil],
+                values: vec![map_map, none],
             };
 
             // Start with an empty map
@@ -787,9 +815,9 @@ mod tests {
 
         unsafe {
             let map_map = vm.special.map_map;
-            let nil = vm.special.nil;
+            let none = vm.special.none;
             let mut roots = TestRoots {
-                values: vec![map_map, nil],
+                values: vec![map_map, none],
             };
 
             let slots = [

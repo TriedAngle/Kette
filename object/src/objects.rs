@@ -169,19 +169,18 @@ pub unsafe fn init_byte_array(ptr: *mut ByteArray, length: u64) {
     });
 }
 
-// ── Code ───────────────────────────────────────────────────────────
-
-/// A compiled code object (bytecode + constant pool).
+/// A compiled code object (bytecode + constant pool + source map).
 ///
 /// ```text
 /// [Header 8B] [constant_count: u32] [register_count: u16] [arg_count: u16]
-/// [bytecode_len: u32] [temp_count: u16] [_pad: u16]
+/// [bytecode_len: u32] [temp_count: u16] [source_map_len: u16]
 /// [constant_0: Value 8B] [constant_1: Value 8B] ...
 /// [bytecode byte_0] [bytecode byte_1] ...
+/// [source_map byte_0] [source_map byte_1] ...
 /// ```
 ///
 /// Code objects have no map pointer. The constant pool immediately follows
-/// the fixed fields, then the raw bytecode bytes.
+/// the fixed fields, then the raw bytecode bytes, then the source map bytes.
 #[repr(C)]
 pub struct Code {
     pub header: Header,
@@ -190,7 +189,7 @@ pub struct Code {
     arg_count: u16,
     bytecode_len: u32,
     temp_count: u16,
-    _pad: u16,
+    source_map_len: u16,
 }
 
 const _: () = assert!(size_of::<Code>() == 24);
@@ -219,6 +218,11 @@ impl Code {
     #[inline(always)]
     pub fn temp_count(&self) -> u16 {
         self.temp_count
+    }
+
+    #[inline(always)]
+    pub fn source_map_len(&self) -> u16 {
+        self.source_map_len
     }
 
     /// Pointer to the first constant in the inline constant pool.
@@ -273,10 +277,25 @@ impl Code {
         )
     }
 
+    /// Access the source map bytes (after bytecode).
+    ///
+    /// # Safety
+    ///
+    /// The memory must be properly laid out (constants, bytecode, source map).
+    #[inline(always)]
+    pub unsafe fn source_map(&self) -> &[u8] {
+        let ptr = self.bytecode_ptr().add(self.bytecode_len as usize);
+        core::slice::from_raw_parts(ptr, self.source_map_len as usize)
+    }
+
     /// Total allocation size for this code object.
     #[inline(always)]
     pub fn byte_size(&self) -> usize {
-        code_allocation_size(self.constant_count, self.bytecode_len)
+        code_allocation_size(
+            self.constant_count,
+            self.bytecode_len,
+            self.source_map_len as u32,
+        )
     }
 }
 
@@ -284,19 +303,22 @@ impl Code {
 pub const fn code_allocation_size(
     constant_count: u32,
     bytecode_len: u32,
+    source_map_len: u32,
 ) -> usize {
     size_of::<Code>()
         + constant_count as usize * size_of::<Value>()
         + bytecode_len as usize
+        + source_map_len as usize
 }
 
 /// Initialize a code object at a raw allocation.
 ///
 /// # Safety
 ///
-/// `ptr` must point to at least `code_allocation_size(constant_count, bytecode_len)`
-/// bytes of writable memory. The caller must then write the constants and
-/// bytecode into the inline areas.
+/// `ptr` must point to at least
+/// `code_allocation_size(constant_count, bytecode_len, source_map_len)`
+/// bytes of writable memory. The caller must then write the constants,
+/// bytecode, and source map into the inline areas.
 pub unsafe fn init_code(
     ptr: *mut Code,
     constant_count: u32,
@@ -304,6 +326,7 @@ pub unsafe fn init_code(
     arg_count: u16,
     bytecode_len: u32,
     temp_count: u16,
+    source_map_len: u16,
 ) {
     ptr.write(Code {
         header: Header::new(ObjectType::Code),
@@ -312,7 +335,7 @@ pub unsafe fn init_code(
         arg_count,
         bytecode_len,
         temp_count,
-        _pad: 0,
+        source_map_len,
     });
 }
 
@@ -332,7 +355,7 @@ pub struct Block {
     pub header: Header,
     /// Tagged reference to this block's [`Map`](crate::Map).
     pub map: Value,
-    /// Tagged reference to the captured environment (temp array) or nil.
+    /// Tagged reference to the captured environment (temp array) or None.
     pub env: Value,
     /// Tagged reference to the captured receiver (`self`).
     pub self_value: Value,

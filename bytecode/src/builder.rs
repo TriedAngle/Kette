@@ -27,7 +27,9 @@ impl BytecodeBuilder {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        Self { buf: Vec::with_capacity(capacity) }
+        Self {
+            buf: Vec::with_capacity(capacity),
+        }
     }
 
     /// Current byte offset in the bytecode stream.
@@ -77,7 +79,6 @@ impl BytecodeBuilder {
             self.emit_u8(reg as u8);
         }
     }
-
 
     /// `LoadConstant <idx:u16>` — load from constant pool into accumulator.
     pub fn load_constant(&mut self, idx: u16) {
@@ -134,7 +135,13 @@ impl BytecodeBuilder {
     /// `Send <message_idx:u16> <reg> <argc:u8> <feedback_idx:u16>`.
     ///
     /// Self is expected in `r0`, arguments in `reg..reg+argc`.
-    pub fn send(&mut self, message_idx: u16, reg: u16, argc: u8, feedback_idx: u16) {
+    pub fn send(
+        &mut self,
+        message_idx: u16,
+        reg: u16,
+        argc: u8,
+        feedback_idx: u16,
+    ) {
         let wide = Self::needs_wide(reg);
         if wide {
             self.emit_op(Op::Wide);
@@ -149,7 +156,13 @@ impl BytecodeBuilder {
     /// `Resend <message_idx:u16> <reg> <argc:u8> <feedback_idx:u16>`.
     ///
     /// Resend to parent. Same layout as [`send`](Self::send).
-    pub fn resend(&mut self, message_idx: u16, reg: u16, argc: u8, feedback_idx: u16) {
+    pub fn resend(
+        &mut self,
+        message_idx: u16,
+        reg: u16,
+        argc: u8,
+        feedback_idx: u16,
+    ) {
         let wide = Self::needs_wide(reg);
         if wide {
             self.emit_op(Op::Wide);

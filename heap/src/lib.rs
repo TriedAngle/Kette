@@ -1,7 +1,7 @@
-mod system;
 mod barrier;
 mod heap;
+mod system;
 
-pub use system::{OS_PAGE_SIZE, map_memory, unmap_memory};
 pub use barrier::SenseBarrier;
 pub use heap::*;
+pub use system::{map_memory, unmap_memory, OS_PAGE_SIZE};

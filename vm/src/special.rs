@@ -90,12 +90,12 @@ unsafe fn add_dictionary_entry(
     dict_obj.map = new_map;
 }
 
-/// The nil value used as a placeholder before real nil is allocated.
-const NIL_PLACEHOLDER: Value = Value::from_raw(0);
+/// The None value used as a placeholder before real None is allocated.
+const NONE_PLACEHOLDER: Value = Value::from_raw(0);
 
 /// Bootstrap the VM by allocating all special objects.
 ///
-/// Creates the heap, allocates `map_map` (self-referential), `nil`, `true`,
+/// Creates the heap, allocates `map_map` (self-referential), `None`, `true`,
 /// `false`, and all trait maps for primitive types, then returns a fully
 /// initialized [`VM`].
 pub fn bootstrap(settings: HeapSettings) -> VM {
@@ -106,12 +106,12 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
     let primitives = primitives::default_primitives();
 
     unsafe {
-        // 1. map_map — 0-slot Map, temporarily nil map ptr, then patch self-referential
+        // 1. map_map — 0-slot Map, temporarily None map ptr, then patch self-referential
         let map_map_val = alloc_map(
             &mut proxy,
             &mut roots,
-            NIL_PLACEHOLDER,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -120,29 +120,30 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         (*(map_map_val.ref_bits() as *mut object::Map)).map = map_map_val;
         roots.push(map_map_val);
 
-        // 2. nil_map + nil
-        let nil_map_val = alloc_map(
+        // 2. none_map + None
+        let none_map_val = alloc_map(
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
         )
         .value();
-        roots.push(nil_map_val);
+        roots.push(none_map_val);
 
-        let nil_val =
-            alloc_slot_object(&mut proxy, &mut roots, nil_map_val, &[]).value();
-        roots.push(nil_val);
+        let none_val =
+            alloc_slot_object(&mut proxy, &mut roots, none_map_val, &[])
+                .value();
+        roots.push(none_val);
 
         // 3. true_map + true_obj
         let true_map_val = alloc_map(
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -160,7 +161,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -178,7 +179,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -198,7 +199,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -218,7 +219,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -238,7 +239,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -258,7 +259,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -278,7 +279,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -298,7 +299,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -318,7 +319,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -334,7 +335,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -354,7 +355,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -375,7 +376,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             1,
@@ -388,7 +389,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -937,7 +938,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             map_map_val,
-            NIL_PLACEHOLDER,
+            NONE_PLACEHOLDER,
             MapFlags::NONE,
             &[],
             0,
@@ -1049,13 +1050,13 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             assoc_map_val,
             dictionary_val,
             none_name,
-            nil_val,
+            none_val,
         );
 
-        // 9. Fixup: patch NIL_PLACEHOLDER → real nil in every map's `code` field
+        // 9. Fixup: patch NONE_PLACEHOLDER → real None in every map's `code` field
         for &map_val in &[
             map_map_val,
-            nil_map_val,
+            none_map_val,
             true_map_val,
             false_map_val,
             array_traits_map_val,
@@ -1074,12 +1075,12 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             dictionary_map_val,
         ] {
             let map = &mut *(map_val.ref_bits() as *mut object::Map);
-            debug_assert_eq!(map.code, NIL_PLACEHOLDER);
-            map.code = nil_val;
+            debug_assert_eq!(map.code, NONE_PLACEHOLDER);
+            map.code = none_val;
         }
 
         let special = SpecialObjects {
-            nil: nil_val,
+            none: none_val,
             true_obj: true_val,
             false_obj: false_val,
             map_map: map_map_val,
@@ -1130,7 +1131,7 @@ mod tests {
         let vm = bootstrap(test_settings());
 
         // All special values must be heap references
-        assert!(vm.special.nil.is_ref());
+        assert!(vm.special.none.is_ref());
         assert!(vm.special.true_obj.is_ref());
         assert!(vm.special.false_obj.is_ref());
         assert!(vm.special.map_map.is_ref());
@@ -1151,16 +1152,16 @@ mod tests {
             assert_eq!(map_map.slot_count(), 0);
             assert_eq!(map_map.value_count(), 0);
 
-            // map_map.code was patched from NIL_PLACEHOLDER to real nil
-            assert_eq!(map_map.code, vm.special.nil);
+            // map_map.code was patched from NONE_PLACEHOLDER to real None
+            assert_eq!(map_map.code, vm.special.none);
 
-            // nil is a SlotObject whose map's map is map_map
-            let nil: &SlotObject = vm.special.nil.as_ref();
-            assert_eq!(nil.header.object_type(), ObjectType::Slots);
-            assert!(nil.map.is_ref());
-            let nil_map: &Map = nil.map.as_ref();
-            assert_eq!(nil_map.map, vm.special.map_map);
-            assert_eq!(nil_map.code, vm.special.nil);
+            // None is a SlotObject whose map's map is map_map
+            let none: &SlotObject = vm.special.none.as_ref();
+            assert_eq!(none.header.object_type(), ObjectType::Slots);
+            assert!(none.map.is_ref());
+            let none_map: &Map = none.map.as_ref();
+            assert_eq!(none_map.map, vm.special.map_map);
+            assert_eq!(none_map.code, vm.special.none);
 
             // true_obj
             let true_obj: &SlotObject = vm.special.true_obj.as_ref();
@@ -1170,11 +1171,11 @@ mod tests {
             let false_obj: &SlotObject = vm.special.false_obj.as_ref();
             assert_eq!(false_obj.header.object_type(), ObjectType::Slots);
 
-            // trait maps all point to map_map, code patched to nil
+            // trait maps all point to map_map, code patched to None
             let arr_traits: &SlotObject = vm.special.array_traits.as_ref();
             let arr_map: &Map = arr_traits.map.as_ref();
             assert_eq!(arr_map.map, vm.special.map_map);
-            assert_eq!(arr_map.code, vm.special.nil);
+            assert_eq!(arr_map.code, vm.special.none);
             assert_eq!(arr_traits.header.object_type(), ObjectType::Slots);
 
             let object_obj: &SlotObject = vm.special.object.as_ref();
@@ -1186,10 +1187,10 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_nil_true_false_are_distinct() {
+    fn bootstrap_none_true_false_are_distinct() {
         let vm = bootstrap(test_settings());
-        assert_ne!(vm.special.nil, vm.special.true_obj);
-        assert_ne!(vm.special.nil, vm.special.false_obj);
+        assert_ne!(vm.special.none, vm.special.true_obj);
+        assert_ne!(vm.special.none, vm.special.false_obj);
         assert_ne!(vm.special.true_obj, vm.special.false_obj);
     }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::ptr;
 
-use bytecode::{Instruction, Op};
+use bytecode::{source_map_lookup, Instruction, Op};
 use heap::{HeapProxy, RootProvider};
 use object::{
     init_array, slot_object_allocation_size, Array, Block, Code, Header, Map,
@@ -24,6 +24,18 @@ pub enum RuntimeError {
     UndefinedGlobal { name: String },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SourceRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocatedRuntimeError {
+    pub error: RuntimeError,
+    pub location: Option<SourceRange>,
+}
+
 #[derive(Debug, Clone)]
 struct Frame {
     code: Value,
@@ -39,6 +51,8 @@ struct Frame {
 pub struct InterpreterState {
     acc: Value,
     frames: Vec<Frame>,
+    last_pc: usize,
+    last_code: Value,
 }
 
 pub(crate) struct InterpreterRoots<'a> {
@@ -62,7 +76,7 @@ impl RootProvider for InterpreterRoots<'_> {
                 visitor(reg);
             }
         }
-        visitor(&mut self.special.nil);
+        visitor(&mut self.special.none);
         visitor(&mut self.special.true_obj);
         visitor(&mut self.special.false_obj);
         visitor(&mut self.special.map_map);
@@ -86,22 +100,43 @@ impl RootProvider for InterpreterRoots<'_> {
     }
 }
 
-pub fn interpret(vm: &mut VM, code: Value) -> Result<Value, RuntimeError> {
-    interpret_with_receiver(vm, code, vm.special.nil)
+pub fn interpret(
+    vm: &mut VM,
+    code: Value,
+) -> Result<Value, LocatedRuntimeError> {
+    interpret_with_receiver(vm, code, vm.special.none)
 }
 
 pub fn interpret_with_receiver(
     vm: &mut VM,
     code: Value,
     receiver: Value,
-) -> Result<Value, RuntimeError> {
+) -> Result<Value, LocatedRuntimeError> {
     let mut state = InterpreterState {
-        acc: vm.special.nil,
+        acc: vm.special.none,
         frames: Vec::new(),
+        last_pc: 0,
+        last_code: code,
     };
 
-    push_entry_frame(vm, &mut state, code, receiver)?;
-    run(vm, &mut state)
+    push_entry_frame(vm, &mut state, code, receiver)
+        .map_err(|e| locate_error(e, &state))?;
+    run(vm, &mut state).map_err(|e| locate_error(e, &state))
+}
+
+fn locate_error(
+    error: RuntimeError,
+    state: &InterpreterState,
+) -> LocatedRuntimeError {
+    let location = if state.last_code.is_ref() {
+        let code: &Code = unsafe { state.last_code.as_ref() };
+        let source_map = unsafe { code.source_map() };
+        source_map_lookup(source_map, state.last_pc as u32)
+            .map(|(start, end)| SourceRange { start, end })
+    } else {
+        None
+    };
+    LocatedRuntimeError { error, location }
 }
 
 fn run(
@@ -111,6 +146,8 @@ fn run(
     while let Some(frame_idx) = current_frame_index(state) {
         let (instr, code_val) = {
             let frame = &mut state.frames[frame_idx];
+            state.last_pc = frame.pc;
+            state.last_code = frame.code;
             let code: &Code = unsafe { frame.code.as_ref() };
             let bytecode = unsafe { code.bytecode() };
             let (instr, next_pc) = decode_at(bytecode, frame.pc);
@@ -145,30 +182,30 @@ fn run(
                 set_register(frame, dst, value)?;
             }
             Instruction::LoadStack { offset } => {
-                let nil = vm.special.nil;
+                let none = vm.special.none;
                 let frame = &mut state.frames[frame_idx];
-                state.acc = load_stack_slot(frame, offset, nil);
+                state.acc = load_stack_slot(frame, offset, none);
             }
             Instruction::StoreStack { offset } => {
                 let value = state.acc;
-                let nil = vm.special.nil;
+                let none = vm.special.none;
                 let frame = &mut state.frames[frame_idx];
-                store_stack_slot(frame, offset, value, nil);
+                store_stack_slot(frame, offset, value, none);
             }
             Instruction::MovToStack { offset, src } => {
                 let value = {
                     let frame = &state.frames[frame_idx];
                     get_register(frame, src)?
                 };
-                let nil = vm.special.nil;
+                let none = vm.special.none;
                 let frame = &mut state.frames[frame_idx];
-                store_stack_slot(frame, offset, value, nil);
+                store_stack_slot(frame, offset, value, none);
             }
             Instruction::MovFromStack { dst, offset } => {
-                let nil = vm.special.nil;
+                let none = vm.special.none;
                 let value = {
                     let frame = &mut state.frames[frame_idx];
-                    load_stack_slot(frame, offset, nil)
+                    load_stack_slot(frame, offset, none)
                 };
                 let frame = &mut state.frames[frame_idx];
                 set_register(frame, dst, value)?;
@@ -329,7 +366,7 @@ fn push_entry_frame(
     code: Value,
     receiver: Value,
 ) -> Result<(), RuntimeError> {
-    push_method_frame(vm, state, code, receiver, None, vm.special.nil, 0)
+    push_method_frame(vm, state, code, receiver, None, vm.special.none, 0)
 }
 
 fn push_method_frame(
@@ -356,15 +393,15 @@ fn push_method_frame(
     }
 
     let reg_count = code.register_count() as usize;
-    let nil = vm.special.nil;
-    let mut registers = vec![nil; reg_count.max(1)];
+    let none = vm.special.none;
+    let mut registers = vec![none; reg_count.max(1)];
     registers[0] = receiver;
 
     let temp_array = if code.temp_count() > 0 {
         state.acc = receiver;
-        alloc_temp_array(vm, state, code.temp_count(), nil)?
+        alloc_temp_array(vm, state, code.temp_count(), none)?
     } else {
-        nil
+        none
     };
 
     if let Some((src_idx, reg, argc)) = args_source {
@@ -409,8 +446,8 @@ fn push_block_frame(
     }
 
     let reg_count = code.register_count() as usize;
-    let nil = vm.special.nil;
-    let mut registers = vec![nil; reg_count.max(1)];
+    let none = vm.special.none;
+    let mut registers = vec![none; reg_count.max(1)];
     registers[0] = receiver;
     copy_args_from_frame(
         state,
@@ -466,8 +503,8 @@ fn push_block_frame_with_args(
     }
 
     let reg_count = code.register_count() as usize;
-    let nil = vm.special.nil;
-    let mut registers = vec![nil; reg_count.max(1)];
+    let none = vm.special.none;
+    let mut registers = vec![none; reg_count.max(1)];
     registers[0] = receiver;
     for (i, arg) in args.iter().enumerate() {
         let idx = i + 1;
@@ -491,7 +528,7 @@ fn push_block_frame_with_args(
         temp_array,
         is_block: true,
         method_frame_idx,
-        holder: vm.special.nil,
+        holder: vm.special.none,
         holder_slot_index: 0,
     });
 
@@ -512,8 +549,8 @@ pub(crate) fn dispatch_send(
     let code: &Code = unsafe { code_val.as_ref() };
     let message = unsafe { code.constant(message_idx as u32) };
     if is_block_value(receiver)? && is_block_call_selector(message, argc) {
-        let block_code = block_code(receiver, vm.special.nil)?;
-        let block_env = block_env(receiver, vm.special.nil)?;
+        let block_code = block_code(receiver, vm.special.none)?;
+        let block_env = block_env(receiver, vm.special.none)?;
         let receiver_self = block_self(receiver)?;
         return push_block_frame(
             vm,
@@ -552,8 +589,8 @@ pub(crate) fn call_block(
             got: receiver,
         });
     }
-    let block_code = block_code(receiver, vm.special.nil)?;
-    let block_env = block_env(receiver, vm.special.nil)?;
+    let block_code = block_code(receiver, vm.special.none)?;
+    let block_env = block_env(receiver, vm.special.none)?;
     let receiver_self = block_self(receiver)?;
     push_block_frame_with_args(
         vm,
@@ -661,7 +698,7 @@ fn dispatch_slot(
         return Ok(());
     }
 
-    if let Some(target) = extract_method_target(slot.value, vm.special.nil)? {
+    if let Some(target) = extract_method_target(slot.value, vm.special.none)? {
         match target {
             MethodTarget::Code(code_val) => {
                 return push_method_frame(
@@ -768,7 +805,7 @@ fn create_block(
         .frames
         .last()
         .map(|f| (f.temp_array, f.registers[0]))
-        .unwrap_or((vm.special.nil, vm.special.nil));
+        .unwrap_or((vm.special.none, vm.special.none));
     let mut scratch = vec![map_val, env, self_value];
     let block = with_roots(vm, state, &mut scratch, |proxy, roots| {
         let size = size_of::<Block>();
@@ -809,11 +846,11 @@ fn alloc_temp_array(
         let arr_ptr = ptr.as_ptr() as *mut Array;
         unsafe {
             init_array(arr_ptr, len as u64 + 1);
-            let nil = roots.special.nil;
+            let none = roots.special.none;
             let elems = arr_ptr.add(1) as *mut Value;
             *elems = parent;
             for i in 0..len as usize {
-                *elems.add(i + 1) = nil;
+                *elems.add(i + 1) = none;
             }
         }
         Value::from_ptr(arr_ptr)
@@ -918,7 +955,7 @@ fn load_temp(
     idx: u16,
 ) -> Result<Value, RuntimeError> {
     let array =
-        get_temp_array(&state.frames[frame_idx], array_idx, vm.special.nil)?;
+        get_temp_array(&state.frames[frame_idx], array_idx, vm.special.none)?;
     let array = unsafe { &*expect_array(array)? };
     let value_idx = idx as u64 + 1;
     if value_idx >= array.len() {
@@ -942,7 +979,7 @@ fn store_temp(
     value: Value,
 ) -> Result<(), RuntimeError> {
     let array_val =
-        get_temp_array(&state.frames[frame_idx], array_idx, vm.special.nil)?;
+        get_temp_array(&state.frames[frame_idx], array_idx, vm.special.none)?;
     let array = unsafe { &*expect_array(array_val)? };
     let value_idx = idx as u64 + 1;
     if value_idx >= array.len() {
@@ -964,9 +1001,9 @@ fn store_temp(
 fn get_temp_array(
     frame: &Frame,
     array_idx: u16,
-    nil: Value,
+    none: Value,
 ) -> Result<Value, RuntimeError> {
-    if frame.temp_array.raw() == nil.raw() {
+    if frame.temp_array.raw() == none.raw() {
         return Err(RuntimeError::TypeError {
             expected: "temp array",
             got: frame.temp_array,
@@ -975,7 +1012,7 @@ fn get_temp_array(
     let mut array = frame.temp_array;
     let mut depth = array_idx;
     while depth > 0 {
-        array = temp_array_parent(array, nil)?;
+        array = temp_array_parent(array, none)?;
         depth -= 1;
     }
     Ok(array)
@@ -983,7 +1020,7 @@ fn get_temp_array(
 
 fn temp_array_parent(
     array_val: Value,
-    nil: Value,
+    none: Value,
 ) -> Result<Value, RuntimeError> {
     let array = unsafe { &*expect_array(array_val)? };
     if array.len() == 0 {
@@ -995,7 +1032,7 @@ fn temp_array_parent(
     unsafe {
         let elems = (array as *const Array).add(1) as *const Value;
         let parent = *elems;
-        if parent.raw() == nil.raw() {
+        if parent.raw() == none.raw() {
             return Err(RuntimeError::TypeError {
                 expected: "temp array parent",
                 got: parent,
@@ -1059,7 +1096,7 @@ enum MethodTarget {
 
 fn extract_method_target(
     value: Value,
-    nil: Value,
+    none: Value,
 ) -> Result<Option<MethodTarget>, RuntimeError> {
     if !value.is_ref() {
         return Ok(None);
@@ -1090,7 +1127,7 @@ fn extract_method_target(
                 }
                 Ok(Some(MethodTarget::Primitive(idx as usize)))
             } else {
-                if map.code.raw() == nil.raw() {
+                if map.code.raw() == none.raw() {
                     return Err(RuntimeError::TypeError {
                         expected: "method code",
                         got: map.code,
@@ -1111,10 +1148,10 @@ fn is_block_value(value: Value) -> Result<bool, RuntimeError> {
     Ok(header.object_type() == ObjectType::Block)
 }
 
-fn block_code(block_val: Value, nil: Value) -> Result<Value, RuntimeError> {
+fn block_code(block_val: Value, none: Value) -> Result<Value, RuntimeError> {
     let block = unsafe { &*expect_block(block_val)? };
     let map: &Map = unsafe { block.map.as_ref() };
-    if map.code.raw() == nil.raw() {
+    if map.code.raw() == none.raw() {
         return Err(RuntimeError::TypeError {
             expected: "block code",
             got: map.code,
@@ -1123,11 +1160,11 @@ fn block_code(block_val: Value, nil: Value) -> Result<Value, RuntimeError> {
     Ok(map.code)
 }
 
-fn block_env(block_val: Value, nil: Value) -> Result<Value, RuntimeError> {
+fn block_env(block_val: Value, none: Value) -> Result<Value, RuntimeError> {
     let block = unsafe { &*expect_block(block_val)? };
     let env = block.env;
-    if env.raw() == nil.raw() {
-        return Ok(nil);
+    if env.raw() == none.raw() {
+        return Ok(none);
     }
     Ok(env)
 }
@@ -1261,13 +1298,13 @@ fn find_enclosing_method_idx(frames: &[Frame]) -> Option<usize> {
 }
 
 fn find_enclosing_holder(vm: &VM, frames: &[Frame]) -> (Value, u32) {
-    let nil = vm.special.nil;
+    let none = vm.special.none;
     for frame in frames.iter().rev() {
-        if frame.holder.raw() != nil.raw() {
+        if frame.holder.raw() != none.raw() {
             return (frame.holder, frame.holder_slot_index);
         }
     }
-    (nil, 0)
+    (none, 0)
 }
 
 fn current_frame_index(state: &InterpreterState) -> Option<usize> {
@@ -1279,10 +1316,10 @@ fn current_frame_index(state: &InterpreterState) -> Option<usize> {
 }
 
 fn is_truthy(vm: &VM, value: Value) -> bool {
-    let nil = vm.special.nil.raw();
+    let none = vm.special.none.raw();
     let false_obj = vm.special.false_obj.raw();
     let raw = value.raw();
-    raw != nil && raw != false_obj
+    raw != none && raw != false_obj
 }
 
 fn get_register(frame: &Frame, reg: u16) -> Result<Value, RuntimeError> {
@@ -1312,18 +1349,18 @@ fn set_register(
     }
 }
 
-fn load_stack_slot(frame: &mut Frame, offset: u32, nil: Value) -> Value {
+fn load_stack_slot(frame: &mut Frame, offset: u32, none: Value) -> Value {
     let idx = offset as usize;
     if idx >= frame.registers.len() {
-        frame.registers.resize(idx + 1, nil);
+        frame.registers.resize(idx + 1, none);
     }
     frame.registers[idx]
 }
 
-fn store_stack_slot(frame: &mut Frame, offset: u32, value: Value, nil: Value) {
+fn store_stack_slot(frame: &mut Frame, offset: u32, value: Value, none: Value) {
     let idx = offset as usize;
     if idx >= frame.registers.len() {
-        frame.registers.resize(idx + 1, nil);
+        frame.registers.resize(idx + 1, none);
     }
     frame.registers[idx] = value;
 }
@@ -1769,7 +1806,7 @@ mod tests {
             .collect()
     }
 
-    fn run_source(src: &str) -> Result<Value, RuntimeError> {
+    fn run_source(src: &str) -> Result<Value, LocatedRuntimeError> {
         let exprs = parse_source(src);
         let code_desc = Compiler::compile(&exprs).expect("compile error");
         let mut vm = bootstrap(test_settings());
@@ -1777,7 +1814,9 @@ mod tests {
         interpret(&mut vm, code_val)
     }
 
-    fn run_source_with_vm(src: &str) -> Result<(VM, Value), RuntimeError> {
+    fn run_source_with_vm(
+        src: &str,
+    ) -> Result<(VM, Value), LocatedRuntimeError> {
         let exprs = parse_source(src);
         let code_desc = Compiler::compile(&exprs).expect("compile error");
         let mut vm = bootstrap(test_settings());
@@ -1789,7 +1828,7 @@ mod tests {
     fn run_source_with_receiver(
         src: &str,
         receiver: Value,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<Value, LocatedRuntimeError> {
         let exprs = parse_source(src);
         let code_desc = Compiler::compile(&exprs).expect("compile error");
         let mut vm = bootstrap(test_settings());
@@ -1898,7 +1937,10 @@ mod tests {
     #[test]
     fn interpret_message_not_understood() {
         let err = run_source("5 foo").expect_err("expected error");
-        assert!(matches!(err, RuntimeError::MessageNotUnderstood { .. }));
+        assert!(matches!(
+            err.error,
+            RuntimeError::MessageNotUnderstood { .. }
+        ));
     }
 
     #[test]
@@ -1943,7 +1985,7 @@ mod tests {
             i := 0. cond := [ i <= 1 ]. cond whileTrue: [ i := i + 1 ]",
         );
         let (vm, value) = result.expect("interpret error");
-        assert_eq!(value.raw(), vm.special.nil.raw());
+        assert_eq!(value.raw(), vm.special.none.raw());
     }
 
     #[test]
@@ -2292,7 +2334,7 @@ mod tests {
     fn extend_with_rejects_assignable_slots() {
         let err = run_source("o = { }. Object _Extend: o With: { x := 7 }")
             .expect_err("expected error");
-        match err {
+        match err.error {
             RuntimeError::Unimplemented { .. } => {}
             other => panic!("expected Unimplemented, got {other:?}"),
         }
@@ -2302,6 +2344,75 @@ mod tests {
     fn extend_with_rejects_code() {
         let err = run_source("o = { }. Object _Extend: o With: { x = 1. 2 }")
             .expect_err("expected error");
-        assert!(matches!(err, RuntimeError::Unimplemented { .. }));
+        assert!(matches!(err.error, RuntimeError::Unimplemented { .. }));
+    }
+
+    // ── Source map / error location tests ────────────────────────
+
+    #[test]
+    fn error_has_source_location() {
+        let err = run_source("5 foo").expect_err("expected error");
+        assert!(matches!(
+            err.error,
+            RuntimeError::MessageNotUnderstood { .. }
+        ));
+        let loc = err.location.expect("error should have source location");
+        // "5 foo" — the send expression spans the whole thing
+        assert_eq!(loc.start, 0);
+        assert_eq!(loc.end, 5);
+    }
+
+    #[test]
+    fn error_location_points_to_failing_send() {
+        // "x = 5. x bar" — the error is on "x bar" (offset 7..12)
+        let err = run_source("x = 5. x bar").expect_err("expected error");
+        let loc = err.location.expect("error should have source location");
+        assert_eq!(loc.start, 7);
+        assert_eq!(loc.end, 12);
+    }
+
+    #[test]
+    fn error_location_binary_message() {
+        // "42 + true" — fixnum + fails on dispatching +
+        let err = run_source("42 + true").expect_err("expected error");
+        let loc = err.location.expect("error should have source location");
+        // The whole binary expression "42 + true"
+        assert_eq!(loc.start, 0);
+        assert_eq!(loc.end, 9);
+    }
+
+    #[test]
+    fn error_location_keyword_message() {
+        let err = run_source("42 foo: 1 Bar: 2").expect_err("expected error");
+        let loc = err.location.expect("error should have source location");
+        assert_eq!(loc.start, 0);
+        assert_eq!(loc.end, 16);
+    }
+
+    #[test]
+    fn error_location_undefined_global() {
+        let err = run_source("NoSuchGlobal").expect_err("expected error");
+        assert!(matches!(err.error, RuntimeError::UndefinedGlobal { .. }));
+        let loc = err.location.expect("error should have source location");
+        assert_eq!(loc.start, 0);
+        assert_eq!(loc.end, 12);
+    }
+
+    #[test]
+    fn error_location_multiline() {
+        let src = "x = 5.\ny = 10.\nx blah";
+        let err = run_source(src).expect_err("expected error");
+        let loc = err.location.expect("error should have source location");
+        // "x blah" starts at offset 15
+        assert_eq!(loc.start, 15);
+        assert_eq!(loc.end, 21);
+    }
+
+    #[test]
+    fn successful_execution_no_error() {
+        // Ensure source maps don't break normal execution
+        let value = run_source("42").expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
     }
 }
