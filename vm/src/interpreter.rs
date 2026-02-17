@@ -548,6 +548,27 @@ pub(crate) fn dispatch_send(
 
     let code: &Code = unsafe { code_val.as_ref() };
     let message = unsafe { code.constant(message_idx as u32) };
+    #[cfg(debug_assertions)]
+    {
+        if let Some(trace_name) = vm.trace_send_name.as_deref() {
+            if let Some(name) = symbol_to_string(message) {
+                if name == trace_name {
+                    let pc = state.frames[frame_idx].pc;
+                    let holder = state.frames[frame_idx].holder;
+                    let holder_slot = state.frames[frame_idx].holder_slot_index;
+                    let holder_name = holder_slot_name(holder, holder_slot);
+                    eprintln!(
+                        "trace_send {} pc={} holder={} recv={:?} {}",
+                        name,
+                        pc,
+                        holder_name,
+                        receiver,
+                        debug_value_summary(receiver)
+                    );
+                }
+            }
+        }
+    }
     if is_block_value(receiver)? && is_block_call_selector(message, argc) {
         let block_code = block_code(receiver, vm.special.none)?;
         let block_env = block_env(receiver, vm.special.none)?;
@@ -872,9 +893,23 @@ fn load_assoc(
         match header.object_type() {
             ObjectType::Slots => {
                 let assoc_obj = unsafe { &*expect_slot_object(assoc_or_name)? };
-                return unsafe {
-                    Ok(assoc_obj.read_value(SlotObject::VALUES_OFFSET))
-                };
+                let value =
+                    unsafe { assoc_obj.read_value(SlotObject::VALUES_OFFSET) };
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(name) = vm.trace_assoc_name.as_deref() {
+                        if let Some(assoc_name) = assoc_name(vm, assoc_or_name)
+                        {
+                            if assoc_name == name {
+                                eprintln!(
+                                    "trace_assoc load {} -> {:?}",
+                                    assoc_name, value
+                                );
+                            }
+                        }
+                    }
+                }
+                return Ok(value);
             }
             ObjectType::Str => {
                 if let Some(value) = lookup_assoc_value(vm, assoc_or_name)? {
@@ -908,9 +943,23 @@ fn lookup_assoc_value(
             if slot.name.raw() == name.raw() {
                 let assoc = slot.value;
                 let assoc_obj = &*expect_slot_object(assoc)?;
-                return Ok(Some(
-                    assoc_obj.read_value(SlotObject::VALUES_OFFSET),
-                ));
+                let value = assoc_obj.read_value(SlotObject::VALUES_OFFSET);
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(trace_name) = vm.trace_assoc_name.as_deref() {
+                        let name_str = symbol_to_string(name)
+                            .unwrap_or_else(|| "<symbol>".to_string());
+                        if name_str == trace_name {
+                            eprintln!(
+                                "trace_assoc load {} -> {:?} {}",
+                                name_str,
+                                value,
+                                debug_value_summary(value)
+                            );
+                        }
+                    }
+                }
+                return Ok(Some(value));
             }
         }
     }
@@ -944,7 +993,98 @@ fn store_assoc(
     if value.is_ref() {
         vm.heap_proxy.write_barrier(assoc, value);
     }
+    #[cfg(debug_assertions)]
+    {
+        if let Some(name) = vm.trace_assoc_name.as_deref() {
+            if let Some(assoc_name) = assoc_name(vm, assoc) {
+                if assoc_name == name {
+                    eprintln!(
+                        "trace_assoc store {} <- {:?} {}",
+                        assoc_name,
+                        value,
+                        debug_value_summary(value)
+                    );
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn assoc_name(vm: &VM, assoc: Value) -> Option<String> {
+    let dict: &SlotObject = unsafe { vm.dictionary.as_ref() };
+    let map: &Map = unsafe { dict.map.as_ref() };
+    unsafe {
+        for slot in map.slots() {
+            if slot.value.raw() == assoc.raw() {
+                let name: &VMString = slot.name.as_ref();
+                return Some(name.as_str().to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(debug_assertions)]
+fn holder_slot_name(holder: Value, slot_index: u32) -> String {
+    if !holder.is_ref() {
+        return "<none>".to_string();
+    }
+    let header: &Header = unsafe { holder.as_ref() };
+    if header.object_type() != ObjectType::Slots {
+        return format!("{:?}", header.object_type());
+    }
+    let holder_obj: &SlotObject = unsafe { holder.as_ref() };
+    let map: &Map = unsafe { holder_obj.map.as_ref() };
+    unsafe {
+        let slots = map.slots();
+        let idx = slot_index as usize;
+        if idx >= slots.len() {
+            return "<unknown>".to_string();
+        }
+        let name = slots[idx].name;
+        symbol_to_string(name).unwrap_or_else(|| "<symbol>".to_string())
+    }
+}
+
+#[cfg(debug_assertions)]
+fn debug_value_summary(value: Value) -> String {
+    if !value.is_ref() {
+        if value.is_fixnum() {
+            let n = unsafe { value.to_i64() };
+            return format!("fixnum={n}");
+        }
+        return "immediate".to_string();
+    }
+
+    let header: &Header = unsafe { value.as_ref() };
+    match header.object_type() {
+        ObjectType::Slots => unsafe {
+            let obj: &SlotObject = value.as_ref();
+            let map: &Map = obj.map.as_ref();
+            format!(
+                "slots map_slots={} value_count={}",
+                map.slot_count(),
+                map.value_count()
+            )
+        },
+        ObjectType::Map => unsafe {
+            let map: &Map = value.as_ref();
+            format!(
+                "map slots={} value_count={}",
+                map.slot_count(),
+                map.value_count()
+            )
+        },
+        ObjectType::Str => "string".to_string(),
+        ObjectType::Array => "array".to_string(),
+        ObjectType::ByteArray => "bytearray".to_string(),
+        ObjectType::Float => "float".to_string(),
+        ObjectType::Ratio => "ratio".to_string(),
+        ObjectType::BigNum => "bignum".to_string(),
+        _ => format!("{:?}", header.object_type()),
+    }
 }
 
 fn load_temp(
@@ -1958,14 +2098,14 @@ mod tests {
             }. \
             Object extend: Object With: { \
                 ifTrue: t IfFalse: f = { t call }. \
-                ifTrue: t = { self ifTrue: t IfFalse: [ none ] }. \
-                ifFalse: f = { self ifTrue: [ none ] IfFalse: f } \
+                ifTrue: t = { self ifTrue: t IfFalse: [ None ] }. \
+                ifFalse: f = { self ifTrue: [ None ] IfFalse: f } \
             }. \
-            Object extend: false With: { \
+            Object extend: False With: { \
                 parent* = Object. \
                 ifTrue: t IfFalse: f = { f call } \
             }. \
-            Object extend: true With: { parent* = Object }. \
+            Object extend: True With: { parent* = Object }. \
             Object extend: Fixnum With: { \
                 parent* = Object. \
                 <= rhs = { rhs leFixnum: self }. \
@@ -1979,10 +2119,10 @@ mod tests {
                     self call ifTrue: [ \
                         body call. \
                         self whileTrue: body \
-                    ] IfFalse: [ none ] \
+                    ] IfFalse: [ None ] \
                 } \
             }. \
-            i := 0. cond := [ i <= 1 ]. cond whileTrue: [ i := i + 1 ]",
+            [ i := 0. cond := [ i <= 1 ]. cond whileTrue: [ i := i + 1 ] ] call",
         );
         let (vm, value) = result.expect("interpret error");
         assert_eq!(value.raw(), vm.special.none.raw());
@@ -1991,9 +2131,24 @@ mod tests {
     #[test]
     fn interpret_nested_temp_chain() {
         let value = run_source(
-            "i := 0. [ j := 1. [ i := i _FixnumAdd: j ] call. i ] call",
+            "[ i := 0. [ j := 1. [ i := i _FixnumAdd: j ] call. i ] call ] call",
         )
         .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn interpret_method_block_captures_local() {
+        let src = "
+            Obj = { \
+                foo = { \
+                    x = 1. \
+                    [ x ] call \
+                } \
+            }. \
+            Obj foo";
+        let value = run_source(src).expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 1);
     }
@@ -2006,9 +2161,9 @@ mod tests {
             }. \
             Object extend: Block With: { \
                 parent* = Object. \
-                whileTrue: body = { none } \
+                whileTrue: body = { None } \
             }. \
-            none",
+            None",
         )
         .expect("interpret error");
 
@@ -2043,21 +2198,21 @@ mod tests {
             }. \
             Object extend: Object With: { \
                 ifTrue: t IfFalse: f = { t call }. \
-                ifTrue: t = { self ifTrue: t IfFalse: [ none ] }. \
-                ifFalse: f = { self ifTrue: [ none ] IfFalse: f } \
+                ifTrue: t = { self ifTrue: t IfFalse: [ None ] }. \
+                ifFalse: f = { self ifTrue: [ None ] IfFalse: f } \
             }. \
-            Object extend: false With: { \
+            Object extend: False With: { \
                 parent* = Object. \
                 ifTrue: t IfFalse: f = { f call } \
             }. \
-            Object extend: true With: { parent* = Object }. \
+            Object extend: True With: { parent* = Object }. \
             Object extend: Block With: { \
                 parent* = Object. \
                 whileTrue: body = { \
                     self call ifTrue: [ \
                         body call. \
                         self whileTrue: body \
-                    ] IfFalse: [ none ] \
+                    ] IfFalse: [ None ] \
                 } \
             }. \
             i := 0. cond := [ i <= 1 ]. cond",
@@ -2089,26 +2244,79 @@ mod tests {
             }. \
             Object extend: Block With: { \
                 parent* = Object. \
-                whileTrue: body = { none } \
+                whileTrue: body = { None } \
             }. \
-            cond := [ 1 ]. cond whileTrue: [ none ]",
+            cond := [ 1 ]. cond whileTrue: [ None ]",
         )
         .expect("interpret error");
         assert!(value.is_ref());
     }
 
     #[test]
-    fn interpret_block_updates_captured_mutable() {
-        let value = run_source("i := 0. [ i := i _FixnumAdd: 1 ] call. i")
+    fn interpret_top_level_const_assoc_lookup() {
+        let value = run_source("Math = { foo = { 1 }. }. Math foo")
             .expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 1);
     }
 
     #[test]
-    fn interpret_nested_block_reads_capture() {
+    fn clone_available_via_parent() {
+        let src = "
+            Object _Extend: Object With: {
+                extend: target With: source = { self _Extend: target With: source }
+            }.
+            Object extend: Object With: { clone = { 1 } }.
+            Complex = { parent* = Object }.
+            Complex clone
+        ";
+        let value = run_source(src).expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn top_level_const_assoc_value_is_object() {
+        let (vm, _) = run_source_with_vm("Math = { foo = { 1 }. }.")
+            .expect("interpret error");
+        let dict: &SlotObject = unsafe { vm.dictionary.as_ref() };
+        let map: &Map = unsafe { dict.map.as_ref() };
+        let mut assoc_val = None;
+        unsafe {
+            for slot in map.slots() {
+                let name: &VMString = slot.name.as_ref();
+                if name.as_str() == "Math" {
+                    let assoc_obj: &SlotObject = slot.value.as_ref();
+                    assoc_val =
+                        Some(assoc_obj.read_value(SlotObject::VALUES_OFFSET));
+                    break;
+                }
+            }
+        }
+        let assoc_val = assoc_val.expect("Math assoc not found");
+        assert_ne!(assoc_val.raw(), vm.special.none.raw());
+        let header: &Header = unsafe { assoc_val.as_ref() };
+        assert_eq!(header.object_type(), ObjectType::Slots);
+        let obj: &SlotObject = unsafe { assoc_val.as_ref() };
+        let obj_map: &Map = unsafe { obj.map.as_ref() };
+        unsafe {
+            assert!(!obj_map.slots().is_empty());
+        }
+    }
+
+    #[test]
+    fn interpret_block_updates_captured_mutable() {
         let value =
-            run_source("i := 0. [ [ i ] call ] call").expect("interpret error");
+            run_source("[ x := 0. [ x := x _FixnumAdd: 1 ] call. x ] call")
+                .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn interpret_nested_block_reads_capture() {
+        let value = run_source("[ x := 0. [ [ x ] call ] call ] call")
+            .expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 0);
     }
@@ -2120,7 +2328,7 @@ mod tests {
                 <= rhs = { rhs leFixnum: self }. \
                 leFixnum: lhs = { lhs _FixnumLe: self } \
             }. \
-            i := 0. [ i <= 1 ] call",
+            [ i := 0. [ i <= 1 ] call ] call",
         )
         .expect("interpret error");
         assert_eq!(value.raw(), vm.special.true_obj.raw());
@@ -2373,10 +2581,10 @@ mod tests {
 
     #[test]
     fn error_location_binary_message() {
-        // "42 + true" — fixnum + fails on dispatching +
-        let err = run_source("42 + true").expect_err("expected error");
+        // "42 + True" — fixnum + fails on dispatching +
+        let err = run_source("42 + True").expect_err("expected error");
         let loc = err.location.expect("error should have source location");
-        // The whole binary expression "42 + true"
+        // The whole binary expression "42 + True"
         assert_eq!(loc.start, 0);
         assert_eq!(loc.end, 9);
     }

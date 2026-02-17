@@ -434,6 +434,8 @@ pub struct SlotDescriptor {
     pub params: Vec<String>,
     pub mutable: bool,
     pub is_parent: bool,
+    /// True when this slot came from shorthand syntax (`name.` or `{ name }`).
+    pub shorthand: bool,
     pub value: Expr,
     pub span: Span,
     /// Comments that appeared immediately before this slot.

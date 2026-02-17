@@ -338,3 +338,17 @@ pub fn float_neg(
     });
     Ok(float)
 }
+
+pub fn float_sqrt(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let a = unsafe { (*expect_float(receiver)?).value };
+    let mut scratch = vec![receiver];
+    let float = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+        alloc_float(proxy, roots, a.sqrt()).value()
+    });
+    Ok(float)
+}

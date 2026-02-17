@@ -580,6 +580,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 params: vec![],
                                 mutable: false,
                                 is_parent: false,
+                                shorthand: false,
                                 value,
                                 span,
                                 leading_comments: comments,
@@ -596,6 +597,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 params: vec![],
                                 mutable: true,
                                 is_parent: false,
+                                shorthand: false,
                                 value,
                                 span,
                                 leading_comments: comments,
@@ -631,8 +633,26 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 params: vec![],
                                 mutable,
                                 is_parent: true,
+                                shorthand: false,
                                 value,
                                 span,
+                                leading_comments: comments,
+                            });
+                        }
+                        TokenKind::Dot | TokenKind::RBrace => {
+                            // Shorthand slot: name. or { name }
+                            let value = Expr::new(
+                                ExprKind::Ident(name.clone()),
+                                ident_tok.span,
+                            );
+                            slots.push(SlotDescriptor {
+                                selector: SlotSelector::Unary(name),
+                                params: vec![],
+                                mutable: true,
+                                is_parent: false,
+                                shorthand: true,
+                                value,
+                                span: ident_tok.span,
                                 leading_comments: comments,
                             });
                         }
@@ -858,6 +878,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     params: vec![],
                     mutable,
                     is_parent,
+                    shorthand: false,
                     value,
                     span,
                     leading_comments: vec![],
@@ -919,6 +940,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     params: arguments,
                     mutable,
                     is_parent: false,
+                    shorthand: false,
                     value,
                     span,
                     leading_comments: vec![],
@@ -954,6 +976,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     params: arguments,
                     mutable,
                     is_parent: false,
+                    shorthand: false,
                     value,
                     span,
                     leading_comments: vec![],

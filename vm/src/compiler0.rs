@@ -202,6 +202,7 @@ pub enum ConstEntry {
     Value(Value),
     Symbol(String),
     Assoc(String),
+    AssocValue(String),
     Code(CodeDesc),
     Map(MapDesc),
 }
@@ -366,6 +367,18 @@ impl Compiler {
         self.add_constant(ConstEntry::Symbol(name.to_string()))
     }
 
+    fn add_assoc(&mut self, name: &str) -> u16 {
+        let constants = &self.frame().constants;
+        for (i, c) in constants.iter().enumerate() {
+            if let ConstEntry::Assoc(s) = c {
+                if s == name {
+                    return i as u16;
+                }
+            }
+        }
+        self.add_constant(ConstEntry::Assoc(name.to_string()))
+    }
+
     fn add_string_const(&mut self, s: &str) -> u16 {
         self.add_constant(ConstEntry::String(s.to_string()))
     }
@@ -382,6 +395,9 @@ impl Compiler {
         match &expr.kind {
             ExprKind::Assignment { target, kind, .. } => {
                 if let ExprKind::Ident(name) = &target.kind {
+                    if self.scope().kind == ScopeKind::TopLevel {
+                        return;
+                    }
                     if *kind == AssignKind::Assign
                         && self.has_local_in_enclosing_scopes(name)
                     {
@@ -415,6 +431,76 @@ impl Compiler {
         }
     }
 
+    fn mark_captures_in_block(
+        &mut self,
+        body: &[Expr],
+        shadow: &HashSet<String>,
+    ) {
+        for expr in body {
+            self.mark_captures_in_block_expr(expr, shadow);
+        }
+    }
+
+    fn mark_captures_in_block_expr(
+        &mut self,
+        expr: &Expr,
+        shadow: &HashSet<String>,
+    ) {
+        match &expr.kind {
+            ExprKind::Ident(name) => {
+                if !shadow.contains(name.as_str()) {
+                    self.mark_captured_if_found(name);
+                }
+            }
+            ExprKind::Assignment { value, .. } => {
+                self.mark_captures_in_block_expr(value, shadow);
+            }
+            ExprKind::Sequence(exprs) => {
+                for e in exprs {
+                    self.mark_captures_in_block_expr(e, shadow);
+                }
+            }
+            ExprKind::Paren(inner) => {
+                self.mark_captures_in_block_expr(inner, shadow);
+            }
+            ExprKind::UnaryMessage { receiver, .. } => {
+                self.mark_captures_in_block_expr(receiver, shadow);
+            }
+            ExprKind::BinaryMessage {
+                receiver, argument, ..
+            } => {
+                self.mark_captures_in_block_expr(receiver, shadow);
+                self.mark_captures_in_block_expr(argument, shadow);
+            }
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                self.mark_captures_in_block_expr(receiver, shadow);
+                for pair in pairs {
+                    self.mark_captures_in_block_expr(&pair.argument, shadow);
+                }
+            }
+            ExprKind::Cascade { receiver, messages } => {
+                self.mark_captures_in_block_expr(receiver, shadow);
+                for msg in messages {
+                    self.mark_captures_in_block_expr(msg, shadow);
+                }
+            }
+            ExprKind::Block { args, body } => {
+                let mut nested = HashSet::new();
+                for arg in args {
+                    nested.insert(arg.clone());
+                }
+                self.collect_assignment_names_filtered(body, &mut nested);
+                for expr in body {
+                    self.mark_captures_in_block_expr(expr, &nested);
+                }
+            }
+            ExprKind::Object { .. } => {
+                // New scope; ignore here.
+            }
+            _ => {}
+        }
+    }
+
     fn analyze_capture_expr(
         &mut self,
         expr: &Expr,
@@ -422,18 +508,17 @@ impl Compiler {
     ) {
         match &expr.kind {
             ExprKind::Ident(name) => {
-                // Check if shadowed by any nested scope
-                for shadow in shadows.iter().rev() {
-                    if shadow.contains(name.as_str()) {
-                        return;
-                    }
-                }
                 if shadows.is_empty() {
                     // Directly in current scope — local ref, not a capture
                     return;
                 }
-                // Inside a nested scope; check if this references a local
-                // in the current or an enclosing scope
+
+                // If the innermost scope defines the name, it's local.
+                if shadows.last().is_some_and(|s| s.contains(name.as_str())) {
+                    return;
+                }
+
+                // Otherwise, try to mark capture (no-op if it's global).
                 self.mark_captured_if_found(name);
             }
             ExprKind::Block { args, body } => {
@@ -444,6 +529,7 @@ impl Compiler {
                 self.collect_assignment_names_filtered(body, &mut shadow);
                 let mut new_shadows = shadows.to_vec();
                 new_shadows.push(shadow);
+                self.mark_captures_in_block(body, new_shadows.last().unwrap());
                 self.analyze_captures(body, &new_shadows);
             }
             ExprKind::Object { slots, body }
@@ -463,7 +549,15 @@ impl Compiler {
                 new_shadows.push(shadow);
                 self.analyze_captures(body, &new_shadows);
                 for slot in slots {
-                    self.analyze_capture_expr(&slot.value, &new_shadows);
+                    if slot.shorthand {
+                        let mut slot_shadows = new_shadows.clone();
+                        if let Some(last) = slot_shadows.last_mut() {
+                            last.remove(&slot_selector_name(slot));
+                        }
+                        self.analyze_capture_expr(&slot.value, &slot_shadows);
+                    } else {
+                        self.analyze_capture_expr(&slot.value, &new_shadows);
+                    }
                 }
             }
             ExprKind::Object { slots, .. } => {
@@ -624,6 +718,11 @@ impl Compiler {
             }
         }
 
+        if self.scope().kind == ScopeKind::TopLevel {
+            let idx = self.add_assoc(name);
+            return Ok(VarLoc::Global(idx));
+        }
+
         if kind == AssignKind::Assign {
             let reg = self.scope_mut().declare_local(name.to_string(), true);
             return Ok(VarLoc::Local(reg));
@@ -680,6 +779,41 @@ impl Compiler {
 
         let idx = self.add_symbol(name);
         VarLoc::Global(idx)
+    }
+
+    fn resolve_lexical_for_load(
+        &mut self,
+        name: &str,
+        skip_current_scope: bool,
+    ) -> Option<VarLoc> {
+        let depth = self.frames.len();
+        if depth == 0 {
+            return None;
+        }
+
+        if !skip_current_scope {
+            if let Some(var) = self.frames[depth - 1].scope.find_local(name) {
+                if var.captured {
+                    return Some(VarLoc::Temp(0, var.temp_idx.unwrap()));
+                }
+                return Some(VarLoc::Local(var.reg));
+            }
+        }
+
+        for i in (0..depth - 1).rev() {
+            if let Some(var) = self.frames[i].scope.find_local(name) {
+                if var.captured {
+                    let array_idx = self.temp_array_depth(i);
+                    return Some(VarLoc::Temp(
+                        array_idx,
+                        var.temp_idx.unwrap(),
+                    ));
+                }
+                return None;
+            }
+        }
+
+        None
     }
 
     fn temp_array_depth(&self, target_frame: usize) -> u16 {
@@ -811,6 +945,27 @@ impl Compiler {
             VarLoc::Local(reg) => self.builder().load_local(reg),
             VarLoc::Temp(arr, idx) => self.builder().load_temp(arr, idx),
             VarLoc::Global(const_idx) => self.builder().load_assoc(const_idx),
+        }
+    }
+
+    fn compile_shorthand_value(
+        &mut self,
+        name: &str,
+        skip_current_scope: bool,
+    ) {
+        if let Some(loc) =
+            self.resolve_lexical_for_load(name, skip_current_scope)
+        {
+            match loc {
+                VarLoc::Local(reg) => self.builder().load_local(reg),
+                VarLoc::Temp(arr, idx) => self.builder().load_temp(arr, idx),
+                VarLoc::Global(_) => {
+                    // Not expected for lexical-only lookup.
+                }
+            }
+        } else {
+            let none_idx = self.add_symbol("None");
+            self.builder().load_assoc(none_idx);
         }
     }
 
@@ -1111,7 +1266,11 @@ impl Compiler {
                 let offset = values_base_offset + value_count * 8;
 
                 // Compile the value expression → temp register
-                self.compile_expr(&slot.value)?;
+                if slot.shorthand {
+                    self.compile_shorthand_value(&name, false);
+                } else {
+                    self.compile_expr(&slot.value)?;
+                }
                 let tmp = self.scope_mut().alloc_temp();
                 self.builder().store_local(tmp);
                 value_regs.push(tmp);
@@ -1204,16 +1363,47 @@ impl Compiler {
         self.emit_captured_param_inits(parent_params);
 
         // Also analyze captures in slot values
+        let mut shadow = HashSet::new();
         for slot in slots {
-            self.analyze_capture_expr(&slot.value, &[]);
+            shadow.insert(slot_selector_name(slot));
+            for param in &slot.params {
+                shadow.insert(param.clone());
+            }
+        }
+        for param in parent_params {
+            shadow.insert(param.clone());
+        }
+        let mut new_shadows = Vec::new();
+        new_shadows.push(shadow);
+        for slot in slots {
+            if slot.shorthand {
+                let mut slot_shadows = new_shadows.clone();
+                if let Some(last) = slot_shadows.last_mut() {
+                    last.remove(&slot_selector_name(slot));
+                }
+                self.analyze_capture_expr(&slot.value, &slot_shadows);
+            } else {
+                self.analyze_capture_expr(&slot.value, &new_shadows);
+            }
         }
 
         // Compile slot initializers
         for slot in slots {
-            self.compile_expr(&slot.value)?;
             let name = slot_selector_name(slot);
-            let reg = self.scope().find_local(&name).expect("slot local").reg;
-            self.builder().store_local(reg);
+            if slot.shorthand {
+                self.compile_shorthand_value(&name, true);
+            } else {
+                self.compile_expr(&slot.value)?;
+            }
+            let (captured, reg, temp_idx) = {
+                let var = self.scope().find_local(&name).expect("slot local");
+                (var.captured, var.reg, var.temp_idx)
+            };
+            if captured {
+                self.builder().store_temp(0, temp_idx.unwrap());
+            } else {
+                self.builder().store_local(reg);
+            }
         }
 
         // Compile body
@@ -1278,12 +1468,54 @@ impl Compiler {
 
                 self.emit_captured_param_inits(&slot.params);
 
+                // Analyze captures in slot values
+                let mut shadow = HashSet::new();
                 for inner_slot in inner_slots {
-                    self.compile_expr(&inner_slot.value)?;
+                    shadow.insert(slot_selector_name(inner_slot));
+                    for param in &inner_slot.params {
+                        shadow.insert(param.clone());
+                    }
+                }
+                for param in &slot.params {
+                    shadow.insert(param.clone());
+                }
+                let mut new_shadows = Vec::new();
+                new_shadows.push(shadow);
+                for inner_slot in inner_slots {
+                    if inner_slot.shorthand {
+                        let mut slot_shadows = new_shadows.clone();
+                        if let Some(last) = slot_shadows.last_mut() {
+                            last.remove(&slot_selector_name(inner_slot));
+                        }
+                        self.analyze_capture_expr(
+                            &inner_slot.value,
+                            &slot_shadows,
+                        );
+                    } else {
+                        self.analyze_capture_expr(
+                            &inner_slot.value,
+                            &new_shadows,
+                        );
+                    }
+                }
+
+                for inner_slot in inner_slots {
                     let name = slot_selector_name(inner_slot);
-                    let reg =
-                        self.scope().find_local(&name).expect("slot local").reg;
-                    self.builder().store_local(reg);
+                    if inner_slot.shorthand {
+                        self.compile_shorthand_value(&name, true);
+                    } else {
+                        self.compile_expr(&inner_slot.value)?;
+                    }
+                    let (captured, reg, temp_idx) = {
+                        let var =
+                            self.scope().find_local(&name).expect("slot local");
+                        (var.captured, var.reg, var.temp_idx)
+                    };
+                    if captured {
+                        self.builder().store_temp(0, temp_idx.unwrap());
+                    } else {
+                        self.builder().store_local(reg);
+                    }
                 }
 
                 self.compile_body(body)?;
@@ -1317,7 +1549,7 @@ impl Compiler {
             ExprKind::Integer(v) => Ok(ConstEntry::Fixnum(*v)),
             ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
             ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
-            ExprKind::Ident(name) => Ok(ConstEntry::Assoc(name.clone())),
+            ExprKind::Ident(name) => Ok(ConstEntry::AssocValue(name.clone())),
             ExprKind::Object { slots, body } if body.is_empty() => {
                 // Nested data object as a constant — build a MapDesc
                 let mut slot_descs = Vec::new();
@@ -1513,8 +1745,9 @@ mod tests {
 
     #[test]
     fn compile_assignment_and_load() {
-        let code = compile_source("x = 5. x");
-        let instrs = decode(&code);
+        let code = compile_source("[ x = 5. x ]");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
         assert_eq!(
             instrs,
             vec![
@@ -1655,8 +1888,9 @@ mod tests {
 
     #[test]
     fn compile_local_assignment_and_binary() {
-        let code = compile_source("x = 5. x + 3");
-        let instrs = decode(&code);
+        let code = compile_source("[ x = 5. x + 3 ]");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
         // r1 = x (from prescan)
         // After "x = 5": r1 holds 5
         // For "x + 3": r2 = tmp_recv, r3 = tmp_arg
@@ -1841,29 +2075,28 @@ mod tests {
 
     #[test]
     fn compile_block_captures_local() {
-        let code = compile_source("y = 10. [ y + 1 ]");
-        // y is declared in top-level scope. The block captures y.
-        // y should be accessed via LoadTemp in both scopes.
-        let instrs = decode(&code);
+        let code = compile_source("[ y = 10. [ y + 1 ] ]");
+        let outer_block = find_code_const(&code.constants);
+        let outer_instrs = decode(outer_block);
 
-        // In top-level: y is captured → stored via StoreTemp
-        assert_eq!(instrs[0], Instruction::LoadSmi { value: 10 });
+        // In outer block: y is captured → stored via StoreTemp
+        assert_eq!(outer_instrs[0], Instruction::LoadSmi { value: 10 });
         assert_eq!(
-            instrs[1],
+            outer_instrs[1],
             Instruction::StoreTemp {
                 array_idx: 0,
                 idx: 0
             }
         );
 
-        // Block creation
-        assert!(matches!(instrs[2], Instruction::CreateBlock { .. }));
+        // Inner block creation
+        assert!(matches!(outer_instrs[2], Instruction::CreateBlock { .. }));
 
-        // Inside the block: y accessed via LoadTemp
-        let block_code = find_code_const(&code.constants);
-        let block_instrs = decode(block_code);
+        // Inside the inner block: y accessed via LoadTemp
+        let inner_block = find_code_const(&outer_block.constants);
+        let inner_instrs = decode(inner_block);
         assert_eq!(
-            block_instrs[0],
+            inner_instrs[0],
             Instruction::LoadTemp {
                 array_idx: 0,
                 idx: 0
@@ -1913,9 +2146,10 @@ mod tests {
 
     #[test]
     fn compile_block_assignment_updates_capture() {
-        let code = compile_source("x := 0. [ x := 1 ]");
-        let block_code = find_code_const(&code.constants);
-        let instrs = decode(block_code);
+        let code = compile_source("[ x := 0. [ x := 1 ] ]");
+        let outer_block = find_code_const(&code.constants);
+        let inner_block = find_code_const(&outer_block.constants);
+        let instrs = decode(inner_block);
         assert!(instrs.iter().any(|i| {
             matches!(
                 i,
@@ -1929,9 +2163,128 @@ mod tests {
 
     #[test]
     fn compile_assignment_to_constant_is_error() {
-        let exprs = parse_source("x = 1. x := 2");
+        let exprs = parse_source("[ x = 1. x := 2 ]");
         let err = Compiler::compile(&exprs).expect_err("expected error");
         assert!(err.message.contains("cannot assign to constant"));
+    }
+
+    #[test]
+    fn top_level_const_assigns_assoc() {
+        let code = compile_source("Math = { foo = { 1 }. }. Math foo");
+        let instrs = decode(&code);
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::StoreAssoc { .. })));
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadAssoc { .. })));
+    }
+
+    #[test]
+    fn top_level_const_uses_assoc_constant() {
+        let code = compile_source("Boolean = { }. Boolean");
+        assert!(code.constants.iter().any(|c| {
+            matches!(c, ConstEntry::Assoc(name) if name == "Boolean")
+        }));
+    }
+
+    #[test]
+    fn data_object_with_method_slot_includes_slot() {
+        let code = compile_source("Math = { foo = { 1 }. }.");
+        let map = code
+            .constants
+            .iter()
+            .find_map(|c| match c {
+                ConstEntry::Map(desc) => Some(desc),
+                _ => None,
+            })
+            .expect("expected map constant");
+        assert!(map.slots.iter().any(|s| s.name == "foo"));
+    }
+
+    #[test]
+    fn top_level_const_emits_create_object() {
+        let code = compile_source("Math = { foo = { 1 }. }.");
+        let instrs = decode(&code);
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::CreateObject { .. })));
+    }
+
+    #[test]
+    fn top_level_const_create_before_store_assoc() {
+        let code = compile_source("Math = { foo = { 1 }. }.");
+        let instrs = decode(&code);
+        let create_idx = instrs
+            .iter()
+            .position(|i| matches!(i, Instruction::CreateObject { .. }))
+            .expect("missing create_object");
+        let store_idx = instrs
+            .iter()
+            .position(|i| matches!(i, Instruction::StoreAssoc { .. }))
+            .expect("missing store_assoc");
+        assert!(create_idx < store_idx);
+    }
+
+    #[test]
+    fn top_level_const_store_assoc_uses_create_result() {
+        let code = compile_source("Math = { foo = { 1 }. }.");
+        let instrs = decode(&code);
+        let store_idx = instrs
+            .iter()
+            .position(|i| matches!(i, Instruction::StoreAssoc { .. }))
+            .expect("missing store_assoc");
+        assert!(store_idx > 0);
+        assert!(matches!(
+            instrs[store_idx - 1],
+            Instruction::CreateObject { .. }
+        ));
+    }
+
+    #[test]
+    fn store_assoc_points_to_assoc_constant() {
+        let code = compile_source("Math = { foo = { 1 }. }.");
+        let instrs = decode(&code);
+        let idx = instrs
+            .iter()
+            .find_map(|i| match i {
+                Instruction::StoreAssoc { idx } => Some(*idx as usize),
+                _ => None,
+            })
+            .expect("missing store_assoc");
+        assert!(matches!(code.constants[idx], ConstEntry::Assoc(_)));
+    }
+
+    #[test]
+    fn method_block_captures_local() {
+        let code = compile_source("Obj = { foo = { x = 1. [ x ] call } }.");
+        let map = code
+            .constants
+            .iter()
+            .find_map(|c| match c {
+                ConstEntry::Map(desc) => Some(desc),
+                _ => None,
+            })
+            .expect("expected map constant");
+        let mut method_code = None;
+        for slot in &map.slots {
+            if slot.name == "foo" {
+                if let SlotValue::Constant(ConstEntry::Code(code)) = &slot.value
+                {
+                    method_code = Some(code);
+                }
+            }
+        }
+        let method_code = method_code.expect("expected foo code");
+        let instrs = decode(method_code);
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::StoreTemp { .. })));
+        let block_code = find_code_const(&method_code.constants);
+        let block_instrs = decode(block_code);
+        assert!(block_instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadTemp { .. })));
     }
 
     #[test]

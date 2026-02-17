@@ -440,6 +440,39 @@ mod tests {
     }
 
     #[test]
+    fn object_with_shorthand_slot_no_dot() {
+        let e = parse_one("{ x }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert!(body.is_empty());
+                assert!(slots[0].mutable);
+                assert!(slots[0].shorthand);
+                assert!(
+                    matches!(slots[0].selector, SlotSelector::Unary(ref s) if s == "x")
+                );
+                assert!(
+                    matches!(slots[0].value.kind, ExprKind::Ident(ref s) if s == "x")
+                );
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn object_with_shorthand_slot_trailing_dot() {
+        let e = parse_one("{ x. y. }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 2);
+                assert!(body.is_empty());
+                assert!(slots.iter().all(|s| s.shorthand));
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
     fn object_slot_value_expression() {
         let e = parse_one("{ x = 7 + 7 }");
         match &e.kind {
@@ -729,9 +762,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(
-                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
-                );
+                assert!(body
+                    .iter()
+                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
             }
             _ => panic!("expected block"),
         }

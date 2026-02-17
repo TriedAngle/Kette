@@ -26,6 +26,12 @@ pub struct VM {
     /// The global dictionary object (SlotObject whose map has one CONSTANT
     /// slot per global).
     pub dictionary: Value,
+    /// Optional global assoc name to trace load/store.
+    #[cfg(debug_assertions)]
+    pub trace_assoc_name: Option<String>,
+    /// Optional message selector to trace sends.
+    #[cfg(debug_assertions)]
+    pub trace_send_name: Option<String>,
 }
 
 impl RootProvider for VM {

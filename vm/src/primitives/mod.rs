@@ -9,6 +9,7 @@ pub mod bytearray;
 pub mod extend;
 pub mod fixnum;
 pub mod float;
+pub mod object_clone;
 pub mod ratio;
 pub mod string;
 
@@ -95,6 +96,7 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("float_div", 1, float::float_div),
         PrimitiveDesc::new("float_mod", 1, float::float_mod),
         PrimitiveDesc::new("float_neg", 0, float::float_neg),
+        PrimitiveDesc::new("float_sqrt", 0, float::float_sqrt),
         PrimitiveDesc::new("float_to_fixnum", 0, float::float_to_fixnum),
         PrimitiveDesc::new("float_to_bignum", 0, float::float_to_bignum),
         PrimitiveDesc::new("float_to_ratio", 0, float::float_to_ratio),
@@ -129,6 +131,27 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
             string::string_to_bytearray,
         ),
         PrimitiveDesc::new("bytearray_size", 0, bytearray::bytearray_size),
+        PrimitiveDesc::new(
+            "bytearray_clone_with_size",
+            1,
+            bytearray::bytearray_clone_with_size,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_memcopy",
+            4,
+            bytearray::bytearray_memcopy,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_memcopy_overlapping",
+            4,
+            bytearray::bytearray_memcopy_overlapping,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_to_string",
+            0,
+            bytearray::bytearray_to_string,
+        ),
+        PrimitiveDesc::new("object_clone", 1, object_clone::object_clone),
     ]
 }
 

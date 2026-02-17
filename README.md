@@ -15,6 +15,8 @@ the parser and core library.
   parent links for delegation.
 - **Blocks are closures**: `[ ... ]` with optional `| args |`.
 - **None/true/false are objects**: `None` is the canonical empty value.
+- **Globals at top level**: any assignment at top level creates/updates a
+  global assoc, regardless of name casing.
 
 ## Syntax Overview
 

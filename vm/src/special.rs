@@ -601,6 +601,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             ("float_div", "_FloatDiv:"),
             ("float_mod", "_FloatMod:"),
             ("float_neg", "_FloatNeg"),
+            ("float_sqrt", "_FloatSqrt"),
             ("float_to_fixnum", "_FloatToFixnum"),
             ("float_to_bignum", "_FloatToBignum"),
             ("float_to_ratio", "_FloatToRatio"),
@@ -766,7 +767,16 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             (*string_traits_obj_ptr).map = string_traits_map_val;
         }
 
-        let bytearray_primitives = [("bytearray_size", "_ByteArraySize")];
+        let bytearray_primitives = [
+            ("bytearray_size", "_ByteArraySize"),
+            ("bytearray_clone_with_size", "_CloneWithSize:"),
+            ("bytearray_memcopy", "_MemCopy:From:To:Length:"),
+            (
+                "bytearray_memcopy_overlapping",
+                "_MemCopyOverlapping:From:To:Length:",
+            ),
+            ("bytearray_to_string", "_ByteArrayToString"),
+        ];
         for (prim_name, slot_name) in bytearray_primitives {
             let prim_idx =
                 primitives::primitive_index_by_name(&primitives, prim_name)
@@ -934,7 +944,17 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             "_Extend:With:",
         );
 
-        let object_map_val = alloc_map(
+        let clone_idx =
+            primitives::primitive_index_by_name(&primitives, "object_clone")
+                .expect("object_clone primitive missing") as i64;
+        let clone_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Clone:",
+        );
+
+        let mut object_map_val = alloc_map(
             &mut proxy,
             &mut roots,
             map_map_val,
@@ -978,8 +998,39 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             extend_method_val,
         );
         roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let clone_code = Value::from_i64(clone_idx);
+        let clone_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            clone_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(clone_map_val);
+
+        let clone_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, clone_map_val, &[])
+                .value();
+        roots.push(clone_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            clone_name,
+            clone_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
         let obj_ptr = object_val.ref_bits() as *mut object::SlotObject;
-        (*obj_ptr).map = new_object_map;
+        (*obj_ptr).map = object_map_val;
 
         let object_name = intern_bootstrap(
             &mut proxy,
@@ -1014,7 +1065,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         );
 
         let true_name =
-            intern_bootstrap(&mut proxy, &mut roots, &mut intern_table, "true");
+            intern_bootstrap(&mut proxy, &mut roots, &mut intern_table, "True");
         add_dictionary_entry(
             &mut proxy,
             &mut roots,
@@ -1029,7 +1080,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut proxy,
             &mut roots,
             &mut intern_table,
-            "false",
+            "False",
         );
         add_dictionary_entry(
             &mut proxy,
@@ -1042,7 +1093,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         );
 
         let none_name =
-            intern_bootstrap(&mut proxy, &mut roots, &mut intern_table, "none");
+            intern_bootstrap(&mut proxy, &mut roots, &mut intern_table, "None");
         add_dictionary_entry(
             &mut proxy,
             &mut roots,
@@ -1075,8 +1126,9 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             dictionary_map_val,
         ] {
             let map = &mut *(map_val.ref_bits() as *mut object::Map);
-            debug_assert_eq!(map.code, NONE_PLACEHOLDER);
-            map.code = none_val;
+            if map.code.raw() == NONE_PLACEHOLDER.raw() {
+                map.code = none_val;
+            }
         }
 
         let special = SpecialObjects {
@@ -1104,6 +1156,10 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             primitives,
             assoc_map: assoc_map_val,
             dictionary: dictionary_val,
+            #[cfg(debug_assertions)]
+            trace_assoc_name: None,
+            #[cfg(debug_assertions)]
+            trace_send_name: None,
         }
     }
 }

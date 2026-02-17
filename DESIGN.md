@@ -173,6 +173,9 @@ Key stages:
 2. Capture analysis to mark closed-over variables.
 3. Emit bytecode and source map entries.
 
+At top level, assignments always compile to global assoc stores (dictionary
+entries), regardless of name casing.
+
 Captures are assigned temp array indices (`temp_count`), and access is encoded
 as `LoadTemp`/`StoreTemp` instructions.
 

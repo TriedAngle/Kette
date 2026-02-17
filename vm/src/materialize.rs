@@ -159,6 +159,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             ConstEntry::Value(value) => *value,
             ConstEntry::Symbol(s) => self.intern(s),
             ConstEntry::Assoc(name) => self.resolve_assoc(name),
+            ConstEntry::AssocValue(name) => self.resolve_assoc_value(name),
             ConstEntry::Code(desc) => self.materialize_code(desc),
             ConstEntry::Map(desc) => self.materialize_map(desc, materialized),
         }
@@ -236,10 +237,8 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             for slot in slots {
                 if slot.name.raw() == self.roots.scratch[sym_idx].raw() {
                     let assoc = slot.value;
-                    let assoc_obj: &SlotObject = assoc.as_ref();
-                    let value = assoc_obj.read_value(SlotObject::VALUES_OFFSET);
                     self.roots.scratch.pop();
-                    return value;
+                    return assoc;
                 }
             }
         }
@@ -251,12 +250,18 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
 
         self.grow_dictionary(assoc_idx, sym_idx);
 
-        let result = self.none();
+        let result = assoc;
         // Clean up: remove assoc and sym from scratch
         // sym_idx < assoc_idx, so remove assoc first
         self.roots.scratch.pop(); // assoc
         self.roots.scratch.pop(); // sym
         result
+    }
+
+    fn resolve_assoc_value(&mut self, name: &str) -> Value {
+        let assoc = self.resolve_assoc(name);
+        let assoc_obj: &SlotObject = unsafe { assoc.as_ref() };
+        unsafe { assoc_obj.read_value(SlotObject::VALUES_OFFSET) }
     }
 
     fn create_assoc(&mut self) -> Value {
@@ -569,7 +574,9 @@ mod tests {
         unsafe {
             let code: &Code = code_val.as_ref();
             let value = code.constant(0);
-            assert_eq!(value.raw(), vm.special.none.raw());
+            let assoc_obj: &SlotObject = value.as_ref();
+            let assoc_val = assoc_obj.read_value(SlotObject::VALUES_OFFSET);
+            assert_eq!(assoc_val.raw(), vm.special.none.raw());
 
             // Dictionary should have one additional slot now
             let dict: &SlotObject = vm.dictionary.as_ref();
@@ -739,9 +746,15 @@ mod tests {
             let a = code.constant(0);
             let b = code.constant(1);
             let c = code.constant(2);
-            assert_eq!(a.raw(), vm.special.none.raw());
-            assert_eq!(b.raw(), vm.special.none.raw());
-            assert_eq!(c.raw(), vm.special.none.raw());
+            let a_obj: &SlotObject = a.as_ref();
+            let b_obj: &SlotObject = b.as_ref();
+            let c_obj: &SlotObject = c.as_ref();
+            let a_val = a_obj.read_value(SlotObject::VALUES_OFFSET);
+            let b_val = b_obj.read_value(SlotObject::VALUES_OFFSET);
+            let c_val = c_obj.read_value(SlotObject::VALUES_OFFSET);
+            assert_eq!(a_val.raw(), vm.special.none.raw());
+            assert_eq!(b_val.raw(), vm.special.none.raw());
+            assert_eq!(c_val.raw(), vm.special.none.raw());
 
             // Dictionary should have 3 additional slots
             let dict: &SlotObject = vm.dictionary.as_ref();

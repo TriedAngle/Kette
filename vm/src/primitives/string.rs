@@ -72,3 +72,21 @@ pub(crate) fn alloc_vm_string(
     });
     Ok(value)
 }
+
+pub(crate) fn alloc_vm_string_from_bytearray(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    data: Value,
+    length: u64,
+) -> Result<Value, RuntimeError> {
+    let mut scratch = vec![data];
+    let value = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+        let size = std::mem::size_of::<object::VMString>();
+        let layout = std::alloc::Layout::from_size_align(size, 8).unwrap();
+        let ptr = proxy.allocate(layout, roots);
+        let str_ptr = ptr.as_ptr() as *mut object::VMString;
+        object::init_str(str_ptr, length, data);
+        Value::from_ptr(str_ptr)
+    });
+    Ok(value)
+}
