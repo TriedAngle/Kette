@@ -6,9 +6,12 @@ use std::{
 };
 
 use heap::HeapSettings;
+use parser::token::TokenKind;
 use parser::{Lexer, Parser};
 
 use vm::{compiler0, interpreter, materialize, special, VM};
+
+const SLOT_PRINT_LIMIT: usize = 30;
 
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -84,7 +87,9 @@ fn main() {
             };
             match execute_source(&mut vm, &source_code, trace_mnu) {
                 Ok(value) => {
-                    print_value(&mut vm, value);
+                    if should_print_last_expr(&source_code) {
+                        print_value(&mut vm, value);
+                    }
                 }
                 Err(err) => {
                     eprintln!("Error executing {}: {}", filename, err);
@@ -185,6 +190,25 @@ fn compile_source(source: &str) -> Result<compiler0::CodeDesc, String> {
 
     compiler0::Compiler::compile(&exprs)
         .map_err(|e| format_compile_error(source, &e))
+}
+
+fn should_print_last_expr(source: &str) -> bool {
+    let mut last_kind = None;
+    for token in Lexer::from_str(source) {
+        if token.kind.is_comment() {
+            continue;
+        }
+        if matches!(token.kind, TokenKind::Eof) {
+            break;
+        }
+        last_kind = Some(token.kind.clone());
+    }
+
+    match last_kind {
+        None => false,
+        Some(TokenKind::Dot) => false,
+        _ => true,
+    }
 }
 
 fn dump_code_desc(desc: &compiler0::CodeDesc) {
@@ -333,6 +357,11 @@ fn print_value(vm: &mut VM, value: object::Value) {
     }
 
     if let Some(text) = try_to_string(vm, value) {
+        println!("{}", text);
+        return;
+    }
+
+    if let Some(text) = format_slot_object_shallow(vm, value) {
         println!("{}", text);
         return;
     }
@@ -737,5 +766,68 @@ fn value_to_string(value: object::Value) -> Option<String> {
         return Some(unsafe { s.as_str() }.to_string());
     }
 
+    None
+}
+
+fn format_slot_object_shallow(
+    vm: &mut VM,
+    value: object::Value,
+) -> Option<String> {
+    if !value.is_ref() {
+        return None;
+    }
+
+    let header: &object::Header = unsafe { value.as_ref() };
+    if header.object_type() != object::ObjectType::Slots {
+        return None;
+    }
+
+    let obj: &object::SlotObject = unsafe { value.as_ref() };
+    let map: &object::Map = unsafe { obj.map.as_ref() };
+    let mut parts = Vec::new();
+    unsafe {
+        for slot in map.slots() {
+            if slot.is_assignment() {
+                continue;
+            }
+            if parts.len() == SLOT_PRINT_LIMIT {
+                parts.push("...".to_string());
+                break;
+            }
+            let name = value_to_string(slot.name)
+                .unwrap_or_else(|| format!("{:?}", slot.name));
+            let (op, val) = if slot.is_assignable() {
+                let offset = slot.value.to_i64() as u32;
+                let val = obj.read_value(offset);
+                (":=", val)
+            } else {
+                ("=", slot.value)
+            };
+            let rendered = match format_value_shallow(vm, val) {
+                Some(text) => text,
+                None => format!("{:?}", val),
+            };
+            parts.push(format!("{name} {op} {rendered}"));
+        }
+    }
+
+    let ptr = value.ref_bits() as usize;
+    Some(format!("({ptr:#x}){{ {} }}", parts.join(". ")))
+}
+
+fn format_value_shallow(vm: &mut VM, value: object::Value) -> Option<String> {
+    if let Some(text) = value_to_string(value) {
+        return Some(text);
+    }
+    if let Some(text) = try_to_string(vm, value) {
+        return Some(text);
+    }
+    if !value.is_ref() {
+        return None;
+    }
+    let header: &object::Header = unsafe { value.as_ref() };
+    if header.object_type() == object::ObjectType::Slots {
+        return Some("{ ... }".to_string());
+    }
     None
 }
