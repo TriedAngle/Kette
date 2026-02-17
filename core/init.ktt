@@ -37,7 +37,7 @@ Object extend: True With: {
 }.
 
 
-Object extend: Fixnum With: { 
+Object extend: Fixnum With: {
     parent* = Object.
     + rhs = { rhs addFixnum: self }.
     - rhs = { rhs subFixnum: self }.
@@ -51,6 +51,7 @@ Object extend: Fixnum With: {
     <= rhs = { rhs leFixnum: self }.
     > rhs = { rhs gtFixnum: self }.
     >= rhs = { rhs geFixnum: self }.
+    ~= rhs = { self == rhs }.
 
     addFixnum: lhs = { lhs _FixnumAdd: self }.
     subFixnum: lhs = { lhs _FixnumSub: self }.
@@ -86,6 +87,7 @@ Object extend: Fixnum With: {
     leFixnum: lhs = { lhs _FixnumLe: self }.
     gtFixnum: lhs = { lhs _FixnumGt: self }.
     geFixnum: lhs = { lhs _FixnumGe: self }.
+    equals: rhs WithEpsilon: e = { self == rhs }.
 
     eqBignum: lhs = { lhs _BignumEq: (self _FixnumToBignum) }.
     neBignum: lhs = { lhs _BignumNe: (self _FixnumToBignum) }.
@@ -123,6 +125,7 @@ Object extend: Bignum With: {
     <= rhs = { rhs leBignum: self }.
     > rhs = { rhs gtBignum: self }.
     >= rhs = { rhs geBignum: self }.
+    ~= rhs = { self == rhs }.
 
     addFixnum: lhs = { (lhs _FixnumToBignum) _BignumAdd: self }.
     subFixnum: lhs = { (lhs _FixnumToBignum) _BignumSub: self }.
@@ -155,6 +158,7 @@ Object extend: Bignum With: {
     leFixnum: lhs = { (lhs _FixnumToBignum) _BignumLe: self }.
     gtFixnum: lhs = { (lhs _FixnumToBignum) _BignumGt: self }.
     geFixnum: lhs = { (lhs _FixnumToBignum) _BignumGe: self }.
+    equals: rhs WithEpsilon: e = { self == rhs }.
 
     eqBignum: lhs = { lhs _BignumEq: self }.
     neBignum: lhs = { lhs _BignumNe: self }.
@@ -193,6 +197,7 @@ Object extend: Ratio With: {
     <= rhs = { rhs leRatio: self }.
     > rhs = { rhs gtRatio: self }.
     >= rhs = { rhs geRatio: self }.
+    ~= rhs = { self == rhs }.
 
     addFixnum: lhs = { (lhs _FixnumToRatio) _RatioAdd: self }.
     subFixnum: lhs = { (lhs _FixnumToRatio) _RatioSub: self }.
@@ -222,6 +227,7 @@ Object extend: Ratio With: {
     leFixnum: lhs = { (lhs _FixnumToRatio) _RatioLe: self }.
     gtFixnum: lhs = { (lhs _FixnumToRatio) _RatioGt: self }.
     geFixnum: lhs = { (lhs _FixnumToRatio) _RatioGe: self }.
+    equals: rhs WithEpsilon: e = { self == rhs }.
 
     eqBignum: lhs = { (lhs _BignumToRatio) _RatioEq: self }.
     neBignum: lhs = { (lhs _BignumToRatio) _RatioNe: self }.
@@ -340,18 +346,6 @@ Complex = {
         Complex clone setRe: (self re - o re) Im: (self im - o im)
     }.
 
-    addFixnum: lhs = { Complex clone setRe: (lhs + self re) Im: self im }.
-    subFixnum: lhs = { Complex clone setRe: (lhs - self re) Im: (0 - self im) }.
-
-    addBignum: lhs = { Complex clone setRe: (lhs + self re) Im: self im }.
-    subBignum: lhs = { Complex clone setRe: (lhs - self re) Im: (0 - self im) }.
-
-    addRatio: lhs = { Complex clone setRe: (lhs + self re) Im: self im }.
-    subRatio: lhs = { Complex clone setRe: (lhs - self re) Im: (0 - self im) }.
-
-    addFloat: lhs = { Complex clone setRe: (lhs + self re) Im: self im }.
-    subFloat: lhs = { Complex clone setRe: (lhs - self re) Im: (0 - self im) }.
-
     * rhs = {
         o = rhs asComplex.
         Complex clone setRe: ((self re * o re) - (self im * o im)) Im: ((self re * o im) + (self im * o re))
@@ -363,6 +357,44 @@ Complex = {
         denom == 0 ifTrue: [ 1 / 0 ] IfFalse: [
             Complex clone setRe: ((self re * o re + self im * o im) / denom) Im: ((self im * o re - self re * o im) / denom)
         ]
+    }.
+
+    == rhs = {
+        o = rhs asComplex.
+        (self re == o re) && (self im == o im)
+    }.
+
+    != rhs = { (self == rhs) ifTrue: [ False ] IfFalse: [ True ] }.
+    ~= rhs = { self == rhs }.
+
+
+    addFixnum: lhs = { (lhs asComplex) + self }.
+    subFixnum: lhs = { (lhs asComplex) - self }.
+    mulFixnum: lhs = { (lhs asComplex) * self }.
+    divFixnum: lhs = { (lhs asComplex) / self }.
+
+    addBignum: lhs = { (lhs asComplex) + self }.
+    subBignum: lhs = { (lhs asComplex) - self }.
+    mulBignum: lhs = { (lhs asComplex) * self }.
+    divBignum: lhs = { (lhs asComplex) / self }.
+
+    addRatio: lhs = { (lhs asComplex) + self }.
+    subRatio: lhs = { (lhs asComplex) - self }.
+    mulRatio: lhs = { (lhs asComplex) * self }.
+    divRatio: lhs = { (lhs asComplex) / self }.
+
+    addFloat: lhs = { (lhs asComplex) + self }.
+    subFloat: lhs = { (lhs asComplex) - self }.
+    mulFloat: lhs = { (lhs asComplex) * self }.
+    divFloat: lhs = { (lhs asComplex) / self }.
+
+    conjugate = { Complex clone setRe: self re Im: (0 - self im) }.
+    magnitudeSquared = { (self re * self re) + (self im * self im) }.
+    abs = { self magnitudeSquared sqrt }.
+    isReal = { self im == 0 }.
+    equals: rhs WithEpsilon: e = {
+        o = rhs asComplex.
+        (self re equals: o re WithEpsilon: e) && (self im equals: o im WithEpsilon: e)
     }.
 
     toString = {

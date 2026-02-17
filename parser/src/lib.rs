@@ -762,9 +762,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(body
-                    .iter()
-                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
+                assert!(
+                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
+                );
             }
             _ => panic!("expected block"),
         }
