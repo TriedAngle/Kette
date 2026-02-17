@@ -7,10 +7,10 @@ pub mod special;
 
 use std::collections::HashMap;
 
-use heap::{HeapProxy, RootProvider};
+use heap::{HeapProxy, RootProvider, SizeFn};
 use object::{
-    Array, Block, Code, Header, Map, ObjectType, SlotObject, SpecialObjects,
-    VMString, Value,
+    Array, BigNum, Block, ByteArray, Code, Float, Header, HeaderFlags, Map,
+    ObjectType, Ratio, SlotObject, SpecialObjects, VMString, Value,
 };
 
 /// The VM owns a heap proxy and the bootstrapped special objects.
@@ -139,3 +139,94 @@ pub unsafe fn trace_object(
         }
     }
 }
+
+/// If `ptr` points to an already-evacuated object (ESCAPED flag is set),
+/// return the forwarding pointer stored at `ptr + size_of::<Header>()`;
+/// otherwise return `ptr` unchanged.
+///
+/// Used by [`object_size`] to resolve the map pointer of a [`SlotObject`]
+/// whose map may have been evacuated before we compute the slot object's size.
+///
+/// # Safety
+///
+/// `ptr` must point to a valid heap object with an initialised [`Header`].
+unsafe fn resolve_fwd(ptr: *const u8) -> *const u8 {
+    let header = &*(ptr as *const Header);
+    if header.has_flag(HeaderFlags::ESCAPED) {
+        // The forwarding pointer was written at offset = size_of::<Header>()
+        // with a Release fence; it is safe to read here with the Acquire load
+        // that observed the ESCAPED flag.
+        std::ptr::read(
+            ptr.add(std::mem::size_of::<Header>()) as *const *const u8
+        )
+    } else {
+        ptr
+    }
+}
+
+/// Compute the total byte size of a heap object.
+///
+/// This is the counterpart of [`trace_object`] used by the evacuation path
+/// to know how many bytes to copy. The caller must invoke this function
+/// **before** writing a forwarding pointer into the object's first payload
+/// word.
+///
+/// Returns `0` for [`ObjectType::Alien`] as a sentinel meaning "do not
+/// evacuate" (Alien objects wrap raw FFI pointers whose ownership semantics
+/// are unknown).
+///
+/// # Safety
+///
+/// `obj` must point to a valid, live heap object. Its first payload word
+/// (`obj + size_of::<Header>()`) must still contain the original field
+/// content (not yet overwritten by a forwarding pointer).
+pub unsafe fn object_size(obj: *const u8) -> usize {
+    let header = &*(obj as *const Header);
+    match header.object_type() {
+        ObjectType::Slots => {
+            // Read the map pointer at offset +size_of::<Header>().
+            // The map object may itself have been evacuated already, but only
+            // its first field (+8 within the map) is overwritten; value_count
+            // sits at a higher offset and is still valid in the old map copy.
+            let raw_map = std::ptr::read(
+                obj.add(std::mem::size_of::<Header>()) as *const *const u8,
+            );
+            let map = &*(resolve_fwd(raw_map) as *const Map);
+            object::slot_object_allocation_size(map.value_count())
+        }
+        ObjectType::Map => {
+            let map = &*(obj as *const Map);
+            map.byte_size()
+        }
+        ObjectType::Array => {
+            let arr = &*(obj as *const Array);
+            std::mem::size_of::<Array>()
+                + arr.len() as usize * std::mem::size_of::<Value>()
+        }
+        ObjectType::ByteArray => {
+            let ba = &*(obj as *const ByteArray);
+            // Round up to 8-byte alignment so the allocator's bump pointer
+            // stays aligned.
+            (std::mem::size_of::<ByteArray>() + ba.len() as usize + 7) & !7
+        }
+        ObjectType::Code => {
+            let code = &*(obj as *const Code);
+            code.byte_size()
+        }
+        ObjectType::Block => std::mem::size_of::<Block>(),
+        ObjectType::Float => std::mem::size_of::<Float>(),
+        ObjectType::Ratio => std::mem::size_of::<Ratio>(),
+        ObjectType::Str => std::mem::size_of::<VMString>(),
+        ObjectType::BigNum => {
+            let bn = &*(obj as *const BigNum);
+            std::mem::size_of::<BigNum>()
+                + bn.len() * std::mem::size_of::<u64>()
+        }
+        // Alien wraps a raw FFI pointer; we do not know its ownership
+        // semantics, so we refuse to evacuate it.
+        ObjectType::Alien => 0,
+    }
+}
+
+/// The [`SizeFn`] pointer passed to [`heap::Heap::new`].
+pub const OBJECT_SIZE_FN: SizeFn = object_size;

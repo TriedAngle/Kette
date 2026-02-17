@@ -271,8 +271,17 @@ Minor GC:
 Major GC:
 
 - Advances the global epoch.
-- Marks all reachable objects and sweeps all blocks.
+- Marks all reachable objects with opportunistic evacuation (see below).
+- Sweeps all blocks; records live line count per block for the next cycle.
 - Large objects are retained or unmapped based on header age.
+
+### Epoch Wraparound
+
+The epoch counter is a `u8` starting at 1 (0 is reserved as "uninitialized").
+When the counter wraps from 255 back to 1 the coordinator thread resets the
+entire line bytemap to zero with a non-atomic `memset` — safe because all
+mutator threads are stopped at this point.  Subsequent marking from the root
+set rebuilds the bytemap from scratch under the new epoch.
 
 ```
 Heap layout (Immix)
@@ -286,12 +295,77 @@ Heap layout (Immix)
   +-----------------------------------------------------------+
   | line | line | line | line | ...                           |
   +-----------------------------------------------------------+
-  ^ mark bitmap stores epoch per line
+  ^ mark bitmap stores epoch per line (0 = dead/unvisited)
 ```
+
+### Opportunistic Evacuation (Defragmentation)
+
+During every major GC the coordinator identifies *sparse* blocks (blocks whose
+live line count from the previous cycle is greater than zero but below 25% of
+the block's capacity) and marks them as **evacuation candidates**.  GC threads
+then evacuate live objects out of candidate blocks into fresh to-space, leaving
+the old locations dead so the sweep naturally frees entire candidate blocks.
+
+**Per-thread to-space (`EvacBuf`).**  Each GC thread owns a private bump
+allocator (`EvacBuf`).  When the current block fills it claims a new one
+directly from the heap with `request_block()` (thread-safe CAS on the fresh
+cursor).  No two threads ever write into the same block.
+
+**`SizeFn`.**  Alongside `TraceFn`, the VM provides a `SizeFn` pointer
+(`vm/src/lib.rs :: object_size`) that returns the total byte size of any heap
+object.  Returning 0 signals "skip evacuation" (used for `Alien` objects whose
+ownership semantics are opaque).
+
+**ESCAPING / ESCAPED handshake.**  When a thread decides to evacuate an object
+it uses the header flags to coordinate with any other thread that may reach the
+same object concurrently:
+
+```
+thread that wins:                       thread that loses:
+
+pre-alloc to-space                      fetch_or(ESCAPING) → already set
+fetch_or_acqrel(ESCAPING) → was clear   undo pre-alloc (if any)
+copy bytes to new location              spin until ESCAPED is observed
+stamp new copy with current epoch       read forwarding ptr from old+8
+clear ESCAPING|ESCAPED on new copy      update own *value reference
+mark_object_lines(new copy)
+write fwd ptr at old_ptr + 8
+fence(Release)
+fetch_or(ESCAPED)
+update own *value reference
+push new copy to worklist
+```
+
+Pre-allocating to-space *before* claiming ESCAPING is the key invariant: once
+ESCAPING is visible any spinning thread is guaranteed that ESCAPED will follow
+— no fallback path is needed.
+
+**Forwarding pointer.**  The forwarding address is stored at
+`old_ptr + size_of::<Header>()` (offset 8).  All heap objects are at least
+16 bytes, so this word is always available.
+
+**Field and root fixup.**  Inter-object references are fixed up during marking:
+`trace_fn` visits the *new copy's* fields while draining the worklist, so any
+field that points to another evacuated object is updated via the normal
+`visit` closure (`*value = Value::from_ptr(fwd)`).  Root pointers (stack
+roots, VM globals, interned symbols) are fixed up in a dedicated pass in
+`HeapProxy::execute_gc_with_reason` immediately after the parallel marking
+phase completes: every root is inspected for the `ESCAPED` flag and forwarded
+if set.
+
+**Line marking.**  Only the *new copy's* lines are marked with the current
+epoch.  The old location's lines are never marked, so after the sweep the
+candidate block shows zero live lines and is returned to the free list
+automatically — no explicit "unmark" step is needed.
+
+**Pinned objects.**  Objects with the `PINNED` flag are never evacuated; they
+fall through to the ordinary in-place marking path regardless of whether their
+block is a candidate.
 
 The VM integrates with GC via `vm/src/lib.rs`:
 
 - `trace_object` describes object graph edges for each object type.
+- `object_size` returns the byte size of each object type (0 for Alien).
 - `VM` implements `RootProvider` for global roots and interned symbols.
 
 ## Where to Start in the Code

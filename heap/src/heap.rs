@@ -13,7 +13,10 @@ use std::{
     ops::Deref,
     ptr::{self, NonNull},
     sync::{
-        atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
+        atomic::{
+            self, AtomicBool, AtomicU16, AtomicU32, AtomicU8, AtomicUsize,
+            Ordering,
+        },
         Arc, Mutex,
     },
 };
@@ -35,6 +38,19 @@ use crate::{system, SenseBarrier, OS_PAGE_SIZE};
 /// `obj` must point to a valid, live heap object with a valid [`Header`].
 pub type TraceFn =
     unsafe fn(obj: *const u8, visitor: &mut dyn FnMut(&mut Value));
+
+/// Function that returns the total byte size of a heap object.
+///
+/// Must return the exact number of bytes allocated for the object starting at
+/// `obj`, including the header. Returns 0 if the size cannot be determined
+/// (evacuation is skipped for that object).
+///
+/// # Safety
+///
+/// `obj` must point to a valid heap object with a valid [`Header`]. The first
+/// field after the header (`obj + size_of::<Header>()`) must still hold the
+/// object's original content (not yet overwritten by a forwarding pointer).
+pub type SizeFn = unsafe fn(obj: *const u8) -> usize;
 
 /// Consumers implement this to provide GC roots.
 ///
@@ -345,8 +361,14 @@ pub const NO_BLOCK: usize = usize::MAX;
 pub struct Block {
     /// Indicates if the block is Free, Recyclable, or Unavailable.
     pub status: AtomicU8,
-    /// Intrusive linked list index for `available` or `full_blocks` lists.
+    /// Intrusive linked list index for `available`, `full_blocks`, or `evac_pool`.
     pub next: AtomicUsize,
+    /// Set by the GC coordinator before the parallel marking phase to mark this
+    /// block as an evacuation candidate (fragmented, worth defragmenting).
+    pub evac_candidate: AtomicBool,
+    /// Number of marked lines recorded at the end of the most recent major sweep.
+    /// Used by the coordinator to rank fragmentation for candidate selection.
+    pub prev_marked: AtomicU16,
 }
 
 /// Metadata for large allocations
@@ -370,6 +392,7 @@ pub struct HeapInner {
     pub track: Trackers,
     pub sync: SyncState,
     pub trace_fn: TraceFn,
+    pub size_fn: SizeFn,
     pub large_objects: Mutex<Vec<NonNull<LargeAllocation>>>,
     pub heap_start: *mut u8,
     /// List of recyclable blocks containing reusable holes.
@@ -387,7 +410,11 @@ unsafe impl Send for HeapInner {}
 unsafe impl Sync for HeapInner {}
 
 impl HeapInner {
-    pub fn new(settings: HeapSettings, trace_fn: TraceFn) -> Self {
+    pub fn new(
+        settings: HeapSettings,
+        trace_fn: TraceFn,
+        size_fn: SizeFn,
+    ) -> Self {
         settings.validate().expect("Invalid Heap Settings");
 
         let block_size = settings.block_size;
@@ -408,6 +435,8 @@ impl HeapInner {
             blocks.push(Block {
                 status: AtomicU8::new(BLOCK_FREE),
                 next: AtomicUsize::new(NO_BLOCK),
+                evac_candidate: AtomicBool::new(false),
+                prev_marked: AtomicU16::new(0),
             });
         }
 
@@ -441,12 +470,49 @@ impl HeapInner {
             track,
             sync: SyncState::new(),
             trace_fn,
+            size_fn,
             large_objects: Mutex::new(Vec::new()),
             heap_start,
             available: AtomicUsize::new(NO_BLOCK),
             full_blocks: AtomicUsize::new(NO_BLOCK),
             blocks: blocks.into_boxed_slice(),
             lines: lines.into_boxed_slice(),
+        }
+    }
+
+    /// Block index for any pointer inside the heap.
+    #[inline(always)]
+    pub fn block_index_for(&self, ptr: *const u8) -> usize {
+        let offset = unsafe { ptr.offset_from(self.heap_start) } as usize;
+        offset / self.settings.block_size
+    }
+
+    /// Mark all lines covered by an object of `size` bytes starting at `ptr`.
+    #[inline]
+    pub fn mark_object_lines(&self, ptr: *const u8, size: usize, epoch: u8) {
+        let line_size = self.settings.line_size;
+        let lines = (size + line_size - 1) / line_size;
+        for i in 0..lines {
+            // SAFETY: ptr is within the heap and size is valid for this object
+            self.mark_object_line(unsafe { ptr.add(i * line_size) }, epoch);
+        }
+    }
+
+    // ── Candidate selection ───────────────────────────────────────────
+
+    /// Mark sparse blocks as evacuation candidates.
+    ///
+    /// Called by the coordinator in its single-threaded window before the
+    /// parallel marking barrier.  Each GC thread allocates its own to-space
+    /// on demand via [`EvacBuf`], so no pre-reserved pool is needed.
+    fn select_evacuation_candidates(&self) {
+        let threshold = (self.info.lines_per_block / 4).max(1) as u16; // < 25% live
+
+        for block in self.blocks.iter() {
+            let prev = block.prev_marked.load(Ordering::Relaxed);
+            // Sparse: has some live objects but fewer than the threshold.
+            let is_candidate = prev > 0 && prev < threshold;
+            block.evac_candidate.store(is_candidate, Ordering::Relaxed);
         }
     }
 
@@ -704,10 +770,32 @@ impl HeapInner {
             }
             GcStatus::MajorRequested => {
                 if is_coordinator {
-                    self.advance_epoch();
+                    let new_epoch = self.advance_epoch();
+
+                    // Epoch wrapped back to 1: reset the line bytemap.
+                    // Safe to use a non-atomic write here — all threads are
+                    // stopped between barrier 1 and this inner barrier, so
+                    // no thread is concurrently reading or writing `lines`.
+                    if new_epoch == 1 {
+                        let ptr = self.lines.as_ptr() as *mut u8;
+                        // SAFETY: lines is a contiguous boxed slice of AtomicU8
+                        // which have the same layout as u8. We are the only
+                        // thread touching lines at this point.
+                        unsafe {
+                            ptr::write_bytes(ptr, 0, self.lines.len());
+                        }
+                    }
+
+                    self.select_evacuation_candidates();
                 }
+
+                // Inner barrier: all threads see the new epoch, zeroed lines
+                // (if wrapped), and the candidate flags before marking starts.
                 self.sync.barrier.wait(threads);
-                self.major_gc_marking(roots);
+
+                let mut evac = EvacBuf::new(self as *const HeapInner);
+                self.major_gc_marking_with_evac(roots, &mut evac);
+
                 self.sync.barrier.wait(threads);
                 if is_coordinator {
                     self.major_gc_sweep();
@@ -775,7 +863,17 @@ impl HeapInner {
         self.clear_remembered_flags(&remember);
     }
 
-    fn major_gc_marking(&self, roots: RootSet) {
+    /// Major GC marking with opportunistic parallel evacuation.
+    ///
+    /// Objects in blocks marked as `evac_candidate` are copied to per-thread
+    /// to-space blocks drawn from `evac_pool`. Objects discovered through the
+    /// root set or reference chains that live in candidate blocks are evacuated
+    /// on first encounter; all other threads that later reach the same object
+    /// wait for the forwarding pointer via the ESCAPING → ESCAPED protocol.
+    ///
+    /// Non-candidate objects, pinned objects, and objects whose size function
+    /// returns 0 are marked in place as in the standard major GC.
+    fn major_gc_marking_with_evac(&self, roots: RootSet, evac: &mut EvacBuf) {
         let RootSet { roots, remember } = roots;
 
         let mut queue: Vec<*const u8> = Vec::new();
@@ -783,8 +881,10 @@ impl HeapInner {
         let heap_ptr: *const HeapInner = self;
         let queue_ptr: *mut Vec<*const u8> = &mut queue;
         let trace_fn = self.trace_fn;
+        let size_fn = self.size_fn;
+        let evac_ptr: *mut EvacBuf = evac;
 
-        let mut visit_value = |value: &mut Value| {
+        let mut visit = |value: &mut Value| {
             if value.is_fixnum() {
                 return;
             }
@@ -793,36 +893,196 @@ impl HeapInner {
                 "header value encountered in GC visitor"
             );
 
-            let ptr = value.ref_bits() as *const u8;
+            let ptr = value.ref_bits() as *mut u8;
             let header = unsafe { &*(ptr as *const Header) };
 
-            if header.age() == epoch {
-                return; // already marked
+            // ── 1. Load flags with Acquire to sync with any concurrent
+            //       evacuator's Release fence + ESCAPED store. ──────────
+            let flags = header.flags_acquire();
+
+            // ── 2. Already evacuated this cycle? ─────────────────────
+            if flags.contains(HeaderFlags::ESCAPED) {
+                // SAFETY: forwarding pointer was written with a Release fence
+                // before ESCAPED was set; our Acquire load above pairs with it.
+                let fwd = unsafe {
+                    ptr::read(
+                        ptr.add(mem::size_of::<Header>()) as *const *mut u8
+                    )
+                };
+                *value = Value::from_ptr(fwd);
+                return;
             }
 
-            header.set_age(epoch);
-            unsafe { (*heap_ptr).mark_object_line(ptr, epoch) };
-            unsafe { (*queue_ptr).push(ptr) };
+            // ── 3. Already marked in place this cycle? ────────────────
+            if header.age() == epoch {
+                return;
+            }
+
+            // ── 4. Determine evacuation eligibility ───────────────────
+            let heap = unsafe { &*heap_ptr };
+            let block_idx = heap.block_index_for(ptr);
+            let is_candidate = unsafe { heap.blocks.get_unchecked(block_idx) }
+                .evac_candidate
+                .load(Ordering::Relaxed);
+            let is_pinned = flags.contains(HeaderFlags::PINNED);
+
+            if is_candidate && !is_pinned {
+                // Compute object size before any mutation.
+                // size_fn returning 0 means "unknown size, skip evacuation".
+                let size = unsafe { size_fn(ptr) };
+
+                if size > 0 {
+                    // Pre-allocate to-space BEFORE claiming the object.
+                    // This guarantees that whenever ESCAPING is set by this
+                    // thread, ESCAPED will always follow (no fallback needed).
+                    let new_ptr = unsafe { (*evac_ptr).alloc(size) };
+
+                    if let Some(new_ptr) = new_ptr {
+                        // Try to claim with ESCAPING (AcqRel: observes prior
+                        // writes by other threads and publishes ours).
+                        let prev =
+                            header.fetch_or_flags_acqrel(HeaderFlags::ESCAPING);
+
+                        if !prev.contains(HeaderFlags::ESCAPING) {
+                            // ── Won: perform evacuation ────────────────
+                            unsafe {
+                                ptr::copy_nonoverlapping(ptr, new_ptr, size);
+
+                                // Initialise new copy: stamp epoch, clear evac flags.
+                                let nh = &*(new_ptr as *const Header);
+                                nh.set_age(epoch);
+                                // Clear ESCAPING | ESCAPED so the new copy
+                                // looks like a fresh, uncontested object.
+                                let clear_mask = HeaderFlags(
+                                    !(HeaderFlags::ESCAPING.0
+                                        | HeaderFlags::ESCAPED.0),
+                                );
+                                nh.fetch_and_flags(clear_mask);
+
+                                // Mark every line covered by the new copy.
+                                (*heap_ptr)
+                                    .mark_object_lines(new_ptr, size, epoch);
+
+                                // Write forwarding pointer into the old object's
+                                // first payload word (offset = size_of::<Header>()).
+                                ptr::write(
+                                    ptr.add(mem::size_of::<Header>())
+                                        as *mut *mut u8,
+                                    new_ptr,
+                                );
+
+                                // Release fence: fwd ptr write is visible to any
+                                // thread that later Acquire-observes ESCAPED.
+                                atomic::fence(Ordering::Release);
+
+                                // Announce completion (Relaxed: the fence above
+                                // provides the Release side of the synchronisation).
+                                header.fetch_or_flags(HeaderFlags::ESCAPED);
+                            }
+
+                            *value = Value::from_ptr(new_ptr);
+                            // Trace from the new copy, not the old.
+                            unsafe { (*queue_ptr).push(new_ptr) };
+                            return;
+                        } else {
+                            // ── Lost CAS: undo pre-allocation ─────────
+                            unsafe { (*evac_ptr).undo(size) };
+
+                            // If ESCAPED is already set (race: winner finished
+                            // between our fetch_or and here), follow fwd ptr now.
+                            if prev.contains(HeaderFlags::ESCAPED) {
+                                // Acquire fence pairs with the evacuator's
+                                // Release fence before the ESCAPED store.
+                                atomic::fence(Ordering::Acquire);
+                                let fwd = unsafe {
+                                    ptr::read(ptr.add(mem::size_of::<Header>())
+                                        as *const *mut u8)
+                                };
+                                *value = Value::from_ptr(fwd);
+                                return;
+                            }
+                            // else: spin below.
+                        }
+                    }
+                    // Pool exhausted or lost CAS with ESCAPED not yet set:
+                    // if ESCAPING is set, spin until the winner sets ESCAPED.
+                    let flags = header.flags();
+                    if flags.contains(HeaderFlags::ESCAPING) {
+                        // Invariant: ESCAPING always leads to ESCAPED because
+                        // the winner pre-allocated before claiming.
+                        loop {
+                            let f = header.flags_acquire();
+                            if f.contains(HeaderFlags::ESCAPED) {
+                                break;
+                            }
+                            core::hint::spin_loop();
+                        }
+                        let fwd = unsafe {
+                            ptr::read(ptr.add(mem::size_of::<Header>())
+                                as *const *mut u8)
+                        };
+                        *value = Value::from_ptr(fwd);
+                        return;
+                    }
+                    // Pool exhausted, nobody evacuating: fall through to
+                    // in-place path below.
+                }
+            }
+
+            // ── 5. Mark in place ──────────────────────────────────────
+            // Use compare_exchange on age to prevent two threads from both
+            // pushing the same object onto their queues.
+            let current_age = header.age();
+            if current_age == epoch {
+                return; // re-check after potential spin above
+            }
+
+            // Re-check ESCAPING: a concurrent thread may have claimed the
+            // object between our last flag read and now.
+            let flags = header.flags_acquire();
+            if flags.contains(HeaderFlags::ESCAPING) {
+                loop {
+                    let f = header.flags_acquire();
+                    if f.contains(HeaderFlags::ESCAPED) {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+                // Acquire is already established by the last flags_acquire().
+                let fwd = unsafe {
+                    ptr::read(
+                        ptr.add(mem::size_of::<Header>()) as *const *mut u8
+                    )
+                };
+                *value = Value::from_ptr(fwd);
+                return;
+            }
+
+            if header.compare_exchange_age(current_age, epoch).is_ok() {
+                unsafe { (*heap_ptr).mark_object_line(ptr, epoch) };
+                unsafe { (*queue_ptr).push(ptr) };
+            }
+            // CAS failure: another thread claimed in-place marking.
         };
 
-        // Visit all remembered set edges
+        // Visit remembered set edges.
         for &obj_value in &remember {
             if !obj_value.is_ref() {
                 continue;
             }
             let obj_ptr = obj_value.ref_bits() as *const u8;
-            unsafe { trace_fn(obj_ptr, &mut visit_value) };
+            unsafe { trace_fn(obj_ptr, &mut visit) };
         }
 
-        // Visit all roots
+        // Visit all roots.
         for root_value in roots {
             let mut v = root_value;
-            visit_value(&mut v);
+            visit(&mut v);
         }
 
-        // Drain worklist
+        // Drain worklist.
         while let Some(obj_ptr) = queue.pop() {
-            unsafe { trace_fn(obj_ptr, &mut visit_value) };
+            unsafe { trace_fn(obj_ptr, &mut visit) };
         }
 
         self.clear_remembered_flags(&remember);
@@ -933,6 +1193,13 @@ impl HeapInner {
             let block = unsafe { self.blocks.get_unchecked(block_idx) };
             block.next.store(NO_BLOCK, Ordering::Relaxed);
 
+            // Record live line count for the next cycle's candidate selection.
+            block
+                .prev_marked
+                .store(marked_lines as u16, Ordering::Relaxed);
+            // Reset candidate flag; coordinator will re-evaluate next cycle.
+            block.evac_candidate.store(false, Ordering::Relaxed);
+
             if marked_lines == 0 {
                 block.status.store(BLOCK_FREE, Ordering::Relaxed);
                 self.push_available(block_idx);
@@ -1018,8 +1285,12 @@ pub struct Heap(Arc<HeapInner>);
 
 impl Heap {
     #[must_use]
-    pub fn new(settings: HeapSettings, trace_fn: TraceFn) -> Self {
-        let inner = HeapInner::new(settings, trace_fn);
+    pub fn new(
+        settings: HeapSettings,
+        trace_fn: TraceFn,
+        size_fn: SizeFn,
+    ) -> Self {
+        let inner = HeapInner::new(settings, trace_fn, size_fn);
         Self(Arc::new(inner))
     }
 
@@ -1033,6 +1304,66 @@ impl Deref for Heap {
     type Target = HeapInner;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+// ── EvacBuf (per-thread to-space bump allocator) ──────────────────────
+
+/// Per-thread bump allocator used exclusively during evacuation.
+///
+/// Each GC thread owns its own `EvacBuf`.  When the current block fills,
+/// the thread claims a fresh block from the heap directly via
+/// [`HeapInner::request_block`], so no pre-reserved pool is needed and
+/// no two threads ever write into the same block.
+struct EvacBuf {
+    heap: *const HeapInner,
+    bump: *mut u8,
+    end: *mut u8,
+}
+
+// SAFETY: EvacBuf is only ever used by one GC thread at a time.
+unsafe impl Send for EvacBuf {}
+
+impl EvacBuf {
+    fn new(heap: *const HeapInner) -> Self {
+        Self {
+            heap,
+            bump: ptr::null_mut(),
+            end: ptr::null_mut(),
+        }
+    }
+
+    /// Bump-allocate `size` bytes (8-byte aligned).
+    /// Returns `None` if no more blocks are available from the heap.
+    unsafe fn alloc(&mut self, size: usize) -> Option<*mut u8> {
+        let size = (size + 7) & !7;
+        if !self.bump.is_null() && self.bump.add(size) <= self.end {
+            let ptr = self.bump;
+            self.bump = self.bump.add(size);
+            return Some(ptr);
+        }
+        self.refill(size)
+    }
+
+    /// Undo a pre-allocation that was not committed (e.g. lost the ESCAPING CAS).
+    /// Only valid when the allocation did not trigger a `refill`.
+    unsafe fn undo(&mut self, size: usize) {
+        let size = (size + 7) & !7;
+        self.bump = self.bump.sub(size);
+    }
+
+    #[cold]
+    unsafe fn refill(&mut self, size: usize) -> Option<*mut u8> {
+        let heap = &*self.heap;
+        let idx = heap.request_block();
+        if idx == NO_BLOCK {
+            return None;
+        }
+        let block_size = heap.settings.block_size;
+        self.bump = heap.heap_start.add(idx * block_size);
+        self.end = self.bump.add(block_size);
+        // Tail-call into alloc now that the buffer is replenished.
+        self.alloc(size)
     }
 }
 
@@ -1415,6 +1746,30 @@ impl HeapProxy {
         let root_set = self.collect_gc_inputs(roots);
         self.heap.rendezvous(is_coord, root_set);
 
+        // After major GC, fix up root pointers that were evacuated.
+        //
+        // `collect_gc_inputs` takes a snapshot of roots, so the marking loop
+        // updates only local copies — the original root provider still holds
+        // the old (pre-evacuation) pointers.  Walk the provider here and
+        // follow any forwarding pointer (indicated by the ESCAPED flag).
+        if matches!(requested, GcStatus::MajorRequested) {
+            roots.visit_roots(&mut |value| {
+                if !value.is_ref() {
+                    return;
+                }
+                let ptr = value.ref_bits() as *const u8;
+                let header = unsafe { &*(ptr as *const Header) };
+                if header.flags_acquire().contains(HeaderFlags::ESCAPED) {
+                    let fwd = unsafe {
+                        ptr::read(
+                            ptr.add(mem::size_of::<Header>()) as *const *mut u8
+                        )
+                    };
+                    *value = Value::from_ptr(fwd);
+                }
+            });
+        }
+
         if reacquire_block {
             self.exchange_block(roots);
         }
@@ -1529,6 +1884,45 @@ mod tests {
         // Test objects have no reference fields
     }
 
+    /// Size function returning 0 — signals "do not evacuate".
+    /// Used in tests that don't need evacuation.
+    unsafe fn null_size(_obj: *const u8) -> usize {
+        0
+    }
+
+    /// Size function for simple test objects: fixed 64-byte layout
+    /// (Header at offset 0, u64 payload at offset 8, rest zeroed).
+    unsafe fn test_size_64(_obj: *const u8) -> usize {
+        64
+    }
+
+    /// Trace function for the "linked" test object layout:
+    ///   [Header: 8B] [id: u64 8B] [next: Value 8B] [zeros: 48B] = 64B
+    ///
+    /// Visits the `next` field so the GC can follow inter-object references.
+    unsafe fn trace_linked(
+        obj: *const u8,
+        visitor: &mut dyn FnMut(&mut Value),
+    ) {
+        // `next` lives at offset 16 (after Header + id).
+        let next_field = obj.add(16) as *mut Value;
+        visitor(&mut *next_field);
+    }
+
+    /// Write a "linked" test object: id at offset 8, `next` Value at offset 16.
+    unsafe fn write_linked_obj(ptr: *mut u8, id: u64, next: Value) {
+        ptr.write_bytes(0, 64);
+        let header = &mut *(ptr as *mut Header);
+        *header = Header::new(ObjectType::Array);
+        *(ptr.add(8) as *mut u64) = id;
+        *(ptr.add(16) as *mut Value) = next;
+    }
+
+    /// Read the `next` Value from a linked test object.
+    unsafe fn read_linked_next(ptr: *const u8) -> Value {
+        *(ptr.add(16) as *const Value)
+    }
+
     /// A simple root provider that holds a list of values.
     struct TestRoots {
         roots: Vec<Value>,
@@ -1567,7 +1961,7 @@ mod tests {
 
     fn create_test_env() -> (Heap, HeapProxy, TestRoots) {
         let settings = create_test_settings();
-        let heap = Heap::new(settings, null_trace);
+        let heap = Heap::new(settings, null_trace, null_size);
         let proxy = HeapProxy::new(heap.clone());
         let roots = TestRoots::new();
         (heap, proxy, roots)
@@ -1810,7 +2204,7 @@ mod tests {
             max_minor_before_major: 5,
         };
 
-        let heap = Heap::new(settings, null_trace);
+        let heap = Heap::new(settings, null_trace, null_size);
 
         let num_threads = 8;
         let start_barrier = Arc::new(Barrier::new(num_threads));
@@ -2041,5 +2435,686 @@ mod tests {
         });
 
         assert_eq!(idx, num_objects as u64, "must visit all roots");
+    }
+
+    // ── Evacuation tests ──────────────────────────────────────────────
+
+    /// Helpers shared by evacuation tests.
+    fn create_evac_settings() -> HeapSettings {
+        HeapSettings {
+            heap_size: 2 * 1024 * 1024, // 2 MB
+            block_size: 8192,           // 8 KB blocks
+            large_size: 4096 - 16,
+            line_size: 64, // 64 B lines
+            bytes_before_gc: 0.1,
+            nursery_fraction: 0.1,
+            minor_recycle_threshold: 0.5,
+            max_minor_before_major: 5,
+        }
+    }
+
+    fn create_evac_env() -> (Heap, HeapProxy, TestRoots) {
+        let settings = create_evac_settings();
+        let heap = Heap::new(settings, null_trace, test_size_64);
+        let proxy = HeapProxy::new(heap.clone());
+        let roots = TestRoots::new();
+        (heap, proxy, roots)
+    }
+
+    /// Helper: write a canonical 64-byte test object at `ptr`.
+    /// Layout: [Header (8B)] [id: u64 (8B)] [zeros (48B)]
+    unsafe fn write_test_obj(ptr: *mut u8, id: u64) {
+        ptr.write_bytes(0, 64);
+        let header = &mut *(ptr as *mut Header);
+        *header = Header::new(ObjectType::Array);
+        let payload = ptr.add(mem::size_of::<Header>()) as *mut u64;
+        *payload = id;
+    }
+
+    /// Helper: read the id from a test object.
+    unsafe fn read_test_id(ptr: *const u8) -> u64 {
+        *ptr.add(mem::size_of::<Header>()).cast::<u64>()
+    }
+
+    // ── Line marking ──────────────────────────────────────────────────
+
+    /// After major GC, a live object's line must be marked with the current
+    /// epoch; a dead object on a different line must show 0.
+    #[test]
+    fn test_evac_line_not_marked_for_evacuated_object() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let line_size = heap.settings.line_size;
+
+        // Allocate a live object.
+        let live = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(live.as_ptr(), 1) };
+        roots.push(Value::from_ptr(live.as_ptr()));
+
+        // Pad to force the next object onto a different line.
+        let pad_layout = Layout::from_size_align(line_size, 8).unwrap();
+        proxy.allocate(pad_layout, &mut roots);
+
+        // Allocate a dead object on a fresh line.
+        let dead = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(dead.as_ptr(), 2) };
+        // Not pushed to roots → garbage.
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let epoch = heap.epoch();
+        let live_line = heap.get_object_line_status(live.as_ptr());
+        let dead_line = heap.get_object_line_status(dead.as_ptr());
+
+        assert_eq!(live_line, epoch, "live object line must be marked");
+        assert_eq!(dead_line, 0, "dead object line must be cleared");
+    }
+
+    /// Two live objects on the same line: the line stays marked even though
+    /// one of them might be evacuated.
+    #[test]
+    fn test_line_stays_marked_when_one_object_stays() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        // Two small objects that fit on the same 64-byte line.
+        let layout = Layout::from_size_align(24, 8).unwrap();
+
+        let a = proxy.allocate(layout, &mut roots);
+        unsafe { a.as_ptr().write_bytes(0, 24) };
+        let ha = unsafe { &mut *(a.as_ptr() as *mut Header) };
+        *ha = Header::new(ObjectType::Array);
+        roots.push(Value::from_ptr(a.as_ptr()));
+
+        let b = proxy.allocate(layout, &mut roots);
+        unsafe { b.as_ptr().write_bytes(0, 24) };
+        let hb = unsafe { &mut *(b.as_ptr() as *mut Header) };
+        *hb = Header::new(ObjectType::Array);
+        roots.push(Value::from_ptr(b.as_ptr()));
+
+        // Verify they're on the same line.
+        let line_a = heap.line_index_for(a.as_ptr());
+        let line_b = heap.line_index_for(b.as_ptr());
+        assert_eq!(line_a, line_b, "both objects must be on the same line");
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let epoch = heap.epoch();
+        // Even if one was evacuated, the in-place survivor marks the line.
+        let line_status = heap.get_object_line_status(a.as_ptr());
+        assert_eq!(line_status, epoch, "shared line must still be marked");
+    }
+
+    // ── Epoch wraparound ──────────────────────────────────────────────
+
+    /// Force 254 major GCs so the epoch wraps from 255 → 1, then verify
+    /// that a live object is still correctly marked after the wrap.
+    #[test]
+    fn test_epoch_wraparound_marks_live_objects() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        let ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(ptr.as_ptr(), 99) };
+        roots.push(Value::from_ptr(ptr.as_ptr()));
+
+        // Drive epoch to 255 by repeatedly forcing major GCs.
+        // Start at epoch 1 (initial), so we need 254 more advances.
+        while heap.epoch() != 255 {
+            heap.track.epoch.store(254, Ordering::Relaxed);
+            proxy.execute_gc_with_reason(
+                GcStatus::MajorRequested,
+                true,
+                &mut roots,
+            );
+        }
+        assert_eq!(heap.epoch(), 255);
+
+        // One more major GC → epoch wraps to 1, lines reset to 0 first.
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        assert_eq!(heap.epoch(), 1, "epoch must have wrapped to 1");
+
+        // The object may have been evacuated during the wraparound GC if its
+        // block became a candidate.  Follow the forwarding pointer when the
+        // ESCAPED flag is set so we inspect the *current* copy.
+        let current_ptr = unsafe {
+            let header = &*(ptr.as_ptr() as *const Header);
+            if header.flags_acquire().contains(HeaderFlags::ESCAPED) {
+                ptr::read(ptr.as_ptr().add(mem::size_of::<Header>())
+                    as *const *const u8)
+            } else {
+                ptr.as_ptr() as *const u8
+            }
+        };
+
+        let line_status = heap.get_object_line_status(current_ptr);
+        assert_eq!(
+            line_status, 1,
+            "live object line must be marked with epoch 1 after wrap"
+        );
+
+        let header = unsafe { &*(current_ptr as *const Header) };
+        assert_eq!(
+            header.age(),
+            1,
+            "live object age must be updated to 1 after wrap"
+        );
+    }
+
+    /// After epoch wraparound, lines that were unmarked before the wrap
+    /// must not be mistakenly treated as live.
+    #[test]
+    fn test_epoch_wraparound_dead_lines_stay_clear() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let line_size = heap.settings.line_size;
+
+        let live = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(live.as_ptr(), 1) };
+        roots.push(Value::from_ptr(live.as_ptr()));
+
+        proxy.allocate(
+            Layout::from_size_align(line_size, 8).unwrap(),
+            &mut roots,
+        );
+
+        let dead = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(dead.as_ptr(), 2) };
+        // Not a root → garbage.
+
+        // Advance to just before wrap.
+        heap.track.epoch.store(254, Ordering::Relaxed);
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+        // Now epoch == 255, live line has 255, dead line has 0.
+
+        // Trigger the wrap.
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        assert_eq!(heap.epoch(), 1);
+        assert_eq!(
+            heap.get_object_line_status(dead.as_ptr()),
+            0,
+            "dead object line must remain 0 after epoch wrap"
+        );
+    }
+
+    // ── Pointer forwarding / evacuation correctness ───────────────────
+
+    /// Manually mark a block as an evacuation candidate and verify that a
+    /// live object rooted from outside is relocated and the root updated.
+    #[test]
+    fn test_evacuation_updates_root_pointer() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        // Allocate a live object.
+        let ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(ptr.as_ptr(), 42) };
+        roots.push(Value::from_ptr(ptr.as_ptr()));
+
+        // Force the object's block to be treated as an evac candidate
+        // with a non-zero prev_marked so the coordinator picks it up.
+        let block_idx = heap.block_index_for(ptr.as_ptr());
+        heap.blocks[block_idx]
+            .prev_marked
+            .store(1, Ordering::Relaxed); // sparse → candidate
+
+        // Run major GC (which runs major_gc_marking_with_evac).
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let epoch = heap.epoch();
+
+        // The root must still be a valid ref with the original payload.
+        let mut found = false;
+        roots.visit_roots(&mut |v| {
+            if !v.is_ref() {
+                return;
+            }
+            let p = v.ref_bits() as *const u8;
+            let id = unsafe { read_test_id(p) };
+            if id == 42 {
+                found = true;
+                let header = unsafe { &*(p as *const Header) };
+                assert_eq!(
+                    header.age(),
+                    epoch,
+                    "evacuated copy must carry current epoch"
+                );
+                // The new copy must NOT have the ESCAPED flag set
+                // (only the OLD copy gets ESCAPED).
+                assert!(
+                    !header.has_flag(HeaderFlags::ESCAPED),
+                    "new copy must not be marked ESCAPED"
+                );
+            }
+        });
+        assert!(found, "root with id=42 must still be reachable");
+    }
+
+    /// After evacuation, the old object's line must be unmarked (epoch not
+    /// set there), and the new copy's line must be marked.
+    #[test]
+    fn test_evacuation_marks_new_line_not_old() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        let old_ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(old_ptr.as_ptr(), 7) };
+        roots.push(Value::from_ptr(old_ptr.as_ptr()));
+
+        let old_raw = old_ptr.as_ptr() as *const u8;
+
+        let block_idx = heap.block_index_for(old_raw);
+        heap.blocks[block_idx]
+            .prev_marked
+            .store(1, Ordering::Relaxed);
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let epoch = heap.epoch();
+
+        // Find where the object ended up.
+        let mut new_raw: *const u8 = ptr::null();
+        roots.visit_roots(&mut |v| {
+            if v.is_ref() {
+                let p = v.ref_bits() as *const u8;
+                if unsafe { read_test_id(p) } == 7 {
+                    new_raw = p;
+                }
+            }
+        });
+        assert!(!new_raw.is_null(), "object must still be reachable");
+
+        if new_raw != old_raw {
+            // Object was actually evacuated: old line must be 0, new must be epoch.
+            let old_line = heap.get_object_line_status(old_raw);
+            let new_line = heap.get_object_line_status(new_raw);
+            assert_eq!(
+                old_line, 0,
+                "old copy's line must be unmarked after evacuation"
+            );
+            assert_eq!(
+                new_line, epoch,
+                "new copy's line must be marked with current epoch"
+            );
+        }
+        // If not evacuated (pool exhausted, pinned, etc.) the test is vacuously
+        // satisfied; the pointer is still valid.
+    }
+
+    /// Payload (object content) must survive evacuation intact.
+    #[test]
+    fn test_evacuation_preserves_payload() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let header_size = mem::size_of::<Header>();
+
+        let n = 8usize;
+        for i in 0..n {
+            let p = proxy.allocate(layout, &mut roots);
+            unsafe { write_test_obj(p.as_ptr(), i as u64) };
+            roots.push(Value::from_ptr(p.as_ptr()));
+
+            let block_idx = heap.block_index_for(p.as_ptr());
+            heap.blocks[block_idx]
+                .prev_marked
+                .store(1, Ordering::Relaxed);
+        }
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let mut ids_seen = vec![false; n];
+        roots.visit_roots(&mut |v| {
+            if !v.is_ref() {
+                return;
+            }
+            let p = v.ref_bits() as *const u8;
+            // Verify header intact.
+            let header = unsafe { &*(p as *const Header) };
+            assert_eq!(header.object_type(), ObjectType::Array);
+            // Verify payload intact.
+            let id = unsafe { *p.add(header_size).cast::<u64>() } as usize;
+            assert!(id < n, "id out of range: {id}");
+            ids_seen[id] = true;
+        });
+
+        for i in 0..n {
+            assert!(ids_seen[i], "object {i} lost after evacuation");
+        }
+    }
+
+    /// PINNED objects must not be evacuated even if their block is a candidate.
+    #[test]
+    fn test_pinned_object_not_evacuated() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        let ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(ptr.as_ptr(), 55) };
+
+        // Mark the object as pinned.
+        let header = unsafe { &*(ptr.as_ptr() as *const Header) };
+        header.add_flag(HeaderFlags::PINNED);
+
+        roots.push(Value::from_ptr(ptr.as_ptr()));
+        let raw = ptr.as_ptr() as *const u8;
+
+        let block_idx = heap.block_index_for(raw);
+        heap.blocks[block_idx]
+            .prev_marked
+            .store(1, Ordering::Relaxed);
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        // Root must still point to the original address.
+        roots.visit_roots(&mut |v| {
+            if v.is_ref()
+                && unsafe { read_test_id(v.ref_bits() as *const u8) } == 55
+            {
+                assert_eq!(
+                    v.ref_bits() as *const u8,
+                    raw,
+                    "pinned object must not be relocated"
+                );
+            }
+        });
+    }
+
+    /// `prev_marked` is written by `major_gc_sweep` and reflects the actual
+    /// number of marked lines in the block after GC.
+    #[test]
+    fn test_prev_marked_updated_after_major_gc() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        let ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(ptr.as_ptr(), 1) };
+        roots.push(Value::from_ptr(ptr.as_ptr()));
+        let block_idx = heap.block_index_for(ptr.as_ptr());
+
+        // Initially 0 (block freshly allocated).
+        assert_eq!(
+            heap.blocks[block_idx].prev_marked.load(Ordering::Relaxed),
+            0
+        );
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let prev = heap.blocks[block_idx].prev_marked.load(Ordering::Relaxed);
+        assert!(
+            prev > 0,
+            "prev_marked must be > 0 after marking a live object (got {prev})"
+        );
+    }
+
+    /// `evac_candidate` flag is reset to false by `major_gc_sweep` so the
+    /// coordinator can re-evaluate every cycle.
+    #[test]
+    fn test_evac_candidate_reset_after_sweep() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        let ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(ptr.as_ptr(), 1) };
+        roots.push(Value::from_ptr(ptr.as_ptr()));
+
+        let block_idx = heap.block_index_for(ptr.as_ptr());
+        heap.blocks[block_idx]
+            .evac_candidate
+            .store(true, Ordering::Relaxed);
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        assert!(
+            !heap.blocks[block_idx]
+                .evac_candidate
+                .load(Ordering::Relaxed),
+            "evac_candidate must be reset after sweep"
+        );
+    }
+
+    /// The most fundamental evacuation check: the object must physically move
+    /// to a new address, the root must be updated to the new address, and the
+    /// old location must carry the ESCAPED flag + a valid forwarding pointer.
+    #[test]
+    fn test_object_physically_moves() {
+        let (heap, mut proxy, mut roots) = create_evac_env();
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        // Allocate and record the original raw address.
+        let ptr = proxy.allocate(layout, &mut roots);
+        unsafe { write_test_obj(ptr.as_ptr(), 0xDEAD) };
+        roots.push(Value::from_ptr(ptr.as_ptr()));
+        let old_raw = ptr.as_ptr() as *const u8;
+
+        // Force the block to be sparse so the coordinator marks it as a
+        // candidate.  prev_marked=1 is well below the 25% threshold.
+        let block_idx = heap.block_index_for(old_raw);
+        heap.blocks[block_idx]
+            .prev_marked
+            .store(1, Ordering::Relaxed);
+
+        // Run major GC.
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        // --- Verify evacuation happened ---
+        // 1. Old location must have the ESCAPED flag set.
+        let old_header = unsafe { &*(old_raw as *const Header) };
+        assert!(
+            old_header.flags_acquire().contains(HeaderFlags::ESCAPED),
+            "old copy must have ESCAPED flag after evacuation"
+        );
+
+        // 2. The root must now point to the NEW location.
+        let mut new_raw: *const u8 = ptr::null();
+        roots.visit_roots(&mut |v| {
+            if v.is_ref() {
+                let p = v.ref_bits() as *const u8;
+                if unsafe { read_test_id(p) } == 0xDEAD {
+                    new_raw = p;
+                }
+            }
+        });
+        assert!(
+            !new_raw.is_null(),
+            "object must still be reachable via roots"
+        );
+        assert_ne!(
+            new_raw, old_raw,
+            "root must point to the new (evacuated) location, not the old one"
+        );
+
+        // 3. Forwarding pointer at old_raw+8 must equal new_raw.
+        let fwd = unsafe {
+            ptr::read(old_raw.add(mem::size_of::<Header>()) as *const *const u8)
+        };
+        assert_eq!(
+            fwd, new_raw,
+            "forwarding pointer at old location must match new root"
+        );
+
+        // 4. New copy must have the current epoch in its age field.
+        let epoch = heap.epoch();
+        let new_header = unsafe { &*(new_raw as *const Header) };
+        assert_eq!(
+            new_header.age(),
+            epoch,
+            "new copy must carry current epoch"
+        );
+
+        // 5. New copy must NOT have ESCAPED/ESCAPING (it is a fresh object).
+        assert!(
+            !new_header.has_flag(HeaderFlags::ESCAPED),
+            "new copy must not carry ESCAPED"
+        );
+        assert!(
+            !new_header.has_flag(HeaderFlags::ESCAPING),
+            "new copy must not carry ESCAPING"
+        );
+
+        // 6. New location's line is marked; old location's line is not.
+        let old_line = heap.get_object_line_status(old_raw);
+        let new_line = heap.get_object_line_status(new_raw);
+        assert_eq!(old_line, 0, "old copy's line must be unmarked");
+        assert_eq!(
+            new_line, epoch,
+            "new copy's line must be marked with epoch"
+        );
+    }
+
+    /// Verify that inter-object references are updated transitively during
+    /// evacuation.  Object A holds a `next` pointer to object B; both live in
+    /// candidate blocks.  After GC:
+    ///   - root → new_A   (root fixup pass)
+    ///   - new_A.next → new_B  (field updated via trace_fn during marking)
+    ///   - new_B.id == original B id
+    #[test]
+    fn test_evacuation_updates_fields_transitively() {
+        // Use trace_linked so the GC follows the A→B reference.
+        let settings = create_evac_settings();
+        let heap = Heap::new(settings, trace_linked, test_size_64);
+        let mut proxy = HeapProxy::new(heap.clone());
+        let mut roots = TestRoots::new();
+
+        let layout = Layout::from_size_align(64, 8).unwrap();
+
+        // Allocate B first (no outgoing refs).
+        let b_ptr = proxy.allocate(layout, &mut roots);
+        let b_old = b_ptr.as_ptr() as *const u8;
+        unsafe { write_linked_obj(b_ptr.as_ptr(), 0xBBBB, Value::from_i64(0)) };
+
+        // Allocate A with A.next = B.
+        let a_ptr = proxy.allocate(layout, &mut roots);
+        let a_old = a_ptr.as_ptr() as *const u8;
+        unsafe {
+            write_linked_obj(
+                a_ptr.as_ptr(),
+                0xAAAA,
+                Value::from_ptr(b_ptr.as_ptr()),
+            )
+        };
+
+        // Only A is a root; B is reachable only through A.next.
+        roots.push(Value::from_ptr(a_ptr.as_ptr()));
+
+        // Force both blocks to be candidates.
+        for raw in [a_old, b_old] {
+            let idx = heap.block_index_for(raw);
+            heap.blocks[idx].prev_marked.store(1, Ordering::Relaxed);
+        }
+
+        proxy.execute_gc_with_reason(
+            GcStatus::MajorRequested,
+            true,
+            &mut roots,
+        );
+
+        let epoch = heap.epoch();
+
+        // --- Find A's new location from roots ---
+        let mut a_new: *const u8 = ptr::null();
+        roots.visit_roots(&mut |v| {
+            if v.is_ref() {
+                let p = v.ref_bits() as *const u8;
+                if unsafe { read_test_id(p) } == 0xAAAA {
+                    a_new = p;
+                }
+            }
+        });
+        assert!(!a_new.is_null(), "A must still be reachable");
+        assert_ne!(a_new, a_old, "A must have been evacuated to a new address");
+
+        // --- A's new copy's `next` field must point to B's new location ---
+        let next_val = unsafe { read_linked_next(a_new) };
+        assert!(next_val.is_ref(), "A.next must still be a reference");
+        let b_new = next_val.ref_bits() as *const u8;
+
+        assert_ne!(b_new, b_old, "B must have been evacuated to a new address");
+        assert_eq!(
+            unsafe { read_test_id(b_new) },
+            0xBBBB,
+            "B's payload must survive evacuation"
+        );
+
+        // --- Old B must carry the ESCAPED flag ---
+        let b_old_header = unsafe { &*(b_old as *const Header) };
+        assert!(
+            b_old_header.flags_acquire().contains(HeaderFlags::ESCAPED),
+            "old B must have ESCAPED flag"
+        );
+
+        // --- New B must have the current epoch and no evac flags ---
+        let b_new_header = unsafe { &*(b_new as *const Header) };
+        assert_eq!(b_new_header.age(), epoch);
+        assert!(!b_new_header.has_flag(HeaderFlags::ESCAPED));
+
+        // --- Line marks: old locations clear, new locations marked ---
+        assert_eq!(
+            heap.get_object_line_status(a_old),
+            0,
+            "old A line must be 0"
+        );
+        assert_eq!(
+            heap.get_object_line_status(b_old),
+            0,
+            "old B line must be 0"
+        );
+        assert_eq!(
+            heap.get_object_line_status(a_new),
+            epoch,
+            "new A line marked"
+        );
+        assert_eq!(
+            heap.get_object_line_status(b_new),
+            epoch,
+            "new B line marked"
+        );
     }
 }

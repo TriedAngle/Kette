@@ -150,6 +150,36 @@ impl Header {
     pub fn fetch_or_flags(&self, flag: HeaderFlags) -> HeaderFlags {
         HeaderFlags(self.flags.fetch_or(flag.0, Ordering::Relaxed))
     }
+
+    /// Load flags with [`Ordering::Acquire`].
+    ///
+    /// Use this when the load must synchronise with a [`fetch_or_flags_release`]
+    /// or a [`std::sync::atomic::fence`]`(Release)` in another thread, e.g.
+    /// when checking [`HeaderFlags::ESCAPED`] before reading a forwarding pointer.
+    #[inline(always)]
+    pub fn flags_acquire(&self) -> HeaderFlags {
+        HeaderFlags(self.flags.load(Ordering::Acquire))
+    }
+
+    /// Atomically OR flags with [`Ordering::AcqRel`], returning the *previous*
+    /// flags value.
+    ///
+    /// Use this for claiming ownership of an object (setting
+    /// [`HeaderFlags::ESCAPING`]) when the caller both needs to observe prior
+    /// writes from other threads (Acquire) and publish its own writes (Release).
+    #[inline(always)]
+    pub fn fetch_or_flags_acqrel(&self, flag: HeaderFlags) -> HeaderFlags {
+        HeaderFlags(self.flags.fetch_or(flag.0, Ordering::AcqRel))
+    }
+
+    /// Atomically AND the flags byte and return the *previous* value.
+    ///
+    /// Useful for clearing specific flags (e.g. stripping `ESCAPING |
+    /// ESCAPED` from a freshly copied object).
+    #[inline(always)]
+    pub fn fetch_and_flags(&self, mask: HeaderFlags) -> HeaderFlags {
+        HeaderFlags(self.flags.fetch_and(mask.0, Ordering::Relaxed))
+    }
 }
 
 impl core::fmt::Debug for Header {

@@ -99,7 +99,7 @@ const NONE_PLACEHOLDER: Value = Value::from_raw(0);
 /// `false`, and all trait maps for primitive types, then returns a fully
 /// initialized [`VM`].
 pub fn bootstrap(settings: HeapSettings) -> VM {
-    let heap = Heap::new(settings, trace_object);
+    let heap = Heap::new(settings, trace_object, crate::OBJECT_SIZE_FN);
     let mut proxy = heap.proxy();
     let mut roots = BootstrapRoots::new();
     let mut intern_table = HashMap::new();
