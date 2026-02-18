@@ -368,6 +368,38 @@ The VM integrates with GC via `vm/src/lib.rs`:
 - `object_size` returns the byte size of each object type (0 for Alien).
 - `VM` implements `RootProvider` for global roots and interned symbols.
 
+## FFI and Proxy Model
+
+The VM provides low-level FFI primitives on `Alien` objects plus `libffi`-backed
+dynamic calls.  The key pieces are:
+
+- `Alien` wraps raw pointer + optional size metadata.
+- Shared libraries and symbols are loaded with `_LibraryOpen:` and `_LibrarySym:`.
+- Dynamic foreign calls use `_AlienCallWithTypes:Args:ReturnType:` where
+  parameter and return types are protocol descriptor objects.
+- CType descriptors are ordinary user-space objects with ordered slots:
+  `impl`, `size`, `align`, then optional field descriptors (for struct layout).
+  Scalar descriptors start with a scalar tag in `impl`; struct descriptors use
+  `impl = None` and place field CType descriptors after `align`.
+- The VM lazily caches libffi type metadata by writing an internal cache handle
+  into the descriptor's `impl` slot.
+- Struct-by-value interop is supported through descriptors: struct arguments are
+  supplied from `ByteArray`/`Alien` backing bytes; struct returns are materialized
+  as `ByteArray` values.
+- User-space code can wrap either `Alien` or `ByteArray` in a single `Proxy`
+  object and dispatch through a shared typed memory API.
+
+### Stale pointer safety (not implemented)
+
+The current design does **not** implement stale-pointer liveness checks for
+foreign pointers.  A stored `Alien` pointer may become invalid if external code
+frees or unloads the underlying resource.
+
+This is an explicit current limitation. A future design could add an optional
+liveness mechanism (for example: generation/epoch handles, indirection tables,
+or explicit proxy kill-state similar to Self's dead/live proxy model), but no
+such mechanism is required by the current runtime contract.
+
 ## Where to Start in the Code
 
 Suggested entry points:

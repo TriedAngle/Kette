@@ -418,6 +418,10 @@ Object extend: Float With: {
 
 Object extend: Object With: {
     asComplex = { Complex clone setRe: self Im: 0 }.
+    cArgValue = { self }.
+    pin: value = { self _Pin: value }.
+    unpin: value = { self _Unpin: value }.
+    isPinned: value = { self _IsPinned: value }.
 }.
 
 Object extend: Block With: {
@@ -453,6 +457,14 @@ Object extend: String With: {
     toString = { self }.
 }.
 
+Object extend: Array With: {
+    parent* = Object.
+    size = { self _ArraySize }.
+    cloneWithSize: s = { self _ArrayCloneWithSize: s }.
+    at: index = { self _ArrayAt: index }.
+    at: index Put: value = { self _ArrayAt: index Put: value }.
+}.
+
 Object extend: ByteArray With: {
     parent* = Object.
     size = { self _ByteArraySize }.
@@ -463,5 +475,202 @@ Object extend: ByteArray With: {
     memCopyOverlapping: src From: srcOffset To: dstOffset Length: len = {
         self _MemCopyOverlapping: src From: srcOffset To: dstOffset Length: len
     }.
+    copyTo: dst From: srcOffset Length: len = {
+        dst memCopy: self From: srcOffset To: 0 Length: len
+    }.
+    copyFrom: src Offset: srcOffset Length: len = {
+        self memCopy: src From: srcOffset To: 0 Length: len
+    }.
+    address = { 0 }.
+    isNull = { False }.
+    free = { self }.
     toString = { self _ByteArrayToString }.
+    u8At: i = { self _ByteArrayU8At: i }.
+    i8At: i = { self _ByteArrayI8At: i }.
+    u16At: i = { self _ByteArrayU16At: i }.
+    i16At: i = { self _ByteArrayI16At: i }.
+    u32At: i = { self _ByteArrayU32At: i }.
+    i32At: i = { self _ByteArrayI32At: i }.
+    u64At: i = { self _ByteArrayU64At: i }.
+    i64At: i = { self _ByteArrayI64At: i }.
+    f32At: i = { self _ByteArrayF32At: i }.
+    f64At: i = { self _ByteArrayF64At: i }.
+    pointerAt: i = { self _ByteArrayPointerAt: i }.
+    u8At: i Put: v = { self _ByteArrayU8At: i Put: v }.
+    i8At: i Put: v = { self _ByteArrayI8At: i Put: v }.
+    u16At: i Put: v = { self _ByteArrayU16At: i Put: v }.
+    i16At: i Put: v = { self _ByteArrayI16At: i Put: v }.
+    u32At: i Put: v = { self _ByteArrayU32At: i Put: v }.
+    i32At: i Put: v = { self _ByteArrayI32At: i Put: v }.
+    u64At: i Put: v = { self _ByteArrayU64At: i Put: v }.
+    i64At: i Put: v = { self _ByteArrayI64At: i Put: v }.
+    f32At: i Put: v = { self _ByteArrayF32At: i Put: v }.
+    f64At: i Put: v = { self _ByteArrayF64At: i Put: v }.
+    pointerAt: i Put: v = { self _ByteArrayPointerAt: i Put: v }.
 }.
+
+Object extend: Alien With: {
+    parent* = Object.
+    new: s = { self _AlienNew: s }.
+    fromAddress: addr Size: s = { self _AlienFromAddress: addr Size: s }.
+    libraryOpen: path = { self _LibraryOpen: path }.
+    free = { self _AlienFree }.
+    size = { self _AlienSize }.
+    address = { self _AlienAddress }.
+    isNull = { self _AlienIsNull }.
+    librarySym: name = { self _LibrarySym: name }.
+    libraryClose = { self _LibraryClose }.
+    copyTo: dst From: srcOffset Length: len = {
+        self _AlienCopyTo: dst From: srcOffset Length: len
+    }.
+    copyFrom: src Offset: srcOffset Length: len = {
+        self _AlienCopyFrom: src Offset: srcOffset Length: len
+    }.
+    u8At: i = { self _AlienU8At: i }.
+    i8At: i = { self _AlienI8At: i }.
+    u16At: i = { self _AlienU16At: i }.
+    i16At: i = { self _AlienI16At: i }.
+    u32At: i = { self _AlienU32At: i }.
+    i32At: i = { self _AlienI32At: i }.
+    u64At: i = { self _AlienU64At: i }.
+    i64At: i = { self _AlienI64At: i }.
+    f32At: i = { self _AlienF32At: i }.
+    f64At: i = { self _AlienF64At: i }.
+    pointerAt: i = { self _AlienPointerAt: i }.
+    u8At: i Put: v = { self _AlienU8At: i Put: v }.
+    i8At: i Put: v = { self _AlienI8At: i Put: v }.
+    u16At: i Put: v = { self _AlienU16At: i Put: v }.
+    i16At: i Put: v = { self _AlienI16At: i Put: v }.
+    u32At: i Put: v = { self _AlienU32At: i Put: v }.
+    i32At: i Put: v = { self _AlienI32At: i Put: v }.
+    u64At: i Put: v = { self _AlienU64At: i Put: v }.
+    i64At: i Put: v = { self _AlienI64At: i Put: v }.
+    f32At: i Put: v = { self _AlienF32At: i Put: v }.
+    f64At: i Put: v = { self _AlienF64At: i Put: v }.
+    pointerAt: i Put: v = { self _AlienPointerAt: i Put: v }.
+    callWithTypes: types Args: values ReturnType: ret = {
+        lowered := Array cloneWithSize: values size.
+        i := 0.
+        [ i < values size ] whileTrue: [
+            lowered at: i Put: ((values at: i) cArgValue).
+            i := i + 1
+        ].
+        self _AlienCallWithTypes: types Args: lowered ReturnType: ret
+    }.
+}.
+
+Proxy := {
+    parent* = Object.
+    backing := None.
+    fromBacking: b = {
+        p := { parent* = Proxy. backing := b }.
+        p
+    }.
+    forAlienSize: s = { self fromBacking: (Alien new: s) }.
+    forByteArraySize: s = { self fromBacking: (ByteArray cloneWithSize: s) }.
+    size = { backing size }.
+    address = { backing address }.
+    isNull = { backing isNull }.
+    free = { backing free }.
+    copyTo: dst From: srcOffset Length: len = {
+        backing copyTo: dst From: srcOffset Length: len
+    }.
+    copyFrom: src Offset: srcOffset Length: len = {
+        backing copyFrom: src Offset: srcOffset Length: len
+    }.
+    u8At: i = { backing u8At: i }.
+    i8At: i = { backing i8At: i }.
+    u16At: i = { backing u16At: i }.
+    i16At: i = { backing i16At: i }.
+    u32At: i = { backing u32At: i }.
+    i32At: i = { backing i32At: i }.
+    u64At: i = { backing u64At: i }.
+    i64At: i = { backing i64At: i }.
+    f32At: i = { backing f32At: i }.
+    f64At: i = { backing f64At: i }.
+    pointerAt: i = { backing pointerAt: i }.
+    u8At: i Put: v = { backing u8At: i Put: v }.
+    i8At: i Put: v = { backing i8At: i Put: v }.
+    u16At: i Put: v = { backing u16At: i Put: v }.
+    i16At: i Put: v = { backing i16At: i Put: v }.
+    u32At: i Put: v = { backing u32At: i Put: v }.
+    i32At: i Put: v = { backing i32At: i Put: v }.
+    u64At: i Put: v = { backing u64At: i Put: v }.
+    i64At: i Put: v = { backing i64At: i Put: v }.
+    f32At: i Put: v = { backing f32At: i Put: v }.
+    f64At: i Put: v = { backing f64At: i Put: v }.
+    pointerAt: i Put: v = { backing pointerAt: i Put: v }.
+    callWithTypes: types Args: values ReturnType: ret = {
+        backing callWithTypes: types Args: values ReturnType: ret
+    }.
+    cArgValue = { backing cArgValue }.
+    pin = { Object pin: backing. self }.
+    unpin = { Object unpin: backing. self }.
+    isPinned = { Object isPinned: backing }.
+}.
+
+CType := {
+    parent* = Object.
+}.
+
+CVoid := { parent* = CType. impl := 1. size = 0. align = 1 }.
+CInt8 := { parent* = CType. impl := 2. size = 1. align = 1 }.
+CUInt8 := { parent* = CType. impl := 3. size = 1. align = 1 }.
+CInt16 := { parent* = CType. impl := 4. size = 2. align = 2 }.
+CUInt16 := { parent* = CType. impl := 5. size = 2. align = 2 }.
+CInt32 := { parent* = CType. impl := 6. size = 4. align = 4 }.
+CUInt32 := { parent* = CType. impl := 7. size = 4. align = 4 }.
+CInt64 := { parent* = CType. impl := 8. size = 8. align = 8 }.
+CUInt64 := { parent* = CType. impl := 9. size = 8. align = 8 }.
+CFloat32 := { parent* = CType. impl := 10. size = 4. align = 4 }.
+CFloat64 := { parent* = CType. impl := 11. size = 8. align = 8 }.
+CPointer := { parent* = CType. impl := 12. size = 8. align = 8 }.
+CSize := { parent* = CType. impl := 13. size = 8. align = 8 }.
+
+// Example struct descriptor protocol (field order defines layout):
+CStatPairExample := {
+    parent* = CType.
+    impl := None.
+    size = 8.
+    align = 4.
+    first = CInt32.
+    second = CInt32.
+}.
+
+
+openTypes := Array cloneWithSize: 3.
+openTypes at: 0 Put: CPointer.
+openTypes at: 1 Put: CInt32.
+openTypes at: 2 Put: CInt32.
+
+openArgs := Array cloneWithSize: 3.
+openArgs at: 0 Put: "core/init.ktt".
+openArgs at: 1 Put: 0.
+openArgs at: 2 Put: 0.
+
+lseekTypes := Array cloneWithSize: 3.
+lseekTypes at: 0 Put: CInt32.
+lseekTypes at: 1 Put: CInt64.
+lseekTypes at: 2 Put: CInt32.
+
+closeTypes := Array cloneWithSize: 1.
+closeTypes at: 0 Put: CInt32.
+
+libc := Alien libraryOpen: "libc.so.6".
+openFn := libc librarySym: "open".
+lseekFn := libc librarySym: "lseek".
+closeFn := libc librarySym: "close".
+
+fd := openFn callWithTypes: openTypes Args: openArgs ReturnType: CInt32.
+seekArgs := Array cloneWithSize: 3.
+seekArgs at: 0 Put: fd.
+seekArgs at: 1 Put: 0.
+seekArgs at: 2 Put: 2.
+fileSize := lseekFn callWithTypes: lseekTypes Args: seekArgs ReturnType: CInt64.
+
+closeArgs := Array cloneWithSize: 1.
+closeArgs at: 0 Put: fd.
+closeFn callWithTypes: closeTypes Args: closeArgs ReturnType: CInt32.
+libc libraryClose.
+
+("ffi stat demo: core/init.ktt bytes = " + fileSize toString) println.

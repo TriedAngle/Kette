@@ -1,6 +1,0 @@
-// expect:
-// 8
-// 15
-
-(| x := 3 . y := 5 |) [ x ] [ y ] bi + >string println
-(| x := 3 . y := 5 |) [ 10 swap x<< ] keep [ x ] [ y ] bi + >string println

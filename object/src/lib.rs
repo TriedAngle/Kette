@@ -12,10 +12,10 @@ pub use header::{Header, HeaderFlags, ObjectType};
 pub use lookup::{lookup, LookupResult, VisitedLink};
 pub use map::{init_map, map_allocation_size, Map, MapFlags};
 pub use objects::{
-    code_allocation_size, float_allocation_size, init_array, init_byte_array,
-    init_code, init_float, init_ratio, init_str, slot_object_allocation_size,
-    Alien, Array, BigNum, Block, ByteArray, Code, Float, Ratio, SlotObject,
-    VMString,
+    alien_allocation_size, code_allocation_size, float_allocation_size,
+    init_alien, init_array, init_byte_array, init_code, init_float, init_ratio,
+    init_str, slot_object_allocation_size, Alien, Array, BigNum, Block,
+    ByteArray, Code, Float, Ratio, SlotObject, VMString,
 };
 pub use slot::{Slot, SlotFlags};
 pub use special::SpecialObjects;

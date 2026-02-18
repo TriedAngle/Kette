@@ -1,5 +1,0 @@
-// expect:
-// Hello World!
-// Hello World!
-"Hello World!" println
-"Hello " print "World!" print "" println

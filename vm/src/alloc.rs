@@ -3,11 +3,11 @@ use std::ptr;
 
 use heap::{HeapProxy, RootProvider};
 use object::{
-    code_allocation_size, float_allocation_size, init_array, init_byte_array,
-    init_code, init_float, init_map, init_ratio, map_allocation_size,
-    slot_object_allocation_size, Array, BigNum, Block, ByteArray, Code, Float,
-    Header, Map, MapFlags, ObjectType, Ratio, Slot, SlotFlags, SlotObject,
-    Tagged, Value,
+    alien_allocation_size, code_allocation_size, float_allocation_size,
+    init_alien, init_array, init_byte_array, init_code, init_float, init_map,
+    init_ratio, map_allocation_size, slot_object_allocation_size, Alien, Array,
+    BigNum, Block, ByteArray, Code, Float, Header, Map, MapFlags, ObjectType,
+    Ratio, Slot, SlotFlags, SlotObject, Tagged, Value,
 };
 
 /// Allocate a [`Map`] with inline slots.
@@ -282,6 +282,28 @@ pub unsafe fn alloc_ratio(
     let ratio_ptr = ptr.as_ptr() as *mut Ratio;
     init_ratio(ratio_ptr, numerator, denominator);
     Tagged::from_value(Value::from_ptr(ratio_ptr))
+}
+
+/// Allocate an [`Alien`] wrapping a raw C pointer.
+///
+/// `c_ptr` is the raw pointer stored as `u64` (0 = null pointer).
+/// `size` is the byte size of the pointed-to region (0 = unknown/N/A).
+///
+/// # Safety
+///
+/// All GC-reachable values must be rooted before calling.
+pub unsafe fn alloc_alien(
+    proxy: &mut HeapProxy,
+    roots: &mut dyn RootProvider,
+    c_ptr: u64,
+    size: u64,
+) -> Tagged<Alien> {
+    let bytes = alien_allocation_size();
+    let layout = Layout::from_size_align(bytes, 8).unwrap();
+    let raw = proxy.allocate(layout, roots);
+    let alien_ptr = raw.as_ptr() as *mut Alien;
+    init_alien(alien_ptr, c_ptr, size);
+    Tagged::from_value(Value::from_ptr(alien_ptr))
 }
 
 /// Create a new Map that is `old_map` plus one additional CONSTANT slot.

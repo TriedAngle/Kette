@@ -468,9 +468,43 @@ impl BigNum {
 }
 
 /// Foreign (FFI) pointer wrapper.
+///
+/// ```text
+/// [Header 8B] [ptr: u64 8B] [size: u64 8B]
+/// ```
+///
+/// `ptr` holds the raw C pointer as a `u64` (0 = null).
+/// `size` holds the byte size of the region pointed to (0 = unknown/N/A).
+///
+/// Aliens have no map pointer. Lookups use
+/// [`SpecialObjects::alien_traits`](crate::SpecialObjects::alien_traits).
+/// The GC never evacuates Alien objects (`object_size` returns 0 for them).
 #[repr(C)]
 pub struct Alien {
     pub header: Header,
+    pub ptr: u64,
+    pub size: u64,
+}
+
+const _: () = assert!(size_of::<Alien>() == 24);
+
+/// Allocation size for an [`Alien`] object.
+pub const fn alien_allocation_size() -> usize {
+    size_of::<Alien>()
+}
+
+/// Initialize an [`Alien`] at a raw allocation.
+///
+/// # Safety
+///
+/// `raw` must point to at least `alien_allocation_size()` (24) bytes of
+/// writable memory.
+pub unsafe fn init_alien(raw: *mut Alien, c_ptr: u64, size: u64) {
+    raw.write(Alien {
+        header: Header::new(ObjectType::Alien),
+        ptr: c_ptr,
+        size,
+    });
 }
 
 /// Heap-allocated string — a length + pointer to a [`ByteArray`] backing

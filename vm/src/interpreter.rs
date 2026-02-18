@@ -1926,6 +1926,20 @@ mod tests {
     use object::{Map, ObjectType, SlotFlags, VMString};
     use parser::{Lexer, Parser};
 
+    #[repr(C)]
+    struct TestPair {
+        a: i32,
+        b: i32,
+    }
+
+    extern "C" fn ffi_sum_pair(pair: TestPair) -> i32 {
+        pair.a + pair.b
+    }
+
+    extern "C" fn ffi_make_pair(a: i32, b: i32) -> TestPair {
+        TestPair { a, b }
+    }
+
     fn test_settings() -> HeapSettings {
         HeapSettings {
             heap_size: 1024 * 1024,
@@ -2392,6 +2406,76 @@ mod tests {
     }
 
     #[test]
+    fn array_traits_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let traits_obj: &SlotObject =
+            unsafe { vm.special.array_traits.as_ref() };
+        let map: &Map = unsafe { traits_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_ArrayAt:Put:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "array_at_put");
+        }
+        assert!(found, "_ArrayAt:Put: slot not found");
+    }
+
+    #[test]
+    fn array_primitives_basic_behavior() {
+        let value = run_source(
+            "arr := Array _ArrayCloneWithSize: 2. arr _ArrayAt: 0 Put: 41. arr _ArrayAt: 1 Put: 1. (arr _ArrayAt: 0) _FixnumAdd: (arr _ArrayAt: 1)",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn array_clone_with_size_initializes_to_none() {
+        let (vm, value) = run_source_with_vm(
+            "arr := Array _ArrayCloneWithSize: 1. arr _ArrayAt: 0",
+        )
+        .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.none.raw());
+    }
+
+    #[test]
+    fn array_at_out_of_bounds_is_error() {
+        let err =
+            run_source("arr := Array _ArrayCloneWithSize: 1. arr _ArrayAt: 1")
+                .expect_err("expected error");
+        assert!(matches!(
+            err.error,
+            RuntimeError::Unimplemented {
+                message: "array index out of bounds"
+            }
+        ));
+    }
+
+    #[test]
+    fn array_at_put_negative_index_is_error() {
+        let err = run_source(
+            "arr := Array _ArrayCloneWithSize: 1. arr _ArrayAt: -1 Put: 5",
+        )
+        .expect_err("expected error");
+        assert!(matches!(
+            err.error,
+            RuntimeError::Unimplemented {
+                message: "array index must be non-negative"
+            }
+        ));
+    }
+
+    #[test]
     fn bignum_traits_primitive_slot() {
         let vm = bootstrap(test_settings());
         let traits_obj: &SlotObject =
@@ -2464,6 +2548,41 @@ mod tests {
     }
 
     #[test]
+    fn alien_traits_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let traits_obj: &SlotObject =
+            unsafe { vm.special.alien_traits.as_ref() };
+        let map: &Map = unsafe { traits_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_AlienNew:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "alien_new");
+            assert_eq!(prim.arity, 1);
+        }
+        assert!(found, "_AlienNew: slot not found");
+    }
+
+    #[test]
+    fn alien_primitives_allocate_write_read_free() {
+        let value = run_source(
+            "a := Alien _AlienNew: 8. a _AlienU64At: 0 Put: 123. v := a _AlienU64At: 0. a _AlienFree. v",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 123);
+    }
+
+    #[test]
     fn compare_fixnum_primitives() {
         let (vm, value) =
             run_source_with_vm("1 _FixnumEq: 1").expect("interpret error");
@@ -2527,6 +2646,194 @@ mod tests {
         let fixnum_value =
             lookup_dictionary_value(&vm, "Fixnum").expect("Fixnum missing");
         assert_eq!(fixnum_value.raw(), vm.special.fixnum_traits.raw());
+    }
+
+    #[test]
+    fn dictionary_alien_matches_traits() {
+        let vm = bootstrap(test_settings());
+        let alien_value =
+            lookup_dictionary_value(&vm, "Alien").expect("Alien missing");
+        assert_eq!(alien_value.raw(), vm.special.alien_traits.raw());
+    }
+
+    #[test]
+    fn object_pin_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let object_value =
+            lookup_dictionary_value(&vm, "Object").expect("Object missing");
+        let object_obj: &SlotObject = unsafe { object_value.as_ref() };
+        let map: &Map = unsafe { object_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_Pin:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "object_pin");
+            assert_eq!(prim.arity, 1);
+        }
+        assert!(found, "_Pin: slot not found");
+    }
+
+    #[test]
+    fn object_pin_and_unpin_behaves() {
+        let (vm, pinned) =
+            run_source_with_vm("o = { }. Object _Pin: o. Object _IsPinned: o")
+                .expect("interpret error");
+        assert_eq!(pinned.raw(), vm.special.true_obj.raw());
+
+        let (vm2, unpinned) = run_source_with_vm(
+            "o = { }. Object _Pin: o. Object _Unpin: o. Object _IsPinned: o",
+        )
+        .expect("interpret error");
+        assert_eq!(unpinned.raw(), vm2.special.false_obj.raw());
+    }
+
+    #[test]
+    fn object_pin_rejects_fixnum() {
+        let err = run_source("Object _Pin: 1").expect_err("expected error");
+        assert!(matches!(err.error, RuntimeError::TypeError { .. }));
+    }
+
+    #[test]
+    fn ctype_size_align_metadata() {
+        let csize_align = run_source(
+            "CSize := { impl := 13. size = 8. align = 8 }. CSize align",
+        )
+        .expect("interpret error");
+        assert!(csize_align.is_fixnum());
+        assert_eq!(unsafe { csize_align.to_i64() }, 8);
+    }
+
+    #[test]
+    fn ctype_struct_descriptor_has_required_slots() {
+        let (vm, _) = run_source_with_vm(
+            "CInt32 := { impl := 6. size = 4. align = 4 }. CPair := { impl := None. size = 8. align = 4. first = CInt32. second = CInt32 }. None",
+        )
+        .expect("interpret error");
+        let cpair =
+            lookup_dictionary_value(&vm, "CPair").expect("CPair missing");
+        let obj: &object::SlotObject = unsafe { cpair.as_ref() };
+        let map: &Map = unsafe { obj.map.as_ref() };
+        let mut names = Vec::new();
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            names.push(unsafe { name.as_str() }.to_string());
+        }
+        assert!(names.iter().any(|n| n == "impl"));
+        assert!(names.iter().any(|n| n == "size"));
+        assert!(names.iter().any(|n| n == "align"));
+    }
+
+    #[test]
+    fn ctype_struct_descriptor_roundtrip_through_array() {
+        let value = run_source(
+            "cint := { impl := 6. size = 4. align = 4 }. cpair := { impl := None. size = 8. align = 4. first := None. second := None }. cpair first: cint. cpair second: cint. ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: cpair. (ts _ArrayAt: 0) size",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 8);
+    }
+
+    #[test]
+    fn alien_u64_roundtrip_with_bignum() {
+        let (vm, value) = run_source_with_vm(
+            "max := (4611686018427387903 _FixnumToBignum). big := max _BignumAdd: max. a := Alien _AlienNew: 8. a _AlienU64At: 0 Put: big. (a _AlienU64At: 0) _BignumEq: big",
+        )
+        .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
+    }
+
+    #[test]
+    fn alien_dynamic_call_strlen() {
+        let value = run_source(
+            "CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"libc.so.6\". fn := lib _LibrarySym: \"strlen\". s := \"hello\" _StringToByteArray. n := \"hello\" _StringLength. bytes := n _FixnumAdd: 1. a := Alien _AlienNew: bytes. a _AlienCopyFrom: s Offset: 0 Length: bytes. ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: CPointer. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: a. r := fn _AlienCallWithTypes: ts Args: av ReturnType: CSize. lib _LibraryClose. a _AlienFree. r",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 5);
+    }
+
+    #[test]
+    fn alien_dynamic_call_length_mismatch_is_error() {
+        let err = run_source(
+            "CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"libc.so.6\". fn := lib _LibrarySym: \"strlen\". ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: CPointer. av := Array _ArrayCloneWithSize: 0. fn _AlienCallWithTypes: ts Args: av ReturnType: CSize",
+        )
+        .expect_err("expected error");
+        assert!(matches!(
+            err.error,
+            RuntimeError::Unimplemented {
+                message: "parameter types and argument values length mismatch"
+            }
+        ));
+    }
+
+    #[test]
+    fn alien_dynamic_call_struct_by_value_arg() {
+        let addr = ffi_sum_pair as *const () as usize;
+        let src = format!(
+            "cint := {{ impl := 6. size = 4. align = 4 }}. cpair := {{ impl := None. size = 8. align = 4. first := None. second := None }}. cpair first: cint. cpair second: cint. fn := Alien _AlienFromAddress: {addr} Size: 0. pair := ByteArray _CloneWithSize: 8. pair _ByteArrayI32At: 0 Put: 40. pair _ByteArrayI32At: 4 Put: 2. ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: cpair. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: pair. fn _AlienCallWithTypes: ts Args: av ReturnType: cint"
+        );
+        let value = run_source(&src).expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn alien_dynamic_call_struct_by_value_return() {
+        let addr = ffi_make_pair as *const () as usize;
+        let src = format!(
+            "cint := {{ impl := 6. size = 4. align = 4 }}. cpair := {{ impl := None. size = 8. align = 4. first := None. second := None }}. cpair first: cint. cpair second: cint. fn := Alien _AlienFromAddress: {addr} Size: 0. ts := Array _ArrayCloneWithSize: 2. ts _ArrayAt: 0 Put: cint. ts _ArrayAt: 1 Put: cint. av := Array _ArrayCloneWithSize: 2. av _ArrayAt: 0 Put: 7. av _ArrayAt: 1 Put: 35. out := fn _AlienCallWithTypes: ts Args: av ReturnType: cpair. (out _ByteArrayI32At: 0) _FixnumAdd: (out _ByteArrayI32At: 4)"
+        );
+        let value = run_source(&src).expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn ffi_proxy_argument_lowering_in_user_space() {
+        let value = run_source(
+            "Object _Extend: Object With: { cArgValue = { self } }. Object _Extend: Alien With: { callWithOneType: t Arg: v ReturnType: r = { ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: t. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: (v cArgValue). self _AlienCallWithTypes: ts Args: av ReturnType: r } }. CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"libc.so.6\". fn := lib _LibrarySym: \"strlen\". p := { backing = \"hello\". cArgValue = { self backing } }. r := fn callWithOneType: CPointer Arg: p ReturnType: CSize. lib _LibraryClose. r",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 5);
+    }
+
+    #[test]
+    fn proxy_works_with_bytearray_backing() {
+        let value = run_source(
+            "Object _Extend: ByteArray With: { u64At: i = { self _ByteArrayU64At: i }. u64At: i Put: v = { self _ByteArrayU64At: i Put: v } }. Proxy := { readAfterWrite: backing = { backing u64At: 0 Put: 42. backing u64At: 0 } }. b := ByteArray _CloneWithSize: 8. Proxy readAfterWrite: b",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn proxy_works_with_alien_backing() {
+        let value = run_source(
+            "Object _Extend: Alien With: { u64At: i = { self _AlienU64At: i }. u64At: i Put: v = { self _AlienU64At: i Put: v }. free = { self _AlienFree } }. Proxy := { readAfterWrite: backing = { backing u64At: 0 Put: 123. backing u64At: 0 } }. a := Alien _AlienNew: 8. v := Proxy readAfterWrite: a. a free. v",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 123);
+    }
+
+    #[test]
+    fn proxy_pin_wrapper_behaves() {
+        let (vm, value) = run_source_with_vm(
+            "Proxy := { fromBacking: b = { { backing = b. pin = { Object _Pin: (self backing). self }. unpin = { Object _Unpin: (self backing). self }. isPinned = { Object _IsPinned: (self backing) } } } }. p := Proxy fromBacking: { }. p pin. a := p isPinned. p unpin. b := p isPinned. a",
+        )
+        .expect("interpret error");
+        assert_eq!(value.raw(), vm.special.true_obj.raw());
     }
 
     #[test]

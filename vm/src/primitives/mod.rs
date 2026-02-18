@@ -1,8 +1,10 @@
-use object::{BigNum, Float, Header, ObjectType, Ratio, Value};
+use object::{Alien, Array, BigNum, Float, Header, ObjectType, Ratio, Value};
 
 use crate::interpreter::{InterpreterState, RuntimeError};
 use crate::VM;
 
+pub mod alien;
+pub mod array;
 pub mod bignum;
 pub mod block;
 pub mod bytearray;
@@ -10,6 +12,7 @@ pub mod extend;
 pub mod fixnum;
 pub mod float;
 pub mod object_clone;
+pub mod pin;
 pub mod ratio;
 pub mod string;
 
@@ -122,6 +125,14 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("block_call6", 6, block::block_call6),
         PrimitiveDesc::new("block_call7", 7, block::block_call7),
         PrimitiveDesc::new("block_call8", 8, block::block_call8),
+        PrimitiveDesc::new("array_size", 0, array::array_size),
+        PrimitiveDesc::new(
+            "array_clone_with_size",
+            1,
+            array::array_clone_with_size,
+        ),
+        PrimitiveDesc::new("array_at", 1, array::array_at),
+        PrimitiveDesc::new("array_at_put", 2, array::array_at_put),
         PrimitiveDesc::new("string_print", 0, string::string_print),
         PrimitiveDesc::new("string_println", 0, string::string_println),
         PrimitiveDesc::new("string_length", 0, string::string_length),
@@ -151,6 +162,173 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
             0,
             bytearray::bytearray_to_string,
         ),
+        PrimitiveDesc::new(
+            "bytearray_read_u8",
+            1,
+            bytearray::bytearray_read_u8,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_i8",
+            1,
+            bytearray::bytearray_read_i8,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_u16",
+            1,
+            bytearray::bytearray_read_u16,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_i16",
+            1,
+            bytearray::bytearray_read_i16,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_u32",
+            1,
+            bytearray::bytearray_read_u32,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_i32",
+            1,
+            bytearray::bytearray_read_i32,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_u64",
+            1,
+            bytearray::bytearray_read_u64,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_i64",
+            1,
+            bytearray::bytearray_read_i64,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_f32",
+            1,
+            bytearray::bytearray_read_f32,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_f64",
+            1,
+            bytearray::bytearray_read_f64,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_read_pointer",
+            1,
+            bytearray::bytearray_read_pointer,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_u8",
+            2,
+            bytearray::bytearray_write_u8,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_i8",
+            2,
+            bytearray::bytearray_write_i8,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_u16",
+            2,
+            bytearray::bytearray_write_u16,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_i16",
+            2,
+            bytearray::bytearray_write_i16,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_u32",
+            2,
+            bytearray::bytearray_write_u32,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_i32",
+            2,
+            bytearray::bytearray_write_i32,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_u64",
+            2,
+            bytearray::bytearray_write_u64,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_i64",
+            2,
+            bytearray::bytearray_write_i64,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_f32",
+            2,
+            bytearray::bytearray_write_f32,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_f64",
+            2,
+            bytearray::bytearray_write_f64,
+        ),
+        PrimitiveDesc::new(
+            "bytearray_write_pointer",
+            2,
+            bytearray::bytearray_write_pointer,
+        ),
+        PrimitiveDesc::new("alien_new", 1, alien::alien_new),
+        PrimitiveDesc::new("alien_from_address", 2, alien::alien_from_address),
+        PrimitiveDesc::new("alien_free", 0, alien::alien_free),
+        PrimitiveDesc::new("alien_size", 0, alien::alien_size),
+        PrimitiveDesc::new("alien_address", 0, alien::alien_address),
+        PrimitiveDesc::new("alien_is_null", 0, alien::alien_is_null),
+        PrimitiveDesc::new("alien_read_u8", 1, alien::alien_read_u8),
+        PrimitiveDesc::new("alien_read_i8", 1, alien::alien_read_i8),
+        PrimitiveDesc::new("alien_read_u16", 1, alien::alien_read_u16),
+        PrimitiveDesc::new("alien_read_i16", 1, alien::alien_read_i16),
+        PrimitiveDesc::new("alien_read_u32", 1, alien::alien_read_u32),
+        PrimitiveDesc::new("alien_read_i32", 1, alien::alien_read_i32),
+        PrimitiveDesc::new("alien_read_u64", 1, alien::alien_read_u64),
+        PrimitiveDesc::new("alien_read_i64", 1, alien::alien_read_i64),
+        PrimitiveDesc::new("alien_read_f32", 1, alien::alien_read_f32),
+        PrimitiveDesc::new("alien_read_f64", 1, alien::alien_read_f64),
+        PrimitiveDesc::new("alien_read_pointer", 1, alien::alien_read_pointer),
+        PrimitiveDesc::new("alien_write_u8", 2, alien::alien_write_u8),
+        PrimitiveDesc::new("alien_write_i8", 2, alien::alien_write_i8),
+        PrimitiveDesc::new("alien_write_u16", 2, alien::alien_write_u16),
+        PrimitiveDesc::new("alien_write_i16", 2, alien::alien_write_i16),
+        PrimitiveDesc::new("alien_write_u32", 2, alien::alien_write_u32),
+        PrimitiveDesc::new("alien_write_i32", 2, alien::alien_write_i32),
+        PrimitiveDesc::new("alien_write_u64", 2, alien::alien_write_u64),
+        PrimitiveDesc::new("alien_write_i64", 2, alien::alien_write_i64),
+        PrimitiveDesc::new("alien_write_f32", 2, alien::alien_write_f32),
+        PrimitiveDesc::new("alien_write_f64", 2, alien::alien_write_f64),
+        PrimitiveDesc::new(
+            "alien_write_pointer",
+            2,
+            alien::alien_write_pointer,
+        ),
+        PrimitiveDesc::new(
+            "alien_copy_to_bytearray",
+            3,
+            alien::alien_copy_to_bytearray,
+        ),
+        PrimitiveDesc::new(
+            "alien_copy_from_bytearray",
+            3,
+            alien::alien_copy_from_bytearray,
+        ),
+        PrimitiveDesc::new("alien_library_open", 1, alien::alien_library_open),
+        PrimitiveDesc::new("alien_library_sym", 1, alien::alien_library_sym),
+        PrimitiveDesc::new(
+            "alien_library_close",
+            0,
+            alien::alien_library_close,
+        ),
+        PrimitiveDesc::new(
+            "alien_call_with_types",
+            3,
+            alien::alien_call_with_types,
+        ),
+        PrimitiveDesc::new("object_pin", 1, pin::object_pin),
+        PrimitiveDesc::new("object_unpin", 1, pin::object_unpin),
+        PrimitiveDesc::new("object_is_pinned", 1, pin::object_is_pinned),
         PrimitiveDesc::new("object_clone", 1, object_clone::object_clone),
     ]
 }
@@ -261,6 +439,40 @@ pub(crate) fn expect_bytearray(
         });
     }
     Ok(value.ref_bits() as *const object::ByteArray)
+}
+
+pub(crate) fn expect_array(value: Value) -> Result<*const Array, RuntimeError> {
+    if !value.is_ref() {
+        return Err(RuntimeError::TypeError {
+            expected: "array",
+            got: value,
+        });
+    }
+    let header: &Header = unsafe { value.as_ref() };
+    if header.object_type() != ObjectType::Array {
+        return Err(RuntimeError::TypeError {
+            expected: "array",
+            got: value,
+        });
+    }
+    Ok(value.ref_bits() as *const Array)
+}
+
+pub(crate) fn expect_alien(value: Value) -> Result<*const Alien, RuntimeError> {
+    if !value.is_ref() {
+        return Err(RuntimeError::TypeError {
+            expected: "alien",
+            got: value,
+        });
+    }
+    let header: &Header = unsafe { value.as_ref() };
+    if header.object_type() != ObjectType::Alien {
+        return Err(RuntimeError::TypeError {
+            expected: "alien",
+            got: value,
+        });
+    }
+    Ok(value.ref_bits() as *const Alien)
 }
 
 pub(crate) fn bool_value(vm: &VM, value: bool) -> Value {

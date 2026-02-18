@@ -9,3 +9,5 @@ heap = { path = "../heap" }
 bytecode = { path = "../bytecode" }
 parser = { path = "../parser" }
 clap = { version = "4.5.53", features = ["derive"] }
+libffi = "3"
+libc = "0.2"

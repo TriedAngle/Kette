@@ -1,4 +1,0 @@
-// expect:
-// t
-
-(| two = 2 |) two 2 = >string println

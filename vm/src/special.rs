@@ -235,7 +235,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         .value();
         roots.push(bignum_traits_val);
 
-        let alien_traits_map_val = alloc_map(
+        let mut alien_traits_map_val = alloc_map(
             &mut proxy,
             &mut roots,
             map_map_val,
@@ -767,6 +767,58 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             (*string_traits_obj_ptr).map = string_traits_map_val;
         }
 
+        let mut array_traits_map_val = array_traits_map_val;
+        let array_primitives = [
+            ("array_size", "_ArraySize"),
+            ("array_clone_with_size", "_ArrayCloneWithSize:"),
+            ("array_at", "_ArrayAt:"),
+            ("array_at_put", "_ArrayAt:Put:"),
+        ];
+
+        for (prim_name, slot_name) in array_primitives {
+            let prim_idx =
+                primitives::primitive_index_by_name(&primitives, prim_name)
+                    .expect("array primitive missing") as i64;
+            let slot_value = intern_bootstrap(
+                &mut proxy,
+                &mut roots,
+                &mut intern_table,
+                slot_name,
+            );
+
+            let primitive_code = Value::from_i64(prim_idx);
+            let method_map_val = alloc_map(
+                &mut proxy,
+                &mut roots,
+                map_map_val,
+                primitive_code,
+                MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+                &[],
+                0,
+            )
+            .value();
+            roots.push(method_map_val);
+
+            let method_obj_val =
+                alloc_slot_object(&mut proxy, &mut roots, method_map_val, &[])
+                    .value();
+            roots.push(method_obj_val);
+
+            let new_array_traits_map = add_constant_slot(
+                &mut proxy,
+                &mut roots,
+                array_traits_map_val,
+                map_map_val,
+                slot_value,
+                method_obj_val,
+            );
+            roots.push(new_array_traits_map);
+            array_traits_map_val = new_array_traits_map;
+            let array_traits_obj_ptr =
+                array_traits_val.ref_bits() as *mut object::SlotObject;
+            (*array_traits_obj_ptr).map = array_traits_map_val;
+        }
+
         let bytearray_primitives = [
             ("bytearray_size", "_ByteArraySize"),
             ("bytearray_clone_with_size", "_CloneWithSize:"),
@@ -776,6 +828,28 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
                 "_MemCopyOverlapping:From:To:Length:",
             ),
             ("bytearray_to_string", "_ByteArrayToString"),
+            ("bytearray_read_u8", "_ByteArrayU8At:"),
+            ("bytearray_read_i8", "_ByteArrayI8At:"),
+            ("bytearray_read_u16", "_ByteArrayU16At:"),
+            ("bytearray_read_i16", "_ByteArrayI16At:"),
+            ("bytearray_read_u32", "_ByteArrayU32At:"),
+            ("bytearray_read_i32", "_ByteArrayI32At:"),
+            ("bytearray_read_u64", "_ByteArrayU64At:"),
+            ("bytearray_read_i64", "_ByteArrayI64At:"),
+            ("bytearray_read_f32", "_ByteArrayF32At:"),
+            ("bytearray_read_f64", "_ByteArrayF64At:"),
+            ("bytearray_read_pointer", "_ByteArrayPointerAt:"),
+            ("bytearray_write_u8", "_ByteArrayU8At:Put:"),
+            ("bytearray_write_i8", "_ByteArrayI8At:Put:"),
+            ("bytearray_write_u16", "_ByteArrayU16At:Put:"),
+            ("bytearray_write_i16", "_ByteArrayI16At:Put:"),
+            ("bytearray_write_u32", "_ByteArrayU32At:Put:"),
+            ("bytearray_write_i32", "_ByteArrayI32At:Put:"),
+            ("bytearray_write_u64", "_ByteArrayU64At:Put:"),
+            ("bytearray_write_i64", "_ByteArrayI64At:Put:"),
+            ("bytearray_write_f32", "_ByteArrayF32At:Put:"),
+            ("bytearray_write_f64", "_ByteArrayF64At:Put:"),
+            ("bytearray_write_pointer", "_ByteArrayPointerAt:Put:"),
         ];
         for (prim_name, slot_name) in bytearray_primitives {
             let prim_idx =
@@ -820,6 +894,90 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             let bytearray_traits_obj_ptr =
                 bytearray_traits_val.ref_bits() as *mut object::SlotObject;
             (*bytearray_traits_obj_ptr).map = bytearray_traits_map_val;
+        }
+
+        let alien_primitives = [
+            ("alien_new", "_AlienNew:"),
+            ("alien_from_address", "_AlienFromAddress:Size:"),
+            ("alien_free", "_AlienFree"),
+            ("alien_size", "_AlienSize"),
+            ("alien_address", "_AlienAddress"),
+            ("alien_is_null", "_AlienIsNull"),
+            ("alien_read_u8", "_AlienU8At:"),
+            ("alien_read_i8", "_AlienI8At:"),
+            ("alien_read_u16", "_AlienU16At:"),
+            ("alien_read_i16", "_AlienI16At:"),
+            ("alien_read_u32", "_AlienU32At:"),
+            ("alien_read_i32", "_AlienI32At:"),
+            ("alien_read_u64", "_AlienU64At:"),
+            ("alien_read_i64", "_AlienI64At:"),
+            ("alien_read_f32", "_AlienF32At:"),
+            ("alien_read_f64", "_AlienF64At:"),
+            ("alien_read_pointer", "_AlienPointerAt:"),
+            ("alien_write_u8", "_AlienU8At:Put:"),
+            ("alien_write_i8", "_AlienI8At:Put:"),
+            ("alien_write_u16", "_AlienU16At:Put:"),
+            ("alien_write_i16", "_AlienI16At:Put:"),
+            ("alien_write_u32", "_AlienU32At:Put:"),
+            ("alien_write_i32", "_AlienI32At:Put:"),
+            ("alien_write_u64", "_AlienU64At:Put:"),
+            ("alien_write_i64", "_AlienI64At:Put:"),
+            ("alien_write_f32", "_AlienF32At:Put:"),
+            ("alien_write_f64", "_AlienF64At:Put:"),
+            ("alien_write_pointer", "_AlienPointerAt:Put:"),
+            ("alien_copy_to_bytearray", "_AlienCopyTo:From:Length:"),
+            ("alien_copy_from_bytearray", "_AlienCopyFrom:Offset:Length:"),
+            ("alien_library_open", "_LibraryOpen:"),
+            ("alien_library_sym", "_LibrarySym:"),
+            ("alien_library_close", "_LibraryClose"),
+            (
+                "alien_call_with_types",
+                "_AlienCallWithTypes:Args:ReturnType:",
+            ),
+        ];
+
+        for (prim_name, slot_name) in alien_primitives {
+            let prim_idx =
+                primitives::primitive_index_by_name(&primitives, prim_name)
+                    .expect("alien primitive missing") as i64;
+            let slot_value = intern_bootstrap(
+                &mut proxy,
+                &mut roots,
+                &mut intern_table,
+                slot_name,
+            );
+
+            let primitive_code = Value::from_i64(prim_idx);
+            let method_map_val = alloc_map(
+                &mut proxy,
+                &mut roots,
+                map_map_val,
+                primitive_code,
+                MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+                &[],
+                0,
+            )
+            .value();
+            roots.push(method_map_val);
+
+            let method_obj_val =
+                alloc_slot_object(&mut proxy, &mut roots, method_map_val, &[])
+                    .value();
+            roots.push(method_obj_val);
+
+            let new_alien_traits_map = add_constant_slot(
+                &mut proxy,
+                &mut roots,
+                alien_traits_map_val,
+                map_map_val,
+                slot_value,
+                method_obj_val,
+            );
+            roots.push(new_alien_traits_map);
+            alien_traits_map_val = new_alien_traits_map;
+            let alien_traits_obj_ptr =
+                alien_traits_val.ref_bits() as *mut object::SlotObject;
+            (*alien_traits_obj_ptr).map = alien_traits_map_val;
         }
 
         let fixnum_name = intern_bootstrap(
@@ -918,6 +1076,22 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             bytearray_traits_val,
         );
 
+        let alien_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "Alien",
+        );
+        add_dictionary_entry(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            assoc_map_val,
+            dictionary_val,
+            alien_name,
+            alien_traits_val,
+        );
+
         let string_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
@@ -952,6 +1126,36 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut roots,
             &mut intern_table,
             "_Clone:",
+        );
+        let pin_idx =
+            primitives::primitive_index_by_name(&primitives, "object_pin")
+                .expect("object_pin primitive missing") as i64;
+        let pin_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Pin:",
+        );
+        let unpin_idx =
+            primitives::primitive_index_by_name(&primitives, "object_unpin")
+                .expect("object_unpin primitive missing") as i64;
+        let unpin_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Unpin:",
+        );
+        let is_pinned_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "object_is_pinned",
+        )
+        .expect("object_is_pinned primitive missing")
+            as i64;
+        let is_pinned_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_IsPinned:",
         );
 
         let mut object_map_val = alloc_map(
@@ -996,6 +1200,92 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             extend_name,
             extend_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let pin_code = Value::from_i64(pin_idx);
+        let pin_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            pin_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(pin_map_val);
+
+        let pin_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, pin_map_val, &[]).value();
+        roots.push(pin_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            pin_name,
+            pin_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let unpin_code = Value::from_i64(unpin_idx);
+        let unpin_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            unpin_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(unpin_map_val);
+
+        let unpin_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, unpin_map_val, &[])
+                .value();
+        roots.push(unpin_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            unpin_name,
+            unpin_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let is_pinned_code = Value::from_i64(is_pinned_idx);
+        let is_pinned_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            is_pinned_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(is_pinned_map_val);
+
+        let is_pinned_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, is_pinned_map_val, &[])
+                .value();
+        roots.push(is_pinned_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            is_pinned_name,
+            is_pinned_method_val,
         );
         roots.push(new_object_map);
         object_map_val = new_object_map;
@@ -1130,7 +1420,6 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
                 map.code = none_val;
             }
         }
-
         let special = SpecialObjects {
             none: none_val,
             true_obj: true_val,
