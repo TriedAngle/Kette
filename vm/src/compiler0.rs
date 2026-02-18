@@ -581,8 +581,21 @@ impl Compiler {
                     self.analyze_capture_expr(&pair.argument, shadows);
                 }
             }
-            ExprKind::Assignment { target, value, .. } => {
-                self.analyze_capture_expr(target, shadows);
+            ExprKind::Assignment {
+                target,
+                kind,
+                value,
+            } => {
+                if *kind == AssignKind::Assign {
+                    if let ExprKind::Ident(name) = &target.kind {
+                        if shadows
+                            .last()
+                            .is_none_or(|s| !s.contains(name.as_str()))
+                        {
+                            self.mark_captured_if_found(name);
+                        }
+                    }
+                }
                 self.analyze_capture_expr(value, shadows);
             }
             ExprKind::Return(inner) | ExprKind::Paren(inner) => {
@@ -1305,13 +1318,34 @@ impl Compiler {
                         value: SlotValue::Constant(ConstEntry::Code(code_desc)),
                     });
                 } else {
-                    // Constant slot: value goes directly in the map
-                    let const_entry = self.expr_to_const_entry(&slot.value)?;
-                    slot_descs.push(SlotDesc {
-                        flags: base_flags | SLOT_CONSTANT,
-                        name,
-                        value: SlotValue::Constant(const_entry),
-                    });
+                    if self.slot_value_requires_runtime(&slot.value) {
+                        let offset = values_base_offset + value_count * 8;
+                        if slot.shorthand {
+                            self.compile_shorthand_value(&name, false);
+                        } else {
+                            self.compile_expr(&slot.value)?;
+                        }
+                        let tmp = self.scope_mut().alloc_temp();
+                        self.builder().store_local(tmp);
+                        value_regs.push(tmp);
+
+                        // Read-only runtime value slot: assignable reader without writer.
+                        slot_descs.push(SlotDesc {
+                            flags: base_flags | SLOT_ASSIGNABLE,
+                            name,
+                            value: SlotValue::Offset(offset),
+                        });
+                        value_count += 1;
+                    } else {
+                        // Constant slot: value goes directly in the map.
+                        let const_entry =
+                            self.expr_to_const_entry(&slot.value)?;
+                        slot_descs.push(SlotDesc {
+                            flags: base_flags | SLOT_CONSTANT,
+                            name,
+                            value: SlotValue::Constant(const_entry),
+                        });
+                    }
                 }
             }
         }
@@ -1581,6 +1615,28 @@ impl Compiler {
                 self.builder().local_return();
                 Ok(ConstEntry::Code(self.pop_frame()))
             }
+        }
+    }
+
+    fn slot_value_requires_runtime(&mut self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Integer(_) | ExprKind::Float(_) | ExprKind::String(_) => {
+                false
+            }
+            ExprKind::Ident(name) => {
+                self.resolve_lexical_for_load(name, false).is_some()
+            }
+            ExprKind::Object { slots, body } => {
+                if !body.is_empty() {
+                    return true;
+                }
+                slots.iter().any(|s| {
+                    !s.params.is_empty()
+                        || self.slot_value_requires_runtime(&s.value)
+                })
+            }
+            ExprKind::Block { .. } => false,
+            _ => true,
         }
     }
 
@@ -2166,6 +2222,31 @@ mod tests {
         let exprs = parse_source("[ x = 1. x := 2 ]");
         let err = Compiler::compile(&exprs).expect_err("expected error");
         assert!(err.message.contains("cannot assign to constant"));
+    }
+
+    #[test]
+    fn const_slot_initializer_with_local_uses_runtime_value_slot() {
+        let code = compile_source("[ | s | { size = s } ]");
+        let block_code = find_code_const_by_args(&code.constants, 1);
+        let instrs = decode(block_code);
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::CreateObject { .. })));
+        let map_desc = block_code
+            .constants
+            .iter()
+            .find_map(|c| match c {
+                ConstEntry::Map(m) => Some(m),
+                _ => None,
+            })
+            .expect("expected map constant in method code");
+        let size_slot = map_desc
+            .slots
+            .iter()
+            .find(|s| s.name == "size")
+            .expect("size slot");
+        assert!(size_slot.flags & SLOT_ASSIGNABLE != 0);
+        assert!(size_slot.flags & SLOT_CONSTANT == 0);
     }
 
     #[test]

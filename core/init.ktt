@@ -611,21 +611,29 @@ Proxy := {
 
 CType := {
     parent* = Object.
+    scalarTag: tag Size: s Align: a = {
+        {
+            parent* = self.
+            impl := tag.
+            size = s.
+            align = a
+        }
+    }.
 }.
 
-CVoid := { parent* = CType. impl := 1. size = 0. align = 1 }.
-CInt8 := { parent* = CType. impl := 2. size = 1. align = 1 }.
-CUInt8 := { parent* = CType. impl := 3. size = 1. align = 1 }.
-CInt16 := { parent* = CType. impl := 4. size = 2. align = 2 }.
-CUInt16 := { parent* = CType. impl := 5. size = 2. align = 2 }.
-CInt32 := { parent* = CType. impl := 6. size = 4. align = 4 }.
-CUInt32 := { parent* = CType. impl := 7. size = 4. align = 4 }.
-CInt64 := { parent* = CType. impl := 8. size = 8. align = 8 }.
-CUInt64 := { parent* = CType. impl := 9. size = 8. align = 8 }.
-CFloat32 := { parent* = CType. impl := 10. size = 4. align = 4 }.
-CFloat64 := { parent* = CType. impl := 11. size = 8. align = 8 }.
-CPointer := { parent* = CType. impl := 12. size = 8. align = 8 }.
-CSize := { parent* = CType. impl := 13. size = 8. align = 8 }.
+CVoid := CType scalarTag: 1 Size: 0 Align: 1.
+CInt8 := CType scalarTag: 2 Size: 1 Align: 1.
+CUInt8 := CType scalarTag: 3 Size: 1 Align: 1.
+CInt16 := CType scalarTag: 4 Size: 2 Align: 2.
+CUInt16 := CType scalarTag: 5 Size: 2 Align: 2.
+CInt32 := CType scalarTag: 6 Size: 4 Align: 4.
+CUInt32 := CType scalarTag: 7 Size: 4 Align: 4.
+CInt64 := CType scalarTag: 8 Size: 8 Align: 8.
+CUInt64 := CType scalarTag: 9 Size: 8 Align: 8.
+CFloat32 := CType scalarTag: 10 Size: 4 Align: 4.
+CFloat64 := CType scalarTag: 11 Size: 8 Align: 8.
+CPointer := CType scalarTag: 12 Size: 8 Align: 8.
+CSize := CType scalarTag: 13 Size: 8 Align: 8.
 
 // Example struct descriptor protocol (field order defines layout):
 CStatPairExample := {

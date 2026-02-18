@@ -2830,7 +2830,7 @@ mod tests {
     #[test]
     fn proxy_pin_wrapper_behaves() {
         let (vm, value) = run_source_with_vm(
-            "Proxy := { fromBacking: b = { { backing = b. pin = { Object _Pin: (self backing). self }. unpin = { Object _Unpin: (self backing). self }. isPinned = { Object _IsPinned: (self backing) } } } }. p := Proxy fromBacking: { }. p pin. a := p isPinned. p unpin. b := p isPinned. a",
+            "Proxy := { fromBacking: b = { { backing := b. pin = { Object _Pin: (self backing). self }. unpin = { Object _Unpin: (self backing). self }. isPinned = { Object _IsPinned: (self backing) } } } }. p := Proxy fromBacking: { }. p pin. a := p isPinned. p unpin. b := p isPinned. a",
         )
         .expect("interpret error");
         assert_eq!(value.raw(), vm.special.true_obj.raw());
