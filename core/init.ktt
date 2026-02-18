@@ -4,13 +4,21 @@ Object _Extend: Object With: {
     }
 }.
 
-Boolean = { 
+Clonable = {
     parent* = Object.
-    ifTrue: t ifFalse: f = { t call }.
-    ifTrue: t = { self ifTrue: t IfFalse: [ None ] }.
-    ifFalse: f = { self ifTrue: [ None ] IfFalse: f }.
-    && rhs = { self ifTrue: [ rhs ] IfFalse: [ self ] }.
-    || rhs = { self ifTrue: [ self ] IfFalse: [ rhs ] }.
+    clone = {
+        self _Clone: self
+    }.
+    copy = { self clone }.
+}.
+
+Oddball = {
+    parent* = Object.
+    copy = { self }.
+}.
+
+Boolean = { 
+    parent* = Oddball.
 }.
 
 Object extend: Object With: { 
@@ -18,18 +26,15 @@ Object extend: Object With: {
 }.
 
 Object extend: Object With: {
-    clone = { 
-        x = Object _Clone: self.
-        ^ x
-    }.
-}.
-
-Object extend: Object With: {
     reflect: target = { self _Reflect: target }.
 }.
 
+Object extend: None With: {
+    parent* = Oddball.
+}.
+
 Object extend: Mirror With: {
-    parent* = Object.
+    parent* = Clonable.
 
     slotCount = { self _MirrorSlotCount }.
     slotNameAt: i = { self _MirrorSlotNameAt: i }.
@@ -42,7 +47,7 @@ Object extend: Mirror With: {
 
     eachSlot: body = {
         i := 0.
-        [ i < (self slotCount) ] whileTrue: [
+        [ i < self slotCount ] whileTrue: [
             body call: (self slotNameAt: i).
             i := i + 1
         ].
@@ -52,19 +57,36 @@ Object extend: Mirror With: {
 
 Object extend: False With: {
     parent* = Boolean.
+    ifTrue: t ifFalse: f = { f call }.
+    ifTrue: t = { None }.
+    ifFalse: f = { f call }.
     ifTrue: t IfFalse: f = { f call }.
-    toString = { "False" }.
+    toString = "False".
+    not = { True }.
+    xor: rhs = { rhs }.
+    !& rhs = { True }.
+    && rhs = { self }.
+    || rhs = { rhs }.
 }.
 
 Object extend: True With: {
     parent* = Boolean.
-    toString = { "True" }.
+    ifTrue: t ifFalse: f = { t call }.
+    ifTrue: t = { t call }.
+    ifFalse: f = { None }.
     ifTrue: t IfFalse: f = { t call }.
+    toString = "True" .
+    not = { False }.
+    xor: rhs = { rhs not }.
+    eitherOr: rhs = { self xor: rhs }.
+    !& rhs = { rhs rhs not }.
+    && rhs = { rhs }.
+    || rhs = { self }.
 }.
 
 
 Object extend: Fixnum With: {
-    parent* = Object.
+    parent* = Clonable.
     + rhs = { rhs addFixnum: self }.
     - rhs = { rhs subFixnum: self }.
     * rhs = { rhs mulFixnum: self }.
@@ -139,7 +161,7 @@ Object extend: Fixnum With: {
 }.
 
 Object extend: Bignum With: {
-    parent* = Object.
+    parent* = Clonable.
     + rhs = { rhs addBignum: self }.
     - rhs = { rhs subBignum: self }.
     * rhs = { rhs mulBignum: self }.
@@ -213,7 +235,7 @@ Object extend: Bignum With: {
 }.
 
 Object extend: Ratio With: {
-    parent* = Object.
+    parent* = Clonable.
     + rhs = { rhs addRatio: self }.
     - rhs = { rhs subRatio: self }.
     * rhs = { rhs mulRatio: self }.
@@ -285,7 +307,7 @@ Object extend: Ratio With: {
 }.
 
 Object extend: Float With: {
-    parent* = Object.
+    parent* = Clonable.
     epsilon = 1e-9.
     + rhs = { rhs addFloat: self }.
     - rhs = { rhs subFloat: self }.
@@ -361,19 +383,19 @@ Object extend: Float With: {
 Complex = {
     re := 0.
     im := 0.
-    parent* = Object.
+    parent* = Clonable.
 
     asComplex = { self }.
     setRe: r Im: i = { self re: r. self im: i. self }.
 
     + rhs = {
         o = rhs asComplex.
-        Complex clone setRe: (self re + o re) Im: (self im + o im)
+        Complex clone setRe: self re + o re Im: self im + o im
     }.
 
     - rhs = {
         o = rhs asComplex.
-        Complex clone setRe: (self re - o re) Im: (self im - o im)
+        Complex clone setRe: self re - o re Im: self im - o im
     }.
 
     * rhs = {
@@ -391,35 +413,35 @@ Complex = {
 
     == rhs = {
         o = rhs asComplex.
-        (self re == o re) && (self im == o im)
+        self re == o re && self im == o im
     }.
 
-    != rhs = { (self == rhs) ifTrue: [ False ] IfFalse: [ True ] }.
+    != rhs = { self == rhs ifTrue: [ False ] IfFalse: [ True ] }.
     ~= rhs = { self == rhs }.
 
 
-    addFixnum: lhs = { (lhs asComplex) + self }.
-    subFixnum: lhs = { (lhs asComplex) - self }.
-    mulFixnum: lhs = { (lhs asComplex) * self }.
-    divFixnum: lhs = { (lhs asComplex) / self }.
+    addFixnum: lhs = { lhs asComplex + self }.
+    subFixnum: lhs = { lhs asComplex - self }.
+    mulFixnum: lhs = { lhs asComplex * self }.
+    divFixnum: lhs = { lhs asComplex / self }.
 
-    addBignum: lhs = { (lhs asComplex) + self }.
-    subBignum: lhs = { (lhs asComplex) - self }.
-    mulBignum: lhs = { (lhs asComplex) * self }.
-    divBignum: lhs = { (lhs asComplex) / self }.
+    addBignum: lhs = { lhs asComplex + self }.
+    subBignum: lhs = { lhs asComplex - self }.
+    mulBignum: lhs = { lhs asComplex * self }.
+    divBignum: lhs = { lhs asComplex / self }.
 
-    addRatio: lhs = { (lhs asComplex) + self }.
-    subRatio: lhs = { (lhs asComplex) - self }.
-    mulRatio: lhs = { (lhs asComplex) * self }.
-    divRatio: lhs = { (lhs asComplex) / self }.
+    addRatio: lhs = { lhs asComplex + self }.
+    subRatio: lhs = { lhs asComplex - self }.
+    mulRatio: lhs = { lhs asComplex * self }.
+    divRatio: lhs = { lhs asComplex / self }.
 
-    addFloat: lhs = { (lhs asComplex) + self }.
-    subFloat: lhs = { (lhs asComplex) - self }.
-    mulFloat: lhs = { (lhs asComplex) * self }.
-    divFloat: lhs = { (lhs asComplex) / self }.
+    addFloat: lhs = { lhs asComplex + self }.
+    subFloat: lhs = { lhs asComplex - self }.
+    mulFloat: lhs = { lhs asComplex * self }.
+    divFloat: lhs = { lhs asComplex / self }.
 
-    conjugate = { Complex clone setRe: self re Im: (0 - self im) }.
-    magnitudeSquared = { (self re * self re) + (self im * self im) }.
+    conjugate = { Complex clone setRe: self re Im: 0 - self im }.
+    magnitudeSquared = { self re * self re + self im * self im }.
     abs = { self magnitudeSquared sqrt }.
     isReal = { self im == 0 }.
     equals: rhs WithEpsilon: e = {
@@ -428,10 +450,10 @@ Complex = {
     }.
 
     toString = {
-        (self im < 0) ifTrue: [
-            (self re toString) + " - " + ((0 - self im) toString) + "i"
+        self im < 0 ifTrue: [
+            self re toString + " - " + (0 - self im) toString + "i"
         ] IfFalse: [
-            (self re toString) + " + " + ((self im) toString) + "i"
+            self re toString + " + " + self im toString + "i"
         ]
     }.
 }.
@@ -460,8 +482,12 @@ Object extend: Object With: {
     isPinned: value = { self _IsPinned: value }.
 }.
 
+Object extend: VM With: {
+    eval: source = { self _Eval: source }.
+}.
+
 Object extend: Block With: {
-    parent* = Object.
+    parent* = Clonable.
     whileTrue: body = {
         self call ifTrue: [ 
             body call.
@@ -473,7 +499,7 @@ Object extend: Block With: {
 }.
 
 Object extend: String With: {
-    parent* = Object.
+    parent* = Clonable.
     + rhs = {
         rhsStr := rhs toString.
         lhsBytes := self toByteArray.
@@ -481,7 +507,7 @@ Object extend: String With: {
         lhsLen := self length.
         rhsLen := rhsStr length.
         total := lhsLen + rhsLen.
-        dst := lhsBytes cloneWithSize: (total + 1).
+        dst := lhsBytes cloneWithSize: total + 1.
         dst memCopy: lhsBytes From: 0 To: 0 Length: lhsLen.
         dst memCopy: rhsBytes From: 0 To: lhsLen Length: rhsLen.
         dst toString
@@ -494,7 +520,7 @@ Object extend: String With: {
 }.
 
 Sequence = {
-    parent* = Object.
+    parent* = Clonable.
     each: body = { self }.
 }.
 
@@ -502,7 +528,7 @@ IndexedSequence = {
     parent* = Sequence.
     each: body = {
         i := 0.
-        [ i < (self size) ] whileTrue: [
+        [ i < self size ] whileTrue: [
             body call: (self at: i).
             i := i + 1
         ].
@@ -520,7 +546,7 @@ Object extend: Array With: {
 }.
 
 CollectorChunk = {
-    parent* = Object.
+    parent* = Clonable.
     values := None.
     next := None.
 
@@ -534,7 +560,7 @@ CollectorChunk = {
 }.
 
 Collector = {
-    parent* = Object.
+    parent* = Clonable.
     firstChunk := None.
     currentChunk := None.
     currentIndex := 0.
@@ -542,30 +568,32 @@ Collector = {
     nextChunkSize := 8.
 
     with: first With: second = {
-        ((Collector clone init) add: first) add: second
+        c := Collector clone init.
+        c add: first.
+        c add: second
     }.
 
     init = {
-        first := CollectorChunk withSize: (self nextChunkSize).
+        first := CollectorChunk withSize: self nextChunkSize.
         self firstChunk: first.
         self currentChunk: first.
         self currentIndex: 0.
         self count: 0.
-        self nextChunkSize: ((self nextChunkSize) * 2).
+        self nextChunkSize: self nextChunkSize * 2.
         self
     }.
 
     allocateNextChunk = {
-        next := CollectorChunk withSize: (self nextChunkSize).
+        next := CollectorChunk withSize: self nextChunkSize.
         self currentChunk next: next.
         self currentChunk: next.
         self currentIndex: 0.
-        self nextChunkSize: ((self nextChunkSize) * 2).
+        self nextChunkSize: self nextChunkSize * 2.
         self
     }.
 
     add: value = {
-        currentSize := (self currentChunk values) size.
+        currentSize := self currentChunk values size.
         i := self currentIndex.
         i == currentSize ifTrue: [
             self allocateNextChunk.
@@ -573,19 +601,19 @@ Collector = {
         ] IfFalse: [
             self
         ].
-        (self currentChunk values) at: i Put: value.
-        self currentIndex: (i + 1).
-        self count: ((self count) + 1).
+        self currentChunk values at: i Put: value.
+        self currentIndex: i + 1.
+        self count: self count + 1.
         self
     }.
 
     asArray = {
-        out := Array cloneWithSize: (self count).
+        out := Array cloneWithSize: self count.
         chunk := self firstChunk.
         chunkValues := chunk values.
         chunkIndex := 0.
         outIndex := 0.
-        [ outIndex < (self count) ] whileTrue: [
+        [ outIndex < self count ] whileTrue: [
             chunkSize := chunkValues size.
             chunkIndex == chunkSize ifTrue: [
                 chunk := chunk next.
@@ -602,8 +630,8 @@ Collector = {
     }.
 
     debugPrint = {
-        ("Collector(count=" + (self count toString) + ", currentIndex=" + (self currentIndex toString) + ", nextChunkSize=" + (self nextChunkSize toString) + ")") println.
-        ("Collector(firstChunkSize=" + ((self firstChunk values size) toString) + ", currentChunkSize=" + ((self currentChunk values size) toString) + ")") println.
+        ("Collector(count=" + self count toString + ", currentIndex=" + self currentIndex toString + ", nextChunkSize=" + self nextChunkSize toString + ")") println.
+        ("Collector(firstChunkSize=" + self firstChunk values size toString + ", currentChunkSize=" + self currentChunk values size toString + ")") println.
         self
     }.
 }.
@@ -613,7 +641,7 @@ Object extend: Collector With: {
 }.
 
 Object extend: ByteArray With: {
-    parent* = Object.
+    parent* = Clonable.
     size = { self _ByteArraySize }.
     cloneWithSize: s = { self _CloneWithSize: s }.
     memCopy: src From: srcOffset To: dstOffset Length: len = {
@@ -657,7 +685,7 @@ Object extend: ByteArray With: {
 }.
 
 Object extend: Alien With: {
-    parent* = Object.
+    parent* = Clonable.
     new: s = { self _AlienNew: s }.
     fromAddress: addr Size: s = { self _AlienFromAddress: addr Size: s }.
     libraryOpen: path = { self _LibraryOpen: path }.
@@ -709,7 +737,7 @@ Object extend: Alien With: {
 }.
 
 Proxy := {
-    parent* = Object.
+    parent* = Clonable.
     backing := None.
     ctype := None.
 
@@ -786,7 +814,7 @@ Proxy := {
 }.
 
 Disposable := {
-    parent* = Object.
+    parent* = Clonable.
     disposed = { False }.
     dispose = { self }.
     using: body = {
@@ -812,13 +840,13 @@ File := {
         }
     }.
 
-    isOpen = { (self fd) >= 0 }.
-    disposed = { (self isOpen) ifTrue: [ False ] IfFalse: [ True ] }.
+    isOpen = { self fd >= 0 }.
+    disposed = { self isOpen not }.
 
     close = {
-        (self isOpen)
+        self isOpen
             ifTrue: [
-                rc := Posix closeFd: (self fd).
+                rc := Posix closeFd: self fd.
                 self fd: -1.
                 rc
             ]
@@ -828,19 +856,20 @@ File := {
     dispose = { self close. self }.
 
     size = {
-        (self isOpen)
-            ifTrue: [ Posix seekFd: (self fd) Offset: 0 Whence: Posix SEEK_END ]
+        self isOpen
+            ifTrue: [ Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_END ]
             IfFalse: [ self _FileClosed ]
     }.
 
     statSize = {
-        (self isOpen)
+        self isOpen
             ifTrue: [
                 statBuf := ByteArray cloneWithSize: CStatLinuxX64 size.
-                rc := Posix fstatFd: (self fd) Into: statBuf.
-                (rc == 0)
+                rc := Posix fstatFd: self fd Into: statBuf.
+                rc == 0
                     ifTrue: [
-                        statOffset := (CStatLinuxX64 _CTypeFieldInfoAt: "st_size") offset.
+                        statInfo := CStatLinuxX64 _CTypeFieldInfoAt: "st_size".
+                        statOffset := statInfo offset.
                         statBuf i64At: statOffset
                     ]
                     IfFalse: [ self _FstatFailed: rc ]
@@ -849,32 +878,32 @@ File := {
     }.
 
     readInto: buffer Length: len = {
-        (self isOpen)
-            ifTrue: [ Posix readFd: (self fd) Into: buffer Length: len ]
+        self isOpen
+            ifTrue: [ Posix readFd: self fd Into: buffer Length: len ]
             IfFalse: [ self _FileClosed ]
     }.
 
     rewind = {
-        (self isOpen)
-            ifTrue: [ Posix seekFd: (self fd) Offset: 0 Whence: Posix SEEK_SET ]
+        self isOpen
+            ifTrue: [ Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_SET ]
             IfFalse: [ self _FileClosed ]
     }.
 
     readFirstLines: lineCount = {
         self rewind.
         buffer := ByteArray cloneWithSize: 8192.
-        bytesRead := self readInto: buffer Length: (buffer size).
-        (bytesRead <= 0)
+        bytesRead := self readInto: buffer Length: buffer size.
+        bytesRead <= 0
             ifTrue: [ "" ]
             IfFalse: [
                 stop := bytesRead.
                 lines := 0.
                 i := 0.
                 [ i < bytesRead ] whileTrue: [
-                    ((buffer u8At: i) == 10)
+                    (buffer u8At: i) == 10
                         ifTrue: [
                             lines := lines + 1.
-                            (lines >= lineCount)
+                            lines >= lineCount
                                 ifTrue: [
                                     stop := i + 1.
                                     i := bytesRead
@@ -885,7 +914,7 @@ File := {
                     i := i + 1
                 ].
 
-                out := ByteArray cloneWithSize: (stop + 1).
+                out := ByteArray cloneWithSize: stop + 1.
                 out memCopy: buffer From: 0 To: 0 Length: stop.
                 out toString
             ]
@@ -899,24 +928,24 @@ File := {
         start := 0.
         i := 0.
         [ i < total ] whileTrue: [
-            ((bytes u8At: i) == 10)
+            (bytes u8At: i) == 10
                 ifTrue: [
                     lineLen := i - start.
-                    lineBytes := ByteArray cloneWithSize: (lineLen + 1).
+                    lineBytes := ByteArray cloneWithSize: lineLen + 1.
                     lineBytes memCopy: bytes From: start To: 0 Length: lineLen.
-                    body call: (lineBytes toString).
+                    body call: lineBytes toString.
                     start := i + 1
                 ]
                 IfFalse: [ None ].
             i := i + 1
         ].
 
-        (start < total)
+        start < total
             ifTrue: [
                 lineLen := total - start.
-                lineBytes := ByteArray cloneWithSize: (lineLen + 1).
+                lineBytes := ByteArray cloneWithSize: lineLen + 1.
                 lineBytes memCopy: bytes From: start To: 0 Length: lineLen.
-                body call: (lineBytes toString)
+                body call: lineBytes toString
             ]
             IfFalse: [ None ].
         self
@@ -925,43 +954,44 @@ File := {
     eachLine: body = {
         self rewind.
         total := self statSize.
-        bytes := ByteArray cloneWithSize: (total + 1).
+        bytes := ByteArray cloneWithSize: total + 1.
         total := self readInto: bytes Length: total.
 
         start := 0.
         i := 0.
         [ i < total ] whileTrue: [
-            ((bytes u8At: i) == 10)
+            (bytes u8At: i) == 10
                 ifTrue: [
                     lineLen := i - start.
-                    lineBytes := ByteArray cloneWithSize: (lineLen + 1).
+                    lineBytes := ByteArray cloneWithSize: lineLen + 1.
                     lineBytes memCopy: bytes From: start To: 0 Length: lineLen.
-                    body call: (lineBytes toString).
+                    body call: lineBytes toString.
                     start := i + 1
                 ]
                 IfFalse: [ None ].
             i := i + 1
         ].
 
-        (start < total)
+        start < total
             ifTrue: [
                 lineLen := total - start.
-                lineBytes := ByteArray cloneWithSize: (lineLen + 1).
+                lineBytes := ByteArray cloneWithSize: lineLen + 1.
                 lineBytes memCopy: bytes From: start To: 0 Length: lineLen.
-                body call: (lineBytes toString)
+                body call: lineBytes toString
             ]
             IfFalse: [ None ].
         self
     }.
 
     printFirstLines: lineCount = {
-        (self readFirstLines: lineCount) print.
+        content := self readFirstLines: lineCount.
+        content print.
         self
     }.
 }.
 
 CType := {
-    parent* = Object.
+    parent* = Oddball.
     scalarTag: tag Size: s Align: a = {
         {
             parent* = self.
@@ -1096,7 +1126,7 @@ CStatLinuxX64 := CType struct: {
 }.
 
 Posix := {
-    parent* = Object.
+    parent* = Oddball.
     SEEK_SET = 0.
     SEEK_CUR = 1.
     SEEK_END = 2.
@@ -1175,10 +1205,13 @@ Posix := {
 }.
 
 (File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0) using: [ | file |
-    ("Reading: core/init.ktt (Size: " + (file size toString) + "):") println.
+    ("Reading: core/init.ktt (Size: " + file size toString + "):") println.
     file 
         eachLine: [ | line |
             line println
         ]
         First: 3
 ].
+
+(VM _Eval: "NewGlobal = \"incredible\". 10 + 44") toString println.
+NewGlobal println.

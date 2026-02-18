@@ -17,6 +17,7 @@ pub mod object_clone;
 pub mod pin;
 pub mod ratio;
 pub mod string;
+pub mod vm;
 
 pub type PrimitiveFn = fn(
     &mut VM,
@@ -369,6 +370,7 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
             mirror::mirror_add_slot_value,
         ),
         PrimitiveDesc::new("mirror_remove_slot", 1, mirror::mirror_remove_slot),
+        PrimitiveDesc::new("vm_eval", 1, vm::vm_eval),
     ]
 }
 

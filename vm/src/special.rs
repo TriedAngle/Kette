@@ -1216,6 +1216,15 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut intern_table,
             "_Become:With:",
         );
+        let vm_eval_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_eval")
+                .expect("vm_eval primitive missing") as i64;
+        let vm_eval_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Eval:",
+        );
 
         let mut object_map_val = alloc_map(
             &mut proxy,
@@ -1554,6 +1563,50 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             object_val,
         );
 
+        let vm_eval_code = Value::from_i64(vm_eval_idx);
+        let vm_eval_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_eval_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_eval_map_val);
+
+        let vm_eval_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, vm_eval_map_val, &[])
+                .value();
+        roots.push(vm_eval_method_val);
+
+        let vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            vm_eval_name,
+            vm_eval_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_val =
+            alloc_slot_object(&mut proxy, &mut roots, vm_map_val, &[]).value();
+        roots.push(vm_val);
+
+        let vm_name =
+            intern_bootstrap(&mut proxy, &mut roots, &mut intern_table, "VM");
+        add_dictionary_entry(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            assoc_map_val,
+            dictionary_val,
+            vm_name,
+            vm_val,
+        );
+
         let reflectee_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
@@ -1746,6 +1799,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             block_traits_map_val,
             object_map_val,
             new_object_map,
+            vm_map_val,
             mirror_map_val,
             assoc_map_val,
             dictionary_map_val,
