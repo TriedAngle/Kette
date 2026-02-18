@@ -2,6 +2,7 @@ mod backend;
 mod diagnostics;
 mod position;
 mod semantic;
+mod text_edit;
 
 use backend::Backend;
 use tower_lsp::{LspService, Server};

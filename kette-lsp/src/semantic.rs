@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use parser::ast::Expr;
 use parser::ast::ExprKind;
 use parser::token::{Token, TokenKind};
+#[cfg(test)]
 use parser::{Lexer, Parser};
 use tower_lsp::lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType,
@@ -34,6 +35,7 @@ pub fn token_modifiers() -> Vec<SemanticTokenModifier> {
     Vec::new()
 }
 
+#[cfg(test)]
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let tokens: Vec<Token> = Lexer::from_str(source)
         .filter(|t| {
@@ -47,27 +49,32 @@ pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let exprs: Vec<Expr> =
         parse_results.into_iter().filter_map(Result::ok).collect();
 
-    let globals = collect_top_level_globals(&exprs);
+    semantic_tokens_from(source, &tokens, &exprs)
+}
+
+pub fn semantic_tokens_from(
+    source: &str,
+    tokens: &[Token],
+    exprs: &[Expr],
+) -> Vec<SemanticToken> {
     let mut classified = Classified::default();
 
-    classify_keyword_and_operator_tokens(&tokens, &mut classified);
+    classify_keyword_operator_and_literal_tokens(tokens, &mut classified);
 
     let mut unary_selector_spans = HashSet::new();
-    for expr in &exprs {
+    for expr in exprs {
         collect_unary_selector_spans(
             expr,
-            &tokens,
+            tokens,
             &mut unary_selector_spans,
             &mut classified,
         );
     }
 
     let mut scopes = Vec::new();
-    for expr in &exprs {
+    for expr in exprs {
         classify_identifier_usage(
             expr,
-            true,
-            &globals,
             &mut scopes,
             &unary_selector_spans,
             &mut classified,
@@ -134,7 +141,7 @@ struct Scope {
     locals: HashSet<String>,
 }
 
-fn classify_keyword_and_operator_tokens(
+fn classify_keyword_operator_and_literal_tokens(
     tokens: &[Token],
     out: &mut Classified,
 ) {
@@ -159,6 +166,13 @@ fn classify_keyword_and_operator_tokens(
                     tok.span.start.offset,
                     tok.span.end.offset,
                     TYPE_SELF_KEYWORD,
+                );
+            }
+            TokenKind::Identifier(name) if is_literal_ident(name) => {
+                out.add(
+                    tok.span.start.offset,
+                    tok.span.end.offset,
+                    TYPE_LITERAL_NUMBER,
                 );
             }
             _ => {}
@@ -276,22 +290,8 @@ fn find_unary_selector_span(
     None
 }
 
-fn collect_top_level_globals(exprs: &[Expr]) -> HashSet<String> {
-    let mut globals = HashSet::new();
-    for expr in exprs {
-        if let ExprKind::Assignment { target, .. } = &expr.kind {
-            if let ExprKind::Ident(name) = &target.kind {
-                globals.insert(name.clone());
-            }
-        }
-    }
-    globals
-}
-
 fn classify_identifier_usage(
     expr: &Expr,
-    top_level: bool,
-    globals: &HashSet<String>,
     scopes: &mut Vec<Scope>,
     unary_selector_spans: &HashSet<(usize, usize)>,
     out: &mut Classified,
@@ -315,18 +315,14 @@ fn classify_identifier_usage(
             }
             let token_type = if is_local(name, scopes) {
                 TYPE_LOCAL
-            } else if top_level || globals.contains(name) {
-                TYPE_GLOBAL
             } else {
-                TYPE_LOCAL
+                TYPE_GLOBAL
             };
             out.add(span.0, span.1, token_type);
         }
         ExprKind::UnaryMessage { receiver, .. } => {
             classify_identifier_usage(
                 receiver,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
@@ -337,16 +333,12 @@ fn classify_identifier_usage(
         } => {
             classify_identifier_usage(
                 receiver,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
             );
             classify_identifier_usage(
                 argument,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
@@ -355,8 +347,6 @@ fn classify_identifier_usage(
         ExprKind::KeywordMessage { receiver, pairs } => {
             classify_identifier_usage(
                 receiver,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
@@ -364,8 +354,6 @@ fn classify_identifier_usage(
             for pair in pairs {
                 classify_identifier_usage(
                     &pair.argument,
-                    top_level,
-                    globals,
                     scopes,
                     unary_selector_spans,
                     out,
@@ -375,20 +363,11 @@ fn classify_identifier_usage(
         ExprKind::Paren(inner)
         | ExprKind::Return(inner)
         | ExprKind::Resend { message: inner } => {
-            classify_identifier_usage(
-                inner,
-                top_level,
-                globals,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
+            classify_identifier_usage(inner, scopes, unary_selector_spans, out);
         }
         ExprKind::DirectedResend { message, .. } => {
             classify_identifier_usage(
                 message,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
@@ -397,20 +376,11 @@ fn classify_identifier_usage(
         ExprKind::Assignment { target, value, .. } => {
             classify_identifier_usage(
                 target,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
             );
-            classify_identifier_usage(
-                value,
-                top_level,
-                globals,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
+            classify_identifier_usage(value, scopes, unary_selector_spans, out);
         }
         ExprKind::Block { args, body } => {
             let mut scope = Scope::default();
@@ -422,14 +392,7 @@ fn classify_identifier_usage(
             }
             scopes.push(scope);
             for e in body {
-                classify_identifier_usage(
-                    e,
-                    false,
-                    globals,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
+                classify_identifier_usage(e, scopes, unary_selector_spans, out);
             }
             scopes.pop();
         }
@@ -438,8 +401,6 @@ fn classify_identifier_usage(
                 if slot.params.is_empty() {
                     classify_identifier_usage(
                         &slot.value,
-                        false,
-                        globals,
                         scopes,
                         unary_selector_spans,
                         out,
@@ -452,8 +413,6 @@ fn classify_identifier_usage(
                     scopes.push(scope);
                     classify_identifier_usage(
                         &slot.value,
-                        false,
-                        globals,
                         scopes,
                         unary_selector_spans,
                         out,
@@ -472,8 +431,6 @@ fn classify_identifier_usage(
                 for e in body {
                     classify_identifier_usage(
                         e,
-                        false,
-                        globals,
                         scopes,
                         unary_selector_spans,
                         out,
@@ -484,8 +441,6 @@ fn classify_identifier_usage(
                 for e in body {
                     classify_identifier_usage(
                         e,
-                        false,
-                        globals,
                         scopes,
                         unary_selector_spans,
                         out,
@@ -495,21 +450,12 @@ fn classify_identifier_usage(
         }
         ExprKind::Sequence(exprs) => {
             for e in exprs {
-                classify_identifier_usage(
-                    e,
-                    top_level,
-                    globals,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
+                classify_identifier_usage(e, scopes, unary_selector_spans, out);
             }
         }
         ExprKind::Cascade { receiver, messages } => {
             classify_identifier_usage(
                 receiver,
-                top_level,
-                globals,
                 scopes,
                 unary_selector_spans,
                 out,
@@ -517,8 +463,6 @@ fn classify_identifier_usage(
             for msg in messages {
                 classify_identifier_usage(
                     msg,
-                    top_level,
-                    globals,
                     scopes,
                     unary_selector_spans,
                     out,

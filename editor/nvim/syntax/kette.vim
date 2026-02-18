@@ -20,8 +20,7 @@ syn match ketteFloat "\<[+-]\=\d[0-9_]*[eE][+-]\=[0-9_][0-9_]*\>"
 syn match ketteNumber "\<[+-]\=\d[0-9_]*\>"
 
 syn match ketteKeywordPart "\<[A-Za-z_][A-Za-z0-9_]*:\>"
-syn match ketteGlobal "\<[A-Z][A-Za-z0-9_]*\>"
-syn match ketteLocal "\<[a-z_][A-Za-z0-9_]*\>"
+syn match ketteIdentifier "\<[A-Za-z_][A-Za-z0-9_]*\>"
 
 syn match ketteOperator "[!@#$%&*+\-=/~?<>,'`\\|][!@#$%&*+\-=/~?<>,'`\\|]*"
 
@@ -41,8 +40,7 @@ hi def link ketteRadixNumber Number
 hi def link ketteFloat Float
 hi def link ketteNumber Number
 hi def link ketteKeywordPart Function
-hi def link ketteGlobal Type
-hi def link ketteLocal Identifier
+hi def link ketteIdentifier Identifier
 hi def link ketteOperator Operator
 hi def link ketteLineComment Comment
 hi def link ketteBlockComment Comment

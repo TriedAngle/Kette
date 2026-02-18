@@ -1,4 +1,9 @@
-# Kette Neovim Integration
+# Kette Editor Integration
+
+- Neovim: this document
+- VSCode: `editor/vscode/README.md`
+
+## Neovim Integration
 
 This guide wires Kette into Neovim with:
 

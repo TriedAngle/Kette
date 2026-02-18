@@ -144,6 +144,11 @@ i := 1.
 - Object model + lookup: `object/`
 - GC/heap: `heap/`
 
+## Editor Support
+
+- Neovim integration: `editor/README.md`
+- VSCode integration and extension packaging: `editor/vscode/README.md`
+
 ## Status
 
 The VM and language are under active development. APIs and syntax may change.
