@@ -76,6 +76,7 @@ Object extend: Fixnum With: {
     divFloat: lhs = { lhs _FloatDiv: (self _FixnumToFloat) }.
     modFloat: lhs = { lhs _FloatMod: (self _FixnumToFloat) }.
 
+    neg = { self _FixnumNeg }.
     sqrt = { (self _FixnumToFloat) sqrt }.
 
     toString = { self _FixnumToString }.
@@ -150,6 +151,7 @@ Object extend: Bignum With: {
     divFloat: lhs = { lhs _FloatDiv: (self _BignumToFloat) }.
     modFloat: lhs = { lhs _FloatMod: (self _BignumToFloat) }.
 
+    neg = { self _BignumNeg }.
     sqrt = { (self _BignumToFloat) sqrt }.
 
     eqFixnum: lhs = { (lhs _FixnumToBignum) _BignumEq: self }.
@@ -219,6 +221,7 @@ Object extend: Ratio With: {
     mulFloat: lhs = { lhs _FloatMul: (self _RatioToFloat) }.
     divFloat: lhs = { lhs _FloatDiv: (self _RatioToFloat) }.
 
+    neg = { self _RatioNeg }.
     sqrt = { (self _RatioToFloat) sqrt }.
 
     eqFixnum: lhs = { (lhs _FixnumToRatio) _RatioEq: self }.
@@ -324,6 +327,7 @@ Object extend: Float With: {
     gtFloat: lhs = { lhs _FloatGt: self }.
     geFloat: lhs = { lhs _FloatGe: self }.
 
+    neg = { self _FloatNeg }.
     toString = { self _FloatToString }.
     toStringDigits: d = { self _FloatToStringDigits: d }.
 }.
@@ -419,6 +423,12 @@ Object extend: Float With: {
 Object extend: Object With: {
     asComplex = { Complex clone setRe: self Im: 0 }.
     cArgValue = { self }.
+    asArray = {
+        out := Array cloneWithSize: 1.
+        out at: 0 Put: self.
+        out
+    }.
+    & rhs = { Collector with: self With: rhs }.
     pin: value = { self _Pin: value }.
     unpin: value = { self _Unpin: value }.
     isPinned: value = { self _IsPinned: value }.
@@ -457,12 +467,123 @@ Object extend: String With: {
     toString = { self }.
 }.
 
-Object extend: Array With: {
+Sequence = {
     parent* = Object.
+    each: body = { self }.
+}.
+
+IndexedSequence = {
+    parent* = Sequence.
+    each: body = {
+        i := 0.
+        [ i < (self size) ] whileTrue: [
+            body call: (self at: i).
+            i := i + 1
+        ].
+        self
+    }.
+}.
+
+Object extend: Array With: {
+    parent* = IndexedSequence.
     size = { self _ArraySize }.
     cloneWithSize: s = { self _ArrayCloneWithSize: s }.
     at: index = { self _ArrayAt: index }.
     at: index Put: value = { self _ArrayAt: index Put: value }.
+    asArray = { self }.
+}.
+
+CollectorChunk = {
+    parent* = Object.
+    values := None.
+    next := None.
+
+    withSize: s = {
+        {
+            parent* = CollectorChunk.
+            values := Array cloneWithSize: s.
+            next := None
+        }
+    }.
+}.
+
+Collector = {
+    parent* = Object.
+    firstChunk := None.
+    currentChunk := None.
+    currentIndex := 0.
+    count := 0.
+    nextChunkSize := 8.
+
+    with: first With: second = {
+        ((Collector clone init) add: first) add: second
+    }.
+
+    init = {
+        first := CollectorChunk withSize: (self nextChunkSize).
+        self firstChunk: first.
+        self currentChunk: first.
+        self currentIndex: 0.
+        self count: 0.
+        self nextChunkSize: ((self nextChunkSize) * 2).
+        self
+    }.
+
+    allocateNextChunk = {
+        next := CollectorChunk withSize: (self nextChunkSize).
+        self currentChunk next: next.
+        self currentChunk: next.
+        self currentIndex: 0.
+        self nextChunkSize: ((self nextChunkSize) * 2).
+        self
+    }.
+
+    add: value = {
+        currentSize := (self currentChunk values) size.
+        i := self currentIndex.
+        i == currentSize ifTrue: [
+            self allocateNextChunk.
+            i := self currentIndex
+        ] IfFalse: [
+            self
+        ].
+        (self currentChunk values) at: i Put: value.
+        self currentIndex: (i + 1).
+        self count: ((self count) + 1).
+        self
+    }.
+
+    asArray = {
+        out := Array cloneWithSize: (self count).
+        chunk := self firstChunk.
+        chunkValues := chunk values.
+        chunkIndex := 0.
+        outIndex := 0.
+        [ outIndex < (self count) ] whileTrue: [
+            chunkSize := chunkValues size.
+            chunkIndex == chunkSize ifTrue: [
+                chunk := chunk next.
+                chunkValues := chunk values.
+                chunkIndex := 0
+            ] IfFalse: [
+                self
+            ].
+            out at: outIndex Put: (chunkValues at: chunkIndex).
+            outIndex := outIndex + 1.
+            chunkIndex := chunkIndex + 1
+        ].
+        out
+    }.
+
+    debugPrint = {
+        ("Collector(count=" + (self count toString) + ", currentIndex=" + (self currentIndex toString) + ", nextChunkSize=" + (self nextChunkSize toString) + ")") println.
+        ("Collector(firstChunkSize=" + ((self firstChunk values size) toString) + ", currentChunkSize=" + ((self currentChunk values size) toString) + ")") println.
+        self
+    }.
+}.
+
+Object extend: Collector With: {
+    & rhs = { self add: rhs }.
 }.
 
 Object extend: ByteArray With: {
@@ -482,8 +603,8 @@ Object extend: ByteArray With: {
         self memCopy: src From: srcOffset To: 0 Length: len
     }.
     address = { 0 }.
-    isNull = { False }.
-    free = { self }.
+    isNull = { ^ False }.
+    free = { ^ self }.
     toString = { self _ByteArrayToString }.
     u8At: i = { self _ByteArrayU8At: i }.
     i8At: i = { self _ByteArrayI8At: i }.
@@ -645,40 +766,26 @@ CStatPairExample := {
     second = CInt32.
 }.
 
-
-openTypes := Array cloneWithSize: 3.
-openTypes at: 0 Put: CPointer.
-openTypes at: 1 Put: CInt32.
-openTypes at: 2 Put: CInt32.
-
-openArgs := Array cloneWithSize: 3.
-openArgs at: 0 Put: "core/init.ktt".
-openArgs at: 1 Put: 0.
-openArgs at: 2 Put: 0.
-
-lseekTypes := Array cloneWithSize: 3.
-lseekTypes at: 0 Put: CInt32.
-lseekTypes at: 1 Put: CInt64.
-lseekTypes at: 2 Put: CInt32.
-
-closeTypes := Array cloneWithSize: 1.
-closeTypes at: 0 Put: CInt32.
-
 libc := Alien libraryOpen: "libc.so.6".
 openFn := libc librarySym: "open".
 lseekFn := libc librarySym: "lseek".
 closeFn := libc librarySym: "close".
 
-fd := openFn callWithTypes: openTypes Args: openArgs ReturnType: CInt32.
-seekArgs := Array cloneWithSize: 3.
-seekArgs at: 0 Put: fd.
-seekArgs at: 1 Put: 0.
-seekArgs at: 2 Put: 2.
-fileSize := lseekFn callWithTypes: lseekTypes Args: seekArgs ReturnType: CInt64.
+fd := openFn 
+    callWithTypes: (CPointer & CInt32 & CInt32) asArray 
+    Args: ("core/init.ktt" & 0 & 0) asArray 
+    ReturnType: CInt32.
 
-closeArgs := Array cloneWithSize: 1.
-closeArgs at: 0 Put: fd.
-closeFn callWithTypes: closeTypes Args: closeArgs ReturnType: CInt32.
+fileSize := lseekFn 
+    callWithTypes: (CInt32 & CInt32 & CInt64) asArray 
+    Args: (fd & 0 & 2) asArray 
+    ReturnType: CInt64.
+
+closeFn 
+    callWithTypes: CInt32 asArray 
+    Args: fd asArray 
+    ReturnType: CInt32.
+
 libc libraryClose.
 
 ("ffi stat demo: core/init.ktt bytes = " + fileSize toString) println.

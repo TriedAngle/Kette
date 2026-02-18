@@ -473,6 +473,75 @@ mod tests {
     }
 
     #[test]
+    fn shorthand_with_assignment_stays_pure_data_object() {
+        let e = parse_one("{ x. y := 1 }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 2);
+                assert!(body.is_empty());
+                assert!(slots[0].shorthand);
+                assert!(matches!(
+                    slots[0].selector,
+                    SlotSelector::Unary(ref s) if s == "x"
+                ));
+                assert!(!slots[1].shorthand);
+                assert!(matches!(
+                    slots[1].selector,
+                    SlotSelector::Unary(ref s) if s == "y"
+                ));
+                assert!(slots[1].mutable);
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn shorthand_not_allowed_in_method_object() {
+        let results = parse("{ x. y print }");
+        assert!(results.iter().any(|r| {
+            r.as_ref().is_err_and(|e| {
+                e.message.contains(
+                    "shorthand slots are only allowed in pure data objects",
+                )
+            })
+        }));
+    }
+
+    #[test]
+    fn trailing_ident_after_expression_is_body_not_shorthand() {
+        let e = parse_one("{ out := 1. out print. out }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert_eq!(body.len(), 2);
+                assert!(
+                    matches!(body[1].kind, ExprKind::Ident(ref s) if s == "out")
+                );
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn assignments_after_method_expression_stay_in_body() {
+        let e = parse_one("{ x := 1. x print. x := 2 }");
+        match &e.kind {
+            ExprKind::Object { slots, body } => {
+                assert_eq!(slots.len(), 1);
+                assert_eq!(body.len(), 2);
+                assert!(matches!(
+                    body[1].kind,
+                    ExprKind::Assignment {
+                        kind: AssignKind::Assign,
+                        ..
+                    }
+                ));
+            }
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
     fn object_slot_value_expression() {
         let e = parse_one("{ x = 7 + 7 }");
         match &e.kind {

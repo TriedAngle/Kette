@@ -1360,7 +1360,32 @@ impl Compiler {
         let first_value_reg = if value_regs.is_empty() {
             0
         } else {
-            value_regs[0]
+            let mut contiguous = true;
+            for w in value_regs.windows(2) {
+                if w[1] != w[0] + 1 {
+                    contiguous = false;
+                    break;
+                }
+            }
+
+            if contiguous {
+                value_regs[0]
+            } else {
+                let mut dst_regs = Vec::with_capacity(value_regs.len());
+                for _ in 0..value_regs.len() {
+                    dst_regs.push(self.scope_mut().alloc_temp());
+                }
+
+                for (&src, &dst) in value_regs.iter().zip(dst_regs.iter()) {
+                    if src == dst {
+                        continue;
+                    }
+                    self.builder().load_local(src);
+                    self.builder().store_local(dst);
+                }
+
+                dst_regs[0]
+            }
         };
         self.builder().create_object(map_idx, first_value_reg);
 
@@ -1623,9 +1648,7 @@ impl Compiler {
             ExprKind::Integer(_) | ExprKind::Float(_) | ExprKind::String(_) => {
                 false
             }
-            ExprKind::Ident(name) => {
-                self.resolve_lexical_for_load(name, false).is_some()
-            }
+            ExprKind::Ident(_) => true,
             ExprKind::Object { slots, body } => {
                 if !body.is_empty() {
                     return true;
@@ -2496,6 +2519,74 @@ mod tests {
         assert!(matches!(instrs[2], Instruction::Send { argc: 0, .. }));
     }
 
+    #[test]
+    fn minimal_repro_trailing_ident_no_longer_clobbers_captured_temp() {
+        let code = compile_source(
+            "Obj = { m = { out := 1. i := 0. [ i < 1 ] whileTrue: [ out := out + 1. i := i + 1 ]. out } }.",
+        );
+        let method_code = find_slot_code_const(&code.constants, "m");
+        let instrs = decode(method_code);
+
+        // `out := 1` initializes one captured temp index.
+        let out_idx = instrs
+            .iter()
+            .enumerate()
+            .find_map(|(i, instr)| match instr {
+                Instruction::StoreTemp { array_idx: 0, idx }
+                    if i > 0
+                        && matches!(
+                            instrs[i - 1],
+                            Instruction::LoadSmi { value: 1 }
+                        ) =>
+                {
+                    Some(*idx)
+                }
+                _ => None,
+            })
+            .expect("expected out init store temp");
+
+        // Regression guard: trailing `out` must be parsed as body expression,
+        // so no `None` store should clobber the captured temp.
+        let has_none_clobber = instrs.windows(2).any(|w| {
+            matches!(
+                w,
+                [
+                    Instruction::LoadAssoc { .. },
+                    Instruction::StoreTemp {
+                        array_idx: 0,
+                        idx
+                    }
+                ] if *idx == out_idx
+            )
+        });
+
+        assert!(
+            !has_none_clobber,
+            "unexpected LoadAssoc(None) + StoreTemp clobber on captured out"
+        );
+    }
+
+    #[test]
+    fn block_form_with_same_loop_shape_has_no_none_clobber() {
+        let code = compile_source(
+            "[ out := 1. i := 0. [ i < 1 ] whileTrue: [ out := out + 1. i := i + 1 ]. out ]",
+        );
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
+
+        let has_none_store_to_temp = instrs.windows(2).any(|w| {
+            matches!(
+                w,
+                [Instruction::LoadAssoc { .. }, Instruction::StoreTemp { .. }]
+            )
+        });
+
+        assert!(
+            !has_none_store_to_temp,
+            "standalone block should not inject None into captured temps"
+        );
+    }
+
     // ── Helper ──────────────────────────────────────────────────
 
     fn find_code_const(constants: &[ConstEntry]) -> &CodeDesc {
@@ -2543,5 +2634,25 @@ mod tests {
             }
         }
         panic!("no Code constant found with arg_count {arg_count}");
+    }
+
+    fn find_slot_code_const<'a>(
+        constants: &'a [ConstEntry],
+        slot_name: &str,
+    ) -> &'a CodeDesc {
+        for c in constants {
+            if let ConstEntry::Map(map) = c {
+                for slot in &map.slots {
+                    if slot.name == slot_name {
+                        if let SlotValue::Constant(ConstEntry::Code(code)) =
+                            &slot.value
+                        {
+                            return code;
+                        }
+                    }
+                }
+            }
+        }
+        panic!("no code constant found for slot {slot_name}");
     }
 }

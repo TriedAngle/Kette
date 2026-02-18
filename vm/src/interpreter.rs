@@ -7,7 +7,7 @@ use bytecode::{source_map_lookup, Instruction, Op};
 use heap::{HeapProxy, RootProvider};
 use object::{
     init_array, slot_object_allocation_size, Array, Block, Code, Header, Map,
-    ObjectType, Slot, SlotObject, VMString, Value,
+    ObjectType, Slot, SlotFlags, SlotObject, VMString, Value,
 };
 
 use crate::VM;
@@ -1667,20 +1667,32 @@ pub(crate) fn primitive_extend_with(
             message: "extend: source has code",
         });
     }
-    if source_map.value_count() != 0 {
-        return Err(RuntimeError::Unimplemented {
-            message: "extend: assignable slot",
-        });
-    }
-
     let mut new_slots: Vec<Slot> = Vec::new();
     for slot in unsafe { source_map.slots() } {
-        if !slot.is_constant() {
+        if slot.is_assignment() {
             return Err(RuntimeError::Unimplemented {
                 message: "extend: assignable slot",
             });
         }
-        new_slots.push(*slot);
+        if slot.is_constant() {
+            new_slots.push(*slot);
+            continue;
+        }
+
+        if !slot.is_assignable() {
+            return Err(RuntimeError::Unimplemented {
+                message: "extend: unsupported slot kind",
+            });
+        }
+
+        let offset = unsafe { slot.value.to_i64() } as u32;
+        let value = unsafe { source_obj.read_value(offset) };
+        let flags = slot
+            .flags()
+            .without(SlotFlags::ASSIGNABLE)
+            .without(SlotFlags::ASSIGNMENT)
+            .with(SlotFlags::CONSTANT);
+        new_slots.push(Slot::new(flags, slot.name, value));
     }
 
     let mut scratch = vec![target, source, source_map_val];
@@ -2287,6 +2299,16 @@ mod tests {
         let value = run_source(src).expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn array_extend_runtime_parent_slot_is_resolved_at_runtime() {
+        let value = run_source(
+            "Seq = { ping = { 7 } }. Object _Extend: Array With: { parent* = Seq }. a := Array _ArrayCloneWithSize: 0. a ping",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 7);
     }
 
     #[test]
