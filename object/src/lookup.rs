@@ -321,6 +321,7 @@ mod tests {
             fixnum_traits: none,
             code_traits: none,
             float_traits: none,
+            mirror: none,
         }
     }
 

@@ -8,6 +8,7 @@ pub mod special;
 use std::collections::HashMap;
 
 use heap::{HeapProxy, RootProvider, SizeFn};
+use libffi::middle::Cif;
 use object::{
     Array, BigNum, Block, ByteArray, Code, Float, Header, HeaderFlags, Map,
     ObjectType, Ratio, SlotObject, SpecialObjects, VMString, Value,
@@ -23,6 +24,8 @@ pub struct VM {
     pub primitives: Vec<primitives::PrimitiveDesc>,
     /// Shared map for all assoc objects (0 named slots, value_count=1).
     pub assoc_map: Value,
+    /// Cached libffi call interfaces keyed by function signature.
+    pub ffi_cif_cache: HashMap<primitives::alien::CifCacheKey, Cif>,
     /// The global dictionary object (SlotObject whose map has one CONSTANT
     /// slot per global).
     pub dictionary: Value,
@@ -51,6 +54,7 @@ impl RootProvider for VM {
         visitor(&mut self.special.fixnum_traits);
         visitor(&mut self.special.code_traits);
         visitor(&mut self.special.float_traits);
+        visitor(&mut self.special.mirror);
         visitor(&mut self.assoc_map);
         visitor(&mut self.dictionary);
         for v in self.intern_table.values_mut() {

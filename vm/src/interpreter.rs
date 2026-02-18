@@ -1931,6 +1931,7 @@ fn read_reg(bytes: &[u8], pos: &mut usize, wide: bool) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::compiler0::Compiler;
     use crate::materialize::materialize;
     use crate::special::bootstrap;
@@ -2663,6 +2664,105 @@ mod tests {
     }
 
     #[test]
+    fn object_has_reflect_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let object_value =
+            lookup_dictionary_value(&vm, "Object").expect("Object missing");
+        let object_obj: &SlotObject = unsafe { object_value.as_ref() };
+        let map: &Map = unsafe { object_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_Reflect:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "object_reflect");
+            assert_eq!(prim.arity, 1);
+        }
+        assert!(found, "_Reflect: slot not found");
+    }
+
+    #[test]
+    fn object_has_become_with_primitive_slot() {
+        let vm = bootstrap(test_settings());
+        let object_value =
+            lookup_dictionary_value(&vm, "Object").expect("Object missing");
+        let object_obj: &SlotObject = unsafe { object_value.as_ref() };
+        let map: &Map = unsafe { object_obj.map.as_ref() };
+        let mut found = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } != "_Become:With:" {
+                continue;
+            }
+            found = true;
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, "object_become_with");
+            assert_eq!(prim.arity, 2);
+        }
+        assert!(found, "_Become:With: slot not found");
+    }
+
+    #[test]
+    fn object_has_ctype_primitives() {
+        let vm = bootstrap(test_settings());
+        let object_value =
+            lookup_dictionary_value(&vm, "Object").expect("Object missing");
+        let object_obj: &SlotObject = unsafe { object_value.as_ref() };
+        let map: &Map = unsafe { object_obj.map.as_ref() };
+        let mut saw_build = false;
+        let mut saw_info = false;
+        let mut saw_tag = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            match unsafe { name.as_str() } {
+                "_CTypeBuildStruct:" => saw_build = true,
+                "_CTypeFieldInfoAt:" => saw_info = true,
+                "_CTypeScalarTag" => saw_tag = true,
+                _ => {}
+            }
+        }
+        assert!(saw_build, "_CTypeBuildStruct: slot not found");
+        assert!(saw_info, "_CTypeFieldInfoAt: slot not found");
+        assert!(saw_tag, "_CTypeScalarTag slot not found");
+    }
+
+    #[test]
+    fn mirror_global_has_primitive_slots() {
+        let vm = bootstrap(test_settings());
+        let mirror_value =
+            lookup_dictionary_value(&vm, "Mirror").expect("Mirror missing");
+        let mirror_obj: &SlotObject = unsafe { mirror_value.as_ref() };
+        let map: &Map = unsafe { mirror_obj.map.as_ref() };
+
+        let mut saw_slot_count = false;
+        let mut saw_at = false;
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            match unsafe { name.as_str() } {
+                "_MirrorSlotCount" => saw_slot_count = true,
+                "_MirrorAt:" => saw_at = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_slot_count, "_MirrorSlotCount slot not found");
+        assert!(saw_at, "_MirrorAt: slot not found");
+    }
+
+    #[test]
     fn dictionary_fixnum_matches_traits() {
         let vm = bootstrap(test_settings());
         let fixnum_value =
@@ -2722,6 +2822,111 @@ mod tests {
     fn object_pin_rejects_fixnum() {
         let err = run_source("Object _Pin: 1").expect_err("expected error");
         assert!(matches!(err.error, RuntimeError::TypeError { .. }));
+    }
+
+    #[test]
+    fn mirror_slot_count_and_name_at() {
+        let value = run_source(
+            "o = { x = 1. y := 2 }. m := Object _Reflect: o. n0 := m _MirrorSlotNameAt: 0. n1 := m _MirrorSlotNameAt: 1. (n0 _StringLength) _FixnumAdd: (n1 _StringLength)",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 2);
+    }
+
+    #[test]
+    fn mirror_at_put_updates_assignable_slot() {
+        let value = run_source(
+            "o = { x := 1 }. m := Object _Reflect: o. m _MirrorAt: \"x\" Put: 41. m _MirrorAt: \"x\"",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 41);
+    }
+
+    #[test]
+    fn mirror_add_and_remove_constant_slot() {
+        let value = run_source(
+            "o = { }. m := Object _Reflect: o. m _MirrorAddSlot: \"x\" Value: 7. v := m _MirrorAt: \"x\". m _MirrorRemoveSlot: \"x\". v",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 7);
+    }
+
+    #[test]
+    fn become_with_swaps_references() {
+        let value = run_source(
+            "a = { tag = \"A\" }. b = { tag = \"B\" }. o = { ref := None }. o ref: a. Object _Become: a With: b. (o ref) tag",
+        )
+        .expect("interpret error");
+        let s: &VMString = unsafe { value.as_ref() };
+        assert_eq!(unsafe { s.as_str() }, "B");
+    }
+
+    #[test]
+    fn ctype_build_struct_computes_c_layout_and_offsets() {
+        let (vm, info) = run_source_with_vm(
+            "CType := { parent* = Object. scalarTag: tag Size: s Align: a = { { parent* = self. impl = tag. size = s. align = a } } }. CUInt8 := CType scalarTag: 3 Size: 1 Align: 1. CUInt32 := CType scalarTag: 7 Size: 4 Align: 4. CTiny := CType _CTypeBuildStruct: { a = CUInt8. b = CUInt32. c = CUInt8 }. CTiny _CTypeFieldInfoAt: \"b\"",
+        )
+        .expect("interpret error");
+
+        let info_obj: &SlotObject = unsafe { info.as_ref() };
+        let info_map: &Map = unsafe { info_obj.map.as_ref() };
+        let mut offset = None;
+        for slot in unsafe { info_map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            if unsafe { name.as_str() } == "offset" {
+                offset = Some(slot.value);
+            }
+        }
+        assert_eq!(unsafe { offset.expect("offset slot").to_i64() }, 4);
+
+        let c_tiny =
+            lookup_dictionary_value(&vm, "CTiny").expect("CTiny missing");
+        let c_tiny_obj: &SlotObject = unsafe { c_tiny.as_ref() };
+        let c_tiny_map: &Map = unsafe { c_tiny_obj.map.as_ref() };
+        let mut size = None;
+        let mut align = None;
+        for slot in unsafe { c_tiny_map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            match unsafe { name.as_str() } {
+                "size" => size = Some(slot.value),
+                "align" => align = Some(slot.value),
+                _ => {}
+            }
+        }
+        assert_eq!(unsafe { size.expect("size slot").to_i64() }, 12);
+        assert_eq!(unsafe { align.expect("align slot").to_i64() }, 4);
+    }
+
+    #[test]
+    fn ctype_build_struct_rejects_non_ctype_field() {
+        let err = run_source(
+            "CType := { parent* = Object. scalarTag: tag Size: s Align: a = { { parent* = self. impl = tag. size = s. align = a } } }. CType _CTypeBuildStruct: { nope = { x = 1 } }",
+        )
+        .expect_err("expected error");
+        assert!(matches!(err.error, RuntimeError::Unimplemented { .. }));
+    }
+
+    #[test]
+    fn ctype_field_info_returns_member_descriptor() {
+        let value = run_source(
+            "CType := { parent* = Object. scalarTag: tag Size: s Align: a = { { parent* = self. impl = tag. size = s. align = a } } }. CUInt8 := CType scalarTag: 3 Size: 1 Align: 1. CUInt32 := CType scalarTag: 7 Size: 4 Align: 4. CTiny := CType _CTypeBuildStruct: { a = CUInt8. b = CUInt32. c = CUInt8 }. infoA := CTiny _CTypeFieldInfoAt: \"a\". infoB := CTiny _CTypeFieldInfoAt: \"b\". ((infoA type) _CTypeScalarTag) _FixnumAdd: ((infoB type) _CTypeScalarTag)",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 10);
+    }
+
+    #[test]
+    fn proxy_generic_field_access_uses_ctype_layout() {
+        let value = run_source(
+            "Object _Extend: True With: { ifTrue: t IfFalse: f = { t call } }. Object _Extend: False With: { ifTrue: t IfFalse: f = { f call } }. CType := { parent* = Object. scalarTag: tag Size: s Align: a = { { parent* = self. impl = tag. size = s. align = a } }. struct: d = { self _CTypeBuildStruct: d } }. CUInt8 := CType scalarTag: 3 Size: 1 Align: 1. CUInt32 := CType scalarTag: 7 Size: 4 Align: 4. CTiny := CType struct: { a = CUInt8. b = CUInt32. c = CUInt8 }. Proxy := { parent* = Object. fromCType: t = { { parent* = Proxy. ctype = t. backing = ByteArray _CloneWithSize: (t size) } }. u8At: i = { (self backing) _ByteArrayU8At: i }. u32At: i = { (self backing) _ByteArrayU32At: i }. u8At: i Put: v = { (self backing) _ByteArrayU8At: i Put: v }. u32At: i Put: v = { (self backing) _ByteArrayU32At: i Put: v }. readCType: t At: offset = { ((t _CTypeScalarTag) _FixnumEq: 3) ifTrue: [ self u8At: offset ] IfFalse: [ self u32At: offset ] }. writeCType: t At: offset Value: value = { ((t _CTypeScalarTag) _FixnumEq: 3) ifTrue: [ self u8At: offset Put: value ] IfFalse: [ self u32At: offset Put: value ] }. atField: name = { info := (self ctype) _CTypeFieldInfoAt: name. self readCType: (info type) At: (info offset) }. atField: name Put: value = { info := (self ctype) _CTypeFieldInfoAt: name. self writeCType: (info type) At: (info offset) Value: value. value } }. p := Proxy fromCType: CTiny. p atField: \"a\" Put: 7. p atField: \"b\" Put: 1234. p atField: \"c\" Put: 9. ((p atField: \"a\") _FixnumAdd: (p atField: \"b\")) _FixnumAdd: (p atField: \"c\")",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1250);
     }
 
     #[test]

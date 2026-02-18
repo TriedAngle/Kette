@@ -1,14 +1,16 @@
 use std::ffi::CString;
-use std::mem::size_of;
+use std::mem::{align_of, size_of};
 
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 use libffi::raw;
 use object::{
-    Alien, BigNum, ByteArray, ObjectType, SlotObject, VMString, Value,
+    Alien, BigNum, ByteArray, MapFlags, ObjectType, Slot, SlotFlags,
+    SlotObject, VMString, Value,
 };
 
 use crate::alloc::{
     alloc_alien, alloc_bignum_from_i128, alloc_byte_array, alloc_float,
+    alloc_map, alloc_slot_object,
 };
 use crate::interpreter::{with_roots, InterpreterState, RuntimeError};
 use crate::primitives::{
@@ -17,7 +19,6 @@ use crate::primitives::{
 };
 use crate::VM;
 
-// ── Raw C functions ──────────────────────────────────────────────────
 
 extern "C" {
     fn malloc(size: usize) -> *mut u8;
@@ -31,8 +32,6 @@ extern "C" {
     fn dlsym(handle: *mut u8, symbol: *const i8) -> *mut u8;
     fn dlclose(handle: *mut u8) -> i32;
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────
 
 fn alien_ptr(receiver: Value) -> Result<(*mut Alien, u64), RuntimeError> {
     let ptr = expect_alien(receiver)? as *mut Alien;
@@ -256,8 +255,6 @@ pub fn alien_from_address(
     Ok(alien)
 }
 
-// ── Lifecycle ────────────────────────────────────────────────────────
-
 pub fn alien_free(
     _vm: &mut VM,
     _state: &mut InterpreterState,
@@ -272,8 +269,6 @@ pub fn alien_free(
     }
     Ok(receiver)
 }
-
-// ── Accessors ────────────────────────────────────────────────────────
 
 pub fn alien_size(
     _vm: &mut VM,
@@ -310,7 +305,6 @@ pub fn alien_is_null(
     })
 }
 
-// ── Typed reads ──────────────────────────────────────────────────────
 
 macro_rules! alien_read_int {
     ($name:ident, $ty:ty) => {
@@ -641,6 +635,25 @@ impl CTypeKind {
             }
         }
     }
+
+    fn scalar_tag(self) -> Option<i64> {
+        match self {
+            Self::Void => Some(CTYPE_TAG_VOID),
+            Self::I8 => Some(CTYPE_TAG_I8),
+            Self::U8 => Some(CTYPE_TAG_U8),
+            Self::I16 => Some(CTYPE_TAG_I16),
+            Self::U16 => Some(CTYPE_TAG_U16),
+            Self::I32 => Some(CTYPE_TAG_I32),
+            Self::U32 => Some(CTYPE_TAG_U32),
+            Self::I64 => Some(CTYPE_TAG_I64),
+            Self::U64 => Some(CTYPE_TAG_U64),
+            Self::F32 => Some(CTYPE_TAG_F32),
+            Self::F64 => Some(CTYPE_TAG_F64),
+            Self::Pointer => Some(CTYPE_TAG_POINTER),
+            Self::Size => Some(CTYPE_TAG_SIZE),
+            Self::Struct => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -648,12 +661,35 @@ struct CTypeDescriptor {
     kind: CTypeKind,
     ffi_type: Type,
     size: usize,
+    #[allow(dead_code)]
+    align: usize,
+    fields: Vec<CTypeField>,
+}
+
+#[derive(Clone, Copy)]
+struct CTypeField {
+    name: Value,
+    offset: usize,
+    descriptor: Value,
 }
 
 struct CTypeCache {
+    magic: u64,
     kind: CTypeKind,
     ffi_type: Type,
     size: usize,
+    #[allow(dead_code)]
+    align: usize,
+    fields: Vec<CTypeField>,
+}
+
+const CTYPE_CACHE_MAGIC: u64 = 0x4354_5950_455f_4348;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CifCacheKey {
+    fn_ptr: u64,
+    param_types: Vec<u64>,
+    return_type: u64,
 }
 
 enum FfiArgValue {
@@ -707,6 +743,144 @@ fn slot_current_value(
     Err(RuntimeError::Unimplemented {
         message: "unsupported ctype slot kind",
     })
+}
+
+fn compute_struct_layout(
+    field_types: &[Type],
+) -> Result<(Type, usize, usize, Vec<usize>), RuntimeError> {
+    let ffi_type = Type::structure(field_types.iter().cloned());
+    let raw_type = ffi_type.as_raw_ptr();
+    let mut offsets = vec![0usize; field_types.len()];
+    let status = unsafe {
+        raw::ffi_get_struct_offsets(
+            raw::ffi_abi_FFI_DEFAULT_ABI,
+            raw_type,
+            offsets.as_mut_ptr(),
+        )
+    };
+    if status != raw::ffi_status_FFI_OK {
+        return Err(RuntimeError::Unimplemented {
+            message: "failed to compute ctype struct layout",
+        });
+    }
+    let size = unsafe { (*raw_type).size };
+    let align = unsafe { (*raw_type).alignment } as usize;
+    Ok((ffi_type, size, align, offsets))
+}
+
+fn bytearray_cache_ptr(value: Value) -> Option<*const CTypeCache> {
+    if !value.is_ref() {
+        return None;
+    }
+    let header: &object::Header = unsafe { value.as_ref() };
+    if header.object_type() != ObjectType::ByteArray {
+        return None;
+    }
+    let ba = value.ref_bits() as *const ByteArray;
+    let len = unsafe { (*ba).len() as usize };
+    if len != size_of::<CTypeCache>() {
+        return None;
+    }
+    let data = unsafe { (ba as *const u8).add(size_of::<ByteArray>()) };
+    if (data as usize) % align_of::<CTypeCache>() != 0 {
+        return None;
+    }
+    Some(data as *const CTypeCache)
+}
+
+fn decode_cached_impl(impl_value: Value) -> Option<CTypeDescriptor> {
+    if let Some(cache_ptr) = bytearray_cache_ptr(impl_value) {
+        let cached = unsafe { &*cache_ptr };
+        if cached.magic == CTYPE_CACHE_MAGIC {
+            return Some(CTypeDescriptor {
+                kind: cached.kind,
+                ffi_type: cached.ffi_type.clone(),
+                size: cached.size,
+                align: cached.align,
+                fields: cached.fields.clone(),
+            });
+        }
+    }
+
+    if impl_value.is_ref() {
+        let impl_header: &object::Header = unsafe { impl_value.as_ref() };
+        if impl_header.object_type() == object::ObjectType::Alien {
+            let cached_alien = impl_value.ref_bits() as *const Alien;
+            let cache_size = unsafe { (*cached_alien).size } as usize;
+            if cache_size == size_of::<CTypeCache>() {
+                let cache_ptr =
+                    unsafe { (*cached_alien).ptr as *const CTypeCache };
+                if !cache_ptr.is_null() {
+                    let cached = unsafe { &*cache_ptr };
+                    return Some(CTypeDescriptor {
+                        kind: cached.kind,
+                        ffi_type: cached.ffi_type.clone(),
+                        size: cached.size,
+                        align: cached.align,
+                        fields: cached.fields.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn alloc_ctype_cache_value(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    scratch: &mut Vec<Value>,
+    cache: CTypeCache,
+) -> Result<Value, RuntimeError> {
+    let zero = vec![0u8; size_of::<CTypeCache>()];
+    let cache_ba = with_roots(vm, state, scratch, |proxy, roots| unsafe {
+        alloc_byte_array(proxy, roots, &zero).value()
+    });
+    let ba_ptr = expect_bytearray(cache_ba)? as *mut ByteArray;
+    let data = unsafe { (ba_ptr as *mut u8).add(size_of::<ByteArray>()) };
+    if (data as usize) % align_of::<CTypeCache>() != 0 {
+        return Err(RuntimeError::Unimplemented {
+            message: "bytearray cache alignment too small for CTypeCache",
+        });
+    }
+    unsafe { (data as *mut CTypeCache).write(cache) };
+    Ok(cache_ba)
+}
+
+fn has_ctype_parent(
+    descriptor: Value,
+    ctype_root: Value,
+    seen: &mut Vec<u64>,
+) -> Result<bool, RuntimeError> {
+    if !descriptor.is_ref() {
+        return Ok(false);
+    }
+    if seen.contains(&descriptor.raw()) {
+        return Ok(false);
+    }
+    seen.push(descriptor.raw());
+
+    let header: &object::Header = unsafe { descriptor.as_ref() };
+    if header.object_type() != ObjectType::Slots {
+        return Ok(false);
+    }
+
+    let obj = descriptor.ref_bits() as *mut SlotObject;
+    let map: &object::Map = unsafe { (*obj).map.as_ref() };
+    for slot in unsafe { map.slots() } {
+        if !slot.is_parent() || slot.is_assignment() {
+            continue;
+        }
+        let parent = slot_current_value(obj, slot)?;
+        if parent.raw() == ctype_root.raw() {
+            return Ok(true);
+        }
+        if has_ctype_parent(parent, ctype_root, seen)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn decode_ctype_descriptor(
@@ -777,25 +951,9 @@ fn decode_ctype_descriptor(
     let impl_slot = logical_slots[0];
     let impl_value = slot_current_value(obj, &impl_slot)?;
 
-    if impl_value.is_ref() {
-        let impl_header: &object::Header = unsafe { impl_value.as_ref() };
-        if impl_header.object_type() == object::ObjectType::Alien {
-            let cached_alien = impl_value.ref_bits() as *const Alien;
-            let cache_size = unsafe { (*cached_alien).size } as usize;
-            if cache_size == size_of::<CTypeCache>() {
-                let cache_ptr =
-                    unsafe { (*cached_alien).ptr as *const CTypeCache };
-                if !cache_ptr.is_null() {
-                    let cached = unsafe { &*cache_ptr };
-                    stack.pop();
-                    return Ok(CTypeDescriptor {
-                        kind: cached.kind,
-                        ffi_type: cached.ffi_type.clone(),
-                        size: cached.size,
-                    });
-                }
-            }
-        }
+    if let Some(cached_desc) = decode_cached_impl(impl_value) {
+        stack.pop();
+        return Ok(cached_desc);
     }
 
     let size_value = slot_current_value(obj, &logical_slots[1])?;
@@ -812,17 +970,26 @@ fn decode_ctype_descriptor(
             message: "ctype align slot is not fixnum",
         });
     }
-    let size = expect_fixnum(size_value)?;
-    let align = expect_fixnum(align_value)?;
-    if size < 0 || align <= 0 {
+    let slot_size = expect_fixnum(size_value)?;
+    let slot_align = expect_fixnum(align_value)?;
+    if slot_size < 0 || slot_align <= 0 {
         stack.pop();
         return Err(RuntimeError::Unimplemented {
             message: "ctype descriptor size/align must be non-negative",
         });
     }
 
-    let field_slots = &logical_slots[3..];
-    let (kind, ffi_type) = if impl_value.is_fixnum() {
+    let field_slots: Vec<object::Slot> = logical_slots[3..]
+        .iter()
+        .copied()
+        .filter(|slot| {
+            !value_is_method_object(slot.value)
+                && slot_name(slot)
+                    .map(|name| !name.ends_with(':'))
+                    .unwrap_or(true)
+        })
+        .collect();
+    let (kind, ffi_type, size, align, fields) = if impl_value.is_fixnum() {
         if !field_slots.is_empty() {
             stack.pop();
             return Err(RuntimeError::Unimplemented {
@@ -834,10 +1001,17 @@ fn decode_ctype_descriptor(
             CTypeKind::from_tag(tag).ok_or(RuntimeError::Unimplemented {
                 message: "unknown scalar ctype tag",
             })?;
-        (kind, kind.ffi_type())
+        (
+            kind,
+            kind.ffi_type(),
+            slot_size as usize,
+            slot_align as usize,
+            Vec::new(),
+        )
     } else if impl_value.raw() == vm.special.none.raw() {
         let mut field_types = Vec::with_capacity(field_slots.len());
-        for field_slot in field_slots {
+        let mut field_desc_values = Vec::with_capacity(field_slots.len());
+        for field_slot in &field_slots {
             let field_desc_value = slot_current_value(obj, field_slot)?;
             let field_desc = decode_ctype_descriptor(
                 vm,
@@ -847,8 +1021,19 @@ fn decode_ctype_descriptor(
                 stack,
             )?;
             field_types.push(field_desc.ffi_type);
+            field_desc_values.push(field_desc_value);
         }
-        (CTypeKind::Struct, Type::structure(field_types.into_iter()))
+        let (ffi_type, size, align, offsets) =
+            compute_struct_layout(&field_types)?;
+        let mut fields = Vec::with_capacity(field_slots.len());
+        for (i, field_slot) in field_slots.iter().enumerate() {
+            fields.push(CTypeField {
+                name: field_slot.name,
+                offset: offsets[i],
+                descriptor: field_desc_values[i],
+            });
+        }
+        (CTypeKind::Struct, ffi_type, size, align, fields)
     } else {
         stack.pop();
         return Err(RuntimeError::Unimplemented {
@@ -857,39 +1042,304 @@ fn decode_ctype_descriptor(
         });
     };
 
-    if !impl_slot.is_assignable() {
-        stack.pop();
-        return Err(RuntimeError::Unimplemented {
-            message: "ctype descriptor impl slot must be assignable",
-        });
-    }
-
-    let cache = Box::new(CTypeCache {
+    let cache = CTypeCache {
+        magic: CTYPE_CACHE_MAGIC,
         kind,
         ffi_type: ffi_type.clone(),
-        size: size as usize,
-    });
-    let cache_ptr = Box::into_raw(cache) as u64;
-    let cache_alien = with_roots(vm, state, scratch, |proxy, roots| unsafe {
-        alloc_alien(proxy, roots, cache_ptr, size_of::<CTypeCache>() as u64)
-            .value()
-    });
+        size,
+        align,
+        fields: fields.clone(),
+    };
+    let cache_value = alloc_ctype_cache_value(vm, state, scratch, cache)?;
 
-    if !impl_slot.value.is_fixnum() {
-        stack.pop();
-        return Err(RuntimeError::Unimplemented {
-            message: "ctype impl slot metadata offset is not fixnum",
-        });
+    if impl_slot.is_assignable() {
+        if !impl_slot.value.is_fixnum() {
+            stack.pop();
+            return Err(RuntimeError::Unimplemented {
+                message: "ctype impl slot metadata offset is not fixnum",
+            });
+        }
+        let impl_offset = expect_fixnum(impl_slot.value)?;
+        unsafe { (*obj).write_value(impl_offset as u32, cache_value) };
+        vm.heap_proxy.write_barrier(descriptor, cache_value);
     }
-    let impl_offset = expect_fixnum(impl_slot.value)?;
-    unsafe { (*obj).write_value(impl_offset as u32, cache_alien) };
 
     stack.pop();
     Ok(CTypeDescriptor {
         kind,
         ffi_type,
-        size: size as usize,
+        size,
+        align,
+        fields,
     })
+}
+
+pub fn ctype_build_struct(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let definition = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "ctype struct field definition",
+        got: Value::from_i64(0),
+    })?;
+    let def_obj = expect_slot_object_ptr(definition)?;
+    let def_map: &object::Map = unsafe { (*def_obj).map.as_ref() };
+
+    let mut field_names = Vec::new();
+    let mut field_values = Vec::new();
+    let mut field_types = Vec::new();
+    let mut decode_stack = Vec::new();
+    let mut seen = Vec::new();
+    let mut scratch = vec![receiver, definition];
+
+    for slot in unsafe { def_map.slots() } {
+        if slot.is_parent() || slot.is_assignment() {
+            continue;
+        }
+        let name = slot_name(slot)?;
+        if name == "impl" || name == "size" || name == "align" {
+            continue;
+        }
+
+        let field_desc = slot_current_value(def_obj, slot)?;
+        if !has_ctype_parent(field_desc, receiver, &mut seen)? {
+            return Err(RuntimeError::Unimplemented {
+                message: "ctype struct field must have CType as a parent",
+            });
+        }
+        seen.clear();
+
+        let decoded = decode_ctype_descriptor(
+            vm,
+            state,
+            field_desc,
+            &mut scratch,
+            &mut decode_stack,
+        )?;
+        field_names.push(slot.name);
+        field_values.push(field_desc);
+        field_types.push(decoded.ffi_type);
+    }
+
+    let (struct_ffi_type, size, align, offsets) =
+        compute_struct_layout(&field_types)?;
+    let fields: Vec<CTypeField> = field_names
+        .iter()
+        .zip(field_values.iter())
+        .zip(offsets.iter())
+        .map(|((&name, &descriptor), &offset)| CTypeField {
+            name,
+            offset,
+            descriptor,
+        })
+        .collect();
+
+    let cache = CTypeCache {
+        magic: CTYPE_CACHE_MAGIC,
+        kind: CTypeKind::Struct,
+        ffi_type: struct_ffi_type,
+        size,
+        align,
+        fields: fields.clone(),
+    };
+    let cache_value = alloc_ctype_cache_value(vm, state, &mut scratch, cache)?;
+
+    let parent_name = intern_symbol(vm, state, "parent*")?;
+    let impl_name = intern_symbol(vm, state, "impl")?;
+    let size_name = intern_symbol(vm, state, "size")?;
+    let align_name = intern_symbol(vm, state, "align")?;
+    let mut slots = Vec::with_capacity(field_names.len() + 4);
+    slots.push(Slot::new(
+        SlotFlags::ENUMERABLE
+            .with(SlotFlags::CONSTANT)
+            .with(SlotFlags::PARENT),
+        parent_name,
+        receiver,
+    ));
+    slots.push(Slot::new(
+        SlotFlags::ENUMERABLE.with(SlotFlags::CONSTANT),
+        impl_name,
+        cache_value,
+    ));
+    slots.push(Slot::new(
+        SlotFlags::ENUMERABLE.with(SlotFlags::CONSTANT),
+        size_name,
+        Value::from_i64(size as i64),
+    ));
+    slots.push(Slot::new(
+        SlotFlags::ENUMERABLE.with(SlotFlags::CONSTANT),
+        align_name,
+        Value::from_i64(align as i64),
+    ));
+    for (i, name) in field_names.iter().enumerate() {
+        slots.push(Slot::new(
+            SlotFlags::ENUMERABLE.with(SlotFlags::CONSTANT),
+            *name,
+            field_values[i],
+        ));
+    }
+
+    let map_map = vm.special.map_map;
+    let none = vm.special.none;
+    scratch.push(cache_value);
+    scratch.extend(field_values.iter().copied());
+    let struct_descriptor =
+        with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+            let map = alloc_map(
+                proxy,
+                roots,
+                map_map,
+                none,
+                MapFlags::NONE,
+                &slots,
+                0,
+            )
+            .value();
+            alloc_slot_object(proxy, roots, map, &[]).value()
+        });
+
+    Ok(struct_descriptor)
+}
+
+pub fn ctype_field_info_at(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let field_name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "field name",
+        got: Value::from_i64(0),
+    })?;
+    let wanted_ptr = expect_string(field_name)?;
+    let wanted = unsafe { (*wanted_ptr).as_str() };
+
+    let mut scratch = vec![receiver, field_name];
+    let mut decode_stack = Vec::new();
+    let desc = decode_ctype_descriptor(
+        vm,
+        state,
+        receiver,
+        &mut scratch,
+        &mut decode_stack,
+    )?;
+    if !matches!(desc.kind, CTypeKind::Struct) {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field info only supported for struct descriptors",
+        });
+    }
+
+    let field = desc
+        .fields
+        .iter()
+        .find(|field| value_name_eq(field.name, wanted))
+        .copied()
+        .ok_or(RuntimeError::Unimplemented {
+            message: "unknown ctype struct field",
+        })?;
+
+    let offset_name = intern_symbol(vm, state, "offset")?;
+    let type_name = intern_symbol(vm, state, "type")?;
+    let slots = [
+        Slot::new(
+            SlotFlags::ENUMERABLE.with(SlotFlags::CONSTANT),
+            offset_name,
+            Value::from_i64(field.offset as i64),
+        ),
+        Slot::new(
+            SlotFlags::ENUMERABLE.with(SlotFlags::CONSTANT),
+            type_name,
+            field.descriptor,
+        ),
+    ];
+    let map_map = vm.special.map_map;
+    let none = vm.special.none;
+    scratch.push(field.descriptor);
+    let result = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+        let map =
+            alloc_map(proxy, roots, map_map, none, MapFlags::NONE, &slots, 0)
+                .value();
+        alloc_slot_object(proxy, roots, map, &[]).value()
+    });
+    Ok(result)
+}
+
+pub fn ctype_scalar_tag(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let mut scratch = vec![receiver];
+    let mut decode_stack = Vec::new();
+    let desc = decode_ctype_descriptor(
+        vm,
+        state,
+        receiver,
+        &mut scratch,
+        &mut decode_stack,
+    )?;
+    if let Some(tag) = desc.kind.scalar_tag() {
+        Ok(Value::from_i64(tag))
+    } else {
+        Ok(vm.special.none)
+    }
+}
+
+fn intern_symbol(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    name: &str,
+) -> Result<Value, RuntimeError> {
+    if let Some(&symbol) = vm.intern_table.get(name) {
+        return Ok(symbol);
+    }
+    let symbol =
+        crate::primitives::string::alloc_vm_string(vm, state, name.as_bytes())?;
+    vm.intern_table.insert(name.to_string(), symbol);
+    Ok(symbol)
+}
+
+fn expect_slot_object_ptr(
+    value: Value,
+) -> Result<*mut SlotObject, RuntimeError> {
+    if !value.is_ref() {
+        return Err(RuntimeError::TypeError {
+            expected: "slot object",
+            got: value,
+        });
+    }
+    let header: &object::Header = unsafe { value.as_ref() };
+    if header.object_type() != ObjectType::Slots {
+        return Err(RuntimeError::TypeError {
+            expected: "slot object",
+            got: value,
+        });
+    }
+    Ok(value.ref_bits() as *mut SlotObject)
+}
+
+fn value_name_eq(name_value: Value, wanted: &str) -> bool {
+    if !name_value.is_ref() {
+        return false;
+    }
+    let name: &VMString = unsafe { name_value.as_ref() };
+    unsafe { name.as_str() == wanted }
+}
+
+fn value_is_method_object(value: Value) -> bool {
+    if !value.is_ref() {
+        return false;
+    }
+    let header: &object::Header = unsafe { value.as_ref() };
+    if header.object_type() != ObjectType::Slots {
+        return false;
+    }
+    let obj: &SlotObject = unsafe { value.as_ref() };
+    let map: &object::Map = unsafe { obj.map.as_ref() };
+    map.has_code()
 }
 
 fn marshal_arg(
@@ -1108,6 +1558,12 @@ pub fn alien_call_with_types(
         &mut decode_stack,
     )?;
 
+    let cif_key = CifCacheKey {
+        fn_ptr,
+        param_types: types.iter().map(|v| v.raw()).collect(),
+        return_type: return_type_v.raw(),
+    };
+
     let mut arg_storage = Vec::with_capacity(values.len());
     for (idx, &arg_value) in values.iter().enumerate() {
         let marshaled = marshal_arg(&param_descs[idx], arg_value)?;
@@ -1174,10 +1630,16 @@ pub fn alien_call_with_types(
         ffi_args.push(arg);
     }
 
-    let cif = Cif::new(
-        param_descs.iter().map(|d| d.ffi_type.clone()),
-        return_desc.ffi_type.clone(),
-    );
+    let cif_ptr = {
+        let entry = vm.ffi_cif_cache.entry(cif_key).or_insert_with(|| {
+            Cif::new(
+                param_descs.iter().map(|d| d.ffi_type.clone()),
+                return_desc.ffi_type.clone(),
+            )
+        });
+        entry as *const Cif
+    };
+    let cif = unsafe { &*cif_ptr };
     let code = CodePtr(fn_ptr as *mut libc::c_void);
 
     let mut scratch =

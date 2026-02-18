@@ -56,4 +56,7 @@ pub struct SpecialObjects {
 
     /// Methods / slots for [`Float`](crate::Float) objects.
     pub float_traits: Value,
+
+    /// Root Mirror prototype object.
+    pub mirror: Value,
 }

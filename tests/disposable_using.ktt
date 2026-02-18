@@ -1,0 +1,9 @@
+d := {
+    parent* = Disposable.
+    disposed := False.
+    dispose = { self disposed: True. self }
+}.
+
+r := d using: [ | disposable | 41 + 1 ].
+ok := ((r == 42) && (d disposed)).
+(ok ifTrue: [ "disposable-using: ok" ] IfFalse: [ "disposable-using: fail" ]) println.

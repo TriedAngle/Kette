@@ -5,12 +5,14 @@ use crate::VM;
 
 pub mod alien;
 pub mod array;
+pub mod r#become;
 pub mod bignum;
 pub mod block;
 pub mod bytearray;
 pub mod extend;
 pub mod fixnum;
 pub mod float;
+pub mod mirror;
 pub mod object_clone;
 pub mod pin;
 pub mod ratio;
@@ -330,6 +332,43 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("object_unpin", 1, pin::object_unpin),
         PrimitiveDesc::new("object_is_pinned", 1, pin::object_is_pinned),
         PrimitiveDesc::new("object_clone", 1, object_clone::object_clone),
+        PrimitiveDesc::new(
+            "object_become_with",
+            2,
+            r#become::object_become_with,
+        ),
+        PrimitiveDesc::new("object_reflect", 1, mirror::object_reflect),
+        PrimitiveDesc::new("ctype_build_struct", 1, alien::ctype_build_struct),
+        PrimitiveDesc::new(
+            "ctype_field_info_at",
+            1,
+            alien::ctype_field_info_at,
+        ),
+        PrimitiveDesc::new("ctype_scalar_tag", 0, alien::ctype_scalar_tag),
+        PrimitiveDesc::new("mirror_slot_count", 0, mirror::mirror_slot_count),
+        PrimitiveDesc::new(
+            "mirror_slot_name_at",
+            1,
+            mirror::mirror_slot_name_at,
+        ),
+        PrimitiveDesc::new("mirror_at", 1, mirror::mirror_at),
+        PrimitiveDesc::new("mirror_at_put", 2, mirror::mirror_at_put),
+        PrimitiveDesc::new(
+            "mirror_is_parent_at",
+            1,
+            mirror::mirror_is_parent_at,
+        ),
+        PrimitiveDesc::new(
+            "mirror_is_assignable_at",
+            1,
+            mirror::mirror_is_assignable_at,
+        ),
+        PrimitiveDesc::new(
+            "mirror_add_slot_value",
+            2,
+            mirror::mirror_add_slot_value,
+        ),
+        PrimitiveDesc::new("mirror_remove_slot", 1, mirror::mirror_remove_slot),
     ]
 }
 

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::mem::size_of;
 
 use heap::{Heap, HeapProxy, HeapSettings, RootProvider};
-use object::{init_str, MapFlags, SpecialObjects, VMString, Value};
+use object::{
+    init_str, MapFlags, Slot, SlotFlags, SpecialObjects, VMString, Value,
+};
 
 use crate::alloc::{
     add_constant_slot, alloc_byte_array, alloc_map, alloc_slot_object,
@@ -1157,6 +1159,63 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut intern_table,
             "_IsPinned:",
         );
+        let reflect_idx =
+            primitives::primitive_index_by_name(&primitives, "object_reflect")
+                .expect("object_reflect primitive missing") as i64;
+        let reflect_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Reflect:",
+        );
+        let ctype_build_struct_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_build_struct",
+        )
+        .expect("ctype_build_struct primitive missing")
+            as i64;
+        let ctype_build_struct_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeBuildStruct:",
+        );
+        let ctype_field_info_at_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_field_info_at",
+        )
+        .expect("ctype_field_info_at primitive missing")
+            as i64;
+        let ctype_field_info_at_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeFieldInfoAt:",
+        );
+        let ctype_scalar_tag_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_scalar_tag",
+        )
+        .expect("ctype_scalar_tag primitive missing")
+            as i64;
+        let ctype_scalar_tag_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeScalarTag",
+        );
+        let become_with_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "object_become_with",
+        )
+        .expect("object_become_with primitive missing")
+            as i64;
+        let become_with_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Become:With:",
+        );
 
         let mut object_map_val = alloc_map(
             &mut proxy,
@@ -1200,6 +1259,35 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             extend_name,
             extend_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let become_with_code = Value::from_i64(become_with_idx);
+        let become_with_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            become_with_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(become_with_map_val);
+
+        let become_with_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, become_with_map_val, &[])
+                .value();
+        roots.push(become_with_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            become_with_name,
+            become_with_method_val,
         );
         roots.push(new_object_map);
         object_map_val = new_object_map;
@@ -1319,6 +1407,134 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         roots.push(new_object_map);
         object_map_val = new_object_map;
 
+        let reflect_code = Value::from_i64(reflect_idx);
+        let reflect_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            reflect_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(reflect_map_val);
+
+        let reflect_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, reflect_map_val, &[])
+                .value();
+        roots.push(reflect_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            reflect_name,
+            reflect_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_build_struct_code = Value::from_i64(ctype_build_struct_idx);
+        let ctype_build_struct_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_build_struct_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_build_struct_map_val);
+
+        let ctype_build_struct_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_build_struct_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_build_struct_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_build_struct_name,
+            ctype_build_struct_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_field_info_at_code = Value::from_i64(ctype_field_info_at_idx);
+        let ctype_field_info_at_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_field_info_at_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_field_info_at_map_val);
+
+        let ctype_field_info_at_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_field_info_at_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_field_info_at_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_field_info_at_name,
+            ctype_field_info_at_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_scalar_tag_code = Value::from_i64(ctype_scalar_tag_idx);
+        let ctype_scalar_tag_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_scalar_tag_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_scalar_tag_map_val);
+
+        let ctype_scalar_tag_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_scalar_tag_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_scalar_tag_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_scalar_tag_name,
+            ctype_scalar_tag_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
         let obj_ptr = object_val.ref_bits() as *mut object::SlotObject;
         (*obj_ptr).map = object_map_val;
 
@@ -1336,6 +1552,124 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             dictionary_val,
             object_name,
             object_val,
+        );
+
+        let reflectee_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "reflectee",
+        );
+        let reflectee_set_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "reflectee:",
+        );
+        let reflectee_offset = Value::from_i64(16);
+        let reflectee_slots = [
+            Slot::new(
+                SlotFlags::ENUMERABLE.with(SlotFlags::ASSIGNABLE),
+                reflectee_name,
+                reflectee_offset,
+            ),
+            Slot::new(
+                SlotFlags::ENUMERABLE.with(SlotFlags::ASSIGNMENT),
+                reflectee_set_name,
+                reflectee_offset,
+            ),
+        ];
+
+        let mut mirror_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            NONE_PLACEHOLDER,
+            MapFlags::NONE,
+            &reflectee_slots,
+            1,
+        )
+        .value();
+        roots.push(mirror_map_val);
+
+        let mirror_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            mirror_map_val,
+            &[none_val],
+        )
+        .value();
+        roots.push(mirror_val);
+
+        let mirror_primitives = [
+            ("mirror_slot_count", "_MirrorSlotCount"),
+            ("mirror_slot_name_at", "_MirrorSlotNameAt:"),
+            ("mirror_at", "_MirrorAt:"),
+            ("mirror_at_put", "_MirrorAt:Put:"),
+            ("mirror_is_parent_at", "_MirrorIsParentAt:"),
+            ("mirror_is_assignable_at", "_MirrorIsAssignableAt:"),
+            ("mirror_add_slot_value", "_MirrorAddSlot:Value:"),
+            ("mirror_remove_slot", "_MirrorRemoveSlot:"),
+        ];
+
+        for (prim_name, slot_name) in mirror_primitives {
+            let prim_idx =
+                primitives::primitive_index_by_name(&primitives, prim_name)
+                    .expect("mirror primitive missing") as i64;
+            let slot_value = intern_bootstrap(
+                &mut proxy,
+                &mut roots,
+                &mut intern_table,
+                slot_name,
+            );
+
+            let primitive_code = Value::from_i64(prim_idx);
+            let method_map_val = alloc_map(
+                &mut proxy,
+                &mut roots,
+                map_map_val,
+                primitive_code,
+                MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+                &[],
+                0,
+            )
+            .value();
+            roots.push(method_map_val);
+
+            let method_obj_val =
+                alloc_slot_object(&mut proxy, &mut roots, method_map_val, &[])
+                    .value();
+            roots.push(method_obj_val);
+
+            let new_mirror_map = add_constant_slot(
+                &mut proxy,
+                &mut roots,
+                mirror_map_val,
+                map_map_val,
+                slot_value,
+                method_obj_val,
+            );
+            roots.push(new_mirror_map);
+            mirror_map_val = new_mirror_map;
+            let mirror_obj_ptr =
+                mirror_val.ref_bits() as *mut object::SlotObject;
+            (*mirror_obj_ptr).map = mirror_map_val;
+        }
+
+        let mirror_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "Mirror",
+        );
+        add_dictionary_entry(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            assoc_map_val,
+            dictionary_val,
+            mirror_name,
+            mirror_val,
         );
 
         let block_name = intern_bootstrap(
@@ -1412,6 +1746,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             block_traits_map_val,
             object_map_val,
             new_object_map,
+            mirror_map_val,
             assoc_map_val,
             dictionary_map_val,
         ] {
@@ -1436,6 +1771,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             fixnum_traits: fixnum_traits_val,
             code_traits: code_traits_val,
             float_traits: float_traits_val,
+            mirror: mirror_val,
         };
 
         VM {
@@ -1444,6 +1780,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             intern_table,
             primitives,
             assoc_map: assoc_map_val,
+            ffi_cif_cache: HashMap::new(),
             dictionary: dictionary_val,
             #[cfg(debug_assertions)]
             trace_assoc_name: None,
@@ -1488,6 +1825,8 @@ mod tests {
         assert!(vm.special.ratio_traits.is_ref());
         assert!(vm.special.fixnum_traits.is_ref());
         assert!(vm.special.code_traits.is_ref());
+        assert!(vm.special.float_traits.is_ref());
+        assert!(vm.special.mirror.is_ref());
 
         unsafe {
             // map_map is self-referential

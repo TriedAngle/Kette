@@ -1,0 +1,12 @@
+f := File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0.
+preview := f using: [ | file |
+    file eachLine: [ | line | None ] First: 3.
+    file readFirstLines: 3
+].
+firstDisposed := f disposed.
+
+f2 := File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0.
+stats := f2 using: [ | file | { size = file size. stat = file statSize } ].
+
+ok := ((stats size == stats stat) && (firstDisposed && (preview length > 0))).
+(ok ifTrue: [ "file-disposable: ok" ] IfFalse: [ "file-disposable: fail" ]) println.
