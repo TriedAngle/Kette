@@ -19,7 +19,6 @@ use crate::primitives::{
 };
 use crate::VM;
 
-
 extern "C" {
     fn malloc(size: usize) -> *mut u8;
     fn free(ptr: *mut u8);
@@ -304,7 +303,6 @@ pub fn alien_is_null(
         vm.special.false_obj
     })
 }
-
 
 macro_rules! alien_read_int {
     ($name:ident, $ty:ty) => {
