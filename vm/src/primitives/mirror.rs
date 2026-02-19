@@ -1,8 +1,9 @@
-use object::{Header, ObjectType, Slot, SlotObject, VMString, Value};
+use object::{Header, ObjectType, Slot, SlotObject, VMSymbol, Value};
 
 use crate::alloc::{add_constant_slot, remove_constant_slot};
 use crate::interpreter::{with_roots, InterpreterState, RuntimeError};
-use crate::primitives::{expect_fixnum, expect_string};
+use crate::primitives::string::intern_symbol;
+use crate::primitives::{expect_fixnum, expect_string, expect_symbol};
 use crate::VM;
 
 const REFLECTEE_SLOT: &str = "reflectee";
@@ -256,7 +257,7 @@ pub fn mirror_add_slot_value(
         });
     }
 
-    let name_symbol = intern_symbol(vm, state, name_ptr)?;
+    let name_symbol = intern_symbol(vm, state, wanted)?;
     let mut scratch = vec![reflectee, old_map, name_symbol, value];
     let new_map = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
         add_constant_slot(proxy, roots, old_map, map_map, name_symbol, value)
@@ -308,6 +309,10 @@ pub fn mirror_remove_slot(
 }
 
 fn value_to_slot_name(name: Value) -> Result<String, RuntimeError> {
+    if let Ok(ptr) = expect_symbol(name) {
+        let sym: &VMSymbol = unsafe { &*ptr };
+        return Ok(unsafe { sym.as_str() }.to_string());
+    }
     let ptr = expect_string(name)?;
     Ok(unsafe { (*ptr).as_str() }.to_string())
 }
@@ -392,26 +397,11 @@ fn slot_name_eq(slot: &Slot, wanted: &str) -> bool {
         return false;
     }
     let header: &Header = unsafe { slot.name.as_ref() };
-    if header.object_type() != ObjectType::Str {
+    if header.object_type() != ObjectType::Symbol {
         return false;
     }
-    let name: &VMString = unsafe { slot.name.as_ref() };
+    let name: &VMSymbol = unsafe { slot.name.as_ref() };
     unsafe { name.as_str() == wanted }
-}
-
-fn intern_symbol(
-    vm: &mut VM,
-    state: &mut InterpreterState,
-    name_ptr: *const VMString,
-) -> Result<Value, RuntimeError> {
-    let name = unsafe { (*name_ptr).as_str() };
-    if let Some(&sym) = vm.intern_table.get(name) {
-        return Ok(sym);
-    }
-    let sym =
-        crate::primitives::string::alloc_vm_string(vm, state, name.as_bytes())?;
-    vm.intern_table.insert(name.to_string(), sym);
-    Ok(sym)
 }
 
 fn expect_slot_object_ptr(

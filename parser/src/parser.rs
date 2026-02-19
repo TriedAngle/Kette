@@ -138,11 +138,15 @@ impl<I: Iterator<Item = Token>> Parser<I> {
     }
 
     pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
-        self.parse_cascade_level()
+        self.parse_assignment_level()
     }
 
     fn parse_cascade_level(&mut self) -> Result<Expr, ParseError> {
-        let expr = self.parse_assignment_level()?;
+        let expr = self.parse_keyword_level()?;
+        self.parse_cascade_tail(expr)
+    }
+
+    fn parse_cascade_tail(&mut self, expr: Expr) -> Result<Expr, ParseError> {
         if !matches!(self.peek_kind(), TokenKind::Semicolon) {
             return Ok(expr);
         }
@@ -171,8 +175,22 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         ))
     }
 
+    fn parse_message_chain_from(
+        &mut self,
+        primary: Expr,
+    ) -> Result<Expr, ParseError> {
+        let expr = self.parse_unary_tail(primary);
+        let expr = self.parse_binary_with_left(expr, 0)?;
+        let expr = if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
+            self.parse_keyword_tail(expr)?
+        } else {
+            expr
+        };
+        self.parse_cascade_tail(expr)
+    }
+
     fn parse_assignment_level(&mut self) -> Result<Expr, ParseError> {
-        let left = self.parse_keyword_level()?;
+        let left = self.parse_cascade_level()?;
         match self.peek_kind().clone() {
             TokenKind::Assign | TokenKind::Equals => {
                 let op = self.advance();
@@ -769,15 +787,9 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         &mut self,
         primary: Expr,
     ) -> Result<Expr, ParseError> {
-        let expr = self.parse_unary_tail(primary);
-        let expr = self.parse_binary_with_left(expr, 0)?;
-        let expr = if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
-            self.parse_keyword_tail(expr)?
-        } else {
-            expr
-        };
+        let expr = self.parse_message_chain_from(primary)?;
         // Assignment level
-        let expr = match self.peek_kind().clone() {
+        match self.peek_kind().clone() {
             TokenKind::Assign | TokenKind::Equals => {
                 let op = self.advance();
                 let right = self.parse_assignment_level()?;
@@ -787,39 +799,16 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     _ => unreachable!(),
                 };
                 let span = expr.span.merge(right.span);
-                Expr::new(
+                Ok(Expr::new(
                     ExprKind::Assignment {
                         target: Box::new(expr),
                         kind,
                         value: Box::new(right),
                     },
                     span,
-                )
+                ))
             }
-            _ => expr,
-        };
-        // Cascade level
-        if matches!(self.peek_kind(), TokenKind::Semicolon)
-            && self.is_message_expr(&expr)
-        {
-            let receiver = self.cascade_receiver_from_expr(&expr);
-            let mut messages = vec![expr];
-            while matches!(self.peek_kind(), TokenKind::Semicolon) {
-                self.advance();
-                let msg = self.parse_cascade_message(receiver.clone())?;
-                messages.push(msg);
-            }
-            let start = receiver.span;
-            let end = messages.last().map(|e| e.span).unwrap_or(start);
-            Ok(Expr::new(
-                ExprKind::Cascade {
-                    receiver: Box::new(receiver),
-                    messages,
-                },
-                start.merge(end),
-            ))
-        } else {
-            Ok(expr)
+            _ => Ok(expr),
         }
     }
 

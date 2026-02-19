@@ -15,8 +15,8 @@ the parser and core library.
   parent links for delegation.
 - **Blocks are closures**: `[ ... ]` with optional `| args |`.
 - **None/true/false are objects**: `None` is the canonical empty value.
-- **Globals at top level**: any assignment at top level creates/updates a
-  global assoc, regardless of name casing.
+- **Globals at top level**: module-aware compile-time resolution is strict; an
+  unresolved global is a compile error.
 
 ## Syntax Overview
 
@@ -117,6 +117,95 @@ obj foo; bar; baz: 1
 ```
 ^ expr
 ```
+
+## Methods ("functions")
+
+Kette does not have standalone functions. Behavior lives in object slots (methods)
+and is invoked by sending messages.
+
+```
+Math = {
+    double: x = { x + x }.
+    fortyTwo = { 40 + 2 }.
+}.
+
+Math double: 21.
+Math fortyTwo
+```
+
+- A unary method call is `receiver selector`.
+- A keyword method call is `receiver name: arg ...`.
+- Method execution keeps `self` as the receiver object.
+
+## Modules and Global Resolution
+
+The module system is designed to be CL-like in spirit: globals are resolved in
+the module environment known at compile time, and imported names behave like
+aliases to exported bindings.
+
+### Module operations
+
+```
+Module open: 'Lib.
+Module export: 'Hello.
+Module use: 'Other.
+Module use: 'Other As: { answer = 'otherAnswer }.
+```
+
+Equivalent low-level primitives are available on `VM`:
+
+```
+VM _ModuleOpen: 'Lib.
+VM _ModuleExport: 'Hello.
+VM _ModuleUse: 'Other.
+VM _ModuleUse: 'Other As: { answer = 'otherAnswer }.
+```
+
+### Current semantics
+
+- `Module export:` may appear before the definition; defining later in the same
+  compilation unit works.
+- `Module use:` imports exported names directly; `As:` is only needed for
+  renaming or collision avoidance.
+- Top-level unresolved globals in non-`user` modules are compile errors.
+- Imported names are write-through aliases (assigning via an import updates the
+  source module binding).
+- Method global lookup uses the defining module context (not caller module).
+- There is no legacy global fallback path: globals must resolve through module
+  bindings/imports.
+
+### Example
+
+```
+Module open: 'Lib.
+Module export: 'Hello.
+Hello := 41.
+
+Greeter := {
+    greet = { Hello _FixnumAdd: 1 }.
+}.
+Module export: 'Greeter.
+
+Module open: 'App.
+Module use: 'Lib.
+Greeter greet
+```
+
+The full commented walkthrough is in `core/module_resolution_demo.ktt`.
+
+## Running Script Tests
+
+For strict module mode, load `core/init.ktt` first, then test scripts:
+
+```bash
+cargo run -p vm -- core/init.ktt tests/disposable_using.ktt
+cargo run -p vm -- core/init.ktt tests/file_disposable.ktt
+cargo run -p vm -- core/init.ktt tests/mitternacht.ktt
+```
+
+Extra output/file-loading demo previously in init lives in:
+
+- `tests/init_runtime_demo.ktt`
 
 ## FizzBuzz Example
 

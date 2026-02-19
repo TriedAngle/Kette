@@ -1,23 +1,21 @@
-use std::collections::{BTreeMap, HashSet};
-
-use parser::ast::Expr;
-use parser::ast::ExprKind;
-use parser::token::{Token, TokenKind};
+use parser::{semantic, Expr, Token};
 #[cfg(test)]
-use parser::{Lexer, Parser};
+use parser::{Lexer, Parser, TokenKind};
 use tower_lsp::lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType,
 };
-
-use crate::position::byte_offset_to_position;
 
 const TYPE_UNARY_METHOD: u32 = 0;
 const TYPE_KEYWORD_MESSAGE: u32 = 1;
 const TYPE_LOCAL: u32 = 2;
 const TYPE_GLOBAL: u32 = 3;
 const TYPE_OPERATOR: u32 = 4;
-const TYPE_LITERAL_NUMBER: u32 = 5;
-const TYPE_SELF_KEYWORD: u32 = 6;
+const TYPE_PUNCTUATION: u32 = 5;
+const TYPE_LITERAL_NUMBER: u32 = 6;
+const TYPE_LITERAL_STRING: u32 = 7;
+const TYPE_KEYWORD: u32 = 8;
+const TYPE_COMMENT: u32 = 9;
+const TYPE_PARAMETER: u32 = 10;
 
 pub fn token_types() -> Vec<SemanticTokenType> {
     vec![
@@ -26,8 +24,12 @@ pub fn token_types() -> Vec<SemanticTokenType> {
         SemanticTokenType::VARIABLE,
         SemanticTokenType::NAMESPACE,
         SemanticTokenType::OPERATOR,
+        SemanticTokenType::new("punctuation"),
         SemanticTokenType::NUMBER,
-        SemanticTokenType::new("selfKeyword"),
+        SemanticTokenType::STRING,
+        SemanticTokenType::KEYWORD,
+        SemanticTokenType::COMMENT,
+        SemanticTokenType::PARAMETER,
     ]
 }
 
@@ -38,11 +40,7 @@ pub fn token_modifiers() -> Vec<SemanticTokenModifier> {
 #[cfg(test)]
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let tokens: Vec<Token> = Lexer::from_str(source)
-        .filter(|t| {
-            !t.is_eof()
-                && !t.is_comment()
-                && !matches!(t.kind, TokenKind::Error(_))
-        })
+        .filter(|t| !t.is_eof() && !matches!(t.kind, TokenKind::Error(_)))
         .collect();
 
     let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
@@ -57,447 +55,117 @@ pub fn semantic_tokens_from(
     tokens: &[Token],
     exprs: &[Expr],
 ) -> Vec<SemanticToken> {
-    let mut classified = Classified::default();
+    let spans = semantic::analyze_semantics(tokens, exprs);
+    let mut out = Vec::with_capacity(spans.len());
+    let mut cursor = OffsetCursor::new(source);
+    let mut prev_line = 0u32;
+    let mut prev_start = 0u32;
 
-    classify_keyword_operator_and_literal_tokens(tokens, &mut classified);
+    for span in spans {
+        let Some(token_type) = kind_to_type(span.kind) else {
+            continue;
+        };
 
-    let mut unary_selector_spans = HashSet::new();
-    for expr in exprs {
-        collect_unary_selector_spans(
-            expr,
-            tokens,
-            &mut unary_selector_spans,
-            &mut classified,
-        );
-    }
-
-    let mut scopes = Vec::new();
-    for expr in exprs {
-        classify_identifier_usage(
-            expr,
-            &mut scopes,
-            &unary_selector_spans,
-            &mut classified,
-        );
-    }
-
-    classified.to_lsp_tokens(source)
-}
-
-#[derive(Default)]
-struct Classified {
-    by_span: BTreeMap<(usize, usize), u32>,
-}
-
-impl Classified {
-    fn add(&mut self, start: usize, end: usize, token_type: u32) {
-        if end <= start {
-            return;
+        let Some((start_line, start_col)) = cursor.advance_to(span.start)
+        else {
+            continue;
+        };
+        let Some(length) = utf16_len_same_line(source, span.start, span.end)
+        else {
+            continue;
+        };
+        if length == 0 {
+            continue;
         }
-        self.by_span.entry((start, end)).or_insert(token_type);
+
+        let delta_line = start_line.saturating_sub(prev_line);
+        let delta_start = if delta_line == 0 {
+            start_col.saturating_sub(prev_start)
+        } else {
+            start_col
+        };
+
+        out.push(SemanticToken {
+            delta_line,
+            delta_start,
+            length,
+            token_type,
+            token_modifiers_bitset: 0,
+        });
+
+        prev_line = start_line;
+        prev_start = start_col;
     }
 
-    fn to_lsp_tokens(self, source: &str) -> Vec<SemanticToken> {
-        let mut out = Vec::new();
-        let mut prev_line = 0u32;
-        let mut prev_start = 0u32;
+    out
+}
 
-        for ((start, end), token_type) in self.by_span {
-            let start_pos = byte_offset_to_position(source, start);
-            let end_pos = byte_offset_to_position(source, end);
-            if start_pos.line != end_pos.line {
-                continue;
-            }
-            let length = end_pos.character.saturating_sub(start_pos.character);
-            if length == 0 {
-                continue;
-            }
+struct OffsetCursor<'a> {
+    source: &'a str,
+    iter: std::str::CharIndices<'a>,
+    byte: usize,
+    line: u32,
+    utf16_col: u32,
+}
 
-            let delta_line = start_pos.line.saturating_sub(prev_line);
-            let delta_start = if delta_line == 0 {
-                start_pos.character.saturating_sub(prev_start)
+impl<'a> OffsetCursor<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            iter: source.char_indices(),
+            byte: 0,
+            line: 0,
+            utf16_col: 0,
+        }
+    }
+
+    fn advance_to(&mut self, target: usize) -> Option<(u32, u32)> {
+        if target < self.byte || target > self.source.len() {
+            return None;
+        }
+        while self.byte < target {
+            let (idx, ch) = self.iter.next()?;
+            if idx != self.byte {
+                return None;
+            }
+            if ch == '\n' {
+                self.line = self.line.saturating_add(1);
+                self.utf16_col = 0;
             } else {
-                start_pos.character
-            };
-
-            out.push(SemanticToken {
-                delta_line,
-                delta_start,
-                length,
-                token_type,
-                token_modifiers_bitset: 0,
-            });
-
-            prev_line = start_pos.line;
-            prev_start = start_pos.character;
+                self.utf16_col =
+                    self.utf16_col.saturating_add(ch.len_utf16() as u32);
+            }
+            self.byte = idx + ch.len_utf8();
         }
-
-        out
+        Some((self.line, self.utf16_col))
     }
 }
 
-#[derive(Default)]
-struct Scope {
-    locals: HashSet<String>,
-}
-
-fn classify_keyword_operator_and_literal_tokens(
-    tokens: &[Token],
-    out: &mut Classified,
-) {
-    for tok in tokens {
-        match &tok.kind {
-            TokenKind::Keyword(_) => {
-                out.add(
-                    tok.span.start.offset,
-                    tok.span.end.offset,
-                    TYPE_KEYWORD_MESSAGE,
-                );
-            }
-            TokenKind::Operator(_) => {
-                out.add(
-                    tok.span.start.offset,
-                    tok.span.end.offset,
-                    TYPE_OPERATOR,
-                );
-            }
-            TokenKind::SelfKw => {
-                out.add(
-                    tok.span.start.offset,
-                    tok.span.end.offset,
-                    TYPE_SELF_KEYWORD,
-                );
-            }
-            TokenKind::Identifier(name) if is_literal_ident(name) => {
-                out.add(
-                    tok.span.start.offset,
-                    tok.span.end.offset,
-                    TYPE_LITERAL_NUMBER,
-                );
-            }
-            TokenKind::Symbol(_) => {
-                out.add(
-                    tok.span.start.offset,
-                    tok.span.end.offset,
-                    TYPE_GLOBAL,
-                );
-            }
-            _ => {}
-        }
+fn utf16_len_same_line(source: &str, start: usize, end: usize) -> Option<u32> {
+    if end < start || end > source.len() {
+        return None;
     }
-}
-
-fn collect_unary_selector_spans(
-    expr: &Expr,
-    tokens: &[Token],
-    span_set: &mut HashSet<(usize, usize)>,
-    out: &mut Classified,
-) {
-    match &expr.kind {
-        ExprKind::UnaryMessage { receiver, selector } => {
-            collect_unary_selector_spans(receiver, tokens, span_set, out);
-            if let Some(span) =
-                find_unary_selector_span(expr, receiver, selector, tokens)
-            {
-                span_set.insert(span);
-                out.add(span.0, span.1, TYPE_UNARY_METHOD);
-            }
-        }
-        ExprKind::BinaryMessage {
-            receiver, argument, ..
-        } => {
-            collect_unary_selector_spans(receiver, tokens, span_set, out);
-            collect_unary_selector_spans(argument, tokens, span_set, out);
-        }
-        ExprKind::KeywordMessage { receiver, pairs } => {
-            collect_unary_selector_spans(receiver, tokens, span_set, out);
-            for pair in pairs {
-                collect_unary_selector_spans(
-                    &pair.argument,
-                    tokens,
-                    span_set,
-                    out,
-                );
-            }
-        }
-        ExprKind::Paren(inner)
-        | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => {
-            collect_unary_selector_spans(inner, tokens, span_set, out);
-        }
-        ExprKind::DirectedResend { message, .. } => {
-            collect_unary_selector_spans(message, tokens, span_set, out);
-        }
-        ExprKind::Block { body, .. } | ExprKind::Sequence(body) => {
-            for e in body {
-                collect_unary_selector_spans(e, tokens, span_set, out);
-            }
-        }
-        ExprKind::Object { slots, body } => {
-            for slot in slots {
-                collect_unary_selector_spans(
-                    &slot.value,
-                    tokens,
-                    span_set,
-                    out,
-                );
-            }
-            for e in body {
-                collect_unary_selector_spans(e, tokens, span_set, out);
-            }
-        }
-        ExprKind::Assignment { target, value, .. } => {
-            collect_unary_selector_spans(target, tokens, span_set, out);
-            collect_unary_selector_spans(value, tokens, span_set, out);
-        }
-        ExprKind::Cascade { receiver, messages } => {
-            collect_unary_selector_spans(receiver, tokens, span_set, out);
-            for msg in messages {
-                collect_unary_selector_spans(msg, tokens, span_set, out);
-            }
-        }
-        _ => {}
+    let slice = source.get(start..end)?;
+    if slice.contains('\n') {
+        return None;
     }
+    Some(slice.encode_utf16().count() as u32)
 }
 
-fn find_unary_selector_span(
-    expr: &Expr,
-    receiver: &Expr,
-    selector: &str,
-    tokens: &[Token],
-) -> Option<(usize, usize)> {
-    for tok in tokens.iter().rev() {
-        if tok.span.end.offset != expr.span.end.offset {
-            continue;
-        }
-        if tok.span.start.offset < receiver.span.end.offset {
-            continue;
-        }
-        if let TokenKind::Identifier(name) = &tok.kind {
-            if name == selector {
-                return Some((tok.span.start.offset, tok.span.end.offset));
-            }
-        }
-    }
-
-    for tok in tokens.iter().rev() {
-        if tok.span.end.offset > expr.span.end.offset {
-            continue;
-        }
-        if tok.span.start.offset < receiver.span.end.offset {
-            continue;
-        }
-        if let TokenKind::Identifier(name) = &tok.kind {
-            if name == selector {
-                return Some((tok.span.start.offset, tok.span.end.offset));
-            }
-        }
-    }
-
-    None
-}
-
-fn classify_identifier_usage(
-    expr: &Expr,
-    scopes: &mut Vec<Scope>,
-    unary_selector_spans: &HashSet<(usize, usize)>,
-    out: &mut Classified,
-) {
-    match &expr.kind {
-        ExprKind::SelfRef => {
-            out.add(
-                expr.span.start.offset,
-                expr.span.end.offset,
-                TYPE_SELF_KEYWORD,
-            );
-        }
-        ExprKind::Ident(name) => {
-            let span = (expr.span.start.offset, expr.span.end.offset);
-            if unary_selector_spans.contains(&span) {
-                return;
-            }
-            if is_literal_ident(name) {
-                out.add(span.0, span.1, TYPE_LITERAL_NUMBER);
-                return;
-            }
-            let token_type = if is_local(name, scopes) {
-                TYPE_LOCAL
-            } else {
-                TYPE_GLOBAL
-            };
-            out.add(span.0, span.1, token_type);
-        }
-        ExprKind::UnaryMessage { receiver, .. } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-        }
-        ExprKind::BinaryMessage {
-            receiver, argument, ..
-        } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            classify_identifier_usage(
-                argument,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-        }
-        ExprKind::KeywordMessage { receiver, pairs } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            for pair in pairs {
-                classify_identifier_usage(
-                    &pair.argument,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
-            }
-        }
-        ExprKind::Paren(inner)
-        | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => {
-            classify_identifier_usage(inner, scopes, unary_selector_spans, out);
-        }
-        ExprKind::DirectedResend { message, .. } => {
-            classify_identifier_usage(
-                message,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-        }
-        ExprKind::Assignment { target, value, .. } => {
-            classify_identifier_usage(
-                target,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            classify_identifier_usage(value, scopes, unary_selector_spans, out);
-        }
-        ExprKind::Block { args, body } => {
-            let mut scope = Scope::default();
-            for arg in args {
-                scope.locals.insert(arg.clone());
-            }
-            for name in immediate_assignment_names(body) {
-                scope.locals.insert(name);
-            }
-            scopes.push(scope);
-            for e in body {
-                classify_identifier_usage(e, scopes, unary_selector_spans, out);
-            }
-            scopes.pop();
-        }
-        ExprKind::Object { slots, body } => {
-            for slot in slots {
-                if slot.params.is_empty() {
-                    classify_identifier_usage(
-                        &slot.value,
-                        scopes,
-                        unary_selector_spans,
-                        out,
-                    );
-                } else {
-                    let mut scope = Scope::default();
-                    for param in &slot.params {
-                        scope.locals.insert(param.clone());
-                    }
-                    scopes.push(scope);
-                    classify_identifier_usage(
-                        &slot.value,
-                        scopes,
-                        unary_selector_spans,
-                        out,
-                    );
-                    scopes.pop();
-                }
-            }
-
-            let locals = immediate_assignment_names(body);
-            if !locals.is_empty() {
-                let mut scope = Scope::default();
-                for name in locals {
-                    scope.locals.insert(name);
-                }
-                scopes.push(scope);
-                for e in body {
-                    classify_identifier_usage(
-                        e,
-                        scopes,
-                        unary_selector_spans,
-                        out,
-                    );
-                }
-                scopes.pop();
-            } else {
-                for e in body {
-                    classify_identifier_usage(
-                        e,
-                        scopes,
-                        unary_selector_spans,
-                        out,
-                    );
-                }
-            }
-        }
-        ExprKind::Sequence(exprs) => {
-            for e in exprs {
-                classify_identifier_usage(e, scopes, unary_selector_spans, out);
-            }
-        }
-        ExprKind::Cascade { receiver, messages } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            for msg in messages {
-                classify_identifier_usage(
-                    msg,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
-            }
-        }
-        _ => {}
-    }
-}
-
-fn is_local(name: &str, scopes: &[Scope]) -> bool {
-    scopes.iter().rev().any(|s| s.locals.contains(name))
-}
-
-fn immediate_assignment_names(exprs: &[Expr]) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for expr in exprs {
-        if let ExprKind::Assignment { target, .. } = &expr.kind {
-            if let ExprKind::Ident(name) = &target.kind {
-                names.insert(name.clone());
-            }
-        }
-    }
-    names
-}
-
-fn is_literal_ident(name: &str) -> bool {
-    matches!(name, "True" | "False" | "None" | "true" | "false")
+fn kind_to_type(kind: semantic::SemanticKind) -> Option<u32> {
+    Some(match kind {
+        semantic::SemanticKind::UnaryMethod => TYPE_UNARY_METHOD,
+        semantic::SemanticKind::KeywordMessage => TYPE_KEYWORD_MESSAGE,
+        semantic::SemanticKind::Local => TYPE_LOCAL,
+        semantic::SemanticKind::Global => TYPE_GLOBAL,
+        semantic::SemanticKind::Operator => TYPE_OPERATOR,
+        semantic::SemanticKind::Punctuation => TYPE_PUNCTUATION,
+        semantic::SemanticKind::LiteralNumber => TYPE_LITERAL_NUMBER,
+        semantic::SemanticKind::LiteralString => TYPE_LITERAL_STRING,
+        semantic::SemanticKind::Keyword => TYPE_KEYWORD,
+        semantic::SemanticKind::Comment => TYPE_COMMENT,
+        semantic::SemanticKind::Parameter => TYPE_PARAMETER,
+    })
 }
 
 #[cfg(test)]
@@ -517,5 +185,75 @@ mod tests {
         let tokens = semantic_tokens(source);
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].token_type, TYPE_GLOBAL);
+    }
+
+    #[test]
+    fn emits_selfkeyword_token_for_self() {
+        let source = "self";
+        let tokens = semantic_tokens(source);
+        assert!(tokens.iter().any(|tok| tok.token_type == TYPE_KEYWORD));
+    }
+
+    #[test]
+    fn marks_keyword_and_binary_slot_params() {
+        let source = "{ + rhs = { rhs }. foo: a Bar: b = { a + b } }";
+        let tokens = semantic_tokens(source);
+        let param_count = tokens
+            .iter()
+            .filter(|tok| tok.token_type == TYPE_PARAMETER)
+            .count();
+        assert!(param_count >= 4);
+    }
+
+    #[test]
+    fn marks_assignment_operators() {
+        let source = "{ x := 1. y = 2 }";
+        let tokens = semantic_tokens(source);
+        let op_count = tokens
+            .iter()
+            .filter(|tok| tok.token_type == TYPE_OPERATOR)
+            .count();
+        assert!(op_count >= 2);
+    }
+
+    #[test]
+    fn marks_punctuation_tokens() {
+        let source = "[ | x | { x := 1 } ]";
+        let tokens = semantic_tokens(source);
+        assert!(tokens.iter().any(|tok| tok.token_type == TYPE_PUNCTUATION));
+    }
+
+    #[test]
+    fn marks_string_and_number_literals() {
+        let source = "[ x := 42. y := \"ok\" ]";
+        let tokens = semantic_tokens(source);
+        assert!(tokens
+            .iter()
+            .any(|tok| tok.token_type == TYPE_LITERAL_NUMBER));
+        assert!(tokens
+            .iter()
+            .any(|tok| tok.token_type == TYPE_LITERAL_STRING));
+    }
+
+    #[test]
+    fn marks_block_locals() {
+        let source = "[ x := 1. x ]";
+        let tokens = semantic_tokens(source);
+        let local_count = tokens
+            .iter()
+            .filter(|tok| tok.token_type == TYPE_LOCAL)
+            .count();
+        assert!(local_count >= 2);
+    }
+
+    #[test]
+    fn marks_object_method_locals_from_slot_decls() {
+        let source = "{ + rhs = { dst := rhs. dst toString } }";
+        let tokens = semantic_tokens(source);
+        let local_count = tokens
+            .iter()
+            .filter(|tok| tok.token_type == TYPE_LOCAL)
+            .count();
+        assert!(local_count >= 1);
     }
 }

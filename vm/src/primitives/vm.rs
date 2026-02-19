@@ -7,7 +7,10 @@ use parser::{Lexer, Parser};
 use crate::compiler0;
 use crate::interpreter::{self, with_roots, InterpreterState, RuntimeError};
 use crate::materialize;
-use crate::primitives::{expect_string, string::alloc_vm_string};
+use crate::primitives::string::intern_symbol;
+use crate::primitives::{
+    expect_string, expect_symbol, string::alloc_vm_string,
+};
 use crate::VM;
 
 pub fn vm_eval(
@@ -16,6 +19,10 @@ pub fn vm_eval(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
+    if vm.current_module.is_none() {
+        vm.open_module("user");
+    }
+
     let source_ptr = expect_string(args[0])?;
     let source = unsafe { (*source_ptr).as_str() };
 
@@ -33,7 +40,7 @@ pub fn vm_eval(
     let exprs: Vec<parser::ast::Expr> =
         parse_results.into_iter().map(|r| r.unwrap()).collect();
 
-    let code_desc = match compiler0::Compiler::compile(&exprs) {
+    let code_desc = match compiler0::Compiler::compile_for_vm(vm, &exprs) {
         Ok(code_desc) => code_desc,
         Err(err) => {
             let msg = format!("Compile error: {err}");
@@ -182,34 +189,9 @@ pub fn vm_module_at(
 }
 
 fn symbol_to_string(value: Value) -> Result<String, RuntimeError> {
-    if !value.is_ref() {
-        return Err(RuntimeError::TypeError {
-            expected: "symbol",
-            got: value,
-        });
-    }
-    let header: &object::Header = unsafe { value.as_ref() };
-    if header.object_type() != ObjectType::Str {
-        return Err(RuntimeError::TypeError {
-            expected: "symbol",
-            got: value,
-        });
-    }
-    let s: &object::VMString = unsafe { value.as_ref() };
+    let ptr = expect_symbol(value)?;
+    let s: &object::VMSymbol = unsafe { &*ptr };
     Ok(unsafe { s.as_str() }.to_string())
-}
-
-fn intern_symbol(
-    vm: &mut VM,
-    state: &mut InterpreterState,
-    name: &str,
-) -> Result<Value, RuntimeError> {
-    if let Some(&sym) = vm.intern_table.get(name) {
-        return Ok(sym);
-    }
-    let sym = alloc_vm_string(vm, state, name.as_bytes())?;
-    vm.intern_table.insert(name.to_string(), sym);
-    Ok(sym)
 }
 
 fn parse_alias_map(
@@ -255,6 +237,10 @@ mod tests {
     use object::{Header, ObjectType, VMString, Value};
 
     fn execute_source(vm: &mut VM, source: &str) -> Result<Value, String> {
+        if vm.current_module.is_none() {
+            vm.open_module("user");
+        }
+
         let parse_results: Vec<_> =
             Parser::new(Lexer::from_str(source)).collect();
         let parse_errors: Vec<String> = parse_results
@@ -268,7 +254,7 @@ mod tests {
 
         let exprs: Vec<parser::ast::Expr> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        let code_desc = compiler0::Compiler::compile(&exprs)
+        let code_desc = compiler0::Compiler::compile_for_vm(vm, &exprs)
             .map_err(|e| format!("Compile error: {e}"))?;
         let code = materialize::materialize(vm, &code_desc);
         interpreter::interpret(vm, code)
@@ -288,6 +274,31 @@ mod tests {
         Some(unsafe { s.as_str() }.to_string())
     }
 
+    fn compile_source(
+        vm: &mut VM,
+        source: &str,
+    ) -> Result<compiler0::CodeDesc, String> {
+        if vm.current_module.is_none() {
+            vm.open_module("user");
+        }
+
+        let parse_results: Vec<_> =
+            Parser::new(Lexer::from_str(source)).collect();
+        let parse_errors: Vec<String> = parse_results
+            .iter()
+            .filter_map(|r| r.as_ref().err())
+            .map(|e| format!("Parse error: {e}"))
+            .collect();
+        if !parse_errors.is_empty() {
+            return Err(parse_errors.join("\n"));
+        }
+
+        let exprs: Vec<parser::ast::Expr> =
+            parse_results.into_iter().map(|r| r.unwrap()).collect();
+        compiler0::Compiler::compile_for_vm(vm, &exprs)
+            .map_err(|e| format!("Compile error: {e}"))
+    }
+
     #[test]
     fn eval_computes_value_in_global_scope() {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
@@ -302,7 +313,7 @@ mod tests {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
         let value = execute_source(
             &mut vm,
-            "VM _Eval: \"EvalGlobal := 41.\". EvalGlobal _FixnumAdd: 1",
+            "EvalGlobal := 0. VM _Eval: \"EvalGlobal := 41.\". EvalGlobal _FixnumAdd: 1",
         )
         .expect("evaluation should succeed");
         assert!(value.is_fixnum());
@@ -319,7 +330,7 @@ mod tests {
         .expect("evaluation should succeed");
         let text =
             as_string(value).expect("eval should return an error string");
-        assert!(text.contains("UndefinedGlobal"));
+        assert!(text.contains("Compile error"));
         assert!(text.contains("local"));
     }
 
@@ -334,13 +345,20 @@ mod tests {
     }
 
     #[test]
-    fn modules_isolate_bindings_and_fallback_to_global() {
+    fn modules_isolate_bindings_without_global_fallback() {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
-        let value = execute_source(
+        let err = execute_source(
             &mut vm,
             "GlobalX := 9. VM _ModuleOpen: 'A. x := 1. VM _ModuleOpen: 'B. x := 2. VM _ModuleOpen: 'A. x _FixnumAdd: GlobalX",
         )
-        .expect("module lookup should succeed");
+        .expect_err("cross-module global without import should fail");
+        assert!(err.contains("unresolved global 'GlobalX'"));
+
+        let value = execute_source(
+            &mut vm,
+            "GlobalX := 9. VM _ModuleExport: 'GlobalX. VM _ModuleOpen: 'A. x := 1. VM _ModuleUse: 'user. x _FixnumAdd: GlobalX",
+        )
+        .expect("explicit module import should succeed");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 10);
     }
@@ -358,7 +376,7 @@ mod tests {
 
         let err = execute_source(&mut vm, "VM _ModuleOpen: 'App. hidden")
             .expect_err("hidden must not be imported");
-        assert!(err.contains("UndefinedGlobal"));
+        assert!(err.contains("unresolved global 'hidden'"));
     }
 
     #[test]
@@ -435,5 +453,86 @@ mod tests {
         .expect("opening app should auto-use user exports");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 7);
+    }
+
+    #[test]
+    fn module_assignment_through_import_updates_source_binding() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib. x := 1. VM _ModuleExport: 'x. VM _ModuleOpen: 'App. VM _ModuleUse: 'Lib. x := 9. VM _ModuleOpen: 'Lib. x",
+        )
+        .expect("assignment through imported symbol should write source");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 9);
+    }
+
+    #[test]
+    fn methods_resolve_globals_in_defining_module() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib. Posix := { O_RDONLY = 77 }. File := { open: path = { Posix O_RDONLY } }. VM _ModuleExport: 'File. VM _ModuleOpen: 'App. Posix := { O_RDONLY = 13 }. VM _ModuleUse: 'Lib. File open: \"x\"",
+        )
+        .expect("method global lookup should use defining module");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 77);
+    }
+
+    #[test]
+    fn export_before_define_in_same_unit_works() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib. VM _ModuleExport: 'Hello. Hello := 42. VM _ModuleOpen: 'App. VM _ModuleUse: 'Lib. Hello",
+        )
+        .expect("export before define should resolve");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn forward_global_reference_in_same_unit_compiles() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let code = compile_source(
+            &mut vm,
+            "VM _ModuleOpen: 'App. Holder := { get = { x } }. x := 41.",
+        )
+        .expect("forward global reference should compile");
+        assert!(code.constants.iter().any(|c| matches!(
+            c,
+            compiler0::ConstEntry::ModuleAssoc { module, name }
+                if module == "App" && name == "x"
+        )));
+    }
+
+    #[test]
+    fn unresolved_global_is_compile_error() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let err = compile_source(&mut vm, "VM _ModuleOpen: 'App. missing")
+            .expect_err("unresolved global should fail compile");
+        assert!(err.contains("unresolved global 'missing'"));
+    }
+
+    #[test]
+    fn module_compile_emits_module_assoc_constants() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib. Hello := 1. VM _ModuleExport: 'Hello.",
+        )
+        .expect("setup lib module");
+
+        let code = compile_source(
+            &mut vm,
+            "VM _ModuleOpen: 'App. VM _ModuleUse: 'Lib. Hello _FixnumAdd: 1",
+        )
+        .expect("compile should succeed");
+
+        assert!(code.constants.iter().any(|c| matches!(
+            c,
+            compiler0::ConstEntry::ModuleAssoc { module, name }
+                if module == "Lib" && name == "Hello"
+        )));
     }
 }

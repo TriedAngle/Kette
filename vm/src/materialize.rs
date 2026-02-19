@@ -4,8 +4,9 @@ use std::ptr;
 
 use heap::{HeapProxy, RootProvider};
 use object::{
-    code_allocation_size, init_code, init_map, init_str, map_allocation_size,
-    Code, Map, MapFlags, Slot, SlotFlags, SlotObject, VMString, Value,
+    code_allocation_size, init_code, init_map, init_str, init_symbol,
+    map_allocation_size, Code, Map, MapFlags, Slot, SlotFlags, SlotObject,
+    VMString, VMSymbol, Value,
 };
 
 use crate::alloc::{add_constant_slot, alloc_byte_array, alloc_float};
@@ -158,6 +159,9 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             ConstEntry::String(s) => self.alloc_str_value(s.as_bytes()),
             ConstEntry::Value(value) => *value,
             ConstEntry::Symbol(s) => self.intern(s),
+            ConstEntry::ModuleAssoc { module, name } => {
+                self.resolve_assoc(&format!("{module}::{name}"))
+            }
             ConstEntry::Assoc(name) => self.resolve_assoc(name),
             ConstEntry::AssocValue(name) => self.resolve_assoc_value(name),
             ConstEntry::Code(desc) => self.materialize_code(desc),
@@ -316,9 +320,9 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         if let Some(&val) = self.roots.intern_table.get(name) {
             return val;
         }
-        let str_val = self.alloc_str_value(name.as_bytes());
-        self.roots.intern_table.insert(name.to_string(), str_val);
-        str_val
+        let sym_val = self.alloc_symbol_value(name.as_bytes());
+        self.roots.intern_table.insert(name.to_string(), sym_val);
+        sym_val
     }
 
     fn alloc_str_value(&mut self, content: &[u8]) -> Value {
@@ -352,6 +356,31 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             result
         }
     }
+
+    fn alloc_symbol_value(&mut self, content: &[u8]) -> Value {
+        let mut bytes = Vec::with_capacity(content.len() + 1);
+        bytes.extend_from_slice(content);
+        bytes.push(0);
+
+        let ba = unsafe { alloc_byte_array(self.proxy, self.roots, &bytes) };
+        let ba_val = ba.value();
+
+        let ba_idx = self.roots.scratch.len();
+        self.roots.scratch.push(ba_val);
+
+        let size = size_of::<VMSymbol>();
+        let layout = Layout::from_size_align(size, 8).unwrap();
+        let ptr = self.proxy.allocate(layout, self.roots);
+
+        unsafe {
+            let sym_ptr = ptr.as_ptr() as *mut VMSymbol;
+            let ba = self.roots.scratch[ba_idx];
+            init_symbol(sym_ptr, content.len() as u64, ba);
+            let result = Value::from_ptr(sym_ptr);
+            self.roots.scratch.pop();
+            result
+        }
+    }
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -375,19 +404,20 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     let dictionary_idx = scratch.len();
     scratch.push(vm.dictionary);
 
-    // Also root all other specials (indices 4..14)
+    // Also root all other specials (indices 4..16)
     scratch.push(vm.special.string_traits); // 4
-    scratch.push(vm.special.true_obj); // 5
-    scratch.push(vm.special.false_obj); // 6
-    scratch.push(vm.special.array_traits); // 7
-    scratch.push(vm.special.bytearray_traits); // 8
-    scratch.push(vm.special.bignum_traits); // 9
-    scratch.push(vm.special.alien_traits); // 10
-    scratch.push(vm.special.ratio_traits); // 11
-    scratch.push(vm.special.fixnum_traits); // 12
-    scratch.push(vm.special.code_traits); // 13
-    scratch.push(vm.special.float_traits); // 14
-    scratch.push(vm.special.block_traits); // 15
+    scratch.push(vm.special.symbol_traits); // 5
+    scratch.push(vm.special.true_obj); // 6
+    scratch.push(vm.special.false_obj); // 7
+    scratch.push(vm.special.array_traits); // 8
+    scratch.push(vm.special.bytearray_traits); // 9
+    scratch.push(vm.special.bignum_traits); // 10
+    scratch.push(vm.special.alien_traits); // 11
+    scratch.push(vm.special.ratio_traits); // 12
+    scratch.push(vm.special.fixnum_traits); // 13
+    scratch.push(vm.special.code_traits); // 14
+    scratch.push(vm.special.float_traits); // 15
+    scratch.push(vm.special.block_traits); // 16
 
     let mut roots = MaterializeRoots {
         scratch,
@@ -412,17 +442,18 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     vm.assoc_map = roots.scratch[assoc_map_idx];
     vm.dictionary = roots.scratch[dictionary_idx];
     vm.special.string_traits = roots.scratch[4];
-    vm.special.true_obj = roots.scratch[5];
-    vm.special.false_obj = roots.scratch[6];
-    vm.special.array_traits = roots.scratch[7];
-    vm.special.bytearray_traits = roots.scratch[8];
-    vm.special.bignum_traits = roots.scratch[9];
-    vm.special.alien_traits = roots.scratch[10];
-    vm.special.ratio_traits = roots.scratch[11];
-    vm.special.fixnum_traits = roots.scratch[12];
-    vm.special.code_traits = roots.scratch[13];
-    vm.special.float_traits = roots.scratch[14];
-    vm.special.block_traits = roots.scratch[15];
+    vm.special.symbol_traits = roots.scratch[5];
+    vm.special.true_obj = roots.scratch[6];
+    vm.special.false_obj = roots.scratch[7];
+    vm.special.array_traits = roots.scratch[8];
+    vm.special.bytearray_traits = roots.scratch[9];
+    vm.special.bignum_traits = roots.scratch[10];
+    vm.special.alien_traits = roots.scratch[11];
+    vm.special.ratio_traits = roots.scratch[12];
+    vm.special.fixnum_traits = roots.scratch[13];
+    vm.special.code_traits = roots.scratch[14];
+    vm.special.float_traits = roots.scratch[15];
+    vm.special.block_traits = roots.scratch[16];
 
     result
 }

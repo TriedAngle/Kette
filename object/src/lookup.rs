@@ -107,6 +107,9 @@ unsafe fn lookup_value(
         ObjectType::Str => {
             lookup_value(specials.string_traits, name, specials, visited)
         }
+        ObjectType::Symbol => {
+            lookup_value(specials.symbol_traits, name, specials, visited)
+        }
         ObjectType::BigNum => {
             lookup_value(specials.bignum_traits, name, specials, visited)
         }
@@ -317,6 +320,7 @@ mod tests {
             bignum_traits: none,
             alien_traits: none,
             string_traits: none,
+            symbol_traits: none,
             ratio_traits: none,
             fixnum_traits: none,
             code_traits: none,

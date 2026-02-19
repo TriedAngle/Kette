@@ -36,6 +36,7 @@ pub fn object_clone(
         ObjectType::Array => clone_array(vm, state, target),
         ObjectType::ByteArray => clone_bytearray(vm, state, target),
         ObjectType::Str => clone_string(vm, state, target),
+        ObjectType::Symbol => Ok(target),
         ObjectType::Float => clone_float(vm, state, target),
         ObjectType::BigNum => clone_bignum(vm, state, target),
         ObjectType::Ratio => clone_ratio(vm, state, target),

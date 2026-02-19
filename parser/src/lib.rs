@@ -46,6 +46,7 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod semantic;
 pub mod span;
 pub mod token;
 
@@ -272,6 +273,62 @@ mod tests {
                 }
             }
             _ => panic!("expected cascade"),
+        }
+    }
+
+    #[test]
+    fn assignment_rhs_can_be_cascade_unary() {
+        let e = parse_one("x := 3 factorial; print");
+        match &e.kind {
+            ExprKind::Assignment {
+                target,
+                kind,
+                value,
+            } => {
+                assert_eq!(*kind, AssignKind::Assign);
+                assert!(matches!(
+                    target.kind,
+                    ExprKind::Ident(ref name) if name == "x"
+                ));
+                match &value.kind {
+                    ExprKind::Cascade { receiver, messages } => {
+                        assert!(matches!(receiver.kind, ExprKind::Integer(3)));
+                        assert_eq!(messages.len(), 2);
+                    }
+                    _ => panic!("expected cascade as assignment RHS"),
+                }
+            }
+            _ => panic!("expected assignment"),
+        }
+    }
+
+    #[test]
+    fn const_assignment_rhs_can_be_cascade() {
+        let e = parse_one("x = 3 + 4; print");
+        match &e.kind {
+            ExprKind::Assignment { kind, value, .. } => {
+                assert_eq!(*kind, AssignKind::Const);
+                assert!(matches!(value.kind, ExprKind::Cascade { .. }));
+            }
+            _ => panic!("expected assignment"),
+        }
+    }
+
+    #[test]
+    fn assignment_rhs_keyword_cascade() {
+        let e = parse_one("x := obj add: 1; add: 2");
+        match &e.kind {
+            ExprKind::Assignment { value, .. } => match &value.kind {
+                ExprKind::Cascade { receiver, messages } => {
+                    assert!(matches!(
+                        receiver.kind,
+                        ExprKind::Ident(ref name) if name == "obj"
+                    ));
+                    assert_eq!(messages.len(), 2);
+                }
+                _ => panic!("expected cascade"),
+            },
+            _ => panic!("expected assignment"),
         }
     }
 

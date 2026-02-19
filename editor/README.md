@@ -8,8 +8,8 @@
 This guide wires Kette into Neovim with:
 
 - filetype detection for `*.ktt`
-- syntax highlighting
-- parser diagnostics via `kette-lsp`
+- immediate syntax highlighting while typing (Vim syntax)
+- parser + semantic diagnostics via `kette-lsp`
 - semantic highlighting for unary messages, keyword messages, locals, and globals
 
 ## 1) Build the language server
@@ -17,12 +17,12 @@ This guide wires Kette into Neovim with:
 From the repo root:
 
 ```bash
-cargo build -p kette-lsp
+cargo build --release -p kette-lsp
 ```
 
 The binary will be at:
 
-`/home/sebastian/Projects/Kette/target/debug/kette-lsp`
+`/home/sebastian/KetteV2/target/release/kette-lsp`
 
 ## 2) Expose the Neovim runtime files
 
@@ -30,7 +30,7 @@ Add the repo Neovim folder as a local package (works with normal runtime + lazy.
 
 ```bash
 mkdir -p "/home/sebastian/dots/nvim/pack/kette/start"
-ln -sfn "/home/sebastian/Projects/Kette/editor/nvim" "/home/sebastian/dots/nvim/pack/kette/start/kette-nvim"
+ln -sfn "/home/sebastian/KetteV2/editor/nvim" "/home/sebastian/dots/nvim/pack/kette/start/kette-nvim"
 ```
 
 If your config is elsewhere, replace `/home/sebastian/dots/nvim` accordingly.
@@ -43,7 +43,7 @@ In your Neovim LSP config, add:
 vim.lsp.config('kette_lsp', {
   capabilities = capabilities,
   on_attach = on_attach,
-  cmd = { '/home/sebastian/Projects/Kette/target/debug/kette-lsp' },
+  cmd = { '/home/sebastian/KetteV2/target/release/kette-lsp' },
   filetypes = { 'kette' },
   root_markers = { '.git', 'Cargo.toml' },
   single_file_support = true,
@@ -62,6 +62,7 @@ local function set_kette_semantic_hl()
   vim.api.nvim_set_hl(0, '@lsp.type.variable.kette', { link = 'Identifier' })
   vim.api.nvim_set_hl(0, '@lsp.type.namespace.kette', { link = 'Type' })
   vim.api.nvim_set_hl(0, '@lsp.type.operator.kette', { link = 'Operator' })
+  vim.api.nvim_set_hl(0, '@lsp.type.punctuation.kette', { link = 'Comment' })
 end
 
 set_kette_semantic_hl()
@@ -77,6 +78,7 @@ Token mapping in `kette-lsp`:
 - locals -> `variable`
 - globals -> `namespace`
 - binary operators -> `operator`
+- delimiters (`{ } [ ] ( ) | . ; ^`) -> `punctuation`
 
 ## 5) Restart Neovim and verify
 
@@ -84,5 +86,5 @@ Open a `.ktt` file and verify:
 
 - `:set filetype?` shows `kette`
 - `:LspInfo` shows `kette_lsp`
-- syntax errors appear as diagnostics while editing
+- parse/semantic errors appear as diagnostics while editing
 - unary/keyword/local/global coloring differs

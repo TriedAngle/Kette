@@ -144,6 +144,9 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
             0,
             string::string_to_bytearray,
         ),
+        PrimitiveDesc::new("string_to_symbol", 0, string::string_to_symbol),
+        PrimitiveDesc::new("symbol_to_string", 0, string::symbol_to_string),
+        PrimitiveDesc::new("symbol_length", 0, string::symbol_length),
         PrimitiveDesc::new("bytearray_size", 0, bytearray::bytearray_size),
         PrimitiveDesc::new(
             "bytearray_clone_with_size",
@@ -467,6 +470,25 @@ pub(crate) fn expect_string(
         });
     }
     Ok(value.ref_bits() as *const object::VMString)
+}
+
+pub(crate) fn expect_symbol(
+    value: Value,
+) -> Result<*const object::VMSymbol, RuntimeError> {
+    if !value.is_ref() {
+        return Err(RuntimeError::TypeError {
+            expected: "symbol",
+            got: value,
+        });
+    }
+    let header: &Header = unsafe { value.as_ref() };
+    if header.object_type() != ObjectType::Symbol {
+        return Err(RuntimeError::TypeError {
+            expected: "symbol",
+            got: value,
+        });
+    }
+    Ok(value.ref_bits() as *const object::VMSymbol)
 }
 
 pub(crate) fn expect_bytearray(

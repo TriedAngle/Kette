@@ -5,7 +5,7 @@ use libffi::middle::{Arg, Cif, CodePtr, Type};
 use libffi::raw;
 use object::{
     Alien, BigNum, ByteArray, MapFlags, ObjectType, Slot, SlotFlags,
-    SlotObject, VMString, Value,
+    SlotObject, VMString, VMSymbol, Value,
 };
 
 use crate::alloc::{
@@ -13,9 +13,10 @@ use crate::alloc::{
     alloc_map, alloc_slot_object,
 };
 use crate::interpreter::{with_roots, InterpreterState, RuntimeError};
+use crate::primitives::string::intern_symbol;
 use crate::primitives::{
     expect_alien, expect_array, expect_bignum, expect_bytearray, expect_fixnum,
-    expect_float, expect_string,
+    expect_float, expect_string, expect_symbol,
 };
 use crate::VM;
 
@@ -178,6 +179,14 @@ fn value_to_pointer_bits(value: Value) -> Result<u64, RuntimeError> {
             }
             ObjectType::Str => {
                 let s = expect_string(value)?;
+                let ba_val = unsafe { (*s).data };
+                let ba_ptr = expect_bytearray(ba_val)?;
+                let p =
+                    unsafe { (ba_ptr as *const ByteArray).add(1) as *const u8 };
+                return Ok(p as u64);
+            }
+            ObjectType::Symbol => {
+                let s = expect_symbol(value)?;
                 let ba_val = unsafe { (*s).data };
                 let ba_ptr = expect_bytearray(ba_val)?;
                 let p =
@@ -1286,20 +1295,6 @@ pub fn ctype_scalar_tag(
     }
 }
 
-fn intern_symbol(
-    vm: &mut VM,
-    state: &mut InterpreterState,
-    name: &str,
-) -> Result<Value, RuntimeError> {
-    if let Some(&symbol) = vm.intern_table.get(name) {
-        return Ok(symbol);
-    }
-    let symbol =
-        crate::primitives::string::alloc_vm_string(vm, state, name.as_bytes())?;
-    vm.intern_table.insert(name.to_string(), symbol);
-    Ok(symbol)
-}
-
 fn expect_slot_object_ptr(
     value: Value,
 ) -> Result<*mut SlotObject, RuntimeError> {
@@ -1320,11 +1315,15 @@ fn expect_slot_object_ptr(
 }
 
 fn value_name_eq(name_value: Value, wanted: &str) -> bool {
-    if !name_value.is_ref() {
-        return false;
+    if let Ok(sym_ptr) = expect_symbol(name_value) {
+        let name: &VMSymbol = unsafe { &*sym_ptr };
+        return unsafe { name.as_str() == wanted };
     }
-    let name: &VMString = unsafe { name_value.as_ref() };
-    unsafe { name.as_str() == wanted }
+    if let Ok(str_ptr) = expect_string(name_value) {
+        let name: &VMString = unsafe { &*str_ptr };
+        return unsafe { name.as_str() == wanted };
+    }
+    false
 }
 
 fn value_is_method_object(value: Value) -> bool {

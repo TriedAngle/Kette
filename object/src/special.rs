@@ -45,6 +45,9 @@ pub struct SpecialObjects {
     /// Methods / slots for [`VMString`](crate::VMString) objects.
     pub string_traits: Value,
 
+    /// Methods / slots for [`VMSymbol`](crate::VMSymbol) objects.
+    pub symbol_traits: Value,
+
     /// Methods / slots for [`Ratio`](crate::Ratio) objects.
     pub ratio_traits: Value,
 

@@ -1,0 +1,43 @@
+// Module/global resolution demo for current VM behavior.
+// Run with: cargo run -p vm -- core/module_resolution_demo.ktt
+// This file intentionally uses VM module primitives directly so it works
+// without loading core/init first.
+
+// 1) Open a module and export before definition.
+//    The compiler pre-scans top-level forms, so this is valid.
+VM _ModuleOpen: 'Lib.
+VM _ModuleExport: 'Hello.
+Hello := 41.
+
+// 2) Define a method that reads a global.
+//    Inside the VM, this global is compiled as a module-qualified global assoc
+//    reference (ModuleAssoc), not just a plain name lookup.
+Greeter := {
+    greet = {
+        Hello _FixnumAdd: 1
+    }.
+}.
+VM _ModuleExport: 'Greeter.
+
+// 3) Consumer module imports Lib and calls the method.
+//    `Greeter greet` resolves Hello in Lib's module context.
+VM _ModuleOpen: 'App.
+VM _ModuleUse: 'Lib.
+result := Greeter greet.
+
+// 4) Imported names are aliases to exported bindings.
+//    Assigning to imported `Hello` writes back into Lib.
+Hello := 50.
+VM _ModuleOpen: 'Lib.
+libHello := Hello.
+
+// 5) Alias import example.
+//    This is optional; plain `VM _ModuleUse: 'Lib.` already imports `Hello`.
+//    Use `As:` only when you want a different local name or to avoid collisions.
+VM _ModuleOpen: 'App.
+VM _ModuleUse: 'Lib As: { Hello = 'PublicHello }.
+aliasHello := PublicHello.
+
+// Final expression: should be 92 when all module operations worked.
+// result = 42, aliasHello = 50.
+result _FixnumAdd: aliasHello

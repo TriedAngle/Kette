@@ -596,6 +596,29 @@ pub unsafe fn init_str(ptr: *mut VMString, length: u64, data: Value) {
     });
 }
 
+/// Heap-allocated symbol.
+///
+/// Symbols use the same in-memory layout as [`VMString`]: header + byte
+/// length + backing [`ByteArray`] reference. The backing bytes are expected to
+/// include a trailing NUL terminator while `length` stores content size.
+pub type VMSymbol = VMString;
+
+/// Initialize a symbol object at a raw allocation.
+///
+/// `data` must reference a [`ByteArray`] containing `length` content bytes
+/// followed by a trailing `\0` byte.
+///
+/// # Safety
+///
+/// `ptr` must point to at least `size_of::<VMSymbol>()` writable bytes.
+pub unsafe fn init_symbol(ptr: *mut VMSymbol, length: u64, data: Value) {
+    ptr.write(VMSymbol {
+        header: Header::new(ObjectType::Symbol),
+        length,
+        data,
+    });
+}
+
 /// Exact rational number (numerator / denominator).
 #[repr(C)]
 pub struct Ratio {

@@ -1,11 +1,44 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bytecode::{BytecodeBuilder, SourceMapBuilder};
 use object::Value;
 use parser::ast::{
     AssignKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotSelector,
 };
-use parser::span::Span;
+use parser::semantic::{
+    analyze_semantics_with_mode,
+    collect_assignment_names as parser_collect_assignment_names,
+    slot_selector_name, AnalysisMode,
+};
+use parser::span::{Pos, Span};
+
+use crate::VM;
+
+#[derive(Debug, Clone)]
+struct ModuleCompileState {
+    bindings: HashSet<String>,
+    assignment_decls: HashSet<String>,
+    imports: HashMap<String, (String, String)>,
+    exports: HashSet<String>,
+}
+
+impl ModuleCompileState {
+    fn empty() -> Self {
+        Self {
+            bindings: HashSet::new(),
+            assignment_decls: HashSet::new(),
+            imports: HashMap::new(),
+            exports: HashSet::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CompileModuleEnv {
+    initial_module: Option<String>,
+    expr_modules: Vec<Option<String>>,
+    modules: HashMap<String, ModuleCompileState>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CompileError {
@@ -201,6 +234,7 @@ pub enum ConstEntry {
     String(String),
     Value(Value),
     Symbol(String),
+    ModuleAssoc { module: String, name: String },
     Assoc(String),
     AssocValue(String),
     Code(CodeDesc),
@@ -247,17 +281,69 @@ struct CompileFrame {
 
 pub struct Compiler {
     frames: Vec<CompileFrame>,
+    module_env: Option<CompileModuleEnv>,
+    current_module: Option<String>,
+    top_level_expr_index: usize,
 }
 
 impl Compiler {
     fn new() -> Self {
-        Self { frames: Vec::new() }
+        Self {
+            frames: Vec::new(),
+            module_env: None,
+            current_module: None,
+            top_level_expr_index: 0,
+        }
+    }
+
+    fn with_module_env(module_env: CompileModuleEnv) -> Self {
+        Self {
+            frames: Vec::new(),
+            current_module: module_env.initial_module.clone(),
+            module_env: Some(module_env),
+            top_level_expr_index: 0,
+        }
     }
 
     // ── Public API ──────────────────────────────────────────────
 
     pub fn compile(exprs: &[Expr]) -> Result<CodeDesc, CompileError> {
+        match Self::compile_with_issues(exprs) {
+            Ok(code) => Ok(code),
+            Err(mut errs) => {
+                if let Some(first) = errs.drain(..).next() {
+                    Err(first)
+                } else {
+                    Err(CompileError::no_span("compile failed"))
+                }
+            }
+        }
+    }
+
+    pub fn compile_with_issues(
+        exprs: &[Expr],
+    ) -> Result<CodeDesc, Vec<CompileError>> {
+        let analysis =
+            analyze_semantics_with_mode(&[], exprs, AnalysisMode::Strict);
+        if !analysis.issues.is_empty() {
+            let errs = analysis
+                .issues
+                .into_iter()
+                .map(|issue| CompileError::new(issue.message, issue.span))
+                .collect();
+            return Err(errs);
+        }
+
         let mut c = Compiler::new();
+        c.compile_program(exprs).map_err(|err| vec![err])
+    }
+
+    pub fn compile_for_vm(
+        vm: &VM,
+        exprs: &[Expr],
+    ) -> Result<CodeDesc, CompileError> {
+        let module_env = build_compile_module_env(vm, exprs)?;
+        let mut c = Compiler::with_module_env(module_env);
         c.compile_program(exprs)
     }
 
@@ -268,7 +354,31 @@ impl Compiler {
         self.push_frame(ScopeKind::TopLevel);
         self.prescan_locals(exprs);
         self.analyze_captures(exprs, &[]);
-        self.compile_body(exprs)?;
+
+        let non_comment: Vec<&Expr> = exprs
+            .iter()
+            .filter(|e| !matches!(e.kind, ExprKind::Comment(_)))
+            .collect();
+        if non_comment.is_empty() {
+            self.builder().load_local(0);
+        } else {
+            for (i, expr) in non_comment.iter().enumerate() {
+                if let Some(env) = &self.module_env {
+                    if let Some(module) =
+                        env.expr_modules.get(self.top_level_expr_index).cloned()
+                    {
+                        self.current_module = module;
+                    }
+                }
+                self.top_level_expr_index += 1;
+                let mark = self.scope().reg_mark();
+                self.compile_expr(expr)?;
+                if i < non_comment.len() - 1 {
+                    self.scope_mut().restore_regs(mark);
+                }
+            }
+        }
+
         self.builder().local_return();
         Ok(self.pop_frame())
     }
@@ -626,25 +736,7 @@ impl Compiler {
     }
 
     fn collect_assignment_names(body: &[Expr], out: &mut HashSet<String>) {
-        for expr in body {
-            match &expr.kind {
-                ExprKind::Assignment { target, .. } => {
-                    if let ExprKind::Ident(name) = &target.kind {
-                        out.insert(name.clone());
-                    }
-                }
-                ExprKind::Sequence(exprs) => {
-                    Self::collect_assignment_names(exprs, out);
-                }
-                ExprKind::Paren(inner) => {
-                    Self::collect_assignment_names(
-                        std::slice::from_ref(inner.as_ref()),
-                        out,
-                    );
-                }
-                _ => {}
-            }
-        }
+        out.extend(parser_collect_assignment_names(body));
     }
 
     fn collect_assignment_names_filtered(
@@ -720,7 +812,7 @@ impl Compiler {
         }
 
         if self.scope().kind == ScopeKind::TopLevel {
-            let idx = self.add_symbol(name);
+            let idx = self.add_global_ref(name, true, span)?;
             return Ok(VarLoc::Global(idx));
         }
 
@@ -754,15 +846,19 @@ impl Compiler {
         false
     }
 
-    fn resolve_for_load(&mut self, name: &str) -> VarLoc {
+    fn resolve_for_load(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<VarLoc, CompileError> {
         let depth = self.frames.len();
 
         // Check current scope
         if let Some(var) = self.frames[depth - 1].scope.find_local(name) {
             if var.captured {
-                return VarLoc::Temp(0, var.temp_idx.unwrap());
+                return Ok(VarLoc::Temp(0, var.temp_idx.unwrap()));
             }
-            return VarLoc::Local(var.reg);
+            return Ok(VarLoc::Local(var.reg));
         }
 
         // Check enclosing scopes
@@ -770,7 +866,7 @@ impl Compiler {
             if let Some(var) = self.frames[i].scope.find_local(name) {
                 if var.captured {
                     let array_idx = self.temp_array_depth(i);
-                    return VarLoc::Temp(array_idx, var.temp_idx.unwrap());
+                    return Ok(VarLoc::Temp(array_idx, var.temp_idx.unwrap()));
                 }
                 // Found in enclosing but not marked as captured — shouldn't
                 // happen if capture analysis ran correctly. Treat as global.
@@ -778,8 +874,87 @@ impl Compiler {
             }
         }
 
-        let idx = self.add_symbol(name);
-        VarLoc::Global(idx)
+        let idx = self.add_global_ref(name, false, span)?;
+        Ok(VarLoc::Global(idx))
+    }
+
+    fn add_global_ref(
+        &mut self,
+        name: &str,
+        is_store: bool,
+        span: Span,
+    ) -> Result<u16, CompileError> {
+        if self.module_env.is_none() {
+            return Ok(self.add_symbol(name));
+        }
+
+        let (module, export_name) =
+            self.resolve_module_global(name, is_store, span)?;
+        let constants = &self.frame().constants;
+        for (i, c) in constants.iter().enumerate() {
+            if let ConstEntry::ModuleAssoc { module: m, name: n } = c {
+                if m == &module && n == &export_name {
+                    return Ok(i as u16);
+                }
+            }
+        }
+        Ok(self.add_constant(ConstEntry::ModuleAssoc {
+            module,
+            name: export_name,
+        }))
+    }
+
+    fn resolve_module_global(
+        &self,
+        name: &str,
+        is_store: bool,
+        span: Span,
+    ) -> Result<(String, String), CompileError> {
+        let Some(env) = &self.module_env else {
+            return Err(CompileError::new(
+                "module-aware compilation requires module environment",
+                span,
+            ));
+        };
+        let Some(current_module) = &self.current_module else {
+            return Err(CompileError::new(
+                "no open module for global reference",
+                span,
+            ));
+        };
+        let Some(module) = env.modules.get(current_module) else {
+            return Err(CompileError::new(
+                format!("unknown current module '{current_module}'"),
+                span,
+            ));
+        };
+
+        if is_store {
+            if let Some((target_module, target_name)) = module.imports.get(name)
+            {
+                return Ok((target_module.clone(), target_name.clone()));
+            }
+            if module.bindings.contains(name) {
+                return Ok((current_module.clone(), name.to_string()));
+            }
+
+            return Ok((current_module.clone(), name.to_string()));
+        }
+
+        if module.bindings.contains(name) {
+            return Ok((current_module.clone(), name.to_string()));
+        }
+        if let Some((target_module, target_name)) = module.imports.get(name) {
+            return Ok((target_module.clone(), target_name.clone()));
+        }
+
+        Err(CompileError::new(
+            format!(
+                "unresolved global '{}' in module '{}'",
+                name, current_module
+            ),
+            span,
+        ))
     }
 
     fn resolve_lexical_for_load(
@@ -886,7 +1061,7 @@ impl Compiler {
                 self.builder().load_local(0);
             }
             ExprKind::Ident(name) => {
-                self.compile_ident(name);
+                self.compile_ident(name, expr.span)?;
             }
             ExprKind::UnaryMessage { receiver, selector } => {
                 self.compile_unary_message(receiver, selector, expr.span)?;
@@ -945,19 +1120,25 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_ident(&mut self, name: &str) {
-        match self.resolve_for_load(name) {
+    fn compile_ident(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        match self.resolve_for_load(name, span)? {
             VarLoc::Local(reg) => self.builder().load_local(reg),
             VarLoc::Temp(arr, idx) => self.builder().load_temp(arr, idx),
             VarLoc::Global(const_idx) => self.builder().load_assoc(const_idx),
         }
+        Ok(())
     }
 
     fn compile_shorthand_value(
         &mut self,
         name: &str,
         skip_current_scope: bool,
-    ) {
+        _span: Span,
+    ) -> Result<(), CompileError> {
         if let Some(loc) =
             self.resolve_lexical_for_load(name, skip_current_scope)
         {
@@ -972,6 +1153,7 @@ impl Compiler {
             let none_idx = self.add_symbol("None");
             self.builder().load_assoc(none_idx);
         }
+        Ok(())
     }
 
     // ── Message compilation ─────────────────────────────────────
@@ -1272,7 +1454,7 @@ impl Compiler {
 
                 // Compile the value expression → temp register
                 if slot.shorthand {
-                    self.compile_shorthand_value(&name, false);
+                    self.compile_shorthand_value(&name, false, slot.span)?;
                 } else {
                     self.compile_expr(&slot.value)?;
                 }
@@ -1313,7 +1495,9 @@ impl Compiler {
                     if self.slot_value_requires_runtime(&slot.value) {
                         let offset = values_base_offset + value_count * 8;
                         if slot.shorthand {
-                            self.compile_shorthand_value(&name, false);
+                            self.compile_shorthand_value(
+                                &name, false, slot.span,
+                            )?;
                         } else {
                             self.compile_expr(&slot.value)?;
                         }
@@ -1442,7 +1626,7 @@ impl Compiler {
         for slot in slots {
             let name = slot_selector_name(slot);
             if slot.shorthand {
-                self.compile_shorthand_value(&name, true);
+                self.compile_shorthand_value(&name, true, slot.span)?;
             } else {
                 self.compile_expr(&slot.value)?;
             }
@@ -1553,7 +1737,11 @@ impl Compiler {
                 for inner_slot in inner_slots {
                     let name = slot_selector_name(inner_slot);
                     if inner_slot.shorthand {
-                        self.compile_shorthand_value(&name, true);
+                        self.compile_shorthand_value(
+                            &name,
+                            true,
+                            inner_slot.span,
+                        )?;
                     } else {
                         self.compile_expr(&inner_slot.value)?;
                     }
@@ -1700,14 +1888,368 @@ impl Compiler {
     }
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
+#[derive(Debug, Clone)]
+enum ModuleDirective {
+    Open {
+        path: String,
+    },
+    Use {
+        path: String,
+    },
+    UseAs {
+        path: String,
+        aliases: HashMap<String, String>,
+    },
+    Export {
+        name: String,
+    },
+}
 
-fn slot_selector_name(slot: &SlotDescriptor) -> String {
-    match &slot.selector {
-        SlotSelector::Unary(s) => s.clone(),
-        SlotSelector::Binary(s) => s.clone(),
-        SlotSelector::Keyword(s) => s.clone(),
+#[derive(Debug, Clone)]
+struct PendingUse {
+    current_module: String,
+    target_module: String,
+    aliases: HashMap<String, String>,
+    span: Span,
+}
+
+fn build_compile_module_env(
+    vm: &VM,
+    exprs: &[Expr],
+) -> Result<CompileModuleEnv, CompileError> {
+    let mut modules: HashMap<String, ModuleCompileState> = HashMap::new();
+    for (path, module) in &vm.modules {
+        let mut state = ModuleCompileState::empty();
+        state.bindings.extend(module.bindings.keys().cloned());
+        state.exports.extend(module.exports.iter().cloned());
+        for (local, import) in &module.imports {
+            state.imports.insert(
+                local.clone(),
+                (import.module_path.clone(), import.export_name.clone()),
+            );
+        }
+        modules.insert(path.clone(), state);
     }
+
+    let mut expr_modules = Vec::new();
+    let mut current_module = vm.current_module.clone();
+    let mut pending_uses = Vec::new();
+
+    for expr in exprs {
+        if matches!(expr.kind, ExprKind::Comment(_)) {
+            continue;
+        }
+        expr_modules.push(current_module.clone());
+
+        if let Some(name) = top_level_assignment_name(expr) {
+            let Some(module) = &current_module else {
+                return Err(CompileError::new(
+                    "top-level assignment requires an open module",
+                    expr.span,
+                ));
+            };
+            let state = modules
+                .entry(module.clone())
+                .or_insert_with(ModuleCompileState::empty);
+            state.bindings.insert(name.to_string());
+            state.assignment_decls.insert(name.to_string());
+        }
+
+        if let Some(directive) = parse_module_directive(expr) {
+            match directive {
+                ModuleDirective::Open { path } => {
+                    modules
+                        .entry(path.clone())
+                        .or_insert_with(ModuleCompileState::empty);
+                    if path != "user" {
+                        modules
+                            .entry("user".to_string())
+                            .or_insert_with(ModuleCompileState::empty);
+                        pending_uses.push(PendingUse {
+                            current_module: path.clone(),
+                            target_module: "user".to_string(),
+                            aliases: HashMap::new(),
+                            span: expr.span,
+                        });
+                    }
+                    current_module = Some(path);
+                }
+                ModuleDirective::Export { name } => {
+                    let Some(module) = current_module.clone() else {
+                        return Err(CompileError::new(
+                            "Module export requires an open module",
+                            expr.span,
+                        ));
+                    };
+                    modules
+                        .entry(module)
+                        .or_insert_with(ModuleCompileState::empty)
+                        .exports
+                        .insert(name);
+                }
+                ModuleDirective::Use { path } => {
+                    let Some(module) = current_module.clone() else {
+                        return Err(CompileError::new(
+                            "Module use requires an open module",
+                            expr.span,
+                        ));
+                    };
+                    pending_uses.push(PendingUse {
+                        current_module: module,
+                        target_module: path,
+                        aliases: HashMap::new(),
+                        span: expr.span,
+                    });
+                }
+                ModuleDirective::UseAs { path, aliases } => {
+                    let Some(module) = current_module.clone() else {
+                        return Err(CompileError::new(
+                            "Module use requires an open module",
+                            expr.span,
+                        ));
+                    };
+                    pending_uses.push(PendingUse {
+                        current_module: module,
+                        target_module: path,
+                        aliases,
+                        span: expr.span,
+                    });
+                }
+            }
+        }
+    }
+
+    for use_dir in pending_uses {
+        apply_compile_use(&mut modules, &use_dir)?;
+    }
+
+    for module in modules.values_mut() {
+        let import_names: Vec<String> =
+            module.imports.keys().cloned().collect();
+        for name in import_names {
+            if module.assignment_decls.contains(&name) {
+                module.bindings.remove(&name);
+            }
+        }
+    }
+
+    for (module_name, module) in &modules {
+        for export in &module.exports {
+            if module.bindings.contains(export)
+                || module.imports.contains_key(export)
+            {
+                continue;
+            }
+            return Err(CompileError::new(
+                format!(
+                    "module '{}' exports '{}' but it is not defined or imported",
+                    module_name, export
+                ),
+                Span::point(Pos::origin()),
+            ));
+        }
+    }
+
+    Ok(CompileModuleEnv {
+        initial_module: vm.current_module.clone(),
+        expr_modules,
+        modules,
+    })
+}
+
+fn apply_compile_use(
+    modules: &mut HashMap<String, ModuleCompileState>,
+    use_dir: &PendingUse,
+) -> Result<(), CompileError> {
+    apply_compile_use_inner(modules, use_dir)
+}
+
+fn apply_compile_use_inner(
+    modules: &mut HashMap<String, ModuleCompileState>,
+    use_dir: &PendingUse,
+) -> Result<(), CompileError> {
+    let target = modules.get(&use_dir.target_module).ok_or_else(|| {
+        CompileError::new(
+            format!("unknown module '{}'", use_dir.target_module),
+            use_dir.span,
+        )
+    })?;
+
+    let target_exports = target.exports.clone();
+
+    for from in use_dir.aliases.keys() {
+        if !target_exports.contains(from) {
+            return Err(CompileError::new(
+                format!(
+                    "cannot alias non-exported symbol '{}' from module '{}'",
+                    from, use_dir.target_module
+                ),
+                use_dir.span,
+            ));
+        }
+    }
+
+    let current = modules
+        .entry(use_dir.current_module.clone())
+        .or_insert_with(ModuleCompileState::empty);
+
+    for exported in &target_exports {
+        let local_name = use_dir
+            .aliases
+            .get(exported)
+            .cloned()
+            .unwrap_or_else(|| exported.clone());
+
+        if current.bindings.contains(&local_name)
+            && !current.assignment_decls.contains(&local_name)
+        {
+            return Err(CompileError::new(
+                format!(
+                    "import collision in module '{}': '{}' already exists",
+                    use_dir.current_module, local_name
+                ),
+                use_dir.span,
+            ));
+        }
+
+        if let Some(existing) = current.imports.get(&local_name) {
+            if existing != &(use_dir.target_module.clone(), exported.clone()) {
+                return Err(CompileError::new(
+                    format!(
+                        "import collision in module '{}': '{}' already exists",
+                        use_dir.current_module, local_name
+                    ),
+                    use_dir.span,
+                ));
+            }
+            continue;
+        }
+
+        current.imports.insert(
+            local_name,
+            (use_dir.target_module.clone(), exported.clone()),
+        );
+    }
+
+    Ok(())
+}
+
+fn top_level_assignment_name(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Assignment { target, .. } => {
+            if let ExprKind::Ident(name) = &target.kind {
+                Some(name)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_module_directive(expr: &Expr) -> Option<ModuleDirective> {
+    let ExprKind::KeywordMessage { receiver, pairs } = &expr.kind else {
+        return None;
+    };
+    let ExprKind::Ident(receiver_name) = &receiver.kind else {
+        return None;
+    };
+
+    if receiver_name == "Module" {
+        return parse_module_directive_pairs(pairs);
+    }
+    if receiver_name == "VM" {
+        return parse_vm_module_directive_pairs(pairs);
+    }
+
+    None
+}
+
+fn parse_module_directive_pairs(
+    pairs: &[KeywordPair],
+) -> Option<ModuleDirective> {
+    if pairs.len() == 1 && pairs[0].keyword == "open:" {
+        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+            return Some(ModuleDirective::Open { path: path.clone() });
+        }
+    }
+    if pairs.len() == 1 && pairs[0].keyword == "use:" {
+        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+            return Some(ModuleDirective::Use { path: path.clone() });
+        }
+    }
+    if pairs.len() == 2
+        && pairs[0].keyword == "use:"
+        && pairs[1].keyword == "As:"
+    {
+        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+            let aliases = parse_alias_object(&pairs[1].argument)?;
+            return Some(ModuleDirective::UseAs {
+                path: path.clone(),
+                aliases,
+            });
+        }
+    }
+    if pairs.len() == 1 && pairs[0].keyword == "export:" {
+        if let ExprKind::Symbol(name) = &pairs[0].argument.kind {
+            return Some(ModuleDirective::Export { name: name.clone() });
+        }
+    }
+    None
+}
+
+fn parse_vm_module_directive_pairs(
+    pairs: &[KeywordPair],
+) -> Option<ModuleDirective> {
+    if pairs.len() == 1 && pairs[0].keyword == "_ModuleOpen:" {
+        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+            return Some(ModuleDirective::Open { path: path.clone() });
+        }
+    }
+    if pairs.len() == 1 && pairs[0].keyword == "_ModuleUse:" {
+        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+            return Some(ModuleDirective::Use { path: path.clone() });
+        }
+    }
+    if pairs.len() == 2
+        && pairs[0].keyword == "_ModuleUse:"
+        && pairs[1].keyword == "As:"
+    {
+        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+            let aliases = parse_alias_object(&pairs[1].argument)?;
+            return Some(ModuleDirective::UseAs {
+                path: path.clone(),
+                aliases,
+            });
+        }
+    }
+    if pairs.len() == 1 && pairs[0].keyword == "_ModuleExport:" {
+        if let ExprKind::Symbol(name) = &pairs[0].argument.kind {
+            return Some(ModuleDirective::Export { name: name.clone() });
+        }
+    }
+    None
+}
+
+fn parse_alias_object(expr: &Expr) -> Option<HashMap<String, String>> {
+    let ExprKind::Object { slots, body } = &expr.kind else {
+        return None;
+    };
+    if !body.is_empty() {
+        return None;
+    }
+
+    let mut aliases = HashMap::new();
+    for slot in slots {
+        let SlotSelector::Unary(from) = &slot.selector else {
+            return None;
+        };
+        let ExprKind::Symbol(to) = &slot.value.kind else {
+            return None;
+        };
+        aliases.insert(from.clone(), to.clone());
+    }
+    Some(aliases)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

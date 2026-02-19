@@ -3,7 +3,7 @@ use std::mem::size_of;
 
 use heap::{Heap, HeapProxy, HeapSettings, RootProvider};
 use object::{
-    init_str, MapFlags, Slot, SlotFlags, SpecialObjects, VMString, Value,
+    init_symbol, MapFlags, Slot, SlotFlags, SpecialObjects, VMSymbol, Value,
 };
 
 use crate::alloc::{
@@ -37,7 +37,7 @@ impl RootProvider for BootstrapRoots {
     }
 }
 
-unsafe fn alloc_vm_string(
+unsafe fn alloc_vm_symbol(
     proxy: &mut HeapProxy,
     roots: &mut BootstrapRoots,
     bytes: &[u8],
@@ -48,12 +48,12 @@ unsafe fn alloc_vm_string(
     let ba = alloc_byte_array(proxy, roots, &data).value();
     roots.push(ba);
 
-    let size = size_of::<VMString>();
+    let size = size_of::<VMSymbol>();
     let layout = std::alloc::Layout::from_size_align(size, 8).unwrap();
     let ptr = proxy.allocate(layout, roots);
-    let str_ptr = ptr.as_ptr() as *mut VMString;
-    init_str(str_ptr, bytes.len() as u64, ba);
-    Value::from_ptr(str_ptr)
+    let sym_ptr = ptr.as_ptr() as *mut VMSymbol;
+    init_symbol(sym_ptr, bytes.len() as u64, ba);
+    Value::from_ptr(sym_ptr)
 }
 
 unsafe fn intern_bootstrap(
@@ -65,7 +65,7 @@ unsafe fn intern_bootstrap(
     if let Some(&value) = table.get(name) {
         return value;
     }
-    let value = alloc_vm_string(proxy, roots, name.as_bytes());
+    let value = alloc_vm_symbol(proxy, roots, name.as_bytes());
     roots.push(value);
     table.insert(name.to_string(), value);
     value
@@ -276,6 +276,26 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         )
         .value();
         roots.push(string_traits_val);
+
+        let mut symbol_traits_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            NONE_PLACEHOLDER,
+            MapFlags::NONE,
+            &[],
+            0,
+        )
+        .value();
+        roots.push(symbol_traits_map_val);
+        let symbol_traits_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            symbol_traits_map_val,
+            &[],
+        )
+        .value();
+        roots.push(symbol_traits_val);
 
         let mut ratio_traits_map_val = alloc_map(
             &mut proxy,
@@ -723,6 +743,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             ("string_println", "_PrintLn"),
             ("string_length", "_StringLength"),
             ("string_to_bytearray", "_StringToByteArray"),
+            ("string_to_symbol", "_StringToSymbol"),
         ];
 
         for (prim_name, slot_name) in string_primitives {
@@ -767,6 +788,55 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             let string_traits_obj_ptr =
                 string_traits_val.ref_bits() as *mut object::SlotObject;
             (*string_traits_obj_ptr).map = string_traits_map_val;
+        }
+
+        let symbol_primitives = [
+            ("symbol_to_string", "_SymbolToString"),
+            ("symbol_length", "_SymbolLength"),
+        ];
+
+        for (prim_name, slot_name) in symbol_primitives {
+            let prim_idx =
+                primitives::primitive_index_by_name(&primitives, prim_name)
+                    .expect("symbol primitive missing") as i64;
+            let slot_value = intern_bootstrap(
+                &mut proxy,
+                &mut roots,
+                &mut intern_table,
+                slot_name,
+            );
+
+            let primitive_code = Value::from_i64(prim_idx);
+            let method_map_val = alloc_map(
+                &mut proxy,
+                &mut roots,
+                map_map_val,
+                primitive_code,
+                MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+                &[],
+                0,
+            )
+            .value();
+            roots.push(method_map_val);
+
+            let method_obj_val =
+                alloc_slot_object(&mut proxy, &mut roots, method_map_val, &[])
+                    .value();
+            roots.push(method_obj_val);
+
+            let new_symbol_traits_map = add_constant_slot(
+                &mut proxy,
+                &mut roots,
+                symbol_traits_map_val,
+                map_map_val,
+                slot_value,
+                method_obj_val,
+            );
+            roots.push(new_symbol_traits_map);
+            symbol_traits_map_val = new_symbol_traits_map;
+            let symbol_traits_obj_ptr =
+                symbol_traits_val.ref_bits() as *mut object::SlotObject;
+            (*symbol_traits_obj_ptr).map = symbol_traits_map_val;
         }
 
         let mut array_traits_map_val = array_traits_map_val;
@@ -1108,6 +1178,22 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             dictionary_val,
             string_name,
             string_traits_val,
+        );
+
+        let symbol_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "Symbol",
+        );
+        add_dictionary_entry(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            assoc_map_val,
+            dictionary_val,
+            symbol_name,
+            symbol_traits_val,
         );
 
         let extend_idx =
@@ -2035,6 +2121,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             bignum_traits_map_val,
             alien_traits_map_val,
             string_traits_map_val,
+            symbol_traits_map_val,
             ratio_traits_map_val,
             fixnum_traits_map_val,
             code_traits_map_val,
@@ -2064,6 +2151,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             bignum_traits: bignum_traits_val,
             alien_traits: alien_traits_val,
             string_traits: string_traits_val,
+            symbol_traits: symbol_traits_val,
             ratio_traits: ratio_traits_val,
             fixnum_traits: fixnum_traits_val,
             code_traits: code_traits_val,
@@ -2071,7 +2159,7 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             mirror: mirror_val,
         };
 
-        VM {
+        let mut vm = VM {
             heap_proxy: proxy,
             special,
             intern_table,
@@ -2085,7 +2173,9 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             trace_assoc_name: None,
             #[cfg(debug_assertions)]
             trace_send_name: None,
-        }
+        };
+        vm.seed_user_module_from_dictionary();
+        vm
     }
 }
 
@@ -2121,6 +2211,7 @@ mod tests {
         assert!(vm.special.bignum_traits.is_ref());
         assert!(vm.special.alien_traits.is_ref());
         assert!(vm.special.string_traits.is_ref());
+        assert!(vm.special.symbol_traits.is_ref());
         assert!(vm.special.ratio_traits.is_ref());
         assert!(vm.special.fixnum_traits.is_ref());
         assert!(vm.special.code_traits.is_ref());

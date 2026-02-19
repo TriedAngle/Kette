@@ -81,6 +81,15 @@ Object extend: False With: {
     || rhs = { rhs }.
 }.
 
+Object extend: Boolean With: {
+    ifTrue: t ifFalse: f = { t call }.
+    ifTrue: t = { t call }.
+    ifFalse: f = { None }.
+    ifTrue: t IfFalse: f = { t call }.
+    && rhs = { rhs }.
+    || rhs = { self }.
+}.
+
 Object extend: True With: {
     parent* = Boolean.
     ifTrue: t ifFalse: f = { t call }.
@@ -528,7 +537,16 @@ Object extend: String With: {
     println = { self _PrintLn }.
     length = { self _StringLength }.
     toByteArray = { self _StringToByteArray }.
+    toSymbol = { self _StringToSymbol }.
     toString = { self }.
+}.
+
+Object extend: Symbol With: {
+    parent* = Clonable.
+    length = { self _SymbolLength }.
+    toString = { self _SymbolToString }.
+    print = { self toString print }.
+    println = { self toString println }.
 }.
 
 Sequence = {
@@ -548,6 +566,7 @@ IndexedSequence = {
     }.
 }.
 
+// this is a test
 Object extend: Array With: {
     parent* = IndexedSequence.
     size = { self _ArraySize }.
@@ -764,40 +783,39 @@ Proxy := {
     forAlienSize: s = { self fromBacking: (Alien new: s) }.
     forByteArraySize: s = { self fromBacking: (ByteArray cloneWithSize: s) }.
     forCType: t = { self fromCType: t Backing: (ByteArray cloneWithSize: t size) }.
-    size = { backing size }.
-    address = { backing address }.
-    isNull = { backing isNull }.
-    free = { backing free }.
+    size = { self backing size }.
+    address = { self backing address }.
+    isNull = { self backing isNull }.
+    free = { self backing free }.
     copyTo: dst From: srcOffset Length: len = {
-        backing copyTo: dst From: srcOffset Length: len
+        self backing copyTo: dst From: srcOffset Length: len
     }.
     copyFrom: src Offset: srcOffset Length: len = {
-        backing copyFrom: src Offset: srcOffset Length: len
+        self backing copyFrom: src Offset: srcOffset Length: len
     }.
-    u8At: i = { backing u8At: i }.
-    i8At: i = { backing i8At: i }.
-    u16At: i = { backing u16At: i }.
-    i16At: i = { backing i16At: i }.
-    u32At: i = { backing u32At: i }.
-    i32At: i = { backing i32At: i }.
-    u64At: i = { backing u64At: i }.
-    i64At: i = { backing i64At: i }.
-    f32At: i = { backing f32At: i }.
-    f64At: i = { backing f64At: i }.
-    pointerAt: i = { backing pointerAt: i }.
-    u8At: i Put: v = { backing u8At: i Put: v }.
-    i8At: i Put: v = { backing i8At: i Put: v }.
-    u16At: i Put: v = { backing u16At: i Put: v }.
-    i16At: i Put: v = { backing i16At: i Put: v }.
-    u32At: i Put: v = { backing u32At: i Put: v }.
-    i32At: i Put: v = { backing i32At: i Put: v }.
-    u64At: i Put: v = { backing u64At: i Put: v }.
-    i64At: i Put: v = { backing i64At: i Put: v }.
-    f32At: i Put: v = { backing f32At: i Put: v }.
-    f64At: i Put: v = { backing f64At: i Put: v }.
-    pointerAt: i Put: v = { backing pointerAt: i Put: v }.
+    u8At: i = { self backing u8At: i }.
+    u16At: i = { self backing u16At: i }.
+    i16At: i = { self backing i16At: i }.
+    u32At: i = { self backing u32At: i }.
+    i32At: i = { self backing i32At: i }.
+    u64At: i = { self backing u64At: i }.
+    i64At: i = { self backing i64At: i }.
+    f32At: i = { self backing f32At: i }.
+    f64At: i = { self backing f64At: i }.
+    pointerAt: i = { self backing pointerAt: i }.
+    u8At: i Put: v = { self backing u8At: i Put: v }.
+    i8At: i Put: v = { self backing i8At: i Put: v }.
+    u16At: i Put: v = { self backing u16At: i Put: v }.
+    i16At: i Put: v = { self backing i16At: i Put: v }.
+    u32At: i Put: v = { self backing u32At: i Put: v }.
+    i32At: i Put: v = { self backing i32At: i Put: v }.
+    u64At: i Put: v = { self backing u64At: i Put: v }.
+    i64At: i Put: v = { self backing i64At: i Put: v }.
+    f32At: i Put: v = { self backing f32At: i Put: v }.
+    f64At: i Put: v = { self backing f64At: i Put: v }.
+    pointerAt: i Put: v = { self backing pointerAt: i Put: v }.
     callWithTypes: types Args: values ReturnType: ret = {
-        backing callWithTypes: types Args: values ReturnType: ret
+        self backing callWithTypes: types Args: values ReturnType: ret
     }.
 
     readCType: t At: offset = {
@@ -819,10 +837,10 @@ Proxy := {
         value
     }.
 
-    cArgValue = { backing cArgValue }.
-    pin = { Object pin: backing. self }.
-    unpin = { Object unpin: backing. self }.
-    isPinned = { Object isPinned: backing }.
+    cArgValue = { self backing cArgValue }.
+    pin = { Object pin: self backing. self }.
+    unpin = { Object unpin: self backing. self }.
+    isPinned = { Object isPinned: self backing }.
 }.
 
 Disposable := {
@@ -1216,37 +1234,12 @@ Posix := {
     close = { self libc libraryClose }.
 }.
 
-(File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0) using: [ | file |
-    ("Reading: core/init.ktt (Size: " + file size toString + "):") println.
-    file 
-        eachLine: [ | line |
-            line println
-        ]
-        First: 3
-].
+Module export: 'Disposable.
+Module export: 'File.
+Module export: 'Posix.
 
-(VM _Eval: "NewGlobal = \"incredible\". 10 + 44") toString println.
-NewGlobal println.
-
-"Module demo start" println.
-
-Module open: 'Core.Math.
-pi := 3.
-answer := 42.
-Module export: 'pi.
-Module export: 'answer.
-
-Module open: 'App.
-Module use: 'Core.Math.
-(pi + answer) toString println.
-
-Module use: 'Core.Math As: { answer = 'mathAnswer }.
-mathAnswer toString println.
-
-Module open: 'Core.Math.
-Module open: 'App.
-pi toString println.
-
-((Module at: 'Core.Math) answer) toString println.
-
-"Module demo end" println.
+Module open: 'Core.
+Module use: 'user.
+Module export: 'Disposable.
+Module export: 'File.
+Module export: 'Posix.

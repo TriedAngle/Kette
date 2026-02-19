@@ -4,6 +4,7 @@ use parser::ast::Expr;
 use parser::token::Token;
 use parser::{Lexer, ParseError, Parser};
 use tokio::sync::RwLock;
+use tokio::time::{sleep, Duration};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
@@ -17,6 +18,7 @@ use tower_lsp::{Client, LanguageServer, async_trait};
 use url::Url;
 
 use crate::diagnostics::diagnostics_from_parse_errors;
+use crate::diagnostics::diagnostics_from_semantic_issues;
 use crate::semantic;
 use crate::text_edit::apply_content_changes;
 
@@ -29,6 +31,7 @@ pub struct Backend {
 struct DocumentState {
     text: String,
     version: i32,
+    analyzed_version: i32,
     semantic_tokens: Vec<SemanticToken>,
 }
 
@@ -41,9 +44,7 @@ impl Backend {
     }
 
     fn analyze_source(source: &str) -> (Vec<Diagnostic>, Vec<SemanticToken>) {
-        let tokens: Vec<Token> = Lexer::from_str(source).collect();
-        let parse_results: Vec<_> =
-            Parser::new(tokens.clone().into_iter()).collect();
+        let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
 
         let parse_errors: Vec<ParseError> = parse_results
             .iter()
@@ -52,20 +53,58 @@ impl Backend {
         let exprs: Vec<Expr> =
             parse_results.into_iter().filter_map(|r| r.ok()).collect();
 
-        let semantic_input: Vec<Token> = tokens
+        let mut diagnostics =
+            diagnostics_from_parse_errors(source, &parse_errors);
+        let semantic = parser::semantic::analyze_semantics_with_mode(
+            &[],
+            &exprs,
+            parser::semantic::AnalysisMode::Strict,
+        );
+        diagnostics.extend(diagnostics_from_semantic_issues(
+            source,
+            &semantic.issues,
+        ));
+        let semantic_tokens = Self::semantic_tokens_for_source(source, &exprs);
+        (diagnostics, semantic_tokens)
+    }
+
+    fn diagnostics_for_source(source: &str) -> Vec<Diagnostic> {
+        let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
+        let parse_errors: Vec<ParseError> = parse_results
             .iter()
+            .filter_map(|r| r.as_ref().err().cloned())
+            .collect();
+        let exprs: Vec<Expr> =
+            parse_results.into_iter().filter_map(|r| r.ok()).collect();
+
+        let mut diagnostics = diagnostics_from_parse_errors(source, &parse_errors);
+        let semantic = parser::semantic::analyze_semantics_with_mode(
+            &[],
+            &exprs,
+            parser::semantic::AnalysisMode::Strict,
+        );
+        diagnostics.extend(diagnostics_from_semantic_issues(
+            source,
+            &semantic.issues,
+        ));
+        diagnostics
+    }
+
+    fn semantic_tokens_for_source(source: &str, exprs: &[Expr]) -> Vec<SemanticToken> {
+        let semantic_input: Vec<Token> = Lexer::from_str(source)
             .filter(|t| {
                 !t.is_eof()
-                    && !t.is_comment()
                     && !matches!(t.kind, parser::token::TokenKind::Error(_))
             })
-            .cloned()
             .collect();
+        semantic::semantic_tokens_from(source, &semantic_input, exprs)
+    }
 
-        let diagnostics = diagnostics_from_parse_errors(source, &parse_errors);
-        let semantic_tokens =
-            semantic::semantic_tokens_from(source, &semantic_input, &exprs);
-        (diagnostics, semantic_tokens)
+    fn semantic_tokens_from_text(source: &str) -> Vec<SemanticToken> {
+        let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
+        let exprs: Vec<Expr> =
+            parse_results.into_iter().filter_map(|r| r.ok()).collect();
+        Self::semantic_tokens_for_source(source, &exprs)
     }
 
     async fn analyze_store_and_publish(
@@ -84,9 +123,8 @@ impl Backend {
             if doc.version != version {
                 return;
             }
-            if diagnostics.is_empty() {
-                doc.semantic_tokens = semantic_tokens;
-            }
+            doc.semantic_tokens = semantic_tokens;
+            doc.analyzed_version = version;
         }
 
         self.client
@@ -150,6 +188,7 @@ impl LanguageServer for Backend {
                 DocumentState {
                     text: text.clone(),
                     version,
+                    analyzed_version: -1,
                     semantic_tokens: Vec::new(),
                 },
             );
@@ -165,12 +204,13 @@ impl LanguageServer for Backend {
             return;
         }
 
-        let text = {
+        {
             let mut docs = self.documents.write().await;
             let entry =
                 docs.entry(uri.clone()).or_insert_with(|| DocumentState {
                     text: String::new(),
                     version,
+                    analyzed_version: -1,
                     semantic_tokens: Vec::new(),
                 });
             if let Err(err) =
@@ -188,10 +228,49 @@ impl LanguageServer for Backend {
                 return;
             }
             entry.version = version;
-            entry.text.clone()
+        }
+
+        let text = {
+            let docs = self.documents.read().await;
+            let Some(doc) = docs.get(&uri) else {
+                return;
+            };
+            if doc.version != version {
+                return;
+            }
+            doc.text.clone()
         };
 
-        self.analyze_store_and_publish(uri, version, text).await;
+        let semantic_tokens = Self::semantic_tokens_from_text(&text);
+        {
+            let mut docs = self.documents.write().await;
+            let Some(doc) = docs.get_mut(&uri) else {
+                return;
+            };
+            if doc.version != version {
+                return;
+            }
+            doc.semantic_tokens = semantic_tokens;
+            doc.analyzed_version = version;
+        }
+
+        sleep(Duration::from_millis(120)).await;
+
+        let text = {
+            let docs = self.documents.read().await;
+            let Some(doc) = docs.get(&uri) else {
+                return;
+            };
+            if doc.version != version {
+                return;
+            }
+            doc.text.clone()
+        };
+
+        let diagnostics = Self::diagnostics_for_source(&text);
+        self.client
+            .publish_diagnostics(uri, diagnostics, Some(version))
+            .await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -218,9 +297,23 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        let tokens = if doc.analyzed_version == doc.version {
+            doc.semantic_tokens.clone()
+        } else {
+            let fresh = Self::semantic_tokens_from_text(&doc.text);
+            let mut docs = self.documents.write().await;
+            if let Some(current) = docs.get_mut(&uri) {
+                if current.version == doc.version {
+                    current.semantic_tokens = fresh.clone();
+                    current.analyzed_version = current.version;
+                }
+            }
+            fresh
+        };
+
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: Some(doc.version.to_string()),
-            data: doc.semantic_tokens,
+            data: tokens,
         })))
     }
 }

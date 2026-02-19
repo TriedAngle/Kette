@@ -7,7 +7,7 @@ use bytecode::{source_map_lookup, Instruction, Op};
 use heap::{HeapProxy, RootProvider};
 use object::{
     init_array, slot_object_allocation_size, Array, Block, Code, Header, Map,
-    ObjectType, Slot, SlotFlags, SlotObject, VMString, Value,
+    ObjectType, Slot, SlotFlags, SlotObject, VMSymbol, Value,
 };
 
 use crate::VM;
@@ -46,6 +46,8 @@ struct Frame {
     method_frame_idx: usize,
     holder: Value,
     holder_slot_index: u32,
+    module_path: Option<String>,
+    module_dynamic: bool,
 }
 
 pub struct InterpreterState {
@@ -86,6 +88,7 @@ impl RootProvider for InterpreterRoots<'_> {
         visitor(&mut self.special.bignum_traits);
         visitor(&mut self.special.alien_traits);
         visitor(&mut self.special.string_traits);
+        visitor(&mut self.special.symbol_traits);
         visitor(&mut self.special.ratio_traits);
         visitor(&mut self.special.fixnum_traits);
         visitor(&mut self.special.code_traits);
@@ -245,22 +248,44 @@ fn run(
                 set_register(frame, dst, value)?;
             }
             Instruction::LoadAssoc { idx } => {
-                let value = load_assoc(vm, code_val, idx)?;
+                let module_path = if state.frames[frame_idx].module_dynamic {
+                    vm.current_module.clone()
+                } else {
+                    state.frames[frame_idx].module_path.clone()
+                };
+                let value =
+                    load_assoc(vm, code_val, idx, module_path.as_deref())?;
                 state.acc = value;
             }
             Instruction::StoreAssoc { idx } => {
                 let value = state.acc;
-                store_assoc(vm, state, code_val, idx, value)?;
+                let module_path = if state.frames[frame_idx].module_dynamic {
+                    vm.current_module.clone()
+                } else {
+                    state.frames[frame_idx].module_path.clone()
+                };
+                store_assoc(vm, code_val, idx, value, module_path.as_deref())?;
             }
             Instruction::MovToAssoc { idx, src } => {
                 let value = {
                     let frame = &state.frames[frame_idx];
                     get_register(frame, src)?
                 };
-                store_assoc(vm, state, code_val, idx, value)?;
+                let module_path = if state.frames[frame_idx].module_dynamic {
+                    vm.current_module.clone()
+                } else {
+                    state.frames[frame_idx].module_path.clone()
+                };
+                store_assoc(vm, code_val, idx, value, module_path.as_deref())?;
             }
             Instruction::MovFromAssoc { dst, idx } => {
-                let value = load_assoc(vm, code_val, idx)?;
+                let module_path = if state.frames[frame_idx].module_dynamic {
+                    vm.current_module.clone()
+                } else {
+                    state.frames[frame_idx].module_path.clone()
+                };
+                let value =
+                    load_assoc(vm, code_val, idx, module_path.as_deref())?;
                 let frame = &mut state.frames[frame_idx];
                 set_register(frame, dst, value)?;
             }
@@ -372,7 +397,17 @@ fn push_entry_frame(
     code: Value,
     receiver: Value,
 ) -> Result<(), RuntimeError> {
-    push_method_frame(vm, state, code, receiver, None, vm.special.none, 0)
+    push_method_frame(
+        vm,
+        state,
+        code,
+        receiver,
+        None,
+        vm.special.none,
+        0,
+        None,
+        true,
+    )
 }
 
 fn push_method_frame(
@@ -383,6 +418,8 @@ fn push_method_frame(
     args_source: Option<(usize, u16, u8)>,
     holder: Value,
     holder_slot_index: u32,
+    module_path: Option<String>,
+    module_dynamic: bool,
 ) -> Result<(), RuntimeError> {
     if state.frames.len() >= MAX_FRAMES {
         return Err(RuntimeError::StackOverflow);
@@ -424,6 +461,8 @@ fn push_method_frame(
         method_frame_idx,
         holder,
         holder_slot_index,
+        module_path,
+        module_dynamic,
     });
 
     Ok(())
@@ -436,6 +475,8 @@ fn push_block_frame(
     receiver: Value,
     args_source: (usize, u16, u8),
     parent_env: Value,
+    module_path: Option<String>,
+    module_dynamic: bool,
 ) -> Result<(), RuntimeError> {
     if state.frames.len() >= MAX_FRAMES {
         return Err(RuntimeError::StackOverflow);
@@ -482,6 +523,8 @@ fn push_block_frame(
         method_frame_idx,
         holder,
         holder_slot_index,
+        module_path,
+        module_dynamic,
     });
 
     Ok(())
@@ -494,6 +537,8 @@ fn push_block_frame_with_args(
     receiver: Value,
     args: &[Value],
     parent_env: Value,
+    module_path: Option<String>,
+    module_dynamic: bool,
 ) -> Result<(), RuntimeError> {
     if state.frames.len() >= MAX_FRAMES {
         return Err(RuntimeError::StackOverflow);
@@ -536,6 +581,8 @@ fn push_block_frame_with_args(
         method_frame_idx,
         holder: vm.special.none,
         holder_slot_index: 0,
+        module_path,
+        module_dynamic,
     });
 
     Ok(())
@@ -579,6 +626,8 @@ pub(crate) fn dispatch_send(
         let block_code = block_code(receiver, vm.special.none)?;
         let block_env = block_env(receiver, vm.special.none)?;
         let receiver_self = block_self(receiver)?;
+        let module_path = state.frames[frame_idx].module_path.clone();
+        let module_dynamic = state.frames[frame_idx].module_dynamic;
         return push_block_frame(
             vm,
             state,
@@ -586,6 +635,8 @@ pub(crate) fn dispatch_send(
             receiver_self,
             (frame_idx, reg, argc),
             block_env,
+            module_path,
+            module_dynamic,
         );
     }
     let result = unsafe { object::lookup(receiver, message, &vm.special) };
@@ -619,6 +670,12 @@ pub(crate) fn call_block(
     let block_code = block_code(receiver, vm.special.none)?;
     let block_env = block_env(receiver, vm.special.none)?;
     let receiver_self = block_self(receiver)?;
+    let current_idx = current_frame_index(state);
+    let module_path =
+        current_idx.and_then(|idx| state.frames[idx].module_path.clone());
+    let module_dynamic = current_idx
+        .map(|idx| state.frames[idx].module_dynamic)
+        .unwrap_or(false);
     push_block_frame_with_args(
         vm,
         state,
@@ -626,6 +683,8 @@ pub(crate) fn call_block(
         receiver_self,
         args,
         block_env,
+        module_path,
+        module_dynamic,
     )?;
     Ok(state.acc)
 }
@@ -650,10 +709,10 @@ fn message_name(message: Value) -> Option<String> {
         return None;
     }
     let header: &Header = unsafe { message.as_ref() };
-    if header.object_type() != ObjectType::Str {
+    if header.object_type() != ObjectType::Symbol {
         return None;
     }
-    let s: &VMString = unsafe { message.as_ref() };
+    let s: &VMSymbol = unsafe { message.as_ref() };
     Some(unsafe { s.as_str() }.to_string())
 }
 
@@ -728,6 +787,9 @@ fn dispatch_slot(
     if let Some(target) = extract_method_target(slot.value, vm.special.none)? {
         match target {
             MethodTarget::Code(code_val) => {
+                let method_module = vm
+                    .module_owner_of_value(holder)
+                    .or_else(|| state.frames[frame_idx].module_path.clone());
                 return push_method_frame(
                     vm,
                     state,
@@ -736,6 +798,8 @@ fn dispatch_slot(
                     Some((frame_idx, reg, argc)),
                     holder,
                     slot_index,
+                    method_module,
+                    false,
                 );
             }
             MethodTarget::Primitive(index) => {
@@ -890,6 +954,7 @@ fn load_assoc(
     vm: &VM,
     code_val: Value,
     idx: u16,
+    module_path: Option<&str>,
 ) -> Result<Value, RuntimeError> {
     let code: &Code = unsafe { code_val.as_ref() };
     let assoc_or_name = unsafe { code.constant(idx as u32) };
@@ -898,6 +963,15 @@ fn load_assoc(
         let header: &Header = unsafe { assoc_or_name.as_ref() };
         match header.object_type() {
             ObjectType::Slots => {
+                if let Some(name) = assoc_name(vm, assoc_or_name) {
+                    if let Some((module, export_name)) = name.split_once("::") {
+                        if let Some(value) =
+                            vm.module_lookup_in(module, export_name)
+                        {
+                            return Ok(value);
+                        }
+                    }
+                }
                 let assoc_obj = unsafe { &*expect_slot_object(assoc_or_name)? };
                 let value =
                     unsafe { assoc_obj.read_value(SlotObject::VALUES_OFFSET) };
@@ -917,16 +991,14 @@ fn load_assoc(
                 }
                 return Ok(value);
             }
-            ObjectType::Str => {
+            ObjectType::Symbol => {
                 let name = symbol_to_string(assoc_or_name)
                     .unwrap_or_else(|| "<symbol>".to_string());
 
-                if let Some(value) = vm.module_lookup_current(&name) {
-                    return Ok(value);
-                }
-
-                if let Some(value) = lookup_assoc_value(vm, assoc_or_name)? {
-                    return Ok(value);
+                if let Some(path) = module_path {
+                    if let Some(value) = vm.module_lookup_in(path, &name) {
+                        return Ok(value);
+                    }
                 }
 
                 return Err(RuntimeError::UndefinedGlobal { name });
@@ -941,62 +1013,26 @@ fn load_assoc(
     })
 }
 
-fn lookup_assoc_value(
-    vm: &VM,
-    name: Value,
-) -> Result<Option<Value>, RuntimeError> {
-    let dict = vm.dictionary;
-    unsafe {
-        let dict_obj: &SlotObject = dict.as_ref();
-        let map: &Map = dict_obj.map.as_ref();
-        let slots = map.slots();
-        for slot in slots {
-            if slot.name.raw() == name.raw() {
-                let assoc = slot.value;
-                let assoc_obj = &*expect_slot_object(assoc)?;
-                let value = assoc_obj.read_value(SlotObject::VALUES_OFFSET);
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(trace_name) = vm.trace_assoc_name.as_deref() {
-                        let name_str = symbol_to_string(name)
-                            .unwrap_or_else(|| "<symbol>".to_string());
-                        if name_str == trace_name {
-                            eprintln!(
-                                "trace_assoc load {} -> {:?} {}",
-                                name_str,
-                                value,
-                                debug_value_summary(value)
-                            );
-                        }
-                    }
-                }
-                return Ok(Some(value));
-            }
-        }
-    }
-    Ok(None)
-}
-
 fn symbol_to_string(sym: Value) -> Option<String> {
     if !sym.is_ref() {
         return None;
     }
 
     let header: &Header = unsafe { sym.as_ref() };
-    if header.object_type() != ObjectType::Str {
+    if header.object_type() != ObjectType::Symbol {
         return None;
     }
 
-    let s: &VMString = unsafe { sym.as_ref() };
+    let s: &VMSymbol = unsafe { sym.as_ref() };
     Some(unsafe { s.as_str() }.to_string())
 }
 
 fn store_assoc(
     vm: &mut VM,
-    state: &mut InterpreterState,
     code_val: Value,
     idx: u16,
     value: Value,
+    module_path: Option<&str>,
 ) -> Result<(), RuntimeError> {
     let code: &Code = unsafe { code_val.as_ref() };
     let assoc_or_name = unsafe { code.constant(idx as u32) };
@@ -1012,6 +1048,13 @@ fn store_assoc(
                 };
                 if value.is_ref() {
                     vm.heap_proxy.write_barrier(assoc_or_name, value);
+                }
+                if let Some(name) = assoc_name(vm, assoc_or_name) {
+                    if let Some((module, export_name)) = name.split_once("::") {
+                        let _ = vm.module_store_in(module, export_name, value);
+                    } else if let Some(path) = module_path {
+                        let _ = vm.module_store_in(path, &name, value);
+                    }
                 }
                 #[cfg(debug_assertions)]
                 {
@@ -1031,26 +1074,15 @@ fn store_assoc(
                 }
                 return Ok(());
             }
-            ObjectType::Str => {
+            ObjectType::Symbol => {
                 let name = symbol_to_string(assoc_or_name)
                     .unwrap_or_else(|| "<symbol>".to_string());
-                if vm.module_store_current(&name, value) {
-                    return Ok(());
-                }
-                let assoc = match lookup_assoc(vm, assoc_or_name)? {
-                    Some(assoc) => assoc,
-                    None => {
-                        create_global_assoc(vm, state, assoc_or_name, value)?
+                if let Some(path) = module_path {
+                    if vm.module_store_in(path, &name, value) {
+                        return Ok(());
                     }
-                };
-                let assoc_obj = unsafe { &mut *expect_slot_object_mut(assoc)? };
-                unsafe {
-                    assoc_obj.write_value(SlotObject::VALUES_OFFSET, value)
-                };
-                if value.is_ref() {
-                    vm.heap_proxy.write_barrier(assoc, value);
                 }
-                return Ok(());
+                return Err(RuntimeError::UndefinedGlobal { name });
             }
             _ => {}
         }
@@ -1062,71 +1094,13 @@ fn store_assoc(
     })
 }
 
-fn create_global_assoc(
-    vm: &mut VM,
-    state: &mut InterpreterState,
-    name: Value,
-    value: Value,
-) -> Result<Value, RuntimeError> {
-    if !name.is_ref() {
-        return Err(RuntimeError::TypeError {
-            expected: "symbol",
-            got: name,
-        });
-    }
-
-    let mut scratch = vec![name, value, vm.dictionary, vm.assoc_map];
-    let (assoc, new_map) =
-        with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-            let assoc_map = *roots.assoc_map;
-            let map_map = roots.special.map_map;
-            let dict_map = {
-                let dict: &SlotObject = roots.dictionary.as_ref();
-                dict.map
-            };
-            let assoc = crate::alloc::alloc_slot_object(
-                proxy,
-                roots,
-                assoc_map,
-                &[value],
-            )
-            .value();
-            let new_map = crate::alloc::add_constant_slot(
-                proxy, roots, dict_map, map_map, name, assoc,
-            );
-            (assoc, new_map)
-        });
-
-    let dict_obj =
-        unsafe { &mut *(vm.dictionary.ref_bits() as *mut SlotObject) };
-    dict_obj.map = new_map;
-    vm.heap_proxy.write_barrier(vm.dictionary, new_map);
-    Ok(assoc)
-}
-
-fn lookup_assoc(vm: &VM, name: Value) -> Result<Option<Value>, RuntimeError> {
-    let dict = vm.dictionary;
-    unsafe {
-        let dict_obj: &SlotObject = dict.as_ref();
-        let map: &Map = dict_obj.map.as_ref();
-        let slots = map.slots();
-        for slot in slots {
-            if slot.name.raw() == name.raw() {
-                return Ok(Some(slot.value));
-            }
-        }
-    }
-    Ok(None)
-}
-
-#[cfg(debug_assertions)]
 fn assoc_name(vm: &VM, assoc: Value) -> Option<String> {
     let dict: &SlotObject = unsafe { vm.dictionary.as_ref() };
     let map: &Map = unsafe { dict.map.as_ref() };
     unsafe {
         for slot in map.slots() {
             if slot.value.raw() == assoc.raw() {
-                let name: &VMString = slot.name.as_ref();
+                let name: &VMSymbol = slot.name.as_ref();
                 return Some(name.as_str().to_string());
             }
         }
@@ -1186,6 +1160,7 @@ fn debug_value_summary(value: Value) -> String {
             )
         },
         ObjectType::Str => "string".to_string(),
+        ObjectType::Symbol => "symbol".to_string(),
         ObjectType::Array => "array".to_string(),
         ObjectType::ByteArray => "bytearray".to_string(),
         ObjectType::Float => "float".to_string(),
@@ -2085,8 +2060,10 @@ mod tests {
 
     fn run_source(src: &str) -> Result<Value, LocatedRuntimeError> {
         let exprs = parse_source(src);
-        let code_desc = Compiler::compile(&exprs).expect("compile error");
         let mut vm = bootstrap(test_settings());
+        vm.open_module("user");
+        let code_desc =
+            Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         interpret(&mut vm, code_val)
     }
@@ -2095,8 +2072,10 @@ mod tests {
         src: &str,
     ) -> Result<(VM, Value), LocatedRuntimeError> {
         let exprs = parse_source(src);
-        let code_desc = Compiler::compile(&exprs).expect("compile error");
         let mut vm = bootstrap(test_settings());
+        vm.open_module("user");
+        let code_desc =
+            Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         let value = interpret(&mut vm, code_val)?;
         Ok((vm, value))
@@ -2107,8 +2086,10 @@ mod tests {
         receiver: Value,
     ) -> Result<Value, LocatedRuntimeError> {
         let exprs = parse_source(src);
-        let code_desc = Compiler::compile(&exprs).expect("compile error");
         let mut vm = bootstrap(test_settings());
+        vm.open_module("user");
+        let code_desc =
+            Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         interpret_with_receiver(&mut vm, code_val, receiver)
     }
@@ -2145,8 +2126,7 @@ mod tests {
 
     #[test]
     fn interpret_global_store_load() {
-        let value =
-            run_source("{ x := (Y := 5) }. Y").expect("interpret error");
+        let value = run_source("Y := 5. Y").expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 5);
     }
@@ -2426,21 +2406,8 @@ mod tests {
     fn top_level_const_assoc_value_is_object() {
         let (vm, _) = run_source_with_vm("Math = { foo = { 1 }. }.")
             .expect("interpret error");
-        let dict: &SlotObject = unsafe { vm.dictionary.as_ref() };
-        let map: &Map = unsafe { dict.map.as_ref() };
-        let mut assoc_val = None;
-        unsafe {
-            for slot in map.slots() {
-                let name: &VMString = slot.name.as_ref();
-                if name.as_str() == "Math" {
-                    let assoc_obj: &SlotObject = slot.value.as_ref();
-                    assoc_val =
-                        Some(assoc_obj.read_value(SlotObject::VALUES_OFFSET));
-                    break;
-                }
-            }
-        }
-        let assoc_val = assoc_val.expect("Math assoc not found");
+        let assoc_val =
+            lookup_dictionary_value(&vm, "Math").expect("Math assoc not found");
         assert_ne!(assoc_val.raw(), vm.special.none.raw());
         let header: &Header = unsafe { assoc_val.as_ref() };
         assert_eq!(header.object_type(), ObjectType::Slots);
@@ -2489,6 +2456,10 @@ mod tests {
     }
 
     fn lookup_dictionary_value(vm: &VM, name: &str) -> Option<Value> {
+        if let Some(value) = vm.module_lookup_in("user", name) {
+            return Some(value);
+        }
+
         let sym = vm.intern_table.get(name)?;
         unsafe {
             let dict_obj: &SlotObject = vm.dictionary.as_ref();
@@ -2937,7 +2908,7 @@ mod tests {
     #[test]
     fn mirror_slot_count_and_name_at() {
         let value = run_source(
-            "o = { x = 1. y := 2 }. m := Object _Reflect: o. n0 := m _MirrorSlotNameAt: 0. n1 := m _MirrorSlotNameAt: 1. (n0 _StringLength) _FixnumAdd: (n1 _StringLength)",
+            "o = { x = 1. y := 2 }. m := Object _Reflect: o. n0 := m _MirrorSlotNameAt: 0. n1 := m _MirrorSlotNameAt: 1. (n0 _SymbolLength) _FixnumAdd: (n1 _SymbolLength)",
         )
         .expect("interpret error");
         assert!(value.is_fixnum());
@@ -3242,12 +3213,15 @@ mod tests {
     }
 
     #[test]
-    fn error_location_undefined_global() {
-        let err = run_source("NoSuchGlobal").expect_err("expected error");
-        assert!(matches!(err.error, RuntimeError::UndefinedGlobal { .. }));
-        let loc = err.location.expect("error should have source location");
-        assert_eq!(loc.start, 0);
-        assert_eq!(loc.end, 12);
+    fn compile_error_location_undefined_global() {
+        let exprs = parse_source("NoSuchGlobal");
+        let mut vm = bootstrap(test_settings());
+        vm.open_module("user");
+        let err =
+            Compiler::compile_for_vm(&vm, &exprs).expect_err("expected error");
+        let span = err.span.expect("error should have source span");
+        assert_eq!(span.start.offset, 0);
+        assert_eq!(span.end.offset, 12);
     }
 
     #[test]

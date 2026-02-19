@@ -1,3 +1,5 @@
+Module open: 'Test.Mitternacht.
+
 Math = { 
     rootsOfA: a B: b C: c = {
         disc = (b * b) - (4 * a * c).

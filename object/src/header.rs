@@ -13,6 +13,7 @@ pub enum ObjectType {
     BigNum,
     Alien,
     Str,
+    Symbol,
     Ratio,
     Float,
 }

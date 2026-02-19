@@ -14,8 +14,8 @@ pub use map::{init_map, map_allocation_size, Map, MapFlags};
 pub use objects::{
     alien_allocation_size, code_allocation_size, float_allocation_size,
     init_alien, init_array, init_byte_array, init_code, init_float, init_ratio,
-    init_str, slot_object_allocation_size, Alien, Array, BigNum, Block,
-    ByteArray, Code, Float, Ratio, SlotObject, VMString,
+    init_str, init_symbol, slot_object_allocation_size, Alien, Array, BigNum,
+    Block, ByteArray, Code, Float, Ratio, SlotObject, VMString, VMSymbol,
 };
 pub use slot::{Slot, SlotFlags};
 pub use special::SpecialObjects;
@@ -104,6 +104,7 @@ mod tests {
             ObjectType::BigNum,
             ObjectType::Alien,
             ObjectType::Str,
+            ObjectType::Symbol,
             ObjectType::Ratio,
             ObjectType::Float,
         ]

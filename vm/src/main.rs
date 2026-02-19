@@ -68,7 +68,7 @@ fn main() {
         };
 
         if cli.dump_bytecode {
-            match compile_source(&source_code) {
+            match compile_source(&vm, &source_code) {
                 Ok(code_desc) => {
                     println!("== {} ==", filename);
                     dump_code_desc(&code_desc);
@@ -168,14 +168,17 @@ fn execute_source(
     source: &str,
     trace_mnu: bool,
 ) -> Result<object::Value, String> {
-    let code_desc = compile_source(source)?;
+    let code_desc = compile_source(vm, source)?;
     let code = materialize::materialize(vm, &code_desc);
 
     interpreter::interpret(vm, code)
         .map_err(|e| format_located_error(vm, source, &e, trace_mnu))
 }
 
-fn compile_source(source: &str) -> Result<compiler0::CodeDesc, String> {
+fn compile_source(
+    vm: &VM,
+    source: &str,
+) -> Result<compiler0::CodeDesc, String> {
     let lexer = Lexer::from_str(source);
 
     let results: Vec<_> = Parser::new(lexer).collect();
@@ -193,7 +196,7 @@ fn compile_source(source: &str) -> Result<compiler0::CodeDesc, String> {
     let exprs: Vec<parser::ast::Expr> =
         results.into_iter().map(|r| r.unwrap()).collect();
 
-    compiler0::Compiler::compile(&exprs)
+    compiler0::Compiler::compile_for_vm(vm, &exprs)
         .map_err(|e| format_compile_error(source, &e))
 }
 
@@ -310,6 +313,9 @@ fn format_const_entry(entry: &compiler0::ConstEntry) -> String {
         compiler0::ConstEntry::String(s) => format!("String(\"{s}\")"),
         compiler0::ConstEntry::Value(v) => format!("Value({v:?})"),
         compiler0::ConstEntry::Symbol(s) => format!("Symbol({s})"),
+        compiler0::ConstEntry::ModuleAssoc { module, name } => {
+            format!("ModuleAssoc({module}::{name})")
+        }
         compiler0::ConstEntry::Assoc(s) => format!("Assoc({s})"),
         compiler0::ConstEntry::AssocValue(s) => format!("AssocValue({s})"),
         compiler0::ConstEntry::Code(code) => {
@@ -339,6 +345,9 @@ fn format_const_entry_short(entry: &compiler0::ConstEntry) -> String {
         compiler0::ConstEntry::String(s) => format!("String(\"{s}\")"),
         compiler0::ConstEntry::Value(v) => format!("Value({v:?})"),
         compiler0::ConstEntry::Symbol(s) => format!("Symbol({s})"),
+        compiler0::ConstEntry::ModuleAssoc { module, name } => {
+            format!("ModuleAssoc({module}::{name})")
+        }
         compiler0::ConstEntry::Assoc(s) => format!("Assoc({s})"),
         compiler0::ConstEntry::AssocValue(s) => format!("AssocValue({s})"),
         compiler0::ConstEntry::Code(code) => format!(
@@ -545,6 +554,10 @@ fn format_receiver_debug(vm: &VM, receiver: object::Value) -> String {
         object::ObjectType::Str => unsafe {
             let s: &object::VMString = receiver.as_ref();
             lines.push(format!("string=\"{}\"", s.as_str()));
+        },
+        object::ObjectType::Symbol => unsafe {
+            let s: &object::VMSymbol = receiver.as_ref();
+            lines.push(format!("symbol='{}", s.as_str()));
         },
         object::ObjectType::Float => unsafe {
             let f: &object::Float = receiver.as_ref();
@@ -769,6 +782,11 @@ fn value_to_string(value: object::Value) -> Option<String> {
     if header.object_type() == object::ObjectType::Str {
         let s: &object::VMString = unsafe { value.as_ref() };
         return Some(unsafe { s.as_str() }.to_string());
+    }
+
+    if header.object_type() == object::ObjectType::Symbol {
+        let s: &object::VMSymbol = unsafe { value.as_ref() };
+        return Some(format!("'{}", unsafe { s.as_str() }));
     }
 
     None

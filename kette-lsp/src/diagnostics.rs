@@ -1,3 +1,4 @@
+use parser::semantic::SemanticIssue;
 use parser::ParseError;
 #[cfg(test)]
 use parser::{Lexer, Parser};
@@ -8,6 +9,7 @@ use tower_lsp::lsp_types::{
 use crate::position::byte_offset_to_position;
 
 const SOURCE_NAME: &str = "kette-parser";
+const SEMANTIC_SOURCE_NAME: &str = "kette-semantic";
 
 #[cfg(test)]
 pub fn parse_diagnostics(source: &str) -> Vec<Diagnostic> {
@@ -43,6 +45,41 @@ pub fn diagnostics_from_parse_errors(
                 code_description: None,
                 source: Some(SOURCE_NAME.to_string()),
                 message: err.message.clone(),
+                related_information: None,
+                tags: None,
+                data: None,
+            }
+        })
+        .collect()
+}
+
+pub fn diagnostics_from_semantic_issues(
+    source: &str,
+    issues: &[SemanticIssue],
+) -> Vec<Diagnostic> {
+    issues
+        .iter()
+        .map(|issue| {
+            let start = issue.span.start.offset;
+            let mut end = issue.span.end.offset;
+            if end < start {
+                end = start;
+            }
+
+            let range = Range::new(
+                byte_offset_to_position(source, start),
+                byte_offset_to_position(source, end),
+            );
+
+            Diagnostic {
+                range,
+                severity: Some(DiagnosticSeverity::ERROR),
+                code: Some(NumberOrString::String(
+                    "semantic-error".to_string(),
+                )),
+                code_description: None,
+                source: Some(SEMANTIC_SOURCE_NAME.to_string()),
+                message: issue.message.clone(),
                 related_information: None,
                 tags: None,
                 data: None,

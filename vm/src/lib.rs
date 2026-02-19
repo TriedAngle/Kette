@@ -11,7 +11,7 @@ use heap::{HeapProxy, RootProvider, SizeFn};
 use libffi::middle::Cif;
 use object::{
     Array, BigNum, Block, ByteArray, Code, Float, Header, HeaderFlags, Map,
-    ObjectType, Ratio, SlotObject, SpecialObjects, VMString, Value,
+    ObjectType, Ratio, SlotObject, SpecialObjects, VMString, VMSymbol, Value,
 };
 
 /// The VM owns a heap proxy and the bootstrapped special objects.
@@ -32,7 +32,7 @@ pub struct ModuleState {
 pub struct VM {
     pub heap_proxy: HeapProxy,
     pub special: SpecialObjects,
-    /// Interned symbols: Rust string → heap VMString Value.
+    /// Interned symbols: Rust string -> heap symbol Value.
     pub intern_table: HashMap<String, Value>,
     /// Registered primitive descriptors.
     pub primitives: Vec<primitives::PrimitiveDesc>,
@@ -68,6 +68,7 @@ impl RootProvider for VM {
         visitor(&mut self.special.bignum_traits);
         visitor(&mut self.special.alien_traits);
         visitor(&mut self.special.string_traits);
+        visitor(&mut self.special.symbol_traits);
         visitor(&mut self.special.ratio_traits);
         visitor(&mut self.special.fixnum_traits);
         visitor(&mut self.special.code_traits);
@@ -87,8 +88,146 @@ impl RootProvider for VM {
 }
 
 impl VM {
+    fn module_resolve_read_target(
+        &self,
+        module_path: &str,
+        name: &str,
+        seen: &mut HashSet<(String, String)>,
+    ) -> Option<(String, String)> {
+        let key = (module_path.to_string(), name.to_string());
+        if !seen.insert(key) {
+            return None;
+        }
+
+        let module = self.modules.get(module_path)?;
+        if module.bindings.contains_key(name) {
+            return Some((module_path.to_string(), name.to_string()));
+        }
+
+        let import = module.imports.get(name)?;
+        self.module_resolve_read_target(
+            &import.module_path,
+            &import.export_name,
+            seen,
+        )
+    }
+
+    fn module_resolve_write_target(
+        &self,
+        module_path: &str,
+        name: &str,
+        seen: &mut HashSet<(String, String)>,
+    ) -> Option<(String, String)> {
+        let key = (module_path.to_string(), name.to_string());
+        if !seen.insert(key) {
+            return None;
+        }
+
+        let module = self.modules.get(module_path)?;
+        if let Some(import) = module.imports.get(name) {
+            return self.module_resolve_write_target(
+                &import.module_path,
+                &import.export_name,
+                seen,
+            );
+        }
+
+        Some((module_path.to_string(), name.to_string()))
+    }
+
+    pub fn module_lookup_in(
+        &self,
+        module_path: &str,
+        name: &str,
+    ) -> Option<Value> {
+        let mut seen = HashSet::new();
+        let (owner_path, owner_name) =
+            self.module_resolve_read_target(module_path, name, &mut seen)?;
+        self.modules
+            .get(&owner_path)
+            .and_then(|m| m.bindings.get(&owner_name))
+            .copied()
+    }
+
+    pub fn module_store_in(
+        &mut self,
+        module_path: &str,
+        name: &str,
+        value: Value,
+    ) -> bool {
+        self.ensure_module(module_path);
+
+        let mut seen = HashSet::new();
+        let (owner_path, owner_name) = self
+            .module_resolve_write_target(module_path, name, &mut seen)
+            .unwrap_or_else(|| (module_path.to_string(), name.to_string()));
+        self.ensure_module(&owner_path);
+
+        if let Some(module) = self.modules.get_mut(&owner_path) {
+            module.bindings.insert(owner_name, value);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn module_owner_of_value(&self, value: Value) -> Option<String> {
+        if !value.is_ref() {
+            return None;
+        }
+
+        for (path, module) in &self.modules {
+            if module.bindings.values().any(|v| v.raw() == value.raw()) {
+                return Some(path.clone());
+            }
+        }
+
+        None
+    }
+
     pub fn ensure_module(&mut self, path: &str) {
         self.modules.entry(path.to_string()).or_default();
+    }
+
+    pub fn seed_user_module_from_dictionary(&mut self) {
+        self.ensure_module("user");
+        let mut entries: Vec<(String, Value)> = Vec::new();
+
+        if self.dictionary.is_ref() {
+            unsafe {
+                let dict: &SlotObject = self.dictionary.as_ref();
+                let map: &Map = dict.map.as_ref();
+                for slot in map.slots() {
+                    if !slot.name.is_ref() {
+                        continue;
+                    }
+                    let header: &Header = slot.name.as_ref();
+                    if header.object_type() != ObjectType::Symbol {
+                        continue;
+                    }
+                    let sym: &VMSymbol = slot.name.as_ref();
+                    let binding_value = if slot.value.is_ref() {
+                        let value_header: &Header = slot.value.as_ref();
+                        if value_header.object_type() == ObjectType::Slots {
+                            let assoc: &SlotObject = slot.value.as_ref();
+                            assoc.read_value(SlotObject::VALUES_OFFSET)
+                        } else {
+                            slot.value
+                        }
+                    } else {
+                        slot.value
+                    };
+                    entries.push((sym.as_str().to_string(), binding_value));
+                }
+            }
+        }
+
+        if let Some(user) = self.modules.get_mut("user") {
+            for (name, value) in entries {
+                user.bindings.insert(name.clone(), value);
+                user.exports.insert(name);
+            }
+        }
     }
 
     pub fn open_module(&mut self, path: &str) {
@@ -113,28 +252,12 @@ impl VM {
         let Some(current) = self.current_module.clone() else {
             return false;
         };
-        self.ensure_module(&current);
-        if let Some(module) = self.modules.get_mut(&current) {
-            module.bindings.insert(name.to_string(), value);
-            true
-        } else {
-            false
-        }
+        self.module_store_in(&current, name, value)
     }
 
     pub fn module_lookup_current(&self, name: &str) -> Option<Value> {
-        let module = self.current_module_state()?;
-        if let Some(value) = module.bindings.get(name) {
-            return Some(*value);
-        }
-        if let Some(imported) = module.imports.get(name) {
-            return self
-                .modules
-                .get(&imported.module_path)
-                .and_then(|target| target.bindings.get(&imported.export_name))
-                .copied();
-        }
-        None
+        let current = self.current_module.as_ref()?;
+        self.module_lookup_in(current, name)
     }
 
     pub fn module_export_current(&mut self, name: &str) -> Result<(), String> {
@@ -318,6 +441,10 @@ pub unsafe fn trace_object(
             let s = &mut *(obj as *mut VMString);
             visitor(&mut s.data);
         }
+        ObjectType::Symbol => {
+            let s = &mut *(obj as *mut VMSymbol);
+            visitor(&mut s.data);
+        }
         ObjectType::ByteArray
         | ObjectType::BigNum
         | ObjectType::Alien
@@ -409,6 +536,7 @@ pub unsafe fn object_size(obj: *const u8) -> usize {
         ObjectType::Float => std::mem::size_of::<Float>(),
         ObjectType::Ratio => std::mem::size_of::<Ratio>(),
         ObjectType::Str => std::mem::size_of::<VMString>(),
+        ObjectType::Symbol => std::mem::size_of::<VMSymbol>(),
         ObjectType::BigNum => {
             let bn = &*(obj as *const BigNum);
             std::mem::size_of::<BigNum>()
