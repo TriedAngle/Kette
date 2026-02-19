@@ -11,19 +11,21 @@ Recommended setup is hybrid:
 - Vim syntax (`syntax/kette.vim`) provides immediate lexical feedback while typing.
 - `kette-lsp` semantic tokens refine names/scopes (`local`, `parameter`, `global`, etc.).
 
+Module paths and qualified export references use `::` (for example `Lib::Nested::Greeter`).
+
 ## Install
 
 Add this repository subfolder to your runtimepath in Neovim:
 
 ```lua
-vim.opt.runtimepath:append("/home/sebastian/KetteV2/editor/nvim")
+vim.opt.runtimepath:append("/home/sebastian/Projects/Kette/editor/nvim")
 ```
 
 Then call the setup helper in your init:
 
 ```lua
 require("kette.lsp").setup({
-  cmd = { "/home/sebastian/KetteV2/target/release/kette-lsp" },
+  cmd = { "/home/sebastian/Projects/Kette/target/release/kette-lsp" },
 })
 ```
 
@@ -34,6 +36,10 @@ The setup uses `lspconfig`, so ensure `neovim/nvim-lspconfig` is installed.
 ```bash
 cargo build --release -p kette-lsp
 ```
+
+Use the release binary in your LSP config for best responsiveness:
+
+`target/release/kette-lsp`
 
 Optional semantic highlight links for Neovim:
 

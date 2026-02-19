@@ -9,7 +9,7 @@ use heap::HeapSettings;
 use parser::token::TokenKind;
 use parser::{Lexer, Parser};
 
-use vm::{compiler0, interpreter, materialize, special, VM};
+use vm::{compiler0, interpreter, materialize, special, USER_MODULE, VM};
 
 const SLOT_PRINT_LIMIT: usize = 30;
 
@@ -55,7 +55,7 @@ fn main() {
     }
 
     if !cli.files.is_empty() {
-        vm.open_module("user");
+        vm.open_module(USER_MODULE);
     }
 
     for filename in &cli.files {
@@ -108,7 +108,7 @@ fn main() {
     }
 
     if cli.repl || cli.files.is_empty() {
-        vm.open_module("scratchpad");
+        vm.open_module(USER_MODULE);
         let trace_mnu = {
             #[cfg(debug_assertions)]
             {

@@ -191,16 +191,16 @@ Module use: 'Lib.
 Greeter greet
 ```
 
-The full commented walkthrough is in `core/module_resolution_demo.ktt`.
+The full commented walkthrough is in `examples/module_resolution_demo.ktt`.
 
 ## Running Script Tests
 
 For strict module mode, load `core/init.ktt` first, then test scripts:
 
 ```bash
-cargo run -p vm -- core/init.ktt tests/disposable_using.ktt
-cargo run -p vm -- core/init.ktt tests/file_disposable.ktt
-cargo run -p vm -- core/init.ktt tests/mitternacht.ktt
+cargo run -p vm -- core/init.ktt core/alien.ktt core/system.ktt tests/disposable_using.ktt
+cargo run -p vm -- core/init.ktt core/alien.ktt core/system.ktt tests/file_disposable.ktt
+cargo run -p vm -- core/init.ktt core/alien.ktt core/system.ktt tests/mitternacht.ktt
 ```
 
 Extra output/file-loading demo previously in init lives in:

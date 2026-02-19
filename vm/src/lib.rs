@@ -14,6 +14,9 @@ use object::{
     ObjectType, Ratio, SlotObject, SpecialObjects, VMString, VMSymbol, Value,
 };
 
+pub const USER_MODULE: &str = "User";
+pub const CORE_MODULE: &str = "Core";
+
 /// The VM owns a heap proxy and the bootstrapped special objects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleImport {
@@ -190,7 +193,8 @@ impl VM {
     }
 
     pub fn seed_user_module_from_dictionary(&mut self) {
-        self.ensure_module("user");
+        self.ensure_module(USER_MODULE);
+        self.ensure_module(CORE_MODULE);
         let mut entries: Vec<(String, Value)> = Vec::new();
 
         if self.dictionary.is_ref() {
@@ -222,10 +226,17 @@ impl VM {
             }
         }
 
-        if let Some(user) = self.modules.get_mut("user") {
-            for (name, value) in entries {
-                user.bindings.insert(name.clone(), value);
-                user.exports.insert(name);
+        if let Some(user) = self.modules.get_mut(USER_MODULE) {
+            for (name, value) in &entries {
+                user.bindings.insert(name.clone(), *value);
+                user.exports.insert(name.clone());
+            }
+        }
+
+        if let Some(core) = self.modules.get_mut(CORE_MODULE) {
+            for (name, value) in &entries {
+                core.bindings.insert(name.clone(), *value);
+                core.exports.insert(name.clone());
             }
         }
     }
@@ -233,8 +244,8 @@ impl VM {
     pub fn open_module(&mut self, path: &str) {
         self.ensure_module(path);
         self.current_module = Some(path.to_string());
-        if path != "user" {
-            let _ = self.module_use("user", &HashMap::new());
+        if path != CORE_MODULE {
+            let _ = self.module_use(CORE_MODULE, &HashMap::new());
         }
     }
 
@@ -278,6 +289,23 @@ impl VM {
         target_path: &str,
         aliases: &HashMap<String, String>,
     ) -> Result<(), String> {
+        self.module_use_filtered(target_path, aliases, None)
+    }
+
+    pub fn module_use_only(
+        &mut self,
+        target_path: &str,
+        names: &HashSet<String>,
+    ) -> Result<(), String> {
+        self.module_use_filtered(target_path, &HashMap::new(), Some(names))
+    }
+
+    fn module_use_filtered(
+        &mut self,
+        target_path: &str,
+        aliases: &HashMap<String, String>,
+        only_names: Option<&HashSet<String>>,
+    ) -> Result<(), String> {
         let Some(current_path) = self.current_module.clone() else {
             return Err(
                 "no current module; call Module open: first".to_string()
@@ -294,6 +322,11 @@ impl VM {
         let mut seen_targets: HashSet<String> = HashSet::new();
 
         for exported in &target.exports {
+            if let Some(only) = only_names {
+                if !only.contains(exported) {
+                    continue;
+                }
+            }
             let local_name = aliases
                 .get(exported)
                 .cloned()
@@ -319,6 +352,17 @@ impl VM {
                     "cannot alias non-exported symbol '{}' from module '{}'",
                     from, target_path
                 ));
+            }
+        }
+
+        if let Some(only) = only_names {
+            for name in only {
+                if !target.exports.contains(name) {
+                    return Err(format!(
+                        "cannot import non-exported symbol '{}' from module '{}'",
+                        name, target_path
+                    ));
+                }
             }
         }
 

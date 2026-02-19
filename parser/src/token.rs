@@ -10,7 +10,7 @@ pub enum TokenKind {
     Float(f64),
     /// String literal (contents without surrounding quotes), e.g. `"hello"`.
     String(std::string::String),
-    /// Symbol literal, e.g. `'foo`, `'Core.Math`.
+    /// Symbol literal, e.g. `'foo`, `'Core::Math`.
     Symbol(std::string::String),
 
     /// A lowercase-starting identifier, e.g. `factorial`, `x`, `_IntAdd`.
@@ -46,6 +46,8 @@ pub enum TokenKind {
     Pipe,
     /// `.` — expression separator / slot separator.
     Dot,
+    /// `::` — module path separator.
+    PathSep,
     /// `;` — cascade separator.
     Semicolon,
     /// `^` — return operator.
@@ -88,6 +90,7 @@ impl TokenKind {
             Self::RBrace => "`}`",
             Self::Pipe => "`|`",
             Self::Dot => "`.`",
+            Self::PathSep => "`::`",
             Self::Semicolon => "`;`",
             Self::Caret => "`^`",
             Self::Equals => "`=`",

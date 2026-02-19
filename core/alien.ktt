@@ -1,0 +1,153 @@
+Module open: 'Alien.
+
+CType := {
+    parent* = Oddball.
+    scalarTag: tag Size: s Align: a = {
+        {
+            parent* = self.
+            impl = tag.
+            size = s.
+            align = a
+        }
+    }.
+
+    scalarTag = { self _CTypeScalarTag }.
+    struct: definition = { self _CTypeBuildStruct: definition }.
+    fieldInfoAt: name = { self _CTypeFieldInfoAt: name }.
+    fieldOffsetAt: name = { (self fieldInfoAt: name) offset }.
+    fieldTypeAt: name = { (self fieldInfoAt: name) type }.
+
+    proxyReadFrom: proxy At: offset = {
+        proxy _ProxyUnsupportedCTypeRead: self
+    }.
+
+    proxyWriteTo: proxy At: offset Value: value = {
+        proxy _ProxyUnsupportedCTypeWrite: self
+    }.
+}.
+
+CVoid := CType scalarTag: 1 Size: 0 Align: 1.
+CInt8 := CType scalarTag: 2 Size: 1 Align: 1.
+CUInt8 := CType scalarTag: 3 Size: 1 Align: 1.
+CInt16 := CType scalarTag: 4 Size: 2 Align: 2.
+CUInt16 := CType scalarTag: 5 Size: 2 Align: 2.
+CInt32 := CType scalarTag: 6 Size: 4 Align: 4.
+CUInt32 := CType scalarTag: 7 Size: 4 Align: 4.
+CInt64 := CType scalarTag: 8 Size: 8 Align: 8.
+CUInt64 := CType scalarTag: 9 Size: 8 Align: 8.
+CFloat32 := CType scalarTag: 10 Size: 4 Align: 4.
+CFloat64 := CType scalarTag: 11 Size: 8 Align: 8.
+CPointer := CType scalarTag: 12 Size: 8 Align: 8.
+CSize := CType scalarTag: 13 Size: 8 Align: 8.
+
+Object extend: CInt8 With: {
+    proxyReadFrom: p At: o = { p i8At: o }.
+    proxyWriteTo: p At: o Value: v = { p i8At: o Put: v }.
+}.
+
+Object extend: CUInt8 With: {
+    proxyReadFrom: p At: o = { p u8At: o }.
+    proxyWriteTo: p At: o Value: v = { p u8At: o Put: v }.
+}.
+
+Object extend: CInt16 With: {
+    proxyReadFrom: p At: o = { p i16At: o }.
+    proxyWriteTo: p At: o Value: v = { p i16At: o Put: v }.
+}.
+
+Object extend: CUInt16 With: {
+    proxyReadFrom: p At: o = { p u16At: o }.
+    proxyWriteTo: p At: o Value: v = { p u16At: o Put: v }.
+}.
+
+Object extend: CInt32 With: {
+    proxyReadFrom: p At: o = { p i32At: o }.
+    proxyWriteTo: p At: o Value: v = { p i32At: o Put: v }.
+}.
+
+Object extend: CUInt32 With: {
+    proxyReadFrom: p At: o = { p u32At: o }.
+    proxyWriteTo: p At: o Value: v = { p u32At: o Put: v }.
+}.
+
+Object extend: CInt64 With: {
+    proxyReadFrom: p At: o = { p i64At: o }.
+    proxyWriteTo: p At: o Value: v = { p i64At: o Put: v }.
+}.
+
+Object extend: CUInt64 With: {
+    proxyReadFrom: p At: o = { p u64At: o }.
+    proxyWriteTo: p At: o Value: v = { p u64At: o Put: v }.
+}.
+
+Object extend: CFloat32 With: {
+    proxyReadFrom: p At: o = { p f32At: o }.
+    proxyWriteTo: p At: o Value: v = { p f32At: o Put: v }.
+}.
+
+Object extend: CFloat64 With: {
+    proxyReadFrom: p At: o = { p f64At: o }.
+    proxyWriteTo: p At: o Value: v = { p f64At: o Put: v }.
+}.
+
+Object extend: CPointer With: {
+    proxyReadFrom: p At: o = { p pointerAt: o }.
+    proxyWriteTo: p At: o Value: v = { p pointerAt: o Put: v }.
+}.
+
+Object extend: CSize With: {
+    proxyReadFrom: p At: o = { p u64At: o }.
+    proxyWriteTo: p At: o Value: v = { p u64At: o Put: v }.
+}.
+
+CStatPairExample := CType struct: {
+    first = CInt32.
+    second = CInt32.
+}.
+
+CDivT := CType struct: {
+    quot = CInt32.
+    rem = CInt32.
+}.
+
+CStatLinuxX64 := CType struct: {
+    st_dev = CUInt64.
+    st_ino = CUInt64.
+    st_nlink = CUInt64.
+    st_mode = CUInt32.
+    st_uid = CUInt32.
+    st_gid = CUInt32.
+    st_pad0 = CUInt32.
+    st_rdev = CUInt64.
+    st_size = CInt64.
+    st_blksize = CInt64.
+    st_blocks = CInt64.
+    st_atime = CInt64.
+    st_atime_nsec = CInt64.
+    st_mtime = CInt64.
+    st_mtime_nsec = CInt64.
+    st_ctime = CInt64.
+    st_ctime_nsec = CInt64.
+    st_reserved0 = CInt64.
+    st_reserved1 = CInt64.
+    st_reserved2 = CInt64.
+}.
+
+Module export:
+    'CType
+    & 'CVoid
+    & 'CInt8
+    & 'CUInt8
+    & 'CInt16
+    & 'CUInt16
+    & 'CInt32
+    & 'CUInt32
+    & 'CInt64
+    & 'CUInt64
+    & 'CFloat32
+    & 'CFloat64
+    & 'CPointer
+    & 'CSize
+    & 'CStatPairExample
+    & 'CDivT
+    & 'CStatLinuxX64.

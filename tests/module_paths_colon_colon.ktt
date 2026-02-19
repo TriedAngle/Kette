@@ -1,0 +1,17 @@
+// expect:
+// module-paths-colon-colon: ok
+
+Module open: 'Lib::Nested.
+answer := 42.
+Module export: 'answer.
+
+Module open: 'Test::ModulePaths.
+Module use: 'Lib::Nested.
+
+fromImport := answer.
+fromModuleAt := (Module at: 'Lib::Nested) answer.
+
+msg := ((fromImport == 42) && (fromModuleAt == 42))
+    ifTrue: [ "module-paths-colon-colon: ok" ]
+    IfFalse: [ "module-paths-colon-colon: fail" ].
+msg println.

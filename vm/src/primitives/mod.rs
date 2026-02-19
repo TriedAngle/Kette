@@ -377,6 +377,7 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("vm_module_open", 1, vm::vm_module_open),
         PrimitiveDesc::new("vm_module_use", 1, vm::vm_module_use),
         PrimitiveDesc::new("vm_module_use_as", 2, vm::vm_module_use_as),
+        PrimitiveDesc::new("vm_module_use_only", 2, vm::vm_module_use_only),
         PrimitiveDesc::new("vm_module_export", 1, vm::vm_module_export),
         PrimitiveDesc::new("vm_module_at", 1, vm::vm_module_at),
         PrimitiveDesc::new("vm_current_module", 0, vm::vm_current_module),

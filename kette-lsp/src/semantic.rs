@@ -1,4 +1,4 @@
-use parser::{semantic, Expr, Token};
+use parser::{Expr, Token, semantic};
 #[cfg(test)]
 use parser::{Lexer, Parser, TokenKind};
 use tower_lsp::lsp_types::{
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn emits_semantic_token_for_symbol_literal() {
-        let source = "'Core.Math";
+        let source = "'Core::Math";
         let tokens = semantic_tokens(source);
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].token_type, TYPE_GLOBAL);
@@ -224,15 +224,26 @@ mod tests {
     }
 
     #[test]
+    fn marks_path_separator_as_punctuation() {
+        let source = "Lib::Nested::Greeter";
+        let tokens = semantic_tokens(source);
+        assert!(tokens.iter().any(|tok| tok.token_type == TYPE_PUNCTUATION));
+    }
+
+    #[test]
     fn marks_string_and_number_literals() {
         let source = "[ x := 42. y := \"ok\" ]";
         let tokens = semantic_tokens(source);
-        assert!(tokens
-            .iter()
-            .any(|tok| tok.token_type == TYPE_LITERAL_NUMBER));
-        assert!(tokens
-            .iter()
-            .any(|tok| tok.token_type == TYPE_LITERAL_STRING));
+        assert!(
+            tokens
+                .iter()
+                .any(|tok| tok.token_type == TYPE_LITERAL_NUMBER)
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|tok| tok.token_type == TYPE_LITERAL_STRING)
+        );
     }
 
     #[test]

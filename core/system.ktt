@@ -1,0 +1,83 @@
+Module open: 'System.
+Module use: 'Alien.
+
+Posix := {
+    parent* = Oddball.
+    SEEK_SET = 0.
+    SEEK_CUR = 1.
+    SEEK_END = 2.
+    O_RDONLY = 0.
+
+    libc := Alien libraryOpen: "libc.so.6".
+    initialized := False.
+    functions := {
+        open := None.
+        lseek := None.
+        close := None.
+        fstat := None.
+        read := None.
+        div := None
+    }.
+
+    ensureFunctions = {
+        fns := self functions.
+        self initialized
+            ifTrue: [ None ]
+            IfFalse: [
+                fns open: (self libc librarySym: "open").
+                fns lseek: (self libc librarySym: "lseek").
+                fns close: (self libc librarySym: "close").
+                fns fstat: (self libc librarySym: "fstat").
+                fns read: (self libc librarySym: "read").
+                fns div: (self libc librarySym: "div").
+                self initialized: True
+            ].
+        fns
+    }.
+
+    open: path Flags: flags Mode: mode = {
+        self ensureFunctions open
+            callWithTypes: CPointer & CInt32 & CInt32
+            Args: path & flags & mode
+            ReturnType: CInt32
+    }.
+
+    seekFd: fd Offset: offset Whence: whence = {
+        self ensureFunctions lseek
+            callWithTypes: CInt32 & CInt32 & CInt64
+            Args: fd & offset & whence
+            ReturnType: CInt64
+    }.
+
+    closeFd: fd = {
+        self ensureFunctions close
+            callWithTypes: CInt32
+            Args: fd
+            ReturnType: CInt32
+    }.
+
+    fstatFd: fd Into: buffer = {
+        self ensureFunctions fstat
+            callWithTypes: CInt32 & CPointer
+            Args: fd & buffer
+            ReturnType: CInt32
+    }.
+
+    readFd: fd Into: buffer Length: len = {
+        self ensureFunctions read
+            callWithTypes: CInt32 & CPointer & CSize
+            Args: fd & buffer & len
+            ReturnType: CInt64
+    }.
+
+    div: lhs By: rhs = {
+        self ensureFunctions div
+            callWithTypes: CInt32 & CInt32
+            Args: lhs & rhs
+            ReturnType: CDivT
+    }.
+
+    close = { self libc libraryClose }.
+}.
+
+Module export: 'Posix.

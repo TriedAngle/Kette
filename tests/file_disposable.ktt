@@ -1,4 +1,5 @@
-Module open: 'Test.FileDisposable.
+Module open: 'Test::FileDisposable.
+Module use: 'System.
 
 f := File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0.
 preview := f using: [ | file |

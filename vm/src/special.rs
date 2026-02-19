@@ -1317,6 +1317,12 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         )
         .expect("vm_module_use_as primitive missing")
             as i64;
+        let vm_module_use_only_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_module_use_only",
+        )
+        .expect("vm_module_use_only primitive missing")
+            as i64;
         let vm_module_export_idx = primitives::primitive_index_by_name(
             &primitives,
             "vm_module_export",
@@ -1355,6 +1361,12 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut roots,
             &mut intern_table,
             "_ModuleUse:As:",
+        );
+        let vm_module_use_only_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ModuleUseOnly:Names:",
         );
         let vm_module_export_name = intern_bootstrap(
             &mut proxy,
@@ -1827,6 +1839,36 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             vm_module_use_as_name,
             vm_module_use_as_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_module_use_only_code = Value::from_i64(vm_module_use_only_idx);
+        let vm_module_use_only_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_module_use_only_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_module_use_only_map_val);
+        let vm_module_use_only_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_module_use_only_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_module_use_only_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_module_use_only_name,
+            vm_module_use_only_method_val,
         );
         roots.push(vm_map_val);
 

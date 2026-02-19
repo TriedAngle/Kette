@@ -1,0 +1,17 @@
+// expect:
+// qualified-export-send: ok
+
+Module open: 'Lib::Nested.
+Greeter := {
+    greet = { 41 + 1 }.
+}.
+Module export: 'Greeter.
+
+Module open: 'Test::QualifiedExportSend.
+
+result := Lib::Nested::Greeter greet.
+
+msg := (result == 42)
+    ifTrue: [ "qualified-export-send: ok" ]
+    IfFalse: [ "qualified-export-send: fail" ].
+msg println.

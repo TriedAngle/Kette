@@ -1,4 +1,4 @@
-Module open: 'Test.DisposableUsing.
+Module open: 'Test::DisposableUsing.
 
 d := {
     parent* = Disposable.

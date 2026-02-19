@@ -471,7 +471,8 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Identifier(s) => s,
                     _ => unreachable!(),
                 };
-                Ok(Expr::new(ExprKind::Ident(n), t.span))
+                let (n, span) = self.parse_qualified_ident_tail(n, t.span)?;
+                Ok(Expr::new(ExprKind::Ident(n), span))
             }
             TokenKind::ResendKw => {
                 let t = self.advance();
@@ -524,6 +525,30 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 ))
             }
         }
+    }
+
+    fn parse_qualified_ident_tail(
+        &mut self,
+        mut name: String,
+        mut span: Span,
+    ) -> Result<(String, Span), ParseError> {
+        while matches!(self.peek_kind(), TokenKind::PathSep) {
+            self.advance();
+            let tok = self.advance();
+            let segment = match tok.kind {
+                TokenKind::Identifier(s) => s,
+                _ => {
+                    return Err(ParseError::new(
+                        "expected identifier after `::`",
+                        tok.span,
+                    ));
+                }
+            };
+            name.push_str("::");
+            name.push_str(&segment);
+            span = span.merge(tok.span);
+        }
+        Ok((name, span))
     }
 
     fn parse_paren(&mut self) -> Result<Expr, ParseError> {

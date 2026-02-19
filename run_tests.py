@@ -10,6 +10,8 @@ from enum import Enum
 
 TEST_DIR = "tests"
 CORE_INIT = "core/init.ktt"
+ALIEN_INIT = "core/alien.ktt"
+SYSTEM_INIT = "core/system.ktt"
 def build_command(debug: bool) -> list[str]:
     cmd = ["cargo", "build", "--bin", "kette"]
     if not debug:
@@ -20,7 +22,7 @@ def run_command(debug: bool) -> list[str]:
     cmd = ["cargo", "run", "--bin", "kette"]
     if not debug:
         cmd.append("--release")
-    cmd.extend(["--quiet", "--", CORE_INIT])
+    cmd.extend(["--quiet", "--", CORE_INIT, ALIEN_INIT, SYSTEM_INIT])
     return cmd
 
 class Color:

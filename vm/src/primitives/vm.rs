@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use object::Value;
-use object::{MapFlags, ObjectType, Slot, SlotFlags, SlotObject};
+use object::{Array, MapFlags, ObjectType, Slot, SlotFlags, SlotObject};
 use parser::{Lexer, Parser};
 
 use crate::compiler0;
@@ -11,7 +11,7 @@ use crate::primitives::string::intern_symbol;
 use crate::primitives::{
     expect_string, expect_symbol, string::alloc_vm_string,
 };
-use crate::VM;
+use crate::{USER_MODULE, VM};
 
 pub fn vm_eval(
     vm: &mut VM,
@@ -20,7 +20,7 @@ pub fn vm_eval(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     if vm.current_module.is_none() {
-        vm.open_module("user");
+        vm.open_module(USER_MODULE);
     }
 
     let source_ptr = expect_string(args[0])?;
@@ -105,6 +105,22 @@ pub fn vm_module_use_as(
     let path = symbol_to_string(args[0])?;
     let alias_map = parse_alias_map(args[1])?;
     vm.module_use(&path, &alias_map).map_err(|msg| {
+        RuntimeError::Unimplemented {
+            message: Box::leak(msg.into_boxed_str()),
+        }
+    })?;
+    Ok(vm.special.none)
+}
+
+pub fn vm_module_use_only(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let path = symbol_to_string(args[0])?;
+    let names = parse_symbol_names(args[1])?;
+    vm.module_use_only(&path, &names).map_err(|msg| {
         RuntimeError::Unimplemented {
             message: Box::leak(msg.into_boxed_str()),
         }
@@ -230,6 +246,24 @@ fn parse_alias_map(
     Ok(aliases)
 }
 
+fn parse_symbol_names(value: Value) -> Result<HashSet<String>, RuntimeError> {
+    let mut names = HashSet::new();
+
+    if value.is_ref() {
+        let header: &object::Header = unsafe { value.as_ref() };
+        if header.object_type() == ObjectType::Array {
+            let array: &Array = unsafe { value.as_ref() };
+            for element in unsafe { array.elements() } {
+                names.insert(symbol_to_string(*element)?);
+            }
+            return Ok(names);
+        }
+    }
+
+    names.insert(symbol_to_string(value)?);
+    Ok(names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +272,7 @@ mod tests {
 
     fn execute_source(vm: &mut VM, source: &str) -> Result<Value, String> {
         if vm.current_module.is_none() {
-            vm.open_module("user");
+            vm.open_module(USER_MODULE);
         }
 
         let parse_results: Vec<_> =
@@ -279,7 +313,7 @@ mod tests {
         source: &str,
     ) -> Result<compiler0::CodeDesc, String> {
         if vm.current_module.is_none() {
-            vm.open_module("user");
+            vm.open_module(USER_MODULE);
         }
 
         let parse_results: Vec<_> =
@@ -349,14 +383,14 @@ mod tests {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
         let err = execute_source(
             &mut vm,
-            "GlobalX := 9. VM _ModuleOpen: 'A. x := 1. VM _ModuleOpen: 'B. x := 2. VM _ModuleOpen: 'A. x _FixnumAdd: GlobalX",
+            "VM _ModuleOpen: 'Shared. GlobalX := 9. VM _ModuleExport: 'GlobalX. VM _ModuleOpen: 'A. x := 1. VM _ModuleOpen: 'B. x := 2. VM _ModuleOpen: 'A. x _FixnumAdd: GlobalX",
         )
         .expect_err("cross-module global without import should fail");
         assert!(err.contains("unresolved global 'GlobalX'"));
 
         let value = execute_source(
             &mut vm,
-            "GlobalX := 9. VM _ModuleExport: 'GlobalX. VM _ModuleOpen: 'A. x := 1. VM _ModuleUse: 'user. x _FixnumAdd: GlobalX",
+            "VM _ModuleOpen: 'Shared. GlobalX := 9. VM _ModuleExport: 'GlobalX. VM _ModuleOpen: 'A. x := 1. VM _ModuleUse: 'Shared. x _FixnumAdd: GlobalX",
         )
         .expect("explicit module import should succeed");
         assert!(value.is_fixnum());
@@ -377,6 +411,22 @@ mod tests {
         let err = execute_source(&mut vm, "VM _ModuleOpen: 'App. hidden")
             .expect_err("hidden must not be imported");
         assert!(err.contains("unresolved global 'hidden'"));
+    }
+
+    #[test]
+    fn module_use_only_imports_requested_name() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib. foo := 41. bar := 7. VM _ModuleExport: 'foo. VM _ModuleExport: 'bar. VM _ModuleOpen: 'App. VM _ModuleUseOnly: 'Lib Names: 'foo. foo _FixnumAdd: 1",
+        )
+        .expect("use only should import requested name");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+
+        let err = execute_source(&mut vm, "VM _ModuleOpen: 'App. bar")
+            .expect_err("non-selected export must not be imported");
+        assert!(err.contains("unresolved global 'bar'"));
     }
 
     #[test]
@@ -436,7 +486,7 @@ mod tests {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
         let value = execute_source(
             &mut vm,
-            "VM _ModuleOpen: 'Core.Math. pi := 3. answer := 42. VM _ModuleExport: 'pi. VM _ModuleExport: 'answer. VM _ModuleOpen: 'App. VM _ModuleUse: 'Core.Math. VM _ModuleUse: 'Core.Math As: { answer = 'mathAnswer }. VM _ModuleOpen: 'Core.Math. VM _ModuleOpen: 'App. pi _FixnumAdd: mathAnswer",
+            "VM _ModuleOpen: 'Core::Math. pi := 3. answer := 42. VM _ModuleExport: 'pi. VM _ModuleExport: 'answer. VM _ModuleOpen: 'App. VM _ModuleUse: 'Core::Math. VM _ModuleUse: 'Core::Math As: { answer = 'mathAnswer }. VM _ModuleOpen: 'Core::Math. VM _ModuleOpen: 'App. pi _FixnumAdd: mathAnswer",
         )
         .expect("reusing module imports should succeed");
         assert!(value.is_fixnum());
@@ -444,13 +494,13 @@ mod tests {
     }
 
     #[test]
-    fn module_open_auto_uses_user_exports() {
+    fn module_open_auto_uses_core_exports() {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
         let value = execute_source(
             &mut vm,
-            "VM _ModuleOpen: 'user. Shared := 7. VM _ModuleExport: 'Shared. VM _ModuleOpen: 'App. Shared",
+            "VM _ModuleOpen: 'Core. Shared := 7. VM _ModuleExport: 'Shared. VM _ModuleOpen: 'App. Shared",
         )
-        .expect("opening app should auto-use user exports");
+        .expect("opening app should auto-use Core exports");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 7);
     }
@@ -477,6 +527,29 @@ mod tests {
         .expect("method global lookup should use defining module");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 77);
+    }
+
+    #[test]
+    fn qualified_export_reference_works_without_use() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib::Nested. Greeter := { greet = { 41 _FixnumAdd: 1 }. }. VM _ModuleExport: 'Greeter. VM _ModuleOpen: 'App. Lib::Nested::Greeter greet",
+        )
+        .expect("qualified export reference should resolve");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn qualified_export_assignment_is_rejected() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let err = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'Lib::Nested. x := 1. VM _ModuleExport: 'x. VM _ModuleOpen: 'App. Lib::Nested::x := 3",
+        )
+        .expect_err("assignment to qualified export should fail");
+        assert!(err.contains("cannot assign to qualified export"));
     }
 
     #[test]

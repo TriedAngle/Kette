@@ -119,8 +119,16 @@ mod tests {
             matches!(parse_one("'foo").kind, ExprKind::Symbol(ref s) if s == "foo")
         );
         assert!(matches!(
-            parse_one("'Core.Math").kind,
-            ExprKind::Symbol(ref s) if s == "Core.Math"
+            parse_one("'Core::Math").kind,
+            ExprKind::Symbol(ref s) if s == "Core::Math"
+        ));
+    }
+
+    #[test]
+    fn qualified_identifier_with_path_sep() {
+        assert!(matches!(
+            parse_one("Lib::Nested::Thing").kind,
+            ExprKind::Ident(ref s) if s == "Lib::Nested::Thing"
         ));
     }
 
@@ -899,9 +907,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(body
-                    .iter()
-                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
+                assert!(
+                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
+                );
             }
             _ => panic!("expected block"),
         }

@@ -22,7 +22,7 @@ cargo build --release -p kette-lsp
 
 The binary will be at:
 
-`/home/sebastian/KetteV2/target/release/kette-lsp`
+`/home/sebastian/Projects/Kette/target/release/kette-lsp`
 
 ## 2) Expose the Neovim runtime files
 
@@ -30,7 +30,7 @@ Add the repo Neovim folder as a local package (works with normal runtime + lazy.
 
 ```bash
 mkdir -p "/home/sebastian/dots/nvim/pack/kette/start"
-ln -sfn "/home/sebastian/KetteV2/editor/nvim" "/home/sebastian/dots/nvim/pack/kette/start/kette-nvim"
+ln -sfn "/home/sebastian/Projects/Kette/editor/nvim" "/home/sebastian/dots/nvim/pack/kette/start/kette-nvim"
 ```
 
 If your config is elsewhere, replace `/home/sebastian/dots/nvim` accordingly.
@@ -43,7 +43,7 @@ In your Neovim LSP config, add:
 vim.lsp.config('kette_lsp', {
   capabilities = capabilities,
   on_attach = on_attach,
-  cmd = { '/home/sebastian/KetteV2/target/release/kette-lsp' },
+  cmd = { '/home/sebastian/Projects/Kette/target/release/kette-lsp' },
   filetypes = { 'kette' },
   root_markers = { '.git', 'Cargo.toml' },
   single_file_support = true,
@@ -78,7 +78,7 @@ Token mapping in `kette-lsp`:
 - locals -> `variable`
 - globals -> `namespace`
 - binary operators -> `operator`
-- delimiters (`{ } [ ] ( ) | . ; ^`) -> `punctuation`
+- delimiters (`{ } [ ] ( ) | . ; ^ ::`) -> `punctuation`
 
 ## 5) Restart Neovim and verify
 

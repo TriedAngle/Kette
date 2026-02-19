@@ -1,4 +1,5 @@
-Module open: 'Test.RuntimeDemo.
+Module open: 'Test::RuntimeDemo.
+Module use: 'System::Posix.
 
 (File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0) using: [ | file |
     ("Reading: core/init.ktt (Size: " + file size toString + "):") println.
@@ -15,25 +16,24 @@ NewGlobal println.
 
 "Module demo start" println.
 
-Module open: 'Core.Math.
+Module open: 'Core::Math.
 pi := 3.
 answer := 42.
 Module export: 'pi.
 Module export: 'answer.
 
 Module open: 'App.
-Module use: 'Core.Math.
-Module use: 'user.
+Module use: 'Core::Math.
 (pi + answer) toString println.
 
-Module use: 'Core.Math As: { answer = 'mathAnswer }.
+Module use: 'Core::Math As: { answer = 'mathAnswer }.
 mathAnswer toString println.
 
-Module open: 'Core.Math.
+Module open: 'Core::Math.
 Module open: 'App.
 pi toString println.
 
-((Module at: 'Core.Math) answer) toString println.
+((Module at: 'Core::Math) answer) toString println.
 
 "Module demo end" println.
 

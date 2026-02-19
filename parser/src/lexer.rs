@@ -680,8 +680,8 @@ impl<R: Read> Lexer<R> {
             }
         }
 
-        // Check for keyword colon.
-        if self.peek() == Some(b':') {
+        // Check for keyword colon (but not path separator `::`).
+        if self.peek() == Some(b':') && self.peek_ahead(1) != Some(b':') {
             raw.push(':');
             self.advance();
             let span = Span::new(start, self.pos());
@@ -714,7 +714,7 @@ impl<R: Read> Lexer<R> {
             }
         }
 
-        if self.peek() == Some(b':') {
+        if self.peek() == Some(b':') && self.peek_ahead(1) != Some(b':') {
             raw.push(':');
             self.advance();
             let span = Span::new(start, self.pos());
@@ -788,7 +788,7 @@ impl<R: Read> Lexer<R> {
         Token::new(TokenKind::Operator(raw.clone()), span, raw)
     }
 
-    /// Lex a symbol literal: `'ident(.ident)*`.
+    /// Lex a symbol literal: `'ident(::ident)*`.
     fn lex_symbol_literal(&mut self) -> Token {
         let start = self.pos();
         self.advance(); // consume '\''
@@ -823,16 +823,48 @@ impl<R: Read> Lexer<R> {
             }
 
             if !path.is_empty() {
-                path.push('.');
+                path.push(':');
+                path.push(':');
             }
             path.push_str(&segment);
+
+            if self.peek() == Some(b':') && self.peek_ahead(1) == Some(b':') {
+                match self.peek_ahead(2) {
+                    Some(next)
+                        if next == b'_'
+                            || (next as char).is_ascii_alphabetic() =>
+                    {
+                        self.advance();
+                        self.advance();
+                        raw.push(':');
+                        raw.push(':');
+                        continue;
+                    }
+                    _ => {
+                        let span = Span::new(start, self.pos());
+                        return Token::new(
+                            TokenKind::Error(
+                                "expected symbol segment after `::`".into(),
+                            ),
+                            span,
+                            raw,
+                        );
+                    }
+                }
+            }
 
             if self.peek() == Some(b'.') {
                 if let Some(next) = self.peek_ahead(1) {
                     if next == b'_' || (next as char).is_ascii_alphabetic() {
-                        self.advance();
-                        raw.push('.');
-                        continue;
+                        let span = Span::new(start, self.pos());
+                        return Token::new(
+                            TokenKind::Error(
+                                "dot-separated symbol paths are not supported; use `::`"
+                                    .into(),
+                            ),
+                            span,
+                            raw,
+                        );
                     }
                 }
             }
@@ -966,7 +998,15 @@ impl<R: Read> Lexer<R> {
             b'A'..=b'Z' => self.lex_cap_identifier_or_keyword(),
 
             b':' => {
-                if self.peek_ahead(1) == Some(b'=') {
+                if self.peek_ahead(1) == Some(b':') {
+                    self.advance();
+                    self.advance();
+                    Token::new(
+                        TokenKind::PathSep,
+                        Span::new(start, self.pos()),
+                        "::",
+                    )
+                } else if self.peek_ahead(1) == Some(b'=') {
                     self.advance();
                     self.advance();
                     Token::new(
@@ -1239,8 +1279,8 @@ mod tests {
             vec![TokenKind::Symbol("foo".into()), TokenKind::Eof]
         );
         assert_eq!(
-            kinds("'Core.Math"),
-            vec![TokenKind::Symbol("Core.Math".into()), TokenKind::Eof]
+            kinds("'Core::Math"),
+            vec![TokenKind::Symbol("Core::Math".into()), TokenKind::Eof]
         );
     }
 
@@ -1253,13 +1293,19 @@ mod tests {
     #[test]
     fn lex_symbol_literal_then_dot_terminator() {
         assert_eq!(
-            kinds("'Core.Math."),
+            kinds("'Core::Math."),
             vec![
-                TokenKind::Symbol("Core.Math".into()),
+                TokenKind::Symbol("Core::Math".into()),
                 TokenKind::Dot,
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn lex_symbol_literal_dot_path_is_error() {
+        let k = kinds("'Core.Math");
+        assert!(matches!(k[0], TokenKind::Error(_)));
     }
 
     #[test]
@@ -1289,6 +1335,21 @@ mod tests {
     #[test]
     fn lex_assign() {
         assert_eq!(kinds(":="), vec![TokenKind::Assign, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn lex_path_separator() {
+        assert_eq!(
+            kinds("Lib::Nested::Thing"),
+            vec![
+                TokenKind::Identifier("Lib".into()),
+                TokenKind::PathSep,
+                TokenKind::Identifier("Nested".into()),
+                TokenKind::PathSep,
+                TokenKind::Identifier("Thing".into()),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]

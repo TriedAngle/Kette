@@ -1,3 +1,5 @@
+VM _ModuleOpen: 'Core.
+
 Object _Extend: Object With: { 
     extend: target With: source = {
         self _Extend: target With: source
@@ -34,7 +36,13 @@ Module = {
     open: path = { VM _ModuleOpen: path }.
     use: path = { VM _ModuleUse: path }.
     use: path As: aliases = { VM _ModuleUse: path As: aliases }.
-    export: name = { VM _ModuleExport: name }.
+    use: path Only: names = { VM _ModuleUseOnly: path Names: (names asArray) }.
+    export: names = {
+        names asArray each: [ | name |
+            VM _ModuleExport: name
+        ].
+        self
+    }.
     at: path = { VM _ModuleAt: path }.
     current = { VM _CurrentModule }.
 }.
@@ -861,7 +869,8 @@ File := {
     flags = 0.
 
     open: path Flags: flags Mode: mode = {
-        fd := Posix open: path Flags: flags Mode: mode.
+        posix := (Module at: 'System::Posix) Posix.
+        fd := posix open: path Flags: flags Mode: mode.
         {
             parent* = File.
             fd := fd.
@@ -876,7 +885,8 @@ File := {
     close = {
         self isOpen
             ifTrue: [
-                rc := Posix closeFd: self fd.
+                posix := (Module at: 'System::Posix) Posix.
+                rc := posix closeFd: self fd.
                 self fd: -1.
                 rc
             ]
@@ -887,18 +897,24 @@ File := {
 
     size = {
         self isOpen
-            ifTrue: [ Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_END ]
+            ifTrue: [
+                posix := (Module at: 'System::Posix) Posix.
+                posix seekFd: self fd Offset: 0 Whence: posix SEEK_END
+            ]
             IfFalse: [ self _FileClosed ]
     }.
 
     statSize = {
         self isOpen
             ifTrue: [
-                statBuf := ByteArray cloneWithSize: CStatLinuxX64 size.
-                rc := Posix fstatFd: self fd Into: statBuf.
+                alien := Module at: 'Alien.
+                statType := alien CStatLinuxX64.
+                statBuf := ByteArray cloneWithSize: statType size.
+                posix := (Module at: 'System::Posix) Posix.
+                rc := posix fstatFd: self fd Into: statBuf.
                 rc == 0
                     ifTrue: [
-                        statInfo := CStatLinuxX64 _CTypeFieldInfoAt: "st_size".
+                        statInfo := statType _CTypeFieldInfoAt: "st_size".
                         statOffset := statInfo offset.
                         statBuf i64At: statOffset
                     ]
@@ -909,13 +925,19 @@ File := {
 
     readInto: buffer Length: len = {
         self isOpen
-            ifTrue: [ Posix readFd: self fd Into: buffer Length: len ]
+            ifTrue: [
+                posix := (Module at: 'System::Posix) Posix.
+                posix readFd: self fd Into: buffer Length: len
+            ]
             IfFalse: [ self _FileClosed ]
     }.
 
     rewind = {
         self isOpen
-            ifTrue: [ Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_SET ]
+            ifTrue: [
+                posix := (Module at: 'System::Posix) Posix.
+                posix seekFd: self fd Offset: 0 Whence: posix SEEK_SET
+            ]
             IfFalse: [ self _FileClosed ]
     }.
 
@@ -1020,226 +1042,16 @@ File := {
     }.
 }.
 
-CType := {
-    parent* = Oddball.
-    scalarTag: tag Size: s Align: a = {
-        {
-            parent* = self.
-            impl = tag.
-            size = s.
-            align = a
-        }
-    }.
-
-    scalarTag = { self _CTypeScalarTag }.
-    struct: definition = { self _CTypeBuildStruct: definition }.
-    fieldInfoAt: name = { self _CTypeFieldInfoAt: name }.
-    fieldOffsetAt: name = { (self fieldInfoAt: name) offset }.
-    fieldTypeAt: name = { (self fieldInfoAt: name) type }.
-
-    proxyReadFrom: proxy At: offset = {
-        proxy _ProxyUnsupportedCTypeRead: self
-    }.
-
-    proxyWriteTo: proxy At: offset Value: value = {
-        proxy _ProxyUnsupportedCTypeWrite: self
-    }.
-}.
-
-CVoid := CType scalarTag: 1 Size: 0 Align: 1.
-CInt8 := CType scalarTag: 2 Size: 1 Align: 1.
-CUInt8 := CType scalarTag: 3 Size: 1 Align: 1.
-CInt16 := CType scalarTag: 4 Size: 2 Align: 2.
-CUInt16 := CType scalarTag: 5 Size: 2 Align: 2.
-CInt32 := CType scalarTag: 6 Size: 4 Align: 4.
-CUInt32 := CType scalarTag: 7 Size: 4 Align: 4.
-CInt64 := CType scalarTag: 8 Size: 8 Align: 8.
-CUInt64 := CType scalarTag: 9 Size: 8 Align: 8.
-CFloat32 := CType scalarTag: 10 Size: 4 Align: 4.
-CFloat64 := CType scalarTag: 11 Size: 8 Align: 8.
-CPointer := CType scalarTag: 12 Size: 8 Align: 8.
-CSize := CType scalarTag: 13 Size: 8 Align: 8.
-
-Object extend: CInt8 With: {
-    proxyReadFrom: p At: o = { p i8At: o }.
-    proxyWriteTo: p At: o Value: v = { p i8At: o Put: v }.
-}.
-
-Object extend: CUInt8 With: {
-    proxyReadFrom: p At: o = { p u8At: o }.
-    proxyWriteTo: p At: o Value: v = { p u8At: o Put: v }.
-}.
-
-Object extend: CInt16 With: {
-    proxyReadFrom: p At: o = { p i16At: o }.
-    proxyWriteTo: p At: o Value: v = { p i16At: o Put: v }.
-}.
-
-Object extend: CUInt16 With: {
-    proxyReadFrom: p At: o = { p u16At: o }.
-    proxyWriteTo: p At: o Value: v = { p u16At: o Put: v }.
-}.
-
-Object extend: CInt32 With: {
-    proxyReadFrom: p At: o = { p i32At: o }.
-    proxyWriteTo: p At: o Value: v = { p i32At: o Put: v }.
-}.
-
-Object extend: CUInt32 With: {
-    proxyReadFrom: p At: o = { p u32At: o }.
-    proxyWriteTo: p At: o Value: v = { p u32At: o Put: v }.
-}.
-
-Object extend: CInt64 With: {
-    proxyReadFrom: p At: o = { p i64At: o }.
-    proxyWriteTo: p At: o Value: v = { p i64At: o Put: v }.
-}.
-
-Object extend: CUInt64 With: {
-    proxyReadFrom: p At: o = { p u64At: o }.
-    proxyWriteTo: p At: o Value: v = { p u64At: o Put: v }.
-}.
-
-Object extend: CFloat32 With: {
-    proxyReadFrom: p At: o = { p f32At: o }.
-    proxyWriteTo: p At: o Value: v = { p f32At: o Put: v }.
-}.
-
-Object extend: CFloat64 With: {
-    proxyReadFrom: p At: o = { p f64At: o }.
-    proxyWriteTo: p At: o Value: v = { p f64At: o Put: v }.
-}.
-
-Object extend: CPointer With: {
-    proxyReadFrom: p At: o = { p pointerAt: o }.
-    proxyWriteTo: p At: o Value: v = { p pointerAt: o Put: v }.
-}.
-
-Object extend: CSize With: {
-    proxyReadFrom: p At: o = { p u64At: o }.
-    proxyWriteTo: p At: o Value: v = { p u64At: o Put: v }.
-}.
-
-// Example struct descriptor protocol (field order defines layout):
-CStatPairExample := CType struct: {
-    first = CInt32.
-    second = CInt32.
-}.
-
-CDivT := CType struct: {
-    quot = CInt32.
-    rem = CInt32.
-}.
-
-// Linux x86_64 glibc struct stat layout.
-CStatLinuxX64 := CType struct: {
-    st_dev = CUInt64.
-    st_ino = CUInt64.
-    st_nlink = CUInt64.
-    st_mode = CUInt32.
-    st_uid = CUInt32.
-    st_gid = CUInt32.
-    st_pad0 = CUInt32.
-    st_rdev = CUInt64.
-    st_size = CInt64.
-    st_blksize = CInt64.
-    st_blocks = CInt64.
-    st_atime = CInt64.
-    st_atime_nsec = CInt64.
-    st_mtime = CInt64.
-    st_mtime_nsec = CInt64.
-    st_ctime = CInt64.
-    st_ctime_nsec = CInt64.
-    st_reserved0 = CInt64.
-    st_reserved1 = CInt64.
-    st_reserved2 = CInt64.
-}.
-
-Posix := {
-    parent* = Oddball.
-    SEEK_SET = 0.
-    SEEK_CUR = 1.
-    SEEK_END = 2.
-    O_RDONLY = 0.
-
-    libc := Alien libraryOpen: "libc.so.6".
-    initialized := False.
-    functions := {
-        open := None.
-        lseek := None.
-        close := None.
-        fstat := None.
-        read := None.
-        div := None
-    }.
-
-    ensureFunctions = {
-        fns := self functions.
-        self initialized
-            ifTrue: [ None ]
-            IfFalse: [
-                fns open: (self libc librarySym: "open").
-                fns lseek: (self libc librarySym: "lseek").
-                fns close: (self libc librarySym: "close").
-                fns fstat: (self libc librarySym: "fstat").
-                fns read: (self libc librarySym: "read").
-                fns div: (self libc librarySym: "div").
-                self initialized: True
-            ].
-        fns
-    }.
-
-    open: path Flags: flags Mode: mode = {
-        self ensureFunctions open
-            callWithTypes: CPointer & CInt32 & CInt32
-            Args: path & flags & mode
-            ReturnType: CInt32
-    }.
-
-    seekFd: fd Offset: offset Whence: whence = {
-        self ensureFunctions lseek
-            callWithTypes: CInt32 & CInt32 & CInt64
-            Args: fd & offset & whence
-            ReturnType: CInt64
-    }.
-
-    closeFd: fd = {
-        self ensureFunctions close
-            callWithTypes: CInt32
-            Args: fd
-            ReturnType: CInt32
-    }.
-
-    fstatFd: fd Into: buffer = {
-        self ensureFunctions fstat
-            callWithTypes: CInt32 & CPointer
-            Args: fd & buffer
-            ReturnType: CInt32
-    }.
-
-    readFd: fd Into: buffer Length: len = {
-        self ensureFunctions read
-            callWithTypes: CInt32 & CPointer & CSize
-            Args: fd & buffer & len
-            ReturnType: CInt64
-    }.
-
-    div: lhs By: rhs = {
-        self ensureFunctions div
-            callWithTypes: CInt32 & CInt32
-            Args: lhs & rhs
-            ReturnType: CDivT
-    }.
-
-    close = { self libc libraryClose }.
-}.
-
-Module export: 'Disposable.
-Module export: 'File.
-Module export: 'Posix.
-
-Module open: 'Core.
-Module use: 'user.
-Module export: 'Disposable.
-Module export: 'File.
-Module export: 'Posix.
+Module export:
+    'Clonable
+    & 'Oddball
+    & 'Boolean
+    & 'Module
+    & 'Complex
+    & 'Sequence
+    & 'IndexedSequence
+    & 'CollectorChunk
+    & 'Collector
+    & 'Proxy
+    & 'Disposable
+    & 'File.

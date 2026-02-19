@@ -1,5 +1,5 @@
-use parser::semantic::SemanticIssue;
 use parser::ParseError;
+use parser::semantic::SemanticIssue;
 #[cfg(test)]
 use parser::{Lexer, Parser};
 use tower_lsp::lsp_types::{

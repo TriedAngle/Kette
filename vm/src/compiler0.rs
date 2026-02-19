@@ -12,7 +12,7 @@ use parser::semantic::{
 };
 use parser::span::{Pos, Span};
 
-use crate::VM;
+use crate::{CORE_MODULE, VM};
 
 #[derive(Debug, Clone)]
 struct ModuleCompileState {
@@ -916,6 +916,38 @@ impl Compiler {
                 span,
             ));
         };
+
+        if let Some((module_path, export_name)) = name.rsplit_once("::") {
+            if is_store {
+                return Err(CompileError::new(
+                    format!(
+                        "cannot assign to qualified export '{}': read-only",
+                        name
+                    ),
+                    span,
+                ));
+            }
+
+            let Some(module) = env.modules.get(module_path) else {
+                return Err(CompileError::new(
+                    format!("unknown module '{}'", module_path),
+                    span,
+                ));
+            };
+
+            if !module.exports.contains(export_name) {
+                return Err(CompileError::new(
+                    format!(
+                        "unresolved global '{}' in module '{}'",
+                        name, module_path
+                    ),
+                    span,
+                ));
+            }
+
+            return Ok((module_path.to_string(), export_name.to_string()));
+        }
+
         let Some(current_module) = &self.current_module else {
             return Err(CompileError::new(
                 "no open module for global reference",
@@ -1900,6 +1932,10 @@ enum ModuleDirective {
         path: String,
         aliases: HashMap<String, String>,
     },
+    UseOnly {
+        path: String,
+        names: HashSet<String>,
+    },
     Export {
         name: String,
     },
@@ -1910,6 +1946,7 @@ struct PendingUse {
     current_module: String,
     target_module: String,
     aliases: HashMap<String, String>,
+    only_names: Option<HashSet<String>>,
     span: Span,
 }
 
@@ -1961,14 +1998,15 @@ fn build_compile_module_env(
                     modules
                         .entry(path.clone())
                         .or_insert_with(ModuleCompileState::empty);
-                    if path != "user" {
+                    if path != CORE_MODULE {
                         modules
-                            .entry("user".to_string())
+                            .entry(CORE_MODULE.to_string())
                             .or_insert_with(ModuleCompileState::empty);
                         pending_uses.push(PendingUse {
                             current_module: path.clone(),
-                            target_module: "user".to_string(),
+                            target_module: CORE_MODULE.to_string(),
                             aliases: HashMap::new(),
+                            only_names: None,
                             span: expr.span,
                         });
                     }
@@ -1998,6 +2036,7 @@ fn build_compile_module_env(
                         current_module: module,
                         target_module: path,
                         aliases: HashMap::new(),
+                        only_names: None,
                         span: expr.span,
                     });
                 }
@@ -2012,6 +2051,22 @@ fn build_compile_module_env(
                         current_module: module,
                         target_module: path,
                         aliases,
+                        only_names: None,
+                        span: expr.span,
+                    });
+                }
+                ModuleDirective::UseOnly { path, names } => {
+                    let Some(module) = current_module.clone() else {
+                        return Err(CompileError::new(
+                            "Module use requires an open module",
+                            expr.span,
+                        ));
+                    };
+                    pending_uses.push(PendingUse {
+                        current_module: module,
+                        target_module: path,
+                        aliases: HashMap::new(),
+                        only_names: Some(names),
                         span: expr.span,
                     });
                 }
@@ -2077,6 +2132,24 @@ fn apply_compile_use_inner(
 
     let target_exports = target.exports.clone();
 
+    let selected_exports: HashSet<String> = match &use_dir.only_names {
+        Some(only) => {
+            for name in only {
+                if !target_exports.contains(name) {
+                    return Err(CompileError::new(
+                        format!(
+                            "cannot import non-exported symbol '{}' from module '{}'",
+                            name, use_dir.target_module
+                        ),
+                        use_dir.span,
+                    ));
+                }
+            }
+            only.clone()
+        }
+        None => target_exports.clone(),
+    };
+
     for from in use_dir.aliases.keys() {
         if !target_exports.contains(from) {
             return Err(CompileError::new(
@@ -2093,7 +2166,7 @@ fn apply_compile_use_inner(
         .entry(use_dir.current_module.clone())
         .or_insert_with(ModuleCompileState::empty);
 
-    for exported in &target_exports {
+    for exported in &selected_exports {
         let local_name = use_dir
             .aliases
             .get(exported)
@@ -2169,30 +2242,36 @@ fn parse_module_directive_pairs(
     pairs: &[KeywordPair],
 ) -> Option<ModuleDirective> {
     if pairs.len() == 1 && pairs[0].keyword == "open:" {
-        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
-            return Some(ModuleDirective::Open { path: path.clone() });
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+            return Some(ModuleDirective::Open { path });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "use:" {
-        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
-            return Some(ModuleDirective::Use { path: path.clone() });
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+            return Some(ModuleDirective::Use { path });
         }
     }
     if pairs.len() == 2
         && pairs[0].keyword == "use:"
         && pairs[1].keyword == "As:"
     {
-        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
             let aliases = parse_alias_object(&pairs[1].argument)?;
-            return Some(ModuleDirective::UseAs {
-                path: path.clone(),
-                aliases,
-            });
+            return Some(ModuleDirective::UseAs { path, aliases });
+        }
+    }
+    if pairs.len() == 2
+        && pairs[0].keyword == "use:"
+        && pairs[1].keyword == "Only:"
+    {
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+            let names = parse_symbol_set_expr(&pairs[1].argument)?;
+            return Some(ModuleDirective::UseOnly { path, names });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "export:" {
-        if let ExprKind::Symbol(name) = &pairs[0].argument.kind {
-            return Some(ModuleDirective::Export { name: name.clone() });
+        if let Some(name) = parse_symbol_arg(&pairs[0].argument) {
+            return Some(ModuleDirective::Export { name });
         }
     }
     None
@@ -2202,30 +2281,36 @@ fn parse_vm_module_directive_pairs(
     pairs: &[KeywordPair],
 ) -> Option<ModuleDirective> {
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleOpen:" {
-        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
-            return Some(ModuleDirective::Open { path: path.clone() });
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+            return Some(ModuleDirective::Open { path });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleUse:" {
-        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
-            return Some(ModuleDirective::Use { path: path.clone() });
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+            return Some(ModuleDirective::Use { path });
         }
     }
     if pairs.len() == 2
         && pairs[0].keyword == "_ModuleUse:"
         && pairs[1].keyword == "As:"
     {
-        if let ExprKind::Symbol(path) = &pairs[0].argument.kind {
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
             let aliases = parse_alias_object(&pairs[1].argument)?;
-            return Some(ModuleDirective::UseAs {
-                path: path.clone(),
-                aliases,
-            });
+            return Some(ModuleDirective::UseAs { path, aliases });
+        }
+    }
+    if pairs.len() == 2
+        && pairs[0].keyword == "_ModuleUseOnly:"
+        && pairs[1].keyword == "Names:"
+    {
+        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+            let names = parse_symbol_set_expr(&pairs[1].argument)?;
+            return Some(ModuleDirective::UseOnly { path, names });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleExport:" {
-        if let ExprKind::Symbol(name) = &pairs[0].argument.kind {
-            return Some(ModuleDirective::Export { name: name.clone() });
+        if let Some(name) = parse_symbol_arg(&pairs[0].argument) {
+            return Some(ModuleDirective::Export { name });
         }
     }
     None
@@ -2250,6 +2335,40 @@ fn parse_alias_object(expr: &Expr) -> Option<HashMap<String, String>> {
         aliases.insert(from.clone(), to.clone());
     }
     Some(aliases)
+}
+
+fn parse_symbol_arg(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Symbol(name) => Some(name.clone()),
+        ExprKind::Paren(inner) => parse_symbol_arg(inner),
+        _ => None,
+    }
+}
+
+fn parse_symbol_set_expr(expr: &Expr) -> Option<HashSet<String>> {
+    let mut out = HashSet::new();
+    collect_symbol_expr(expr, &mut out)?;
+    Some(out)
+}
+
+fn collect_symbol_expr(expr: &Expr, out: &mut HashSet<String>) -> Option<()> {
+    match &expr.kind {
+        ExprKind::Symbol(name) => {
+            out.insert(name.clone());
+            Some(())
+        }
+        ExprKind::Paren(inner) => collect_symbol_expr(inner, out),
+        ExprKind::BinaryMessage {
+            receiver,
+            operator,
+            argument,
+        } if operator == "&" => {
+            collect_symbol_expr(receiver, out)?;
+            collect_symbol_expr(argument, out)?;
+            Some(())
+        }
+        _ => None,
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

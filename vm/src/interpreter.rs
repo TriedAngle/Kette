@@ -964,7 +964,8 @@ fn load_assoc(
         match header.object_type() {
             ObjectType::Slots => {
                 if let Some(name) = assoc_name(vm, assoc_or_name) {
-                    if let Some((module, export_name)) = name.split_once("::") {
+                    if let Some((module, export_name)) = name.rsplit_once("::")
+                    {
                         if let Some(value) =
                             vm.module_lookup_in(module, export_name)
                         {
@@ -1050,7 +1051,8 @@ fn store_assoc(
                     vm.heap_proxy.write_barrier(assoc_or_name, value);
                 }
                 if let Some(name) = assoc_name(vm, assoc_or_name) {
-                    if let Some((module, export_name)) = name.split_once("::") {
+                    if let Some((module, export_name)) = name.rsplit_once("::")
+                    {
                         let _ = vm.module_store_in(module, export_name, value);
                     } else if let Some(path) = module_path {
                         let _ = vm.module_store_in(path, &name, value);
@@ -2020,6 +2022,7 @@ mod tests {
     use crate::compiler0::Compiler;
     use crate::materialize::materialize;
     use crate::special::bootstrap;
+    use crate::USER_MODULE;
     use heap::HeapSettings;
     use object::{Map, ObjectType, SlotFlags, VMString};
     use parser::{Lexer, Parser};
@@ -2061,7 +2064,7 @@ mod tests {
     fn run_source(src: &str) -> Result<Value, LocatedRuntimeError> {
         let exprs = parse_source(src);
         let mut vm = bootstrap(test_settings());
-        vm.open_module("user");
+        vm.open_module(USER_MODULE);
         let code_desc =
             Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
@@ -2073,7 +2076,7 @@ mod tests {
     ) -> Result<(VM, Value), LocatedRuntimeError> {
         let exprs = parse_source(src);
         let mut vm = bootstrap(test_settings());
-        vm.open_module("user");
+        vm.open_module(USER_MODULE);
         let code_desc =
             Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
@@ -2087,7 +2090,7 @@ mod tests {
     ) -> Result<Value, LocatedRuntimeError> {
         let exprs = parse_source(src);
         let mut vm = bootstrap(test_settings());
-        vm.open_module("user");
+        vm.open_module(USER_MODULE);
         let code_desc =
             Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
@@ -2456,7 +2459,7 @@ mod tests {
     }
 
     fn lookup_dictionary_value(vm: &VM, name: &str) -> Option<Value> {
-        if let Some(value) = vm.module_lookup_in("user", name) {
+        if let Some(value) = vm.module_lookup_in(USER_MODULE, name) {
             return Some(value);
         }
 
@@ -3216,7 +3219,7 @@ mod tests {
     fn compile_error_location_undefined_global() {
         let exprs = parse_source("NoSuchGlobal");
         let mut vm = bootstrap(test_settings());
-        vm.open_module("user");
+        vm.open_module(USER_MODULE);
         let err =
             Compiler::compile_for_vm(&vm, &exprs).expect_err("expected error");
         let span = err.span.expect("error should have source span");

@@ -1,5 +1,5 @@
 // Module/global resolution demo for current VM behavior.
-// Run with: cargo run -p vm -- core/module_resolution_demo.ktt
+// Run with: cargo run -p vm -- examples/module_resolution_demo.ktt
 // This file intentionally uses VM module primitives directly so it works
 // without loading core/init first.
 

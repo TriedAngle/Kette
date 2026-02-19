@@ -169,6 +169,7 @@ fn classify_keyword_operator_and_literal_tokens(
             | TokenKind::RBrace
             | TokenKind::Pipe
             | TokenKind::Dot
+            | TokenKind::PathSep
             | TokenKind::Semicolon
             | TokenKind::Caret => {
                 out.add(

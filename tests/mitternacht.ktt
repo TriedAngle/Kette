@@ -1,4 +1,4 @@
-Module open: 'Test.Mitternacht.
+Module open: 'Test::Mitternacht.
 
 Math = { 
     rootsOfA: a B: b C: c = {

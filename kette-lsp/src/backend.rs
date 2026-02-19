@@ -4,7 +4,7 @@ use parser::ast::Expr;
 use parser::token::Token;
 use parser::{Lexer, ParseError, Parser};
 use tokio::sync::RwLock;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
@@ -44,7 +44,8 @@ impl Backend {
     }
 
     fn analyze_source(source: &str) -> (Vec<Diagnostic>, Vec<SemanticToken>) {
-        let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
+        let parse_results: Vec<_> =
+            Parser::new(Lexer::from_str(source)).collect();
 
         let parse_errors: Vec<ParseError> = parse_results
             .iter()
@@ -60,16 +61,15 @@ impl Backend {
             &exprs,
             parser::semantic::AnalysisMode::Strict,
         );
-        diagnostics.extend(diagnostics_from_semantic_issues(
-            source,
-            &semantic.issues,
-        ));
+        diagnostics
+            .extend(diagnostics_from_semantic_issues(source, &semantic.issues));
         let semantic_tokens = Self::semantic_tokens_for_source(source, &exprs);
         (diagnostics, semantic_tokens)
     }
 
     fn diagnostics_for_source(source: &str) -> Vec<Diagnostic> {
-        let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
+        let parse_results: Vec<_> =
+            Parser::new(Lexer::from_str(source)).collect();
         let parse_errors: Vec<ParseError> = parse_results
             .iter()
             .filter_map(|r| r.as_ref().err().cloned())
@@ -77,20 +77,22 @@ impl Backend {
         let exprs: Vec<Expr> =
             parse_results.into_iter().filter_map(|r| r.ok()).collect();
 
-        let mut diagnostics = diagnostics_from_parse_errors(source, &parse_errors);
+        let mut diagnostics =
+            diagnostics_from_parse_errors(source, &parse_errors);
         let semantic = parser::semantic::analyze_semantics_with_mode(
             &[],
             &exprs,
             parser::semantic::AnalysisMode::Strict,
         );
-        diagnostics.extend(diagnostics_from_semantic_issues(
-            source,
-            &semantic.issues,
-        ));
+        diagnostics
+            .extend(diagnostics_from_semantic_issues(source, &semantic.issues));
         diagnostics
     }
 
-    fn semantic_tokens_for_source(source: &str, exprs: &[Expr]) -> Vec<SemanticToken> {
+    fn semantic_tokens_for_source(
+        source: &str,
+        exprs: &[Expr],
+    ) -> Vec<SemanticToken> {
         let semantic_input: Vec<Token> = Lexer::from_str(source)
             .filter(|t| {
                 !t.is_eof()
@@ -101,7 +103,8 @@ impl Backend {
     }
 
     fn semantic_tokens_from_text(source: &str) -> Vec<SemanticToken> {
-        let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
+        let parse_results: Vec<_> =
+            Parser::new(Lexer::from_str(source)).collect();
         let exprs: Vec<Expr> =
             parse_results.into_iter().filter_map(|r| r.ok()).collect();
         Self::semantic_tokens_for_source(source, &exprs)
