@@ -1219,11 +1219,74 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         let vm_eval_idx =
             primitives::primitive_index_by_name(&primitives, "vm_eval")
                 .expect("vm_eval primitive missing") as i64;
+        let vm_module_open_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_module_open")
+                .expect("vm_module_open primitive missing") as i64;
+        let vm_module_use_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_module_use")
+                .expect("vm_module_use primitive missing") as i64;
+        let vm_module_use_as_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_module_use_as",
+        )
+        .expect("vm_module_use_as primitive missing")
+            as i64;
+        let vm_module_export_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_module_export",
+        )
+        .expect("vm_module_export primitive missing")
+            as i64;
+        let vm_module_at_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_module_at")
+                .expect("vm_module_at primitive missing") as i64;
+        let vm_current_module_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_current_module",
+        )
+        .expect("vm_current_module primitive missing")
+            as i64;
         let vm_eval_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
             &mut intern_table,
             "_Eval:",
+        );
+        let vm_module_open_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ModuleOpen:",
+        );
+        let vm_module_use_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ModuleUse:",
+        );
+        let vm_module_use_as_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ModuleUse:As:",
+        );
+        let vm_module_export_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ModuleExport:",
+        );
+        let vm_module_at_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ModuleAt:",
+        );
+        let vm_current_module_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CurrentModule",
         );
 
         let mut object_map_val = alloc_map(
@@ -1581,13 +1644,193 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
                 .value();
         roots.push(vm_eval_method_val);
 
-        let vm_map_val = add_constant_slot(
+        let mut vm_map_val = add_constant_slot(
             &mut proxy,
             &mut roots,
             object_map_val,
             map_map_val,
             vm_eval_name,
             vm_eval_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_module_open_code = Value::from_i64(vm_module_open_idx);
+        let vm_module_open_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_module_open_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_module_open_map_val);
+        let vm_module_open_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_module_open_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_module_open_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_module_open_name,
+            vm_module_open_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_module_use_code = Value::from_i64(vm_module_use_idx);
+        let vm_module_use_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_module_use_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_module_use_map_val);
+        let vm_module_use_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_module_use_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_module_use_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_module_use_name,
+            vm_module_use_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_module_use_as_code = Value::from_i64(vm_module_use_as_idx);
+        let vm_module_use_as_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_module_use_as_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_module_use_as_map_val);
+        let vm_module_use_as_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_module_use_as_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_module_use_as_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_module_use_as_name,
+            vm_module_use_as_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_module_export_code = Value::from_i64(vm_module_export_idx);
+        let vm_module_export_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_module_export_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_module_export_map_val);
+        let vm_module_export_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_module_export_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_module_export_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_module_export_name,
+            vm_module_export_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_module_at_code = Value::from_i64(vm_module_at_idx);
+        let vm_module_at_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_module_at_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_module_at_map_val);
+        let vm_module_at_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_module_at_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_module_at_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_module_at_name,
+            vm_module_at_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_current_module_code = Value::from_i64(vm_current_module_idx);
+        let vm_current_module_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_current_module_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_current_module_map_val);
+        let vm_current_module_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_current_module_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_current_module_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_current_module_name,
+            vm_current_module_method_val,
         );
         roots.push(vm_map_val);
 
@@ -1836,6 +2079,8 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             assoc_map: assoc_map_val,
             ffi_cif_cache: HashMap::new(),
             dictionary: dictionary_val,
+            current_module: None,
+            modules: HashMap::new(),
             #[cfg(debug_assertions)]
             trace_assoc_name: None,
             #[cfg(debug_assertions)]

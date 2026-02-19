@@ -367,18 +367,6 @@ impl Compiler {
         self.add_constant(ConstEntry::Symbol(name.to_string()))
     }
 
-    fn add_assoc(&mut self, name: &str) -> u16 {
-        let constants = &self.frame().constants;
-        for (i, c) in constants.iter().enumerate() {
-            if let ConstEntry::Assoc(s) = c {
-                if s == name {
-                    return i as u16;
-                }
-            }
-        }
-        self.add_constant(ConstEntry::Assoc(name.to_string()))
-    }
-
     fn add_string_const(&mut self, s: &str) -> u16 {
         self.add_constant(ConstEntry::String(s.to_string()))
     }
@@ -732,7 +720,7 @@ impl Compiler {
         }
 
         if self.scope().kind == ScopeKind::TopLevel {
-            let idx = self.add_assoc(name);
+            let idx = self.add_symbol(name);
             return Ok(VarLoc::Global(idx));
         }
 
@@ -888,6 +876,10 @@ impl Compiler {
             }
             ExprKind::String(s) => {
                 let idx = self.add_string_const(s);
+                self.builder().load_constant(idx);
+            }
+            ExprKind::Symbol(s) => {
+                let idx = self.add_symbol(s);
                 self.builder().load_constant(idx);
             }
             ExprKind::SelfRef => {
@@ -1608,6 +1600,7 @@ impl Compiler {
             ExprKind::Integer(v) => Ok(ConstEntry::Fixnum(*v)),
             ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
             ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
+            ExprKind::Symbol(s) => Ok(ConstEntry::Symbol(s.clone())),
             ExprKind::Ident(name) => Ok(ConstEntry::AssocValue(name.clone())),
             ExprKind::Object { slots, body } if body.is_empty() => {
                 // Nested data object as a constant — build a MapDesc
@@ -2288,7 +2281,7 @@ mod tests {
     fn top_level_const_uses_assoc_constant() {
         let code = compile_source("Boolean = { }. Boolean");
         assert!(code.constants.iter().any(|c| {
-            matches!(c, ConstEntry::Assoc(name) if name == "Boolean")
+            matches!(c, ConstEntry::Symbol(name) if name == "Boolean")
         }));
     }
 
@@ -2356,7 +2349,7 @@ mod tests {
                 _ => None,
             })
             .expect("missing store_assoc");
-        assert!(matches!(code.constants[idx], ConstEntry::Assoc(_)));
+        assert!(matches!(code.constants[idx], ConstEntry::Symbol(_)));
     }
 
     #[test]

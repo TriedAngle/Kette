@@ -54,6 +54,10 @@ fn main() {
         vm.trace_send_name = cli.trace_send.clone();
     }
 
+    if !cli.files.is_empty() {
+        vm.open_module("user");
+    }
+
     for filename in &cli.files {
         let source_code = match fs::read_to_string(filename) {
             Ok(content) => content,
@@ -104,6 +108,7 @@ fn main() {
     }
 
     if cli.repl || cli.files.is_empty() {
+        vm.open_module("scratchpad");
         let trace_mnu = {
             #[cfg(debug_assertions)]
             {

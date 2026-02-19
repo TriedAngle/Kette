@@ -113,6 +113,17 @@ mod tests {
     }
 
     #[test]
+    fn symbol_literal() {
+        assert!(
+            matches!(parse_one("'foo").kind, ExprKind::Symbol(ref s) if s == "foo")
+        );
+        assert!(matches!(
+            parse_one("'Core.Math").kind,
+            ExprKind::Symbol(ref s) if s == "Core.Math"
+        ));
+    }
+
+    #[test]
     fn self_ref() {
         assert!(matches!(parse_one("self").kind, ExprKind::SelfRef));
     }
@@ -831,9 +842,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(
-                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
-                );
+                assert!(body
+                    .iter()
+                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
             }
             _ => panic!("expected block"),
         }

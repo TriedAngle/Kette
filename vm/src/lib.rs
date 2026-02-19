@@ -5,7 +5,7 @@ pub mod materialize;
 pub mod primitives;
 pub mod special;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use heap::{HeapProxy, RootProvider, SizeFn};
 use libffi::middle::Cif;
@@ -15,6 +15,20 @@ use object::{
 };
 
 /// The VM owns a heap proxy and the bootstrapped special objects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleImport {
+    pub module_path: String,
+    pub export_name: String,
+}
+
+#[derive(Debug, Default)]
+pub struct ModuleState {
+    pub bindings: HashMap<String, Value>,
+    pub imports: HashMap<String, ModuleImport>,
+    pub uses: Vec<String>,
+    pub exports: HashSet<String>,
+}
+
 pub struct VM {
     pub heap_proxy: HeapProxy,
     pub special: SpecialObjects,
@@ -29,6 +43,10 @@ pub struct VM {
     /// The global dictionary object (SlotObject whose map has one CONSTANT
     /// slot per global).
     pub dictionary: Value,
+    /// Currently open module path. `None` means legacy global dictionary mode.
+    pub current_module: Option<String>,
+    /// Runtime module registry.
+    pub modules: HashMap<String, ModuleState>,
     /// Optional global assoc name to trace load/store.
     #[cfg(debug_assertions)]
     pub trace_assoc_name: Option<String>,
@@ -57,9 +75,179 @@ impl RootProvider for VM {
         visitor(&mut self.special.mirror);
         visitor(&mut self.assoc_map);
         visitor(&mut self.dictionary);
+        for module in self.modules.values_mut() {
+            for value in module.bindings.values_mut() {
+                visitor(value);
+            }
+        }
         for v in self.intern_table.values_mut() {
             visitor(v);
         }
+    }
+}
+
+impl VM {
+    pub fn ensure_module(&mut self, path: &str) {
+        self.modules.entry(path.to_string()).or_default();
+    }
+
+    pub fn open_module(&mut self, path: &str) {
+        self.ensure_module(path);
+        self.current_module = Some(path.to_string());
+        if path != "user" {
+            let _ = self.module_use("user", &HashMap::new());
+        }
+    }
+
+    pub fn current_module_state(&self) -> Option<&ModuleState> {
+        let path = self.current_module.as_ref()?;
+        self.modules.get(path)
+    }
+
+    pub fn current_module_state_mut(&mut self) -> Option<&mut ModuleState> {
+        let path = self.current_module.clone()?;
+        self.modules.get_mut(&path)
+    }
+
+    pub fn module_store_current(&mut self, name: &str, value: Value) -> bool {
+        let Some(current) = self.current_module.clone() else {
+            return false;
+        };
+        self.ensure_module(&current);
+        if let Some(module) = self.modules.get_mut(&current) {
+            module.bindings.insert(name.to_string(), value);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn module_lookup_current(&self, name: &str) -> Option<Value> {
+        let module = self.current_module_state()?;
+        if let Some(value) = module.bindings.get(name) {
+            return Some(*value);
+        }
+        if let Some(imported) = module.imports.get(name) {
+            return self
+                .modules
+                .get(&imported.module_path)
+                .and_then(|target| target.bindings.get(&imported.export_name))
+                .copied();
+        }
+        None
+    }
+
+    pub fn module_export_current(&mut self, name: &str) -> Result<(), String> {
+        let Some(path) = self.current_module.clone() else {
+            return Err(
+                "no current module; call Module open: first".to_string()
+            );
+        };
+        self.ensure_module(&path);
+        if let Some(module) = self.modules.get_mut(&path) {
+            module.exports.insert(name.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn module_use(
+        &mut self,
+        target_path: &str,
+        aliases: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let Some(current_path) = self.current_module.clone() else {
+            return Err(
+                "no current module; call Module open: first".to_string()
+            );
+        };
+        self.ensure_module(&current_path);
+        self.ensure_module(target_path);
+
+        let target = self.modules.get(target_path).ok_or_else(|| {
+            format!("unknown module '{}': not found", target_path)
+        })?;
+
+        let mut imports: Vec<(String, ModuleImport)> = Vec::new();
+        let mut seen_targets: HashSet<String> = HashSet::new();
+
+        for exported in &target.exports {
+            let local_name = aliases
+                .get(exported)
+                .cloned()
+                .unwrap_or_else(|| exported.clone());
+            if !seen_targets.insert(local_name.clone()) {
+                return Err(format!(
+                    "import alias collision: '{}' appears multiple times",
+                    local_name
+                ));
+            }
+            imports.push((
+                local_name,
+                ModuleImport {
+                    module_path: target_path.to_string(),
+                    export_name: exported.clone(),
+                },
+            ));
+        }
+
+        for from in aliases.keys() {
+            if !target.exports.contains(from) {
+                return Err(format!(
+                    "cannot alias non-exported symbol '{}' from module '{}'",
+                    from, target_path
+                ));
+            }
+        }
+
+        let current = self
+            .modules
+            .get(&current_path)
+            .ok_or_else(|| "current module missing".to_string())?;
+        for (local_name, import) in &imports {
+            if current.bindings.contains_key(local_name) {
+                return Err(format!(
+                    "import collision in module '{}': '{}' already exists",
+                    current_path, local_name
+                ));
+            }
+            if let Some(existing) = current.imports.get(local_name) {
+                if existing != import {
+                    return Err(format!(
+                        "import collision in module '{}': '{}' already exists",
+                        current_path, local_name
+                    ));
+                }
+            }
+        }
+
+        let current = self
+            .modules
+            .get_mut(&current_path)
+            .ok_or_else(|| "current module missing".to_string())?;
+        for (local_name, import) in imports {
+            current.imports.insert(local_name, import);
+        }
+        if !current.uses.iter().any(|u| u == target_path) {
+            current.uses.push(target_path.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn module_public_entries(
+        &self,
+        path: &str,
+    ) -> Result<Vec<(String, Value)>, String> {
+        let module = self
+            .modules
+            .get(path)
+            .ok_or_else(|| format!("module '{}' not found", path))?;
+        let mut out = Vec::new();
+        for name in &module.exports {
+            if let Some(value) = module.bindings.get(name) {
+                out.push((name.clone(), *value));
+            }
+        }
+        Ok(out)
     }
 }
 

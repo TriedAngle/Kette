@@ -435,6 +435,14 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 };
                 Ok(Expr::new(ExprKind::String(v), t.span))
             }
+            TokenKind::Symbol(_) => {
+                let t = self.advance();
+                let v = match t.kind {
+                    TokenKind::Symbol(v) => v,
+                    _ => unreachable!(),
+                };
+                Ok(Expr::new(ExprKind::Symbol(v), t.span))
+            }
             TokenKind::SelfKw => {
                 let t = self.advance();
                 Ok(Expr::new(ExprKind::SelfRef, t.span))

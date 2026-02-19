@@ -788,6 +788,61 @@ impl<R: Read> Lexer<R> {
         Token::new(TokenKind::Operator(raw.clone()), span, raw)
     }
 
+    /// Lex a symbol literal: `'ident(.ident)*`.
+    fn lex_symbol_literal(&mut self) -> Token {
+        let start = self.pos();
+        self.advance(); // consume '\''
+        let mut raw = String::from("'");
+        let mut path = String::new();
+
+        let mut expect_segment = true;
+        while expect_segment {
+            let mut segment = String::new();
+            match self.peek_char() {
+                Some((ch, _)) if ch == '_' || ch.is_alphabetic() => {}
+                _ => {
+                    let span = Span::new(start, self.pos());
+                    return Token::new(
+                        TokenKind::Error(
+                            "expected symbol segment after `'` or `.`".into(),
+                        ),
+                        span,
+                        raw,
+                    );
+                }
+            }
+
+            while let Some((ch, _)) = self.peek_char() {
+                if ch.is_alphanumeric() || ch == '_' {
+                    self.advance_char();
+                    raw.push(ch);
+                    segment.push(ch);
+                } else {
+                    break;
+                }
+            }
+
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(&segment);
+
+            if self.peek() == Some(b'.') {
+                if let Some(next) = self.peek_ahead(1) {
+                    if next == b'_' || (next as char).is_ascii_alphabetic() {
+                        self.advance();
+                        raw.push('.');
+                        continue;
+                    }
+                }
+            }
+            expect_segment = false;
+        }
+
+        let span = Span::new(start, self.pos());
+        Token::new(TokenKind::Symbol(path), span, raw)
+    }
+
     /// Produce the next token from the stream.
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
@@ -810,6 +865,8 @@ impl<R: Read> Lexer<R> {
             }
 
             b'"' => self.lex_string(),
+
+            b'\'' => self.lex_symbol_literal(),
 
             b'(' => {
                 self.advance();
@@ -1173,6 +1230,36 @@ mod tests {
     fn lex_reserved() {
         assert_eq!(kinds("self"), vec![TokenKind::SelfKw, TokenKind::Eof]);
         assert_eq!(kinds("resend"), vec![TokenKind::ResendKw, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn lex_symbol_literal() {
+        assert_eq!(
+            kinds("'foo"),
+            vec![TokenKind::Symbol("foo".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("'Core.Math"),
+            vec![TokenKind::Symbol("Core.Math".into()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn lex_symbol_literal_invalid() {
+        let k = kinds("'.Core");
+        assert!(matches!(k[0], TokenKind::Error(_)));
+    }
+
+    #[test]
+    fn lex_symbol_literal_then_dot_terminator() {
+        assert_eq!(
+            kinds("'Core.Math."),
+            vec![
+                TokenKind::Symbol("Core.Math".into()),
+                TokenKind::Dot,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]

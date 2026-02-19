@@ -58,10 +58,11 @@ pub struct InterpreterState {
 pub(crate) struct InterpreterRoots<'a> {
     acc: &'a mut Value,
     frames: &'a mut [Frame],
-    special: &'a mut object::SpecialObjects,
+    pub(crate) special: &'a mut object::SpecialObjects,
     intern_table: &'a mut HashMap<String, Value>,
-    assoc_map: &'a mut Value,
-    dictionary: &'a mut Value,
+    pub(crate) assoc_map: &'a mut Value,
+    pub(crate) dictionary: &'a mut Value,
+    modules: &'a mut HashMap<String, crate::ModuleState>,
     pub(crate) scratch: &'a mut Vec<Value>,
 }
 
@@ -91,6 +92,11 @@ impl RootProvider for InterpreterRoots<'_> {
         visitor(&mut self.special.float_traits);
         visitor(self.assoc_map);
         visitor(self.dictionary);
+        for module in self.modules.values_mut() {
+            for value in module.bindings.values_mut() {
+                visitor(value);
+            }
+        }
         for v in self.intern_table.values_mut() {
             visitor(v);
         }
@@ -244,14 +250,14 @@ fn run(
             }
             Instruction::StoreAssoc { idx } => {
                 let value = state.acc;
-                store_assoc(vm, code_val, idx, value)?;
+                store_assoc(vm, state, code_val, idx, value)?;
             }
             Instruction::MovToAssoc { idx, src } => {
                 let value = {
                     let frame = &state.frames[frame_idx];
                     get_register(frame, src)?
                 };
-                store_assoc(vm, code_val, idx, value)?;
+                store_assoc(vm, state, code_val, idx, value)?;
             }
             Instruction::MovFromAssoc { dst, idx } => {
                 let value = load_assoc(vm, code_val, idx)?;
@@ -912,12 +918,17 @@ fn load_assoc(
                 return Ok(value);
             }
             ObjectType::Str => {
+                let name = symbol_to_string(assoc_or_name)
+                    .unwrap_or_else(|| "<symbol>".to_string());
+
+                if let Some(value) = vm.module_lookup_current(&name) {
+                    return Ok(value);
+                }
+
                 if let Some(value) = lookup_assoc_value(vm, assoc_or_name)? {
                     return Ok(value);
                 }
 
-                let name = symbol_to_string(assoc_or_name)
-                    .unwrap_or_else(|| "<symbol>".to_string());
                 return Err(RuntimeError::UndefinedGlobal { name });
             }
             _ => {}
@@ -982,33 +993,130 @@ fn symbol_to_string(sym: Value) -> Option<String> {
 
 fn store_assoc(
     vm: &mut VM,
+    state: &mut InterpreterState,
     code_val: Value,
     idx: u16,
     value: Value,
 ) -> Result<(), RuntimeError> {
     let code: &Code = unsafe { code_val.as_ref() };
-    let assoc = unsafe { code.constant(idx as u32) };
-    let assoc_obj = unsafe { &mut *expect_slot_object_mut(assoc)? };
-    unsafe { assoc_obj.write_value(SlotObject::VALUES_OFFSET, value) };
-    if value.is_ref() {
-        vm.heap_proxy.write_barrier(assoc, value);
-    }
-    #[cfg(debug_assertions)]
-    {
-        if let Some(name) = vm.trace_assoc_name.as_deref() {
-            if let Some(assoc_name) = assoc_name(vm, assoc) {
-                if assoc_name == name {
-                    eprintln!(
-                        "trace_assoc store {} <- {:?} {}",
-                        assoc_name,
-                        value,
-                        debug_value_summary(value)
-                    );
+    let assoc_or_name = unsafe { code.constant(idx as u32) };
+
+    if assoc_or_name.is_ref() {
+        let header: &Header = unsafe { assoc_or_name.as_ref() };
+        match header.object_type() {
+            ObjectType::Slots => {
+                let assoc_obj =
+                    unsafe { &mut *expect_slot_object_mut(assoc_or_name)? };
+                unsafe {
+                    assoc_obj.write_value(SlotObject::VALUES_OFFSET, value)
+                };
+                if value.is_ref() {
+                    vm.heap_proxy.write_barrier(assoc_or_name, value);
                 }
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(name) = vm.trace_assoc_name.as_deref() {
+                        if let Some(assoc_name) = assoc_name(vm, assoc_or_name)
+                        {
+                            if assoc_name == name {
+                                eprintln!(
+                                    "trace_assoc store {} <- {:?} {}",
+                                    assoc_name,
+                                    value,
+                                    debug_value_summary(value)
+                                );
+                            }
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            ObjectType::Str => {
+                let name = symbol_to_string(assoc_or_name)
+                    .unwrap_or_else(|| "<symbol>".to_string());
+                if vm.module_store_current(&name, value) {
+                    return Ok(());
+                }
+                let assoc = match lookup_assoc(vm, assoc_or_name)? {
+                    Some(assoc) => assoc,
+                    None => {
+                        create_global_assoc(vm, state, assoc_or_name, value)?
+                    }
+                };
+                let assoc_obj = unsafe { &mut *expect_slot_object_mut(assoc)? };
+                unsafe {
+                    assoc_obj.write_value(SlotObject::VALUES_OFFSET, value)
+                };
+                if value.is_ref() {
+                    vm.heap_proxy.write_barrier(assoc, value);
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    Err(RuntimeError::TypeError {
+        expected: "assoc or symbol",
+        got: assoc_or_name,
+    })
+}
+
+fn create_global_assoc(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    name: Value,
+    value: Value,
+) -> Result<Value, RuntimeError> {
+    if !name.is_ref() {
+        return Err(RuntimeError::TypeError {
+            expected: "symbol",
+            got: name,
+        });
+    }
+
+    let mut scratch = vec![name, value, vm.dictionary, vm.assoc_map];
+    let (assoc, new_map) =
+        with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+            let assoc_map = *roots.assoc_map;
+            let map_map = roots.special.map_map;
+            let dict_map = {
+                let dict: &SlotObject = roots.dictionary.as_ref();
+                dict.map
+            };
+            let assoc = crate::alloc::alloc_slot_object(
+                proxy,
+                roots,
+                assoc_map,
+                &[value],
+            )
+            .value();
+            let new_map = crate::alloc::add_constant_slot(
+                proxy, roots, dict_map, map_map, name, assoc,
+            );
+            (assoc, new_map)
+        });
+
+    let dict_obj =
+        unsafe { &mut *(vm.dictionary.ref_bits() as *mut SlotObject) };
+    dict_obj.map = new_map;
+    vm.heap_proxy.write_barrier(vm.dictionary, new_map);
+    Ok(assoc)
+}
+
+fn lookup_assoc(vm: &VM, name: Value) -> Result<Option<Value>, RuntimeError> {
+    let dict = vm.dictionary;
+    unsafe {
+        let dict_obj: &SlotObject = dict.as_ref();
+        let map: &Map = dict_obj.map.as_ref();
+        let slots = map.slots();
+        for slot in slots {
+            if slot.name.raw() == name.raw() {
+                return Ok(Some(slot.value));
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(debug_assertions)]
@@ -1631,12 +1739,13 @@ pub(crate) fn with_roots<T>(
     scratch: &mut Vec<Value>,
     f: impl FnOnce(&mut HeapProxy, &mut InterpreterRoots<'_>) -> T,
 ) -> T {
-    let (proxy, special, intern_table, assoc_map, dictionary) = (
+    let (proxy, special, intern_table, assoc_map, dictionary, modules) = (
         &mut vm.heap_proxy,
         &mut vm.special,
         &mut vm.intern_table,
         &mut vm.assoc_map,
         &mut vm.dictionary,
+        &mut vm.modules,
     );
     let mut roots = InterpreterRoots {
         acc: &mut state.acc,
@@ -1645,6 +1754,7 @@ pub(crate) fn with_roots<T>(
         intern_table,
         assoc_map,
         dictionary,
+        modules,
         scratch,
     };
     f(proxy, &mut roots)

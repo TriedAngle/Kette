@@ -175,6 +175,13 @@ fn classify_keyword_operator_and_literal_tokens(
                     TYPE_LITERAL_NUMBER,
                 );
             }
+            TokenKind::Symbol(_) => {
+                out.add(
+                    tok.span.start.offset,
+                    tok.span.end.offset,
+                    TYPE_GLOBAL,
+                );
+            }
             _ => {}
         }
     }
@@ -502,5 +509,13 @@ mod tests {
         let source = "Global := { foo = [ | x | x print ] }. Global foo: 1";
         let tokens = semantic_tokens(source);
         assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn emits_semantic_token_for_symbol_literal() {
+        let source = "'Core.Math";
+        let tokens = semantic_tokens(source);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TYPE_GLOBAL);
     }
 }

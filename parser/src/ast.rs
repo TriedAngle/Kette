@@ -77,6 +77,8 @@ pub enum ExprKind {
     Float(f64),
     /// String literal.
     String(String),
+    /// Symbol literal.
+    Symbol(String),
 
     /// `self` keyword.
     SelfRef,
@@ -247,6 +249,7 @@ impl DotBuilder {
             ExprKind::Integer(v) => format!("Integer({})", v),
             ExprKind::Float(v) => format!("Float({})", v),
             ExprKind::String(v) => format!("String(\"{}\")", v),
+            ExprKind::Symbol(v) => format!("Symbol('{}')", v),
             ExprKind::SelfRef => "SelfRef".to_string(),
             ExprKind::Ident(name) => format!("Ident({})", name),
             ExprKind::UnaryMessage { selector, .. } => {

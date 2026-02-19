@@ -10,6 +10,8 @@ pub enum TokenKind {
     Float(f64),
     /// String literal (contents without surrounding quotes), e.g. `"hello"`.
     String(std::string::String),
+    /// Symbol literal, e.g. `'foo`, `'Core.Math`.
+    Symbol(std::string::String),
 
     /// A lowercase-starting identifier, e.g. `factorial`, `x`, `_IntAdd`.
     Identifier(std::string::String),
@@ -70,6 +72,7 @@ impl TokenKind {
             Self::Integer(_) => "integer",
             Self::Float(_) => "float",
             Self::String(_) => "string",
+            Self::Symbol(_) => "symbol",
             Self::Identifier(_) => "identifier",
             Self::Keyword(_) => "keyword",
             Self::ArgName(_) => "argument name",
