@@ -9,7 +9,9 @@ use object::{
     VMString, VMSymbol, Value,
 };
 
-use crate::alloc::{add_constant_slot, alloc_byte_array, alloc_float};
+use crate::alloc::{
+    add_constant_slot, alloc_bignum_from_i128, alloc_byte_array, alloc_float,
+};
 use crate::compiler0::{CodeDesc, ConstEntry, MapDesc, SlotValue};
 use crate::VM;
 
@@ -152,6 +154,12 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
     ) -> Value {
         match entry {
             ConstEntry::Fixnum(n) => Value::from_i64(*n),
+            ConstEntry::BigInt(n) => {
+                let tagged = unsafe {
+                    alloc_bignum_from_i128(self.proxy, self.roots, *n)
+                };
+                tagged.value()
+            }
             ConstEntry::Float(f) => {
                 let tagged = unsafe { alloc_float(self.proxy, self.roots, *f) };
                 tagged.value()
@@ -466,7 +474,7 @@ mod tests {
     use crate::compiler0::SlotDesc;
     use crate::special::bootstrap;
     use heap::HeapSettings;
-    use object::Float;
+    use object::{Float, Header, ObjectType};
 
     fn test_settings() -> HeapSettings {
         HeapSettings {
@@ -538,6 +546,29 @@ mod tests {
             let float: &Float = c.as_ref();
             assert_eq!(float.header.object_type(), object::ObjectType::Float);
             assert!((float.value - 3.14).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn materialize_bigint() {
+        let mut vm = bootstrap(test_settings());
+        let desc = CodeDesc {
+            bytecode: empty_bytecode(),
+            constants: vec![ConstEntry::BigInt(18_446_744_073_709_551_615)],
+            register_count: 1,
+            arg_count: 0,
+            temp_count: 0,
+            feedback_count: 0,
+            source_map: vec![],
+        };
+        let code_val = materialize(&mut vm, &desc);
+        unsafe {
+            let code: &Code = code_val.as_ref();
+            assert_eq!(code.constant_count(), 1);
+            let c = code.constant(0);
+            assert!(c.is_ref());
+            let header: &Header = c.as_ref();
+            assert_eq!(header.object_type(), ObjectType::BigNum);
         }
     }
 

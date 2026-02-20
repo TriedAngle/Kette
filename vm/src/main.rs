@@ -309,6 +309,7 @@ fn format_slot_flags(flags: u16) -> String {
 fn format_const_entry(entry: &compiler0::ConstEntry) -> String {
     match entry {
         compiler0::ConstEntry::Fixnum(v) => format!("Fixnum({v})"),
+        compiler0::ConstEntry::BigInt(v) => format!("BigInt({v})"),
         compiler0::ConstEntry::Float(v) => format!("Float({v})"),
         compiler0::ConstEntry::String(s) => format!("String(\"{s}\")"),
         compiler0::ConstEntry::Value(v) => format!("Value({v:?})"),
@@ -341,6 +342,7 @@ fn format_const_entry(entry: &compiler0::ConstEntry) -> String {
 fn format_const_entry_short(entry: &compiler0::ConstEntry) -> String {
     match entry {
         compiler0::ConstEntry::Fixnum(v) => format!("Fixnum({v})"),
+        compiler0::ConstEntry::BigInt(v) => format!("BigInt({v})"),
         compiler0::ConstEntry::Float(v) => format!("Float({v})"),
         compiler0::ConstEntry::String(s) => format!("String(\"{s}\")"),
         compiler0::ConstEntry::Value(v) => format!("Value({v:?})"),
@@ -584,6 +586,10 @@ fn format_diagnostic(
     start: usize,
     end: usize,
 ) -> String {
+    let source_len = source.len();
+    let start = start.min(source_len);
+    let end = end.min(source_len);
+
     let (line, col, line_start) = offset_to_line_col(source, start);
     let line_end = source[line_start..]
         .find('\n')
@@ -592,7 +598,8 @@ fn format_diagnostic(
     let source_line = &source[line_start..line_end];
 
     // Compute underline span (clamp to current line)
-    let underline_start = start.saturating_sub(line_start);
+    let underline_start =
+        start.saturating_sub(line_start).min(source_line.len());
     let underline_end = end.min(line_end).saturating_sub(line_start);
     let underline_len = underline_end.saturating_sub(underline_start).max(1);
 
@@ -710,6 +717,13 @@ mod tests {
     fn diagnostic_includes_offset() {
         let output = format_diagnostic("x blah", "E", "msg", 2, 6);
         assert!(output.contains("(offset 2)"));
+    }
+
+    #[test]
+    fn diagnostic_clamps_out_of_range_offsets() {
+        let output = format_diagnostic("x\n", "E", "msg", 99_999, 199_999);
+        assert!(output.contains("(offset 2)"));
+        assert!(output.contains("--> 2:1"));
     }
 
     #[test]

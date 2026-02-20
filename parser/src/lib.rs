@@ -89,6 +89,14 @@ mod tests {
     }
 
     #[test]
+    fn large_integer() {
+        assert!(matches!(
+            parse_one("18446744073709551615").kind,
+            ExprKind::Integer(18_446_744_073_709_551_615)
+        ));
+    }
+
+    #[test]
     fn graphviz_export_basic() {
         let expr = parse_one("1 + 2");
         let dot = crate::ast::to_dot(&[expr]);

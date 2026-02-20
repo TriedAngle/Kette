@@ -8,7 +8,7 @@ Posix := {
     SEEK_END = 2.
     O_RDONLY = 0.
 
-    libc := Alien libraryOpen: "libc.so.6".
+    libc := None.
     initialized := False.
     functions := {
         open := None.
@@ -24,6 +24,9 @@ Posix := {
         self initialized
             ifTrue: [ None ]
             IfFalse: [
+                self libc == None
+                    ifTrue: [ self libc: (Alien libraryOpen: "libc.so.6") ]
+                    IfFalse: [ None ].
                 fns open: (self libc librarySym: "open").
                 fns lseek: (self libc librarySym: "lseek").
                 fns close: (self libc librarySym: "close").
@@ -77,7 +80,90 @@ Posix := {
             ReturnType: CDivT
     }.
 
-    close = { self libc libraryClose }.
+    close = {
+        self libc == None
+            ifTrue: [ 0 ]
+            IfFalse: [ self libc libraryClose ]
+    }.
 }.
 
-Module export: 'Posix.
+Win32 := {
+    parent* = Oddball.
+    GENERIC_READ = 2147483648.
+    FILE_SHARE_READ = 1.
+    OPEN_EXISTING = 3.
+    FILE_ATTRIBUTE_NORMAL = 128.
+    FILE_BEGIN = 0.
+    INVALID_HANDLE_VALUE = 18446744073709551615.
+
+    kernel32 := None.
+    initialized := False.
+    functions := {
+        createFileA := None.
+        readFile := None.
+        setFilePointerEx := None.
+        getFileSizeEx := None.
+        closeHandle := None
+    }.
+
+    ensureFunctions = {
+        fns := self functions.
+        self initialized
+            ifTrue: [ None ]
+            IfFalse: [
+                self kernel32 == None
+                    ifTrue: [ self kernel32: (Alien libraryOpen: "kernel32.dll") ]
+                    IfFalse: [ None ].
+                fns createFileA: (self kernel32 librarySym: "CreateFileA").
+                fns readFile: (self kernel32 librarySym: "ReadFile").
+                fns setFilePointerEx: (self kernel32 librarySym: "SetFilePointerEx").
+                fns getFileSizeEx: (self kernel32 librarySym: "GetFileSizeEx").
+                fns closeHandle: (self kernel32 librarySym: "CloseHandle").
+                self initialized: True
+            ].
+        fns
+    }.
+
+    openRead: path = {
+        self ensureFunctions createFileA
+            callWithTypes: CPointer & CUInt32 & CUInt32 & CPointer & CUInt32 & CUInt32 & CPointer
+            Args: path & self GENERIC_READ & self FILE_SHARE_READ & 0 & self OPEN_EXISTING & self FILE_ATTRIBUTE_NORMAL & 0
+            ReturnType: CUInt64
+    }.
+
+    readHandle: handle Into: buffer Length: len BytesReadInto: bytesRead = {
+        self ensureFunctions readFile
+            callWithTypes: CPointer & CPointer & CUInt32 & CPointer & CPointer
+            Args: handle & buffer & len & bytesRead & 0
+            ReturnType: CInt32
+    }.
+
+    rewindHandle: handle NewPositionInto: newPos = {
+        self ensureFunctions setFilePointerEx
+            callWithTypes: CPointer & CInt64 & CPointer & CUInt32
+            Args: handle & 0 & newPos & self FILE_BEGIN
+            ReturnType: CInt32
+    }.
+
+    fileSizeHandle: handle Into: sizeOut = {
+        self ensureFunctions getFileSizeEx
+            callWithTypes: CPointer & CPointer
+            Args: handle & sizeOut
+            ReturnType: CInt32
+    }.
+
+    closeHandle: handle = {
+        self ensureFunctions closeHandle
+            callWithTypes: CPointer
+            Args: handle
+            ReturnType: CInt32
+    }.
+
+    close = {
+        self kernel32 == None
+            ifTrue: [ 0 ]
+            IfFalse: [ self kernel32 libraryClose ]
+    }.
+}.
+
+Module export: 'Posix & 'Win32.

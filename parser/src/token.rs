@@ -5,7 +5,7 @@ use crate::span::Span;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     /// Integer literal, e.g. `42`, `-7`, `16rFF`.
-    Integer(i64),
+    Integer(i128),
     /// Floating-point literal, e.g. `3.14`, `1.5e10`.
     Float(f64),
     /// String literal (contents without surrounding quotes), e.g. `"hello"`.

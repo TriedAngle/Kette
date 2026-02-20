@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use bytecode::{BytecodeBuilder, SourceMapBuilder};
-use object::Value;
+use object::{BigNum, Value};
 use parser::ast::{
     AssignKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotSelector,
 };
@@ -230,6 +230,7 @@ pub struct CodeDesc {
 #[derive(Debug, Clone)]
 pub enum ConstEntry {
     Fixnum(i64),
+    BigInt(i128),
     Float(f64),
     String(String),
     Value(Value),
@@ -287,6 +288,16 @@ pub struct Compiler {
 }
 
 impl Compiler {
+    fn int_const_entry(value: i128) -> ConstEntry {
+        if let Ok(v64) = i64::try_from(value) {
+            let fixnum_min = -(BigNum::FIXNUM_MAX + 1);
+            if (fixnum_min..=BigNum::FIXNUM_MAX).contains(&v64) {
+                return ConstEntry::Fixnum(v64);
+            }
+        }
+        ConstEntry::BigInt(value)
+    }
+
     fn new() -> Self {
         Self {
             frames: Vec::new(),
@@ -1073,7 +1084,7 @@ impl Compiler {
                 if let Ok(v32) = i32::try_from(*v) {
                     self.builder().load_smi(v32);
                 } else {
-                    let idx = self.add_constant(ConstEntry::Fixnum(*v));
+                    let idx = self.add_constant(Self::int_const_entry(*v));
                     self.builder().load_constant(idx);
                 }
             }
@@ -1817,7 +1828,7 @@ impl Compiler {
         expr: &Expr,
     ) -> Result<ConstEntry, CompileError> {
         match &expr.kind {
-            ExprKind::Integer(v) => Ok(ConstEntry::Fixnum(*v)),
+            ExprKind::Integer(v) => Ok(Self::int_const_entry(*v)),
             ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
             ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
             ExprKind::Symbol(s) => Ok(ConstEntry::Symbol(s.clone())),
@@ -2415,6 +2426,23 @@ mod tests {
             instrs,
             vec![Instruction::LoadSmi { value: -7 }, Instruction::LocalReturn,]
         );
+    }
+
+    #[test]
+    fn compile_large_integer_as_bignum_const() {
+        let code = compile_source("18446744073709551615");
+        let instrs = decode(&code);
+        assert_eq!(
+            instrs,
+            vec![
+                Instruction::LoadConstant { idx: 0 },
+                Instruction::LocalReturn,
+            ]
+        );
+        assert!(matches!(
+            code.constants[0],
+            ConstEntry::BigInt(18_446_744_073_709_551_615)
+        ));
     }
 
     #[test]

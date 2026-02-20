@@ -72,7 +72,7 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     /// Integer literal.
-    Integer(i64),
+    Integer(i128),
     /// Floating-point literal.
     Float(f64),
     /// String literal.

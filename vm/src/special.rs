@@ -793,6 +793,8 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         let symbol_primitives = [
             ("symbol_to_string", "_SymbolToString"),
             ("symbol_length", "_SymbolLength"),
+            ("symbol_eq", "_SymbolEq:"),
+            ("symbol_ne", "_SymbolNe:"),
         ];
 
         for (prim_name, slot_name) in symbol_primitives {
@@ -1215,6 +1217,24 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut intern_table,
             "_Clone:",
         );
+        let object_eq_idx =
+            primitives::primitive_index_by_name(&primitives, "object_eq")
+                .expect("object_eq primitive missing") as i64;
+        let object_eq_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ObjectEq:",
+        );
+        let object_ne_idx =
+            primitives::primitive_index_by_name(&primitives, "object_ne")
+                .expect("object_ne primitive missing") as i64;
+        let object_ne_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ObjectNe:",
+        );
         let pin_idx =
             primitives::primitive_index_by_name(&primitives, "object_pin")
                 .expect("object_pin primitive missing") as i64;
@@ -1338,6 +1358,15 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         )
         .expect("vm_current_module primitive missing")
             as i64;
+        let vm_platform_os_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_platform_os")
+                .expect("vm_platform_os primitive missing") as i64;
+        let vm_platform_arch_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_platform_arch",
+        )
+        .expect("vm_platform_arch primitive missing")
+            as i64;
         let vm_eval_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
@@ -1385,6 +1414,18 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut roots,
             &mut intern_table,
             "_CurrentModule",
+        );
+        let vm_platform_os_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_PlatformOS",
+        );
+        let vm_platform_arch_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_PlatformArch",
         );
 
         let mut object_map_val = alloc_map(
@@ -1573,6 +1614,60 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             clone_name,
             clone_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let object_eq_code = Value::from_i64(object_eq_idx);
+        let object_eq_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            object_eq_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(object_eq_map_val);
+        let object_eq_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, object_eq_map_val, &[])
+                .value();
+        roots.push(object_eq_method_val);
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            object_eq_name,
+            object_eq_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let object_ne_code = Value::from_i64(object_ne_idx);
+        let object_ne_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            object_ne_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(object_ne_map_val);
+        let object_ne_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, object_ne_map_val, &[])
+                .value();
+        roots.push(object_ne_method_val);
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            object_ne_name,
+            object_ne_method_val,
         );
         roots.push(new_object_map);
         object_map_val = new_object_map;
@@ -1959,6 +2054,66 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             vm_current_module_name,
             vm_current_module_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_platform_os_code = Value::from_i64(vm_platform_os_idx);
+        let vm_platform_os_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_platform_os_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_platform_os_map_val);
+        let vm_platform_os_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_platform_os_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_platform_os_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_platform_os_name,
+            vm_platform_os_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_platform_arch_code = Value::from_i64(vm_platform_arch_idx);
+        let vm_platform_arch_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_platform_arch_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_platform_arch_map_val);
+        let vm_platform_arch_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_platform_arch_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_platform_arch_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_platform_arch_name,
+            vm_platform_arch_method_val,
         );
         roots.push(vm_map_val);
 

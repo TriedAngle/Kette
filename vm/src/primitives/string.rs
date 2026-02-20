@@ -1,7 +1,7 @@
 use object::{init_symbol, Header, ObjectType, Value};
 
 use crate::interpreter::{with_roots, InterpreterState, RuntimeError};
-use crate::primitives::{expect_string, expect_symbol};
+use crate::primitives::{bool_value, expect_string, expect_symbol};
 use crate::VM;
 
 pub fn string_print(
@@ -81,6 +81,41 @@ pub fn symbol_length(
     let ptr = expect_symbol(receiver)?;
     let len = unsafe { (*ptr).len() } as i64;
     Ok(Value::from_i64(len))
+}
+
+pub fn symbol_eq(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "symbol rhs",
+        got: Value::from_i64(0),
+    })?;
+
+    if !rhs.is_ref() {
+        return Ok(bool_value(vm, false));
+    }
+
+    let rhs_header: &Header = unsafe { rhs.as_ref() };
+    if rhs_header.object_type() != ObjectType::Symbol {
+        return Ok(bool_value(vm, false));
+    }
+
+    let _ = expect_symbol(receiver)?;
+    let _ = expect_symbol(rhs)?;
+    Ok(bool_value(vm, receiver.raw() == rhs.raw()))
+}
+
+pub fn symbol_ne(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let eq = symbol_eq(vm, state, receiver, args)?;
+    Ok(bool_value(vm, eq.raw() == vm.special.false_obj.raw()))
 }
 
 pub(crate) fn alloc_vm_string(

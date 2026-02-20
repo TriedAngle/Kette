@@ -147,6 +147,8 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("string_to_symbol", 0, string::string_to_symbol),
         PrimitiveDesc::new("symbol_to_string", 0, string::symbol_to_string),
         PrimitiveDesc::new("symbol_length", 0, string::symbol_length),
+        PrimitiveDesc::new("symbol_eq", 1, string::symbol_eq),
+        PrimitiveDesc::new("symbol_ne", 1, string::symbol_ne),
         PrimitiveDesc::new("bytearray_size", 0, bytearray::bytearray_size),
         PrimitiveDesc::new(
             "bytearray_clone_with_size",
@@ -336,6 +338,8 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("object_unpin", 1, pin::object_unpin),
         PrimitiveDesc::new("object_is_pinned", 1, pin::object_is_pinned),
         PrimitiveDesc::new("object_clone", 1, object_clone::object_clone),
+        PrimitiveDesc::new("object_eq", 1, object_clone::object_eq),
+        PrimitiveDesc::new("object_ne", 1, object_clone::object_ne),
         PrimitiveDesc::new(
             "object_become_with",
             2,
@@ -381,6 +385,8 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("vm_module_export", 1, vm::vm_module_export),
         PrimitiveDesc::new("vm_module_at", 1, vm::vm_module_at),
         PrimitiveDesc::new("vm_current_module", 0, vm::vm_current_module),
+        PrimitiveDesc::new("vm_platform_os", 0, vm::vm_platform_os),
+        PrimitiveDesc::new("vm_platform_arch", 0, vm::vm_platform_arch),
     ]
 }
 

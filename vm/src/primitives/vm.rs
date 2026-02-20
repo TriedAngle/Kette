@@ -155,6 +155,24 @@ pub fn vm_current_module(
     intern_symbol(vm, state, &path)
 }
 
+pub fn vm_platform_os(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    alloc_vm_string(vm, state, std::env::consts::OS.as_bytes())
+}
+
+pub fn vm_platform_arch(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    alloc_vm_string(vm, state, std::env::consts::ARCH.as_bytes())
+}
+
 pub fn vm_module_at(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -479,6 +497,27 @@ mod tests {
         let err = execute_source(&mut vm, "(VM _ModuleAt: 'Lib) hidden")
             .expect_err("hidden lookup must fail");
         assert!(err.contains("MessageNotUnderstood"));
+    }
+
+    #[test]
+    fn vm_exposes_platform_os_and_arch() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+
+        let os = execute_source(&mut vm, "VM _PlatformOS")
+            .expect("platform os should evaluate");
+        let arch = execute_source(&mut vm, "VM _PlatformArch")
+            .expect("platform arch should evaluate");
+
+        assert_eq!(
+            as_string(os).as_deref(),
+            Some(std::env::consts::OS),
+            "OS primitive should match std::env::consts::OS"
+        );
+        assert_eq!(
+            as_string(arch).as_deref(),
+            Some(std::env::consts::ARCH),
+            "ARCH primitive should match std::env::consts::ARCH"
+        );
     }
 
     #[test]

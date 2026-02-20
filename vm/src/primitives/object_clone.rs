@@ -5,8 +5,34 @@ use crate::alloc::{
     alloc_ratio, alloc_slot_object,
 };
 use crate::interpreter::{with_roots, InterpreterState, RuntimeError};
-use crate::primitives::string::alloc_vm_string;
+use crate::primitives::{bool_value, string::alloc_vm_string};
 use crate::VM;
+
+pub fn object_eq(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "rhs object",
+        got: Value::from_i64(0),
+    })?;
+    Ok(bool_value(vm, receiver.raw() == rhs.raw()))
+}
+
+pub fn object_ne(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "rhs object",
+        got: Value::from_i64(0),
+    })?;
+    Ok(bool_value(vm, receiver.raw() != rhs.raw()))
+}
 
 pub fn object_clone(
     vm: &mut VM,

@@ -70,16 +70,74 @@ mod unix {
     }
 }
 
+#[cfg(windows)]
+mod windows {
+    use core::ffi::c_void;
+
+    pub const MEM_COMMIT: u32 = 0x1000;
+    pub const MEM_RESERVE: u32 = 0x2000;
+    pub const MEM_RELEASE: u32 = 0x8000;
+    pub const PAGE_READWRITE: u32 = 0x04;
+
+    unsafe extern "system" {
+        fn VirtualAlloc(
+            lpAddress: *mut c_void,
+            dwSize: usize,
+            flAllocationType: u32,
+            flProtect: u32,
+        ) -> *mut c_void;
+
+        fn VirtualFree(
+            lpAddress: *mut c_void,
+            dwSize: usize,
+            dwFreeType: u32,
+        ) -> i32;
+    }
+
+    #[inline]
+    pub unsafe fn reserve_and_commit(len: usize) -> *mut u8 {
+        // SAFETY: safe if contract holds
+        let p = unsafe {
+            VirtualAlloc(
+                core::ptr::null_mut(),
+                len,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            )
+        };
+        p as *mut u8
+    }
+
+    #[inline]
+    pub unsafe fn release(ptr: *mut u8) {
+        // SAFETY: safe if contract holds
+        let _ = unsafe { VirtualFree(ptr.cast(), 0, MEM_RELEASE) };
+    }
+}
+
 pub const OS_PAGE_SIZE: usize = 4096;
 
 #[must_use]
 pub fn map_memory(size: usize) -> Option<NonNull<u8>> {
+    #[cfg(unix)]
     // SAFETY: this is safe
     let ptr = unsafe { unix::anonymous_mmap(size) };
+    #[cfg(windows)]
+    // SAFETY: this is safe
+    let ptr = unsafe { windows::reserve_and_commit(size) };
     NonNull::new(ptr)
 }
 
 pub fn unmap_memory(ptr: NonNull<u8>, size: usize) {
+    #[cfg(unix)]
     // SAFETY: ptr must be from mmap allocation
-    unsafe { unix::anonymous_munmap(ptr.as_ptr(), size) };
+    unsafe {
+        unix::anonymous_munmap(ptr.as_ptr(), size)
+    };
+    #[cfg(windows)]
+    {
+        let _ = size;
+        // SAFETY: ptr must be from VirtualAlloc allocation
+        unsafe { windows::release(ptr.as_ptr()) };
+    }
 }

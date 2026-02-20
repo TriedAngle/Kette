@@ -195,6 +195,14 @@ mod tests {
     }
 
     #[test]
+    fn marks_large_integer_as_number_literal() {
+        let source = "18446744073709551615";
+        let tokens = semantic_tokens(source);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_type, TYPE_LITERAL_NUMBER);
+    }
+
+    #[test]
     fn marks_keyword_and_binary_slot_params() {
         let source = "{ + rhs = { rhs }. foo: a Bar: b = { a + b } }";
         let tokens = semantic_tokens(source);

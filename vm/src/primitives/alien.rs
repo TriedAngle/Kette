@@ -33,6 +33,13 @@ extern "C" {
     fn dlclose(handle: *mut u8) -> i32;
 }
 
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn LoadLibraryA(lpLibFileName: *const i8) -> *mut u8;
+    fn GetProcAddress(hModule: *mut u8, lpProcName: *const i8) -> *mut u8;
+    fn FreeLibrary(hLibModule: *mut u8) -> i32;
+}
+
 fn alien_ptr(receiver: Value) -> Result<(*mut Alien, u64), RuntimeError> {
     let ptr = expect_alien(receiver)? as *mut Alien;
     let addr = unsafe { (*ptr).ptr };
@@ -1844,7 +1851,39 @@ pub fn alien_library_open(
     Ok(alien)
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(target_os = "windows")]
+pub fn alien_library_open(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let path_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "string path",
+        got: Value::from_i64(0),
+    })?;
+    let str_ptr = expect_string(path_v)?;
+    let bytes = unsafe { (*str_ptr).as_bytes() };
+    let cstr =
+        CString::new(bytes).map_err(|_| RuntimeError::Unimplemented {
+            message: "library path contains null bytes",
+        })?;
+
+    let handle = unsafe { LoadLibraryA(cstr.as_ptr()) };
+    if handle.is_null() {
+        return Err(RuntimeError::Unimplemented {
+            message: "LoadLibraryA failed",
+        });
+    }
+
+    let mut scratch = vec![path_v];
+    let alien = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+        alloc_alien(proxy, roots, handle as u64, 0).value()
+    });
+    Ok(alien)
+}
+
+#[cfg(not(any(target_family = "unix", target_os = "windows")))]
 pub fn alien_library_open(
     _vm: &mut VM,
     _state: &mut InterpreterState,
@@ -1897,7 +1936,45 @@ pub fn alien_library_sym(
     Ok(alien)
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(target_os = "windows")]
+pub fn alien_library_sym(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let (_, handle) = alien_ptr(receiver)?;
+    if handle == 0 {
+        return Err(RuntimeError::Unimplemented {
+            message: "library handle is null",
+        });
+    }
+    let name_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "string symbol name",
+        got: Value::from_i64(0),
+    })?;
+    let str_ptr = expect_string(name_v)?;
+    let bytes = unsafe { (*str_ptr).as_bytes() };
+    let cstr =
+        CString::new(bytes).map_err(|_| RuntimeError::Unimplemented {
+            message: "symbol name contains null bytes",
+        })?;
+
+    let sym = unsafe { GetProcAddress(handle as *mut u8, cstr.as_ptr()) };
+    if sym.is_null() {
+        return Err(RuntimeError::Unimplemented {
+            message: "GetProcAddress failed: symbol not found",
+        });
+    }
+
+    let mut scratch = vec![receiver, name_v];
+    let alien = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+        alloc_alien(proxy, roots, sym as u64, 0).value()
+    });
+    Ok(alien)
+}
+
+#[cfg(not(any(target_family = "unix", target_os = "windows")))]
 pub fn alien_library_sym(
     _vm: &mut VM,
     _state: &mut InterpreterState,
@@ -1927,7 +2004,23 @@ pub fn alien_library_close(
     Ok(receiver)
 }
 
-#[cfg(not(target_family = "unix"))]
+#[cfg(target_os = "windows")]
+pub fn alien_library_close(
+    _vm: &mut VM,
+    _state: &mut InterpreterState,
+    receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let ptr = expect_alien(receiver)? as *mut Alien;
+    let handle = unsafe { (*ptr).ptr };
+    if handle != 0 {
+        unsafe { FreeLibrary(handle as *mut u8) };
+        unsafe { (*ptr).ptr = 0 };
+    }
+    Ok(receiver)
+}
+
+#[cfg(not(any(target_family = "unix", target_os = "windows")))]
 pub fn alien_library_close(
     _vm: &mut VM,
     _state: &mut InterpreterState,

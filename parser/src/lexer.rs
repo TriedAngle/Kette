@@ -555,7 +555,7 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            let mut value: i64 = 0;
+            let mut value: i128 = 0;
             let mut after_r = raw.split('r');
             let _ = after_r.next();
             let digits_part = after_r.next().unwrap_or("");
@@ -564,7 +564,7 @@ impl<R: Read> Lexer<R> {
                     continue;
                 }
                 let digit = match Self::digit_value(ch as u8) {
-                    Some(v) if v < base => v as i64,
+                    Some(v) if v < base => v as i128,
                     _ => {
                         return Token::new(
                             TokenKind::Error(
@@ -576,7 +576,7 @@ impl<R: Read> Lexer<R> {
                     }
                 };
                 value = match value
-                    .checked_mul(base as i64)
+                    .checked_mul(base as i128)
                     .and_then(|v| v.checked_add(digit))
                 {
                     Some(v) => v,
@@ -651,7 +651,7 @@ impl<R: Read> Lexer<R> {
                 ),
             }
         } else {
-            match normalized.parse::<i64>() {
+            match normalized.parse::<i128>() {
                 Ok(v) => Token::new(TokenKind::Integer(v), span, raw),
                 Err(e) => Token::new(
                     TokenKind::Error(format!("invalid integer: {}", e)),
@@ -1179,6 +1179,17 @@ mod tests {
     #[test]
     fn lex_positive_integer() {
         assert_eq!(kinds("+50"), vec![TokenKind::Integer(50), TokenKind::Eof]);
+    }
+
+    #[test]
+    fn lex_large_integer_i128() {
+        assert_eq!(
+            kinds("18446744073709551615"),
+            vec![
+                TokenKind::Integer(18_446_744_073_709_551_615),
+                TokenKind::Eof
+            ]
+        );
     }
 
     #[test]
