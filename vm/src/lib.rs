@@ -693,15 +693,20 @@ unsafe fn resolve_fwd(ptr: *const u8) -> *const u8 {
 /// content (not yet overwritten by a forwarding pointer).
 pub unsafe fn object_size(obj: *const u8) -> usize {
     let header = &*(obj as *const Header);
-    match header.object_type() {
+    let obj_type = header.object_type();
+    match obj_type {
         ObjectType::Slots => {
             // Read the map pointer at offset +size_of::<Header>().
             // The map object may itself have been evacuated already, but only
             // its first field (+8 within the map) is overwritten; value_count
             // sits at a higher offset and is still valid in the old map copy.
-            let raw_map = std::ptr::read(
-                obj.add(std::mem::size_of::<Header>()) as *const *const u8,
+            let raw_map_val = std::ptr::read(
+                obj.add(std::mem::size_of::<Header>()) as *const Value,
             );
+            if !raw_map_val.is_ref() {
+                return 0;
+            }
+            let raw_map = raw_map_val.ref_bits() as *const u8;
             let map = &*(resolve_fwd(raw_map) as *const Map);
             object::slot_object_allocation_size(map.value_count())
         }

@@ -897,9 +897,13 @@ impl HeapInner {
         let heap_ptr: *const HeapInner = self;
         let queue_ptr: *mut Vec<*const u8> = &mut queue;
         let trace_fn = self.trace_fn;
+        let size_fn = self.size_fn;
 
         let mut visit_value = |value: &mut Value| {
             if value.is_fixnum() {
+                return;
+            }
+            if !value.is_ref() {
                 return;
             }
             debug_assert!(
@@ -914,8 +918,14 @@ impl HeapInner {
             // age == epoch => already marked this cycle
             // anything else => old, skip in minor GC
             if header.compare_exchange_age(0, epoch).is_ok() {
-                // SAFETY: ptr is within the heap
-                unsafe { (*heap_ptr).mark_object_line(ptr, epoch) };
+                let size = unsafe { size_fn(ptr) };
+                if size > 0 {
+                    // SAFETY: ptr is within the heap and size is valid
+                    unsafe { (*heap_ptr).mark_object_lines(ptr, size, epoch) };
+                } else {
+                    // SAFETY: ptr is within the heap
+                    unsafe { (*heap_ptr).mark_object_line(ptr, epoch) };
+                }
                 // SAFETY: queue_ptr is valid for the duration of this function
                 unsafe { (*queue_ptr).push(ptr) };
             }
@@ -967,6 +977,9 @@ impl HeapInner {
 
         let mut visit = |value: &mut Value| {
             if value.is_fixnum() {
+                return;
+            }
+            if !value.is_ref() {
                 return;
             }
             debug_assert!(
@@ -1140,7 +1153,12 @@ impl HeapInner {
             }
 
             if header.compare_exchange_age(current_age, epoch).is_ok() {
-                unsafe { (*heap_ptr).mark_object_line(ptr, epoch) };
+                let size = unsafe { size_fn(ptr) };
+                if size > 0 {
+                    unsafe { (*heap_ptr).mark_object_lines(ptr, size, epoch) };
+                } else {
+                    unsafe { (*heap_ptr).mark_object_line(ptr, epoch) };
+                }
                 unsafe { (*queue_ptr).push(ptr) };
             }
             // CAS failure: another thread claimed in-place marking.
@@ -1502,7 +1520,8 @@ impl HeapProxy {
         roots: &mut dyn RootProvider,
     ) -> NonNull<u8> {
         if layout.size() >= self.heap.settings.large_size {
-            return self.allocate_large(layout);
+            let ptr = self.allocate_large(layout);
+            return ptr;
         }
 
         // Fast path: Current hole has space.

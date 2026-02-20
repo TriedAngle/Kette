@@ -6,8 +6,9 @@ use std::ptr;
 use bytecode::{source_map_lookup, Instruction, Op};
 use heap::{HeapProxy, RootProvider};
 use object::{
-    init_array, slot_object_allocation_size, Array, Block, Code, Header, Map,
-    ObjectType, Slot, SlotFlags, SlotObject, VMSymbol, Value,
+    init_array, init_map, map_allocation_size, slot_object_allocation_size,
+    Array, Block, Code, Header, Map, ObjectType, Slot, SlotFlags, SlotObject,
+    VMSymbol, Value,
 };
 
 use crate::VM;
@@ -125,6 +126,8 @@ impl RootProvider for InterpreterRoots<'_> {
         visitor(&mut self.special.true_obj);
         visitor(&mut self.special.false_obj);
         visitor(&mut self.special.map_map);
+        visitor(&mut self.special.object);
+        visitor(&mut self.special.block_traits);
         visitor(&mut self.special.array_traits);
         visitor(&mut self.special.bytearray_traits);
         visitor(&mut self.special.bignum_traits);
@@ -1096,6 +1099,14 @@ fn try_tail_recursive_self_call(
     }
 
     let none = vm.special.none;
+    let new_temp_array = if code.temp_count() > 0 {
+        state.acc = receiver;
+        alloc_temp_array(vm, state, code.temp_count(), none)?
+    } else {
+        none
+    };
+    let receiver = state.acc;
+
     let reg_count = code.register_count() as usize;
     let mut new_registers = vec![none; reg_count.max(1)];
     new_registers[0] = receiver;
@@ -1121,13 +1132,6 @@ fn try_tail_recursive_self_call(
             new_registers[dst] = old_registers[start + i];
         }
     }
-
-    let new_temp_array = if code.temp_count() > 0 {
-        state.acc = receiver;
-        alloc_temp_array(vm, state, code.temp_count(), none)?
-    } else {
-        none
-    };
 
     if frame_idx > method_idx {
         state.frames.truncate(method_idx + 1);
@@ -2083,7 +2087,8 @@ pub(crate) fn primitive_extend_with(
             message: "extend: source has code",
         });
     }
-    let mut new_slots: Vec<Slot> = Vec::new();
+    let mut append_slots: Vec<(u32, bool)> = Vec::new();
+    let mut idx: u32 = 0;
     for slot in unsafe { source_map.slots() } {
         if slot.is_assignment() {
             return Err(RuntimeError::Unimplemented {
@@ -2091,36 +2096,81 @@ pub(crate) fn primitive_extend_with(
             });
         }
         if slot.is_constant() {
-            new_slots.push(*slot);
-            continue;
-        }
-
-        if !slot.is_assignable() {
+            append_slots.push((idx, false));
+        } else if slot.is_assignable() {
+            append_slots.push((idx, true));
+        } else {
             return Err(RuntimeError::Unimplemented {
                 message: "extend: unsupported slot kind",
             });
         }
-
-        let offset = unsafe { slot.value.to_i64() } as u32;
-        let value = unsafe { source_obj.read_value(offset) };
-        let flags = slot
-            .flags()
-            .without(SlotFlags::ASSIGNABLE)
-            .without(SlotFlags::ASSIGNMENT)
-            .with(SlotFlags::CONSTANT);
-        new_slots.push(Slot::new(flags, slot.name, value));
+        idx += 1;
     }
 
     let mut scratch = vec![target, source, source_map_val];
     let new_map = with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
         let map_map = roots.special.map_map;
-        crate::alloc::append_constant_slots(
-            proxy,
-            roots,
-            (*target_ptr).map,
+        let target_val = roots.scratch[0];
+        let source_val = roots.scratch[1];
+        let source_map_val = roots.scratch[2];
+        let target_obj = &*(target_val.ref_bits() as *mut SlotObject);
+        let old_map_val = target_obj.map;
+        let old_map: &Map = old_map_val.as_ref();
+        let old_slot_count = old_map.slot_count();
+
+        let new_slot_count = old_slot_count + append_slots.len() as u32;
+        let size = map_allocation_size(new_slot_count);
+        let layout = Layout::from_size_align(size, 8).unwrap();
+        let ptr = proxy.allocate(layout, roots);
+        let map_ptr = ptr.as_ptr() as *mut Map;
+        let target_obj = &*(target_val.ref_bits() as *mut SlotObject);
+        let old_map_val = target_obj.map;
+        let old_map: &Map = old_map_val.as_ref();
+        let old_code = old_map.code;
+        let old_flags = old_map.flags();
+        let old_value_count = old_map.value_count();
+        init_map(
+            map_ptr,
             map_map,
-            &new_slots,
-        )
+            old_code,
+            old_flags,
+            new_slot_count,
+            old_value_count,
+        );
+
+        if new_slot_count > 0 {
+            let slots_dst = map_ptr.add(1) as *mut Slot;
+            if old_slot_count > 0 {
+                let old_slots = old_map.slots();
+                ptr::copy_nonoverlapping(
+                    old_slots.as_ptr(),
+                    slots_dst,
+                    old_slot_count as usize,
+                );
+            }
+
+            let source_map: &Map = source_map_val.as_ref();
+            let source_obj = &*(source_val.ref_bits() as *const SlotObject);
+            let mut out = slots_dst.add(old_slot_count as usize);
+            for (slot_idx, was_assignable) in &append_slots {
+                let slot = source_map.slot(*slot_idx);
+                if *was_assignable {
+                    let offset = slot.value.to_i64() as u32;
+                    let value = source_obj.read_value(offset);
+                    let flags = slot
+                        .flags()
+                        .without(SlotFlags::ASSIGNABLE)
+                        .without(SlotFlags::ASSIGNMENT)
+                        .with(SlotFlags::CONSTANT);
+                    out.write(Slot::new(flags, slot.name, value));
+                } else {
+                    out.write(*slot);
+                }
+                out = out.add(1);
+            }
+        }
+
+        Value::from_ptr(map_ptr)
     });
 
     let target_obj = unsafe { &mut *target_ptr };
@@ -2347,7 +2397,6 @@ fn read_reg(bytes: &[u8], pos: &mut usize, wide: bool) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::compiler0::Compiler;
     use crate::materialize::materialize;
     use crate::special::bootstrap;
@@ -2579,7 +2628,7 @@ mod tests {
 
     #[test]
     fn while_true_deep_recursion_does_not_overflow_with_tco() {
-        let (vm, value) = run_source_with_vm(
+        let src =
             "Object _Extend: Object With: { \
                 extend: target With: source = { self _Extend: target With: source } \
             }. \
@@ -2609,10 +2658,9 @@ mod tests {
                     ] IfFalse: [ None ] \
                 } _EnsureTailCall \
             }. \
-            [ i := 0. cond := [ i <= 2000 ]. cond whileTrue: [ i := i + 1 ] ] call",
-        )
-        .expect("expected deep recursive whileTrue to complete");
+            [ i := 0. cond := [ i <= 2000 ]. cond whileTrue: [ i := i + 1 ] ] call";
 
+        let (vm, value) = run_source_with_vm(src).expect("interpret error");
         assert_eq!(value.raw(), vm.special.none.raw());
     }
 
