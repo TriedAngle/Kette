@@ -133,6 +133,134 @@ CStatLinuxX64 := CType struct: {
     st_reserved2 = CInt64.
 }.
 
+Object extend: Alien With: {
+    parent* = Clonable.
+    new: s = { self _AlienNew: s }.
+    fromAddress: addr Size: s = { self _AlienFromAddress: addr Size: s }.
+    libraryOpen: path = { self _LibraryOpen: path }.
+    free = { self _AlienFree }.
+    size = { self _AlienSize }.
+    address = { self _AlienAddress }.
+    isNull = { self _AlienIsNull }.
+    librarySym: name = { self _LibrarySym: name }.
+    libraryClose = { self _LibraryClose }.
+    copyTo: dst From: srcOffset Length: len = {
+        self _AlienCopyTo: dst From: srcOffset Length: len
+    }.
+    copyFrom: src Offset: srcOffset Length: len = {
+        self _AlienCopyFrom: src Offset: srcOffset Length: len
+    }.
+    u8At: i = { self _AlienU8At: i }.
+    i8At: i = { self _AlienI8At: i }.
+    u16At: i = { self _AlienU16At: i }.
+    i16At: i = { self _AlienI16At: i }.
+    u32At: i = { self _AlienU32At: i }.
+    i32At: i = { self _AlienI32At: i }.
+    u64At: i = { self _AlienU64At: i }.
+    i64At: i = { self _AlienI64At: i }.
+    f32At: i = { self _AlienF32At: i }.
+    f64At: i = { self _AlienF64At: i }.
+    pointerAt: i = { self _AlienPointerAt: i }.
+    u8At: i Put: v = { self _AlienU8At: i Put: v }.
+    i8At: i Put: v = { self _AlienI8At: i Put: v }.
+    u16At: i Put: v = { self _AlienU16At: i Put: v }.
+    i16At: i Put: v = { self _AlienI16At: i Put: v }.
+    u32At: i Put: v = { self _AlienU32At: i Put: v }.
+    i32At: i Put: v = { self _AlienI32At: i Put: v }.
+    u64At: i Put: v = { self _AlienU64At: i Put: v }.
+    i64At: i Put: v = { self _AlienI64At: i Put: v }.
+    f32At: i Put: v = { self _AlienF32At: i Put: v }.
+    f64At: i Put: v = { self _AlienF64At: i Put: v }.
+    pointerAt: i Put: v = { self _AlienPointerAt: i Put: v }.
+    callWithTypes: types Args: values ReturnType: ret = {
+        typeArray := types asArray.
+        valueArray := values asArray.
+        lowered := Array cloneWithSize: valueArray size.
+        i := 0.
+        [ i < valueArray size ] whileTrue: [
+            lowered at: i Put: ((valueArray at: i) cArgValue).
+            i := i + 1
+        ].
+        self _AlienCallWithTypes: typeArray Args: lowered ReturnType: ret
+    }.
+}.
+
+Proxy := {
+    parent* = Clonable.
+    backing := None.
+    ctype := None.
+
+    fromBacking: b = {
+        p := { parent* = Proxy. backing := b. ctype = None }.
+        p
+    }.
+    fromCType: t Backing: b = {
+        p := { parent* = Proxy. backing := b. ctype = t }.
+        p
+    }.
+    forAlienSize: s = { self fromBacking: (Alien new: s) }.
+    forByteArraySize: s = { self fromBacking: (ByteArray cloneWithSize: s) }.
+    forCType: t = { self fromCType: t Backing: (ByteArray cloneWithSize: t size) }.
+    size = { self backing size }.
+    address = { self backing address }.
+    isNull = { self backing isNull }.
+    free = { self backing free }.
+    copyTo: dst From: srcOffset Length: len = {
+        self backing copyTo: dst From: srcOffset Length: len
+    }.
+    copyFrom: src Offset: srcOffset Length: len = {
+        self backing copyFrom: src Offset: srcOffset Length: len
+    }.
+    u8At: i = { self backing u8At: i }.
+    u16At: i = { self backing u16At: i }.
+    i16At: i = { self backing i16At: i }.
+    u32At: i = { self backing u32At: i }.
+    i32At: i = { self backing i32At: i }.
+    u64At: i = { self backing u64At: i }.
+    i64At: i = { self backing i64At: i }.
+    f32At: i = { self backing f32At: i }.
+    f64At: i = { self backing f64At: i }.
+    pointerAt: i = { self backing pointerAt: i }.
+    u8At: i Put: v = { self backing u8At: i Put: v }.
+    i8At: i Put: v = { self backing i8At: i Put: v }.
+    u16At: i Put: v = { self backing u16At: i Put: v }.
+    i16At: i Put: v = { self backing i16At: i Put: v }.
+    u32At: i Put: v = { self backing u32At: i Put: v }.
+    i32At: i Put: v = { self backing i32At: i Put: v }.
+    u64At: i Put: v = { self backing u64At: i Put: v }.
+    i64At: i Put: v = { self backing i64At: i Put: v }.
+    f32At: i Put: v = { self backing f32At: i Put: v }.
+    f64At: i Put: v = { self backing f64At: i Put: v }.
+    pointerAt: i Put: v = { self backing pointerAt: i Put: v }.
+    callWithTypes: types Args: values ReturnType: ret = {
+        self backing callWithTypes: types Args: values ReturnType: ret
+    }.
+
+    readCType: t At: offset = {
+        t proxyReadFrom: self At: offset
+    }.
+
+    writeCType: t At: offset Value: value = {
+        t proxyWriteTo: self At: offset Value: value
+    }.
+
+    atField: name = {
+        info := self ctype _CTypeFieldInfoAt: name.
+        self readCType: info type At: info offset
+    }.
+
+    atField: name Put: value = {
+        info := self ctype _CTypeFieldInfoAt: name.
+        self writeCType: info type At: info offset Value: value.
+        value
+    }.
+
+    cArgValue = { self backing cArgValue }.
+    pin = { Object pin: self backing. self }.
+    unpin = { Object unpin: self backing. self }.
+    isPinned = { Object isPinned: self backing }.
+}.
+
 Module export:
     'CType
     & 'CVoid
@@ -150,4 +278,5 @@ Module export:
     & 'CSize
     & 'CStatPairExample
     & 'CDivT
-    & 'CStatLinuxX64.
+    & 'CStatLinuxX64
+    & 'Proxy.

@@ -1367,6 +1367,21 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         )
         .expect("vm_platform_arch primitive missing")
             as i64;
+        let vm_with_handler_do_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_with_handler_do",
+        )
+        .expect("vm_with_handler_do primitive missing")
+            as i64;
+        let vm_signal_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_signal")
+                .expect("vm_signal primitive missing") as i64;
+        let vm_unwind_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_unwind")
+                .expect("vm_unwind primitive missing") as i64;
+        let vm_then_do_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_then_do")
+                .expect("vm_then_do primitive missing") as i64;
         let vm_eval_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
@@ -1426,6 +1441,30 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut roots,
             &mut intern_table,
             "_PlatformArch",
+        );
+        let vm_with_handler_do_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_WithHandler:Do:",
+        );
+        let vm_signal_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Signal:",
+        );
+        let vm_unwind_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Unwind:",
+        );
+        let vm_then_do_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Then:Do:",
         );
 
         let mut object_map_val = alloc_map(
@@ -2114,6 +2153,114 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             vm_platform_arch_name,
             vm_platform_arch_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_with_handler_do_code = Value::from_i64(vm_with_handler_do_idx);
+        let vm_with_handler_do_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_with_handler_do_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_with_handler_do_map_val);
+        let vm_with_handler_do_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_with_handler_do_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_with_handler_do_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_with_handler_do_name,
+            vm_with_handler_do_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_signal_code = Value::from_i64(vm_signal_idx);
+        let vm_signal_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_signal_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_signal_map_val);
+        let vm_signal_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, vm_signal_map_val, &[])
+                .value();
+        roots.push(vm_signal_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_signal_name,
+            vm_signal_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_unwind_code = Value::from_i64(vm_unwind_idx);
+        let vm_unwind_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_unwind_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_unwind_map_val);
+        let vm_unwind_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, vm_unwind_map_val, &[])
+                .value();
+        roots.push(vm_unwind_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_unwind_name,
+            vm_unwind_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_then_do_code = Value::from_i64(vm_then_do_idx);
+        let vm_then_do_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_then_do_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_then_do_map_val);
+        let vm_then_do_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, vm_then_do_map_val, &[])
+                .value();
+        roots.push(vm_then_do_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_then_do_name,
+            vm_then_do_method_val,
         );
         roots.push(vm_map_val);
 

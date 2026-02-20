@@ -17,7 +17,9 @@ const MAX_FRAMES: usize = 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
     MessageNotUnderstood { receiver: Value, message: Value },
+    UnhandledSignal { condition: Value },
     NonLocalReturnExpired,
+    UnwindWithoutHandler,
     StackOverflow,
     TypeError { expected: &'static str, got: Value },
     Unimplemented { message: &'static str },
@@ -50,16 +52,44 @@ struct Frame {
     module_dynamic: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HandlerScope {
+    scope_depth: usize,
+    handler: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FinalizerScope {
+    scope_depth: usize,
+    cleanup: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingRestore {
+    return_depth: usize,
+    value: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnwindState {
+    target_depth: usize,
+    value: Value,
+}
+
 pub struct InterpreterState {
     acc: Value,
     frames: Vec<Frame>,
+    handlers: Vec<HandlerScope>,
+    finalizers: Vec<FinalizerScope>,
+    pending_restores: Vec<PendingRestore>,
+    unwind_cleanup_depths: Vec<usize>,
+    unwind: Option<UnwindState>,
     last_pc: usize,
     last_code: Value,
 }
 
 pub(crate) struct InterpreterRoots<'a> {
-    acc: &'a mut Value,
-    frames: &'a mut [Frame],
+    state: &'a mut InterpreterState,
     pub(crate) special: &'a mut object::SpecialObjects,
     intern_table: &'a mut HashMap<String, Value>,
     pub(crate) assoc_map: &'a mut Value,
@@ -70,14 +100,26 @@ pub(crate) struct InterpreterRoots<'a> {
 
 impl RootProvider for InterpreterRoots<'_> {
     fn visit_roots(&mut self, visitor: &mut dyn FnMut(&mut Value)) {
-        visitor(self.acc);
-        for frame in self.frames.iter_mut() {
+        visitor(&mut self.state.acc);
+        for frame in self.state.frames.iter_mut() {
             visitor(&mut frame.code);
             visitor(&mut frame.temp_array);
             visitor(&mut frame.holder);
             for reg in frame.registers.iter_mut() {
                 visitor(reg);
             }
+        }
+        for handler in self.state.handlers.iter_mut() {
+            visitor(&mut handler.handler);
+        }
+        for finalizer in self.state.finalizers.iter_mut() {
+            visitor(&mut finalizer.cleanup);
+        }
+        for restore in self.state.pending_restores.iter_mut() {
+            visitor(&mut restore.value);
+        }
+        if let Some(unwind) = self.state.unwind.as_mut() {
+            visitor(&mut unwind.value);
         }
         visitor(&mut self.special.none);
         visitor(&mut self.special.true_obj);
@@ -124,6 +166,11 @@ pub fn interpret_with_receiver(
     let mut state = InterpreterState {
         acc: vm.special.none,
         frames: Vec::new(),
+        handlers: Vec::new(),
+        finalizers: Vec::new(),
+        pending_restores: Vec::new(),
+        unwind_cleanup_depths: Vec::new(),
+        unwind: None,
         last_pc: 0,
         last_code: code,
     };
@@ -152,7 +199,15 @@ fn run(
     vm: &mut VM,
     state: &mut InterpreterState,
 ) -> Result<Value, RuntimeError> {
-    while let Some(frame_idx) = current_frame_index(state) {
+    loop {
+        if process_control(vm, state)? {
+            continue;
+        }
+
+        let Some(frame_idx) = current_frame_index(state) else {
+            return Ok(state.acc);
+        };
+
         let (instr, code_val) = {
             let frame = &mut state.frames[frame_idx];
             state.last_pc = frame.pc;
@@ -371,9 +426,6 @@ fn run(
             }
             Instruction::LocalReturn => {
                 state.frames.pop();
-                if state.frames.is_empty() {
-                    return Ok(state.acc);
-                }
             }
             Instruction::Return => {
                 let method_idx = state.frames[frame_idx].method_frame_idx;
@@ -381,14 +433,84 @@ fn run(
                     return Err(RuntimeError::NonLocalReturnExpired);
                 }
                 state.frames.truncate(method_idx);
-                if state.frames.is_empty() {
-                    return Ok(state.acc);
-                }
             }
         }
     }
+}
 
-    Ok(state.acc)
+fn process_control(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+) -> Result<bool, RuntimeError> {
+    if let Some(&depth) = state.unwind_cleanup_depths.last() {
+        if state.frames.len() > depth {
+            return Ok(false);
+        }
+        state.unwind_cleanup_depths.pop();
+    }
+
+    while let Some(restore) = state.pending_restores.last().copied() {
+        if state.frames.len() == restore.return_depth {
+            state.acc = restore.value;
+            state.pending_restores.pop();
+            continue;
+        }
+        break;
+    }
+
+    let frame_depth = state.frames.len();
+    state
+        .handlers
+        .retain(|scope| frame_depth > scope.scope_depth);
+
+    if let Some(unwind) = state.unwind {
+        if run_due_finalizer(vm, state, false)? {
+            return Ok(true);
+        }
+        if frame_depth > unwind.target_depth {
+            state.frames.pop();
+            return Ok(true);
+        }
+        if frame_depth == unwind.target_depth {
+            state.acc = unwind.value;
+            state.unwind = None;
+            return Ok(true);
+        }
+        return Err(RuntimeError::NonLocalReturnExpired);
+    }
+
+    if run_due_finalizer(vm, state, true)? {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+fn run_due_finalizer(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    preserve_acc: bool,
+) -> Result<bool, RuntimeError> {
+    let frame_depth = state.frames.len();
+    let Some(idx) = state
+        .finalizers
+        .iter()
+        .rposition(|scope| frame_depth <= scope.scope_depth)
+    else {
+        return Ok(false);
+    };
+
+    let finalizer = state.finalizers.remove(idx);
+    if preserve_acc {
+        state.pending_restores.push(PendingRestore {
+            return_depth: frame_depth,
+            value: state.acc,
+        });
+    } else {
+        state.unwind_cleanup_depths.push(frame_depth);
+    }
+    call_block(vm, state, finalizer.cleanup, &[])?;
+    Ok(true)
 }
 
 fn push_entry_frame(
@@ -689,6 +811,60 @@ pub(crate) fn call_block(
     Ok(state.acc)
 }
 
+pub(crate) fn install_handler(state: &mut InterpreterState, handler: Value) {
+    state.handlers.push(HandlerScope {
+        scope_depth: state.frames.len(),
+        handler,
+    });
+}
+
+pub(crate) fn install_finalizer(state: &mut InterpreterState, cleanup: Value) {
+    state.finalizers.push(FinalizerScope {
+        scope_depth: state.frames.len(),
+        cleanup,
+    });
+}
+
+pub(crate) fn signal_condition(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    condition: Value,
+) -> Result<(), RuntimeError> {
+    let frame_depth = state.frames.len();
+    let Some(handler) = state
+        .handlers
+        .iter()
+        .rev()
+        .find(|scope| frame_depth > scope.scope_depth)
+        .copied()
+    else {
+        return Err(RuntimeError::UnhandledSignal { condition });
+    };
+    call_block(vm, state, handler.handler, &[condition])?;
+    Ok(())
+}
+
+pub(crate) fn request_unwind(
+    state: &mut InterpreterState,
+    value: Value,
+) -> Result<(), RuntimeError> {
+    let frame_depth = state.frames.len();
+    let Some(handler) = state
+        .handlers
+        .iter()
+        .rev()
+        .find(|scope| frame_depth > scope.scope_depth)
+        .copied()
+    else {
+        return Err(RuntimeError::UnwindWithoutHandler);
+    };
+    state.unwind = Some(UnwindState {
+        target_depth: handler.scope_depth,
+        value,
+    });
+    Ok(())
+}
+
 fn is_block_call_selector(message: Value, argc: u8) -> bool {
     let name = match message_name(message) {
         Some(name) => name,
@@ -869,7 +1045,7 @@ fn create_object(
             );
 
             if value_count > 0 {
-                let regs = &roots.frames[frame_idx].registers;
+                let regs = &roots.state.frames[frame_idx].registers;
                 let vals_dst = obj_ptr.add(1) as *mut Value;
                 for i in 0..value_count {
                     *vals_dst.add(i) = regs[values_start + i];
@@ -1725,8 +1901,7 @@ pub(crate) fn with_roots<T>(
         &mut vm.modules,
     );
     let mut roots = InterpreterRoots {
-        acc: &mut state.acc,
-        frames: &mut state.frames,
+        state,
         special,
         intern_table,
         assoc_map,
@@ -2456,6 +2631,46 @@ mod tests {
         let value = run_source("^ 42").expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn signal_resumes_in_place() {
+        let value = run_source(
+            "(VM _WithHandler: [ | condition | condition _FixnumAdd: 1 ] Do: [ VM _Signal: 41 ]) _FixnumAdd: 1",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 43);
+    }
+
+    #[test]
+    fn handler_can_request_unwind() {
+        let value = run_source(
+            "VM _WithHandler: [ | condition | VM _Unwind: (condition _FixnumAdd: 1) ] Do: [ VM _Signal: 41. 0 ]",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn then_runs_cleanup_on_normal_return() {
+        let value = run_source(
+            "VM _WithHandler: [ | c | c ] Do: [ VM _Then: [ 7 ] Do: [ VM _Unwind: 99 ] ]",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 99);
+    }
+
+    #[test]
+    fn then_runs_cleanup_on_unwind() {
+        let value = run_source(
+            "VM _WithHandler: [ | c | c ] Do: [ VM _Then: [ VM _Unwind: 7. 0 ] Do: [ VM _Unwind: 99 ] ]",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 99);
     }
 
     fn lookup_dictionary_value(vm: &VM, name: &str) -> Option<Value> {

@@ -1,5 +1,6 @@
 Module open: 'Test::RuntimeDemo.
-Module use: 'System::Posix.
+Module use: 'System.
+Module use: 'OS.
 
 (File open: "core/init.ktt" Flags: Posix O_RDONLY Mode: 0) using: [ | file |
     ("Reading: core/init.ktt (Size: " + file size toString + "):") println.

@@ -5,7 +5,10 @@ use object::{Array, MapFlags, ObjectType, Slot, SlotFlags, SlotObject};
 use parser::{Lexer, Parser};
 
 use crate::compiler0;
-use crate::interpreter::{self, with_roots, InterpreterState, RuntimeError};
+use crate::interpreter::{
+    self, call_block, install_finalizer, install_handler, request_unwind,
+    signal_condition, with_roots, InterpreterState, RuntimeError,
+};
 use crate::materialize;
 use crate::primitives::string::intern_symbol;
 use crate::primitives::{
@@ -171,6 +174,48 @@ pub fn vm_platform_arch(
     _args: &[Value],
 ) -> Result<Value, RuntimeError> {
     alloc_vm_string(vm, state, std::env::consts::ARCH.as_bytes())
+}
+
+pub fn vm_with_handler_do(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    install_handler(state, args[0]);
+    call_block(vm, state, args[1], &[])?;
+    Ok(vm.special.none)
+}
+
+pub fn vm_signal(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    signal_condition(vm, state, args[0])?;
+    Ok(vm.special.none)
+}
+
+pub fn vm_unwind(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    request_unwind(state, args[0])?;
+    Ok(vm.special.none)
+}
+
+pub fn vm_then_do(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    install_finalizer(state, args[1]);
+    call_block(vm, state, args[0], &[])?;
+    Ok(vm.special.none)
 }
 
 pub fn vm_module_at(

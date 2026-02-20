@@ -1940,6 +1940,9 @@ enum ModuleDirective {
     Use {
         path: String,
     },
+    UseMany {
+        paths: Vec<String>,
+    },
     UseAs {
         path: String,
         aliases: HashMap<String, String>,
@@ -2051,6 +2054,23 @@ fn build_compile_module_env(
                         only_names: None,
                         span: expr.span,
                     });
+                }
+                ModuleDirective::UseMany { paths } => {
+                    let Some(module) = current_module.clone() else {
+                        return Err(CompileError::new(
+                            "Module use requires an open module",
+                            expr.span,
+                        ));
+                    };
+                    for path in paths {
+                        pending_uses.push(PendingUse {
+                            current_module: module.clone(),
+                            target_module: path,
+                            aliases: HashMap::new(),
+                            only_names: None,
+                            span: expr.span,
+                        });
+                    }
                 }
                 ModuleDirective::UseAs { path, aliases } => {
                     let Some(module) = current_module.clone() else {
@@ -2262,6 +2282,9 @@ fn parse_module_directive_pairs(
         if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
             return Some(ModuleDirective::Use { path });
         }
+        if let Some(paths) = parse_symbol_list_expr(&pairs[0].argument) {
+            return Some(ModuleDirective::UseMany { paths });
+        }
     }
     if pairs.len() == 2
         && pairs[0].keyword == "use:"
@@ -2300,6 +2323,9 @@ fn parse_vm_module_directive_pairs(
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleUse:" {
         if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
             return Some(ModuleDirective::Use { path });
+        }
+        if let Some(paths) = parse_symbol_list_expr(&pairs[0].argument) {
+            return Some(ModuleDirective::UseMany { paths });
         }
     }
     if pairs.len() == 2
@@ -2361,6 +2387,32 @@ fn parse_symbol_set_expr(expr: &Expr) -> Option<HashSet<String>> {
     let mut out = HashSet::new();
     collect_symbol_expr(expr, &mut out)?;
     Some(out)
+}
+
+fn parse_symbol_list_expr(expr: &Expr) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    collect_symbol_list_expr(expr, &mut out)?;
+    Some(out)
+}
+
+fn collect_symbol_list_expr(expr: &Expr, out: &mut Vec<String>) -> Option<()> {
+    match &expr.kind {
+        ExprKind::Symbol(name) => {
+            out.push(name.clone());
+            Some(())
+        }
+        ExprKind::Paren(inner) => collect_symbol_list_expr(inner, out),
+        ExprKind::BinaryMessage {
+            receiver,
+            operator,
+            argument,
+        } if operator == "&" => {
+            collect_symbol_list_expr(receiver, out)?;
+            collect_symbol_list_expr(argument, out)?;
+            Some(())
+        }
+        _ => None,
+    }
 }
 
 fn collect_symbol_expr(expr: &Expr, out: &mut HashSet<String>) -> Option<()> {

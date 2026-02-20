@@ -195,12 +195,12 @@ The full commented walkthrough is in `examples/module_resolution_demo.ktt`.
 
 ## Running Script Tests
 
-For strict module mode, load `core/init.ktt` first, then test scripts:
+For strict module mode, load the core modules first, then test scripts:
 
 ```bash
-cargo run -p vm -- core/init.ktt core/alien.ktt core/system.ktt tests/disposable_using.ktt
-cargo run -p vm -- core/init.ktt core/alien.ktt core/system.ktt tests/file_disposable.ktt
-cargo run -p vm -- core/init.ktt core/alien.ktt core/system.ktt tests/mitternacht.ktt
+cargo run -p vm -- core/init.ktt core/math.ktt core/collections.ktt core/alien.ktt core/system.ktt core/os.ktt tests/disposable_using.ktt
+cargo run -p vm -- core/init.ktt core/math.ktt core/collections.ktt core/alien.ktt core/system.ktt core/os.ktt tests/file_disposable.ktt
+cargo run -p vm -- core/init.ktt core/math.ktt core/collections.ktt core/alien.ktt core/system.ktt core/os.ktt tests/mitternacht.ktt
 ```
 
 Extra output/file-loading demo previously in init lives in:
@@ -227,7 +227,7 @@ i := 1.
 ## Where to Look Next
 
 - VM design doc: `DESIGN.md`
-- Core library: `core/init.ktt`
+- Core modules: `core/init.ktt`, `core/math.ktt`, `core/collections.ktt`, `core/alien.ktt`, `core/system.ktt`, `core/os.ktt`
 - Parser and AST: `parser/`
 - Bytecode + interpreter: `bytecode/`, `vm/`
 - Object model + lookup: `object/`

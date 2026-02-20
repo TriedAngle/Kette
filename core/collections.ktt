@@ -1,0 +1,132 @@
+Module open: 'Collections.
+
+Object extend: Object With: {
+    & rhs = { Collector with: self With: rhs }.
+}.
+
+Sequence = {
+    parent* = Clonable.
+    each: body = { self }.
+}.
+
+IndexedSequence = {
+    parent* = Sequence.
+    each: body = {
+        i := 0.
+        [ i < self size ] whileTrue: [
+            body call: (self at: i).
+            i := i + 1
+        ].
+        self
+    }.
+}.
+
+Object extend: Array With: {
+    parent* = IndexedSequence.
+    size = { self _ArraySize }.
+    cloneWithSize: s = { self _ArrayCloneWithSize: s }.
+    at: index = { self _ArrayAt: index }.
+    at: index Put: value = { self _ArrayAt: index Put: value }.
+    asArray = { self }.
+}.
+
+CollectorChunk = {
+    parent* = Clonable.
+    values := None.
+    next := None.
+
+    withSize: s = {
+        {
+            parent* = CollectorChunk.
+            values := Array cloneWithSize: s.
+            next := None
+        }
+    }.
+}.
+
+Collector = {
+    parent* = Clonable.
+    firstChunk := None.
+    currentChunk := None.
+    currentIndex := 0.
+    count := 0.
+    nextChunkSize := 8.
+
+    with: first With: second = {
+        c := Collector clone init.
+        c add: first.
+        c add: second
+    }.
+
+    init = {
+        first := CollectorChunk withSize: self nextChunkSize.
+        self firstChunk: first.
+        self currentChunk: first.
+        self currentIndex: 0.
+        self count: 0.
+        self nextChunkSize: self nextChunkSize * 2.
+        self
+    }.
+
+    allocateNextChunk = {
+        next := CollectorChunk withSize: self nextChunkSize.
+        self currentChunk next: next.
+        self currentChunk: next.
+        self currentIndex: 0.
+        self nextChunkSize: self nextChunkSize * 2.
+        self
+    }.
+
+    add: value = {
+        currentSize := self currentChunk values size.
+        i := self currentIndex.
+        i == currentSize ifTrue: [
+            self allocateNextChunk.
+            i := self currentIndex
+        ] IfFalse: [
+            self
+        ].
+        self currentChunk values at: i Put: value.
+        self currentIndex: i + 1.
+        self count: self count + 1.
+        self
+    }.
+
+    asArray = {
+        out := Array cloneWithSize: self count.
+        chunk := self firstChunk.
+        chunkValues := chunk values.
+        chunkIndex := 0.
+        outIndex := 0.
+        [ outIndex < self count ] whileTrue: [
+            chunkSize := chunkValues size.
+            chunkIndex == chunkSize ifTrue: [
+                chunk := chunk next.
+                chunkValues := chunk values.
+                chunkIndex := 0
+            ] IfFalse: [
+                self
+            ].
+            out at: outIndex Put: (chunkValues at: chunkIndex).
+            outIndex := outIndex + 1.
+            chunkIndex := chunkIndex + 1
+        ].
+        out
+    }.
+
+    debugPrint = {
+        ("Collector(count=" + self count toString + ", currentIndex=" + self currentIndex toString + ", nextChunkSize=" + self nextChunkSize toString + ")") println.
+        ("Collector(firstChunkSize=" + self firstChunk values size toString + ", currentChunkSize=" + self currentChunk values size toString + ")") println.
+        self
+    }.
+}.
+
+Object extend: Collector With: {
+    & rhs = { self add: rhs }.
+}.
+
+Module export:
+    'Sequence
+    & 'IndexedSequence
+    & 'CollectorChunk
+    & 'Collector.

@@ -1,0 +1,18 @@
+// expect:
+// module-use-multi: ok
+
+Module open: 'LibA.
+foo := 10.
+Module export: 'foo.
+
+Module open: 'LibB.
+bar := 32.
+Module export: 'bar.
+
+Module open: 'Test::ModuleUseMulti.
+Module use: ('LibA & 'LibB).
+
+msg := (foo + bar == 42)
+    ifTrue: [ "module-use-multi: ok" ]
+    IfFalse: [ "module-use-multi: fail" ].
+msg println.

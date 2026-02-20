@@ -1,0 +1,32 @@
+// expect:
+// try-catch: ok
+// using-unwind: ok
+// using-signal: ok
+
+Module open: 'Test::ConditionTryCatch.
+Module use: 'OS.
+
+caught := [ 42 signal. 0 ] tryCatch: [ | condition | condition ].
+(caught == 42
+    ifTrue: [ "try-catch: ok" ]
+    IfFalse: [ "try-catch: fail" ]) println.
+
+d := {
+    parent* = Disposable.
+    disposed := False.
+    dispose = { self disposed: True. self }
+}.
+
+result := [ d using: [ | disposable | VM unwind: 42 ] ] tryCatch: [ | condition | condition ].
+ok := ((result == 42) && (d disposed)).
+(ok ifTrue: [ "using-unwind: ok" ] IfFalse: [ "using-unwind: fail" ]) println.
+
+d2 := {
+    parent* = Disposable.
+    disposed := False.
+    dispose = { self disposed: True. self }
+}.
+
+result2 := [ d2 using: [ | disposable | 99 signal. 0 ] ] tryCatch: [ | condition | condition ].
+ok2 := ((result2 == 99) && (d2 disposed)).
+(ok2 ifTrue: [ "using-signal: ok" ] IfFalse: [ "using-signal: fail" ]) println.

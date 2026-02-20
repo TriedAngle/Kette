@@ -387,6 +387,10 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("vm_current_module", 0, vm::vm_current_module),
         PrimitiveDesc::new("vm_platform_os", 0, vm::vm_platform_os),
         PrimitiveDesc::new("vm_platform_arch", 0, vm::vm_platform_arch),
+        PrimitiveDesc::new("vm_with_handler_do", 2, vm::vm_with_handler_do),
+        PrimitiveDesc::new("vm_signal", 1, vm::vm_signal),
+        PrimitiveDesc::new("vm_unwind", 1, vm::vm_unwind),
+        PrimitiveDesc::new("vm_then_do", 2, vm::vm_then_do),
     ]
 }
 
