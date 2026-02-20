@@ -40,6 +40,8 @@ impl MapFlags {
     pub const HAS_CODE: Self = Self(1 << 0);
     /// `code` is a primitive index (fixnum) instead of a `Code` object.
     pub const PRIMITIVE: Self = Self(1 << 1);
+    /// Method marked as tail-call eligible by the compiler.
+    pub const TAIL_CALL: Self = Self(1 << 2);
 
     #[inline(always)]
     pub const fn contains(self, flag: Self) -> bool {
@@ -77,6 +79,11 @@ impl Map {
     pub fn is_primitive(&self) -> bool {
         self.flags()
             .contains(MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE))
+    }
+
+    #[inline(always)]
+    pub fn is_tail_call(&self) -> bool {
+        self.flags().contains(MapFlags::TAIL_CALL)
     }
 
     /// Byte size of the entire map including inline slots.

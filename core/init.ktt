@@ -135,6 +135,10 @@ Object extend: Object With: {
     unpin: value = { self _Unpin: value }.
     isPinned: value = { self _IsPinned: value }.
     signal = { VM _Signal: self }.
+    synchronized: body = {
+        VM monitorEnter: self.
+        [ body call ] then: [ VM monitorExit: self ]
+    }.
 }.
 
 Object extend: VM With: {
@@ -146,7 +150,71 @@ Object extend: VM With: {
     platformOS = { self _PlatformOS }.
     platformArch = { self _PlatformArch }.
     platform = { self platformOS + "-" + self platformArch }.
+    spawnPlatform: block = { self _SpawnPlatform: block }.
+    threadJoin: handle = { self _ThreadJoin: handle }.
+    threadCurrent = { self _ThreadCurrent }.
+    threadYield = { self _ThreadYield }.
+    threadPark = { self _ThreadPark }.
+    threadParkForMillis: millis = { self _ThreadParkForMillis: millis }.
+    threadUnpark: token = { self _ThreadUnpark: token }.
+    millis = { self _Millis }.
+    unixTime = { self _UnixTime }.
+    monitorEnter: target = { self _MonitorEnter: target }.
+    monitorExit: target = { self _MonitorExit: target }.
+    monitorWait: target = { self _MonitorWait: target }.
+    monitorNotify: target = { self _MonitorNotify: target }.
+    monitorNotifyAll: target = { self _MonitorNotifyAll: target }.
 }.
+
+ThreadHandle = {
+    parent* = Clonable.
+    handle := 0.
+    join = { VM threadJoin: self handle }.
+}.
+
+Thread = {
+    parent* = Object.
+    spawnPlatform: block = {
+        h := VM spawnPlatform: block.
+        {
+            parent* = ThreadHandle.
+            handle := h
+        }
+    }.
+    current = { VM threadCurrent }.
+    yield = { VM threadYield }.
+    park = { VM threadPark }.
+    parkForMillis: millis = { VM threadParkForMillis: millis }.
+    unpark: token = { VM threadUnpark: token }.
+}.
+
+VM _ModuleExport: 'Thread.
+VM _ModuleExport: 'ThreadHandle.
+
+ReentrantLock = {
+    parent* = Clonable.
+    monitor := None.
+
+    new = {
+        m := Object _Clone: Object.
+        {
+            parent* = ReentrantLock.
+            monitor := m
+        }
+    }.
+
+    lock = { VM monitorEnter: self monitor. self }.
+    unlock = { VM monitorExit: self monitor. self }.
+    wait = { VM monitorWait: self monitor }.
+    notify = { VM monitorNotify: self monitor. self }.
+    notifyAll = { VM monitorNotifyAll: self monitor. self }.
+    withLock: body = {
+        self lock.
+        [ body call ] then: [ self unlock ]
+    }.
+}.
+
+VM _ModuleExport: 'ReentrantLock.
 
 Object extend: Block With: {
     parent* = Clonable.
@@ -164,7 +232,7 @@ Object extend: Block With: {
         ] IfFalse: [
             None 
         ]
-    }.
+    } _EnsureTailCall.
 }.
 
 Object extend: String With: {

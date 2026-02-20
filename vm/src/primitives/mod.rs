@@ -12,6 +12,7 @@ pub mod bytearray;
 pub mod extend;
 pub mod fixnum;
 pub mod float;
+pub mod method;
 pub mod mirror;
 pub mod object_clone;
 pub mod pin;
@@ -341,6 +342,11 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("object_eq", 1, object_clone::object_eq),
         PrimitiveDesc::new("object_ne", 1, object_clone::object_ne),
         PrimitiveDesc::new(
+            "method_ensure_tail_call",
+            0,
+            method::method_ensure_tail_call,
+        ),
+        PrimitiveDesc::new(
             "object_become_with",
             2,
             r#become::object_become_with,
@@ -391,6 +397,28 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
         PrimitiveDesc::new("vm_signal", 1, vm::vm_signal),
         PrimitiveDesc::new("vm_unwind", 1, vm::vm_unwind),
         PrimitiveDesc::new("vm_then_do", 2, vm::vm_then_do),
+        PrimitiveDesc::new("vm_spawn_platform", 1, vm::vm_spawn_platform),
+        PrimitiveDesc::new("vm_thread_join", 1, vm::vm_thread_join),
+        PrimitiveDesc::new("vm_thread_current", 0, vm::vm_thread_current),
+        PrimitiveDesc::new("vm_thread_yield", 0, vm::vm_thread_yield),
+        PrimitiveDesc::new("vm_thread_park", 0, vm::vm_thread_park),
+        PrimitiveDesc::new(
+            "vm_thread_park_for_millis",
+            1,
+            vm::vm_thread_park_for_millis,
+        ),
+        PrimitiveDesc::new("vm_thread_unpark", 1, vm::vm_thread_unpark),
+        PrimitiveDesc::new("vm_millis", 0, vm::vm_millis),
+        PrimitiveDesc::new("vm_unix_time", 0, vm::vm_unix_time),
+        PrimitiveDesc::new("vm_monitor_enter", 1, vm::vm_monitor_enter),
+        PrimitiveDesc::new("vm_monitor_exit", 1, vm::vm_monitor_exit),
+        PrimitiveDesc::new("vm_monitor_wait", 1, vm::vm_monitor_wait),
+        PrimitiveDesc::new("vm_monitor_notify", 1, vm::vm_monitor_notify),
+        PrimitiveDesc::new(
+            "vm_monitor_notify_all",
+            1,
+            vm::vm_monitor_notify_all,
+        ),
     ]
 }
 

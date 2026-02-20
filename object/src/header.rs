@@ -33,6 +33,11 @@ impl HeaderFlags {
     pub const PINNED: Self = Self(1 << 1);
     pub const ESCAPING: Self = Self(1 << 2);
     pub const ESCAPED: Self = Self(1 << 3);
+    pub const LOCK_MASK: Self = Self(0b11 << 4);
+    pub const LOCK_UNLOCKED: Self = Self(0b00 << 4);
+    pub const LOCK_THIN: Self = Self(0b01 << 4);
+    pub const LOCK_INFLATING: Self = Self(0b10 << 4);
+    pub const LOCK_INFLATED: Self = Self(0b11 << 4);
 
     #[inline(always)]
     pub const fn contains(self, flag: Self) -> bool {
@@ -180,6 +185,20 @@ impl Header {
     #[inline(always)]
     pub fn fetch_and_flags(&self, mask: HeaderFlags) -> HeaderFlags {
         HeaderFlags(self.flags.fetch_and(mask.0, Ordering::Relaxed))
+    }
+
+    #[inline(always)]
+    pub fn compare_exchange_flags(
+        &self,
+        current: HeaderFlags,
+        new: HeaderFlags,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<HeaderFlags, HeaderFlags> {
+        self.flags
+            .compare_exchange(current.0, new.0, success, failure)
+            .map(HeaderFlags)
+            .map_err(HeaderFlags)
     }
 }
 

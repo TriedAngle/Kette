@@ -9,13 +9,14 @@
 
 use std::{
     alloc::Layout,
+    collections::HashSet,
     mem,
     ops::Deref,
     ptr::{self, NonNull},
     sync::{
         atomic::{
-            self, AtomicBool, AtomicU16, AtomicU32, AtomicU8, AtomicUsize,
-            Ordering,
+            self, AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8,
+            AtomicUsize, Ordering,
         },
         Arc, Mutex,
     },
@@ -66,6 +67,58 @@ pub trait RootProvider {
 pub struct RootSet {
     pub roots: Vec<Value>,
     pub remember: Vec<Value>,
+}
+
+#[inline(always)]
+fn swap_value(value: &mut Value, a: Value, b: Value) -> bool {
+    if value.raw() == a.raw() {
+        *value = b;
+        true
+    } else if value.raw() == b.raw() {
+        *value = a;
+        true
+    } else {
+        false
+    }
+}
+
+fn perform_become_full(
+    trace_fn: TraceFn,
+    roots: &[Value],
+    remember: &[Value],
+    a: Value,
+    b: Value,
+) {
+    let mut queue: Vec<*const u8> = Vec::new();
+    let mut visited: HashSet<u64> = HashSet::new();
+
+    for root in roots {
+        let mut value = *root;
+        swap_value(&mut value, a, b);
+        if value.is_ref() {
+            queue.push(value.ref_bits() as *const u8);
+        }
+    }
+
+    for remembered in remember {
+        if remembered.is_ref() {
+            queue.push(remembered.ref_bits() as *const u8);
+        }
+    }
+
+    while let Some(obj_ptr) = queue.pop() {
+        if !visited.insert(obj_ptr as u64) {
+            continue;
+        }
+        unsafe {
+            trace_fn(obj_ptr, &mut |field| {
+                swap_value(field, a, b);
+                if field.is_ref() {
+                    queue.push(field.ref_bits() as *const u8);
+                }
+            });
+        }
+    }
 }
 
 // ── Heap settings ─────────────────────────────────────────────────────
@@ -152,6 +205,7 @@ pub enum GcStatus {
     None = 0,
     MinorRequested = 1,
     MajorRequested = 2,
+    BecomeRequested = 3,
 }
 
 impl From<u8> for GcStatus {
@@ -159,6 +213,7 @@ impl From<u8> for GcStatus {
         match val {
             1 => GcStatus::MinorRequested,
             2 => GcStatus::MajorRequested,
+            3 => GcStatus::BecomeRequested,
             _ => GcStatus::None,
         }
     }
@@ -332,6 +387,12 @@ pub struct SyncState {
     pub inputs: Mutex<Vec<RootSet>>,
     /// Partitioned work queues for parallel marking.
     pub work_distribution: Mutex<Vec<RootSet>>,
+
+    /// Serialized become requests (one global object-swap at a time).
+    pub become_lock: Mutex<()>,
+    /// Swap pair payload used when status == BecomeRequested.
+    pub become_a: AtomicU64,
+    pub become_b: AtomicU64,
 }
 
 impl SyncState {
@@ -341,6 +402,9 @@ impl SyncState {
             barrier: SenseBarrier::new(),
             inputs: Mutex::new(Vec::new()),
             work_distribution: Mutex::new(Vec::new()),
+            become_lock: Mutex::new(()),
+            become_a: AtomicU64::new(0),
+            become_b: AtomicU64::new(0),
         }
     }
 }
@@ -671,7 +735,7 @@ impl HeapInner {
         // Barrier 1: everyone arrives (fixed participants)
         self.sync.barrier.wait(participants);
 
-        // Phase 2: coordinator distributes
+        // Phase 2: coordinator distributes (or executes stop-the-world become)
         if is_coordinator {
             let all_inputs = std::mem::take(
                 &mut *self.sync.inputs.lock().expect("TODO: handle poisoning"),
@@ -685,58 +749,74 @@ impl HeapInner {
                 },
             );
 
-            let roots_len = roots.roots.len();
-            let remember_len = roots.remember.len();
+            if status == GcStatus::BecomeRequested {
+                let a =
+                    Value::from_raw(self.sync.become_a.load(Ordering::Acquire));
+                let b =
+                    Value::from_raw(self.sync.become_b.load(Ordering::Acquire));
+                perform_become_full(
+                    self.trace_fn,
+                    &roots.roots,
+                    &roots.remember,
+                    a,
+                    b,
+                );
+            } else {
+                let roots_len = roots.roots.len();
+                let remember_len = roots.remember.len();
 
-            let mut roots_iter = roots.roots.into_iter();
-            let mut remember_iter = roots.remember.into_iter();
+                let mut roots_iter = roots.roots.into_iter();
+                let mut remember_iter = roots.remember.into_iter();
 
-            // distribute in even chunks
-            let mut result = Vec::with_capacity(participants);
-            for i in 0..participants {
-                let roots_count = roots_len / participants
-                    + if i < (roots_len % participants) { 1 } else { 0 };
-                let remember_count = remember_len / participants
-                    + if i < (remember_len % participants) {
-                        1
-                    } else {
-                        0
-                    };
+                // distribute in even chunks
+                let mut result = Vec::with_capacity(participants);
+                for i in 0..participants {
+                    let roots_count = roots_len / participants
+                        + if i < (roots_len % participants) { 1 } else { 0 };
+                    let remember_count = remember_len / participants
+                        + if i < (remember_len % participants) {
+                            1
+                        } else {
+                            0
+                        };
 
-                result.push(RootSet {
-                    roots: roots_iter.by_ref().take(roots_count).collect(),
-                    remember: remember_iter
-                        .by_ref()
-                        .take(remember_count)
-                        .collect(),
-                });
+                    result.push(RootSet {
+                        roots: roots_iter.by_ref().take(roots_count).collect(),
+                        remember: remember_iter
+                            .by_ref()
+                            .take(remember_count)
+                            .collect(),
+                    });
+                }
+
+                *self
+                    .sync
+                    .work_distribution
+                    .lock()
+                    .expect("TODO: handle poisoning") = result;
             }
-
-            *self
-                .sync
-                .work_distribution
-                .lock()
-                .expect("TODO: handle poisoning") = result;
         }
 
         // Barrier 2: distribution complete
         self.sync.barrier.wait(participants);
 
         // Phase 3: parallel work
-        let my_work = self
-            .sync
-            .work_distribution
-            .lock()
-            .expect("TODO: handle poisoning")
-            .pop()
-            .unwrap_or_default();
+        if status != GcStatus::BecomeRequested {
+            let my_work = self
+                .sync
+                .work_distribution
+                .lock()
+                .expect("TODO: handle poisoning")
+                .pop()
+                .unwrap_or_default();
 
-        self.execute_parallel_gc_task(
-            status,
-            my_work,
-            participants,
-            is_coordinator,
-        );
+            self.execute_parallel_gc_task(
+                status,
+                my_work,
+                participants,
+                is_coordinator,
+            );
+        }
 
         // Barrier 3: work done
         self.sync.barrier.wait(participants);
@@ -802,6 +882,7 @@ impl HeapInner {
                     self.track.minor_since_major.store(0, Ordering::Relaxed);
                 }
             }
+            GcStatus::BecomeRequested => {}
             _ => {}
         }
     }
@@ -1700,6 +1781,17 @@ impl HeapProxy {
         if status != GcStatus::None {
             let root_set = self.collect_gc_inputs(roots);
             self.heap.rendezvous(false, root_set);
+            if status == GcStatus::BecomeRequested {
+                let a = Value::from_raw(
+                    self.heap.sync.become_a.load(Ordering::Acquire),
+                );
+                let b = Value::from_raw(
+                    self.heap.sync.become_b.load(Ordering::Acquire),
+                );
+                roots.visit_roots(&mut |value| {
+                    swap_value(value, a, b);
+                });
+            }
             self.exchange_block(roots);
             return;
         }
@@ -1772,6 +1864,64 @@ impl HeapProxy {
 
         if reacquire_block {
             self.exchange_block(roots);
+        }
+    }
+
+    #[cold]
+    pub fn execute_become(
+        &mut self,
+        a: Value,
+        b: Value,
+        roots: &mut dyn RootProvider,
+    ) {
+        let heap = self.heap.clone();
+        let _guard = heap
+            .sync
+            .become_lock
+            .lock()
+            .expect("TODO: handle poisoning");
+
+        let (status, _generation, threads, _word) =
+            self.heap.sync.state.load(Ordering::Acquire);
+        if status == GcStatus::None && threads == 1 {
+            let inputs = self.collect_gc_inputs(roots);
+            perform_become_full(
+                self.heap.trace_fn,
+                &inputs.roots,
+                &inputs.remember,
+                a,
+                b,
+            );
+            roots.visit_roots(&mut |value| {
+                swap_value(value, a, b);
+            });
+            return;
+        }
+
+        self.heap.sync.become_a.store(a.raw(), Ordering::Release);
+        self.heap.sync.become_b.store(b.raw(), Ordering::Release);
+
+        loop {
+            self.heap
+                .track
+                .minor_allocated
+                .fetch_add(self.minor_allocated, Ordering::Relaxed);
+            self.minor_allocated = 0;
+
+            let (is_coord, status, _gen, _participants) =
+                self.heap.sync.state.try_start_gc(GcStatus::BecomeRequested);
+            let root_set = self.collect_gc_inputs(roots);
+            self.heap.rendezvous(is_coord, root_set);
+
+            if status != GcStatus::BecomeRequested {
+                continue;
+            }
+
+            roots.visit_roots(&mut |value| {
+                swap_value(value, a, b);
+            });
+            self.exchange_block(roots);
+            break;
         }
     }
 
@@ -1965,6 +2115,36 @@ mod tests {
         let proxy = HeapProxy::new(heap.clone());
         let roots = TestRoots::new();
         (heap, proxy, roots)
+    }
+
+    #[test]
+    fn become_swaps_graph_references() {
+        let settings = create_test_settings();
+        let heap = Heap::new(settings, trace_linked, test_size_64);
+        let mut main_proxy = HeapProxy::new(heap.clone());
+        let mut main_roots = TestRoots::new();
+
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let a_ptr = main_proxy.allocate(layout, &mut main_roots).as_ptr();
+        let b_ptr = main_proxy.allocate(layout, &mut main_roots).as_ptr();
+        let holder_ptr = main_proxy.allocate(layout, &mut main_roots).as_ptr();
+
+        let none = Value::from_i64(0);
+        unsafe {
+            write_linked_obj(a_ptr, 1, none);
+            write_linked_obj(b_ptr, 2, none);
+            write_linked_obj(holder_ptr, 3, Value::from_ptr(a_ptr));
+        }
+
+        let a = Value::from_ptr(a_ptr);
+        let b = Value::from_ptr(b_ptr);
+        let holder = Value::from_ptr(holder_ptr);
+        main_roots.push(a);
+        main_roots.push(holder);
+        main_proxy.execute_become(a, b, &mut main_roots);
+
+        let next = unsafe { read_linked_next(holder_ptr) };
+        assert_eq!(next.raw(), b.raw());
     }
 
     #[test]

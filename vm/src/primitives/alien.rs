@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::mem::{align_of, size_of};
 
@@ -19,6 +21,26 @@ use crate::primitives::{
     expect_float, expect_string, expect_symbol,
 };
 use crate::VM;
+
+thread_local! {
+    static TLS_CIF_CACHE: RefCell<HashMap<CifCacheKey, Cif>> = RefCell::new(HashMap::new());
+}
+
+fn with_thread_local_cif<R, FBuild, FUse>(
+    key: CifCacheKey,
+    build: FBuild,
+    use_cif: FUse,
+) -> R
+where
+    FBuild: FnOnce() -> Cif,
+    FUse: FnOnce(&Cif) -> R,
+{
+    TLS_CIF_CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        let cif = map.entry(key).or_insert_with(build);
+        use_cif(cif)
+    })
+}
 
 extern "C" {
     fn malloc(size: usize) -> *mut u8;
@@ -1634,91 +1656,98 @@ pub fn alien_call_with_types(
         ffi_args.push(arg);
     }
 
-    let cif_ptr = {
-        let entry = vm.ffi_cif_cache.entry(cif_key).or_insert_with(|| {
+    let code = CodePtr(fn_ptr as *mut libc::c_void);
+    let mut scratch =
+        vec![receiver, param_types_v, arg_values_v, return_type_v];
+    let result = with_thread_local_cif(
+        cif_key,
+        || {
             Cif::new(
                 param_descs.iter().map(|d| d.ffi_type.clone()),
                 return_desc.ffi_type.clone(),
             )
-        });
-        entry as *const Cif
-    };
-    let cif = unsafe { &*cif_ptr };
-    let code = CodePtr(fn_ptr as *mut libc::c_void);
-
-    let mut scratch =
-        vec![receiver, param_types_v, arg_values_v, return_type_v];
-    let result = match return_desc.kind {
-        CTypeKind::Void => {
-            unsafe {
-                cif.call::<()>(code, &ffi_args);
+        },
+        |cif| match return_desc.kind {
+            CTypeKind::Void => {
+                unsafe { cif.call::<()>(code, &ffi_args) };
+                vm.special.none
             }
-            vm.special.none
-        }
-        CTypeKind::I8 => {
-            Value::from_i64(unsafe { cif.call::<i8>(code, &ffi_args) } as i64)
-        }
-        CTypeKind::U8 => {
-            Value::from_i64(unsafe { cif.call::<u8>(code, &ffi_args) } as i64)
-        }
-        CTypeKind::I16 => {
-            Value::from_i64(unsafe { cif.call::<i16>(code, &ffi_args) } as i64)
-        }
-        CTypeKind::U16 => {
-            Value::from_i64(unsafe { cif.call::<u16>(code, &ffi_args) } as i64)
-        }
-        CTypeKind::I32 => {
-            Value::from_i64(unsafe { cif.call::<i32>(code, &ffi_args) } as i64)
-        }
-        CTypeKind::U32 => {
-            Value::from_i64(unsafe { cif.call::<u32>(code, &ffi_args) } as i64)
-        }
-        CTypeKind::I64 => output_i64(vm, state, &mut scratch, unsafe {
-            cif.call::<i64>(code, &ffi_args)
-        }),
-        CTypeKind::U64 => output_u64(vm, state, &mut scratch, unsafe {
-            cif.call::<u64>(code, &ffi_args)
-        }),
-        CTypeKind::F32 => {
-            let val = unsafe { cif.call::<f32>(code, &ffi_args) } as f64;
-            with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-                alloc_float(proxy, roots, val).value()
-            })
-        }
-        CTypeKind::F64 => {
-            let val = unsafe { cif.call::<f64>(code, &ffi_args) };
-            with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-                alloc_float(proxy, roots, val).value()
-            })
-        }
-        CTypeKind::Pointer => {
-            let ptr_val = unsafe { cif.call::<usize>(code, &ffi_args) } as u64;
-            with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-                alloc_alien(proxy, roots, ptr_val, 0).value()
-            })
-        }
-        CTypeKind::Size => {
-            let size = unsafe { cif.call::<usize>(code, &ffi_args) };
-            output_u64(vm, state, &mut scratch, size as u64)
-        }
-        CTypeKind::Struct => {
-            let mut ret_bytes = vec![0u8; return_desc.size];
-            unsafe {
-                raw::ffi_call(
-                    cif.as_raw_ptr(),
-                    Some(*code.as_safe_fun()),
-                    ret_bytes.as_mut_ptr() as *mut libc::c_void,
-                    raw_args.as_mut_ptr(),
-                );
+            CTypeKind::I8 => {
+                Value::from_i64(
+                    unsafe { cif.call::<i8>(code, &ffi_args) } as i64
+                )
             }
+            CTypeKind::U8 => {
+                Value::from_i64(
+                    unsafe { cif.call::<u8>(code, &ffi_args) } as i64
+                )
+            }
+            CTypeKind::I16 => {
+                Value::from_i64(
+                    unsafe { cif.call::<i16>(code, &ffi_args) } as i64
+                )
+            }
+            CTypeKind::U16 => {
+                Value::from_i64(
+                    unsafe { cif.call::<u16>(code, &ffi_args) } as i64
+                )
+            }
+            CTypeKind::I32 => {
+                Value::from_i64(
+                    unsafe { cif.call::<i32>(code, &ffi_args) } as i64
+                )
+            }
+            CTypeKind::U32 => {
+                Value::from_i64(
+                    unsafe { cif.call::<u32>(code, &ffi_args) } as i64
+                )
+            }
+            CTypeKind::I64 => output_i64(vm, state, &mut scratch, unsafe {
+                cif.call::<i64>(code, &ffi_args)
+            }),
+            CTypeKind::U64 => output_u64(vm, state, &mut scratch, unsafe {
+                cif.call::<u64>(code, &ffi_args)
+            }),
+            CTypeKind::F32 => {
+                let val = unsafe { cif.call::<f32>(code, &ffi_args) } as f64;
+                with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+                    alloc_float(proxy, roots, val).value()
+                })
+            }
+            CTypeKind::F64 => {
+                let val = unsafe { cif.call::<f64>(code, &ffi_args) };
+                with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+                    alloc_float(proxy, roots, val).value()
+                })
+            }
+            CTypeKind::Pointer => {
+                let ptr_val =
+                    unsafe { cif.call::<usize>(code, &ffi_args) } as u64;
+                with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+                    alloc_alien(proxy, roots, ptr_val, 0).value()
+                })
+            }
+            CTypeKind::Size => {
+                let size = unsafe { cif.call::<usize>(code, &ffi_args) };
+                output_u64(vm, state, &mut scratch, size as u64)
+            }
+            CTypeKind::Struct => {
+                let mut ret_bytes = vec![0u8; return_desc.size];
+                unsafe {
+                    raw::ffi_call(
+                        cif.as_raw_ptr(),
+                        Some(*code.as_safe_fun()),
+                        ret_bytes.as_mut_ptr() as *mut libc::c_void,
+                        raw_args.as_mut_ptr(),
+                    );
+                }
 
-            let ba =
                 with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
                     alloc_byte_array(proxy, roots, &ret_bytes).value()
-                });
-            ba
-        }
-    };
+                })
+            }
+        },
+    );
 
     Ok(result)
 }
@@ -2030,4 +2059,76 @@ pub fn alien_library_close(
     Err(RuntimeError::Unimplemented {
         message: "library loading not supported on this platform",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn cif_store_reuses_same_signature() {
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        let key = CifCacheKey {
+            fn_ptr: 1,
+            param_types: vec![11, 12],
+            return_type: 13,
+        };
+
+        with_thread_local_cif(
+            key.clone(),
+            || {
+                BUILDS.fetch_add(1, Ordering::Relaxed);
+                Cif::new([Type::i64(), Type::i64()], Type::i64())
+            },
+            |_| (),
+        );
+        with_thread_local_cif(
+            key,
+            || {
+                BUILDS.fetch_add(1, Ordering::Relaxed);
+                Cif::new([Type::i64(), Type::i64()], Type::i64())
+            },
+            |_| (),
+        );
+        assert_eq!(BUILDS.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn cif_store_is_safe_under_parallel_lookup() {
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        let key = CifCacheKey {
+            fn_ptr: 2,
+            param_types: vec![21],
+            return_type: 22,
+        };
+
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let key_t = key.clone();
+            workers.push(std::thread::spawn(move || {
+                with_thread_local_cif(
+                    key_t.clone(),
+                    || {
+                        BUILDS.fetch_add(1, Ordering::Relaxed);
+                        Cif::new([Type::i64()], Type::i64())
+                    },
+                    |_| (),
+                );
+                with_thread_local_cif(
+                    key_t,
+                    || {
+                        BUILDS.fetch_add(1, Ordering::Relaxed);
+                        Cif::new([Type::i64()], Type::i64())
+                    },
+                    |_| (),
+                );
+            }));
+        }
+
+        for worker in workers {
+            worker.join().expect("worker should join");
+        }
+        assert_eq!(BUILDS.load(Ordering::Relaxed), 8);
+    }
 }

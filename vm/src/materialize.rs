@@ -11,6 +11,7 @@ use object::{
 
 use crate::alloc::{
     add_constant_slot, alloc_bignum_from_i128, alloc_byte_array, alloc_float,
+    alloc_map, alloc_slot_object,
 };
 use crate::compiler0::{CodeDesc, ConstEntry, MapDesc, SlotValue};
 use crate::VM;
@@ -173,7 +174,26 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             ConstEntry::Assoc(name) => self.resolve_assoc(name),
             ConstEntry::AssocValue(name) => self.resolve_assoc_value(name),
             ConstEntry::Code(desc) => self.materialize_code(desc),
+            ConstEntry::Method { code, tail_call } => {
+                let code_val = self.materialize_code(code);
+                self.materialize_method(code_val, *tail_call)
+            }
             ConstEntry::Map(desc) => self.materialize_map(desc, materialized),
+        }
+    }
+
+    fn materialize_method(&mut self, code: Value, tail_call: bool) -> Value {
+        let mut flags = MapFlags::HAS_CODE;
+        if tail_call {
+            flags = flags.with(MapFlags::TAIL_CALL);
+        }
+        let map_map = self.map_map();
+        unsafe {
+            let map_val =
+                alloc_map(self.proxy, self.roots, map_map, code, flags, &[], 0)
+                    .value();
+
+            alloc_slot_object(self.proxy, self.roots, map_val, &[]).value()
         }
     }
 
@@ -188,7 +208,11 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             None => self.none(),
         };
         let flags = if desc.code.is_some() {
-            MapFlags::HAS_CODE
+            let mut flags = MapFlags::HAS_CODE;
+            if desc.tail_call {
+                flags = flags.with(MapFlags::TAIL_CALL);
+            }
+            flags
         } else {
             MapFlags::NONE
         };
@@ -427,9 +451,14 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     scratch.push(vm.special.float_traits); // 15
     scratch.push(vm.special.block_traits); // 16
 
+    let mut intern_table = vm
+        .shared
+        .intern_table
+        .lock()
+        .expect("intern table poisoned");
     let mut roots = MaterializeRoots {
         scratch,
-        intern_table: &mut vm.intern_table,
+        intern_table: &mut intern_table,
     };
 
     let result = {
@@ -645,8 +674,11 @@ mod tests {
             let map: &Map = dict.map.as_ref();
             assert_eq!(map.slot_count(), base_slots + 1);
             let mut found = false;
+            let sym = vm
+                .with_intern_table(|table| table.get("myGlobal").copied())
+                .expect("interned myGlobal");
             for slot in map.slots() {
-                if slot.name.raw() == vm.intern_table["myGlobal"].raw() {
+                if slot.name.raw() == sym.raw() {
                     found = true;
                     break;
                 }
@@ -754,6 +786,7 @@ mod tests {
             }],
             value_count: 0,
             code: Some(0), // references constant[0]
+            tail_call: false,
         };
         let desc = CodeDesc {
             bytecode: empty_bytecode(),

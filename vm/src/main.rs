@@ -234,6 +234,12 @@ fn dump_code_desc_inner(desc: &compiler0::CodeDesc, indent: usize) {
                 println!("{pad}  >> code const {idx}");
                 dump_code_desc_inner(code, indent + 4);
             }
+            compiler0::ConstEntry::Method { code, tail_call } => {
+                println!(
+                    "{pad}  >> method const {idx} (tail_call={tail_call})"
+                );
+                dump_code_desc_inner(code, indent + 4);
+            }
             compiler0::ConstEntry::Map(map) => {
                 println!("{pad}  >> map slots ({}):", map.slots.len());
                 for slot in &map.slots {
@@ -254,9 +260,19 @@ fn dump_code_desc_inner(desc: &compiler0::CodeDesc, indent: usize) {
                     );
 
                     if let compiler0::SlotValue::Constant(c) = &slot.value {
-                        if let compiler0::ConstEntry::Code(code) = c {
-                            println!("{pad}      >> slot code {}", slot.name);
-                            dump_code_desc_inner(code, indent + 8);
+                        match c {
+                            compiler0::ConstEntry::Code(code)
+                            | compiler0::ConstEntry::Method {
+                                code,
+                                tail_call: _,
+                            } => {
+                                println!(
+                                    "{pad}      >> slot code {}",
+                                    slot.name
+                                );
+                                dump_code_desc_inner(code, indent + 8);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -328,6 +344,16 @@ fn format_const_entry(entry: &compiler0::ConstEntry) -> String {
                 code.constants.len()
             )
         }
+        compiler0::ConstEntry::Method { code, tail_call } => {
+            format!(
+                "Method(tail_call={}, regs={}, args={}, temps={}, consts={})",
+                tail_call,
+                code.register_count,
+                code.arg_count,
+                code.temp_count,
+                code.constants.len()
+            )
+        }
         compiler0::ConstEntry::Map(map) => {
             format!(
                 "Map(slots={}, values={}, code={:?})",
@@ -355,6 +381,10 @@ fn format_const_entry_short(entry: &compiler0::ConstEntry) -> String {
         compiler0::ConstEntry::Code(code) => format!(
             "Code(regs={}, args={}, temps={})",
             code.register_count, code.arg_count, code.temp_count
+        ),
+        compiler0::ConstEntry::Method { code, tail_call } => format!(
+            "Method(tail_call={}, regs={}, args={}, temps={})",
+            tail_call, code.register_count, code.arg_count, code.temp_count
         ),
         compiler0::ConstEntry::Map(map) => {
             format!(

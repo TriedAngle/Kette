@@ -1,0 +1,30 @@
+Object _Extend: Object With: {
+    extend: target With: source = { self _Extend: target With: source }
+}.
+Object extend: Object With: {
+    ifTrue: t IfFalse: f = { t call }.
+    ifTrue: t = { self ifTrue: t IfFalse: [ None ] }.
+    ifFalse: f = { self ifTrue: [ None ] IfFalse: f }
+}.
+Object extend: False With: {
+    parent* = Object.
+    ifTrue: t IfFalse: f = { f call }
+}.
+Object extend: True With: { parent* = Object }.
+Object extend: Fixnum With: {
+    parent* = Object.
+    <= rhs = { rhs leFixnum: self }.
+    leFixnum: lhs = { lhs _FixnumLe: self }.
+    + rhs = { rhs addFixnum: self }.
+    addFixnum: lhs = { lhs _FixnumAdd: self }
+}.
+Object extend: Block With: {
+    parent* = Object.
+    whileTrue: body = {
+        self call ifTrue: [
+            body call.
+            self whileTrue: body
+        ] IfFalse: [ None ]
+    } _EnsureTailCall
+}.
+[ i := 0. cond := [ i <= 2000 ]. cond whileTrue: [ i := i + 1 ] ] call

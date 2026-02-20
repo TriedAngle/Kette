@@ -92,7 +92,7 @@ pub fn object_clone(
 
 #[cfg(debug_assertions)]
 fn lookup_assoc_value(vm: &VM, name: &str) -> Option<Value> {
-    let sym = vm.intern_table.get(name)?;
+    let sym = vm.with_intern_table(|table| table.get(name).copied())?;
     unsafe {
         let dict: &SlotObject = vm.dictionary.as_ref();
         let map: &object::Map = dict.map.as_ref();

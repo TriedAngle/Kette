@@ -239,6 +239,7 @@ pub enum ConstEntry {
     Assoc(String),
     AssocValue(String),
     Code(CodeDesc),
+    Method { code: CodeDesc, tail_call: bool },
     Map(MapDesc),
 }
 
@@ -247,6 +248,13 @@ pub struct MapDesc {
     pub slots: Vec<SlotDesc>,
     pub value_count: u32,
     pub code: Option<usize>,
+    pub tail_call: bool,
+}
+
+#[derive(Debug, Clone)]
+struct NestedMethodDesc {
+    code: CodeDesc,
+    tail_call: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1455,6 +1463,86 @@ impl Compiler {
         Ok(())
     }
 
+    fn unwrap_ensure_tail_call<'a>(&self, expr: &'a Expr) -> (&'a Expr, bool) {
+        if let ExprKind::UnaryMessage { receiver, selector } = &expr.kind {
+            if selector == "_EnsureTailCall" {
+                return (receiver.as_ref(), true);
+            }
+        }
+        (expr, false)
+    }
+
+    fn method_tail_call_eligible(
+        &self,
+        body: &[Expr],
+        method_selector: &str,
+    ) -> bool {
+        let Some(last) = Self::last_meaningful_expr(body) else {
+            return false;
+        };
+        self.expr_contains_tail_self_call(last, method_selector)
+    }
+
+    fn last_meaningful_expr(exprs: &[Expr]) -> Option<&Expr> {
+        exprs
+            .iter()
+            .rev()
+            .find(|e| !matches!(e.kind, ExprKind::Comment(_)))
+    }
+
+    fn expr_contains_tail_self_call(
+        &self,
+        expr: &Expr,
+        method_selector: &str,
+    ) -> bool {
+        match &expr.kind {
+            ExprKind::UnaryMessage { receiver, selector } => {
+                (selector == method_selector
+                    && matches!(receiver.kind, ExprKind::SelfRef))
+                    || self
+                        .expr_contains_tail_self_call(receiver, method_selector)
+            }
+            ExprKind::BinaryMessage {
+                receiver,
+                operator,
+                argument,
+            } => {
+                (operator == method_selector
+                    && matches!(receiver.kind, ExprKind::SelfRef))
+                    || self
+                        .expr_contains_tail_self_call(receiver, method_selector)
+                    || self
+                        .expr_contains_tail_self_call(argument, method_selector)
+            }
+            ExprKind::KeywordMessage { receiver, pairs } => {
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                (selector == method_selector
+                    && matches!(receiver.kind, ExprKind::SelfRef))
+                    || self
+                        .expr_contains_tail_self_call(receiver, method_selector)
+                    || pairs.iter().any(|p| {
+                        self.expr_contains_tail_self_call(
+                            &p.argument,
+                            method_selector,
+                        )
+                    })
+            }
+            ExprKind::Paren(inner) | ExprKind::Return(inner) => {
+                self.expr_contains_tail_self_call(inner, method_selector)
+            }
+            ExprKind::Sequence(exprs)
+            | ExprKind::Block { body: exprs, .. }
+            | ExprKind::Object { body: exprs, .. } => {
+                let Some(last) = Self::last_meaningful_expr(exprs) else {
+                    return false;
+                };
+                self.expr_contains_tail_self_call(last, method_selector)
+            }
+            _ => false,
+        }
+    }
+
     // ── Object compilation ──────────────────────────────────────
 
     fn compile_object(
@@ -1528,11 +1616,14 @@ impl Compiler {
 
                 if is_method_value {
                     // This slot's value is a method — compile as nested CodeDesc
-                    let code_desc = self.compile_nested_method(slot)?;
+                    let nested = self.compile_nested_method(slot)?;
                     slot_descs.push(SlotDesc {
                         flags: base_flags | SLOT_CONSTANT,
                         name,
-                        value: SlotValue::Constant(ConstEntry::Code(code_desc)),
+                        value: SlotValue::Constant(ConstEntry::Method {
+                            code: nested.code,
+                            tail_call: nested.tail_call,
+                        }),
                     });
                 } else {
                     if self.slot_value_requires_runtime(&slot.value) {
@@ -1573,6 +1664,7 @@ impl Compiler {
             slots: slot_descs,
             value_count,
             code: None,
+            tail_call: false,
         };
         let map_idx = self.add_constant(ConstEntry::Map(map_desc));
 
@@ -1714,6 +1806,7 @@ impl Compiler {
             slots: slot_descs,
             value_count: 0,
             code: Some(code_idx as usize),
+            tail_call: false,
         };
         let map_idx = self.add_constant(ConstEntry::Map(map_desc));
         self.builder().create_object(map_idx, 0);
@@ -1724,8 +1817,11 @@ impl Compiler {
     fn compile_nested_method(
         &mut self,
         slot: &SlotDescriptor,
-    ) -> Result<CodeDesc, CompileError> {
-        match &slot.value.kind {
+    ) -> Result<NestedMethodDesc, CompileError> {
+        let method_selector = slot_selector_name(slot);
+        let (method_expr, ensure_tail_call) =
+            self.unwrap_ensure_tail_call(&slot.value);
+        match &method_expr.kind {
             ExprKind::Object {
                 slots: inner_slots,
                 body,
@@ -1804,7 +1900,19 @@ impl Compiler {
                 self.compile_body(body)?;
                 self.builder().local_return();
 
-                Ok(self.pop_frame())
+                let tail_call =
+                    self.method_tail_call_eligible(body, &method_selector);
+                if ensure_tail_call && !tail_call {
+                    return Err(CompileError::new(
+                        "method is not tail-call eligible",
+                        method_expr.span,
+                    ));
+                }
+
+                Ok(NestedMethodDesc {
+                    code: self.pop_frame(),
+                    tail_call,
+                })
             }
             _ => {
                 // Slot value is not an Object — compile as a simple method
@@ -1815,10 +1923,24 @@ impl Compiler {
                     self.scope_mut().declare_param(param.clone());
                 }
 
-                self.compile_expr(&slot.value)?;
+                self.compile_expr(method_expr)?;
                 self.builder().local_return();
 
-                Ok(self.pop_frame())
+                let tail_call = self.expr_contains_tail_self_call(
+                    method_expr,
+                    &method_selector,
+                );
+                if ensure_tail_call && !tail_call {
+                    return Err(CompileError::new(
+                        "method is not tail-call eligible",
+                        method_expr.span,
+                    ));
+                }
+
+                Ok(NestedMethodDesc {
+                    code: self.pop_frame(),
+                    tail_call,
+                })
             }
         }
     }
@@ -1850,6 +1972,7 @@ impl Compiler {
                     slots: slot_descs,
                     value_count: 0,
                     code: None,
+                    tail_call: false,
                 }))
             }
             ExprKind::Block { args, body } => {
@@ -1902,6 +2025,7 @@ impl Compiler {
             slots: Vec::new(),
             value_count: 0,
             code: Some(code_idx as usize),
+            tail_call: false,
         };
         let map_idx = self.add_constant(ConstEntry::Map(map_desc));
         self.builder().create_block(map_idx);
@@ -1970,18 +2094,20 @@ fn build_compile_module_env(
     exprs: &[Expr],
 ) -> Result<CompileModuleEnv, CompileError> {
     let mut modules: HashMap<String, ModuleCompileState> = HashMap::new();
-    for (path, module) in &vm.modules {
-        let mut state = ModuleCompileState::empty();
-        state.bindings.extend(module.bindings.keys().cloned());
-        state.exports.extend(module.exports.iter().cloned());
-        for (local, import) in &module.imports {
-            state.imports.insert(
-                local.clone(),
-                (import.module_path.clone(), import.export_name.clone()),
-            );
+    vm.with_modules(|loaded| {
+        for (path, module) in loaded.iter() {
+            let mut state = ModuleCompileState::empty();
+            state.bindings.extend(module.bindings.keys().cloned());
+            state.exports.extend(module.exports.iter().cloned());
+            for (local, import) in &module.imports {
+                state.imports.insert(
+                    local.clone(),
+                    (import.module_path.clone(), import.export_name.clone()),
+                );
+            }
+            modules.insert(path.clone(), state);
         }
-        modules.insert(path.clone(), state);
-    }
+    });
 
     let mut expr_modules = Vec::new();
     let mut current_module = vm.current_module.clone();
@@ -3108,7 +3234,9 @@ mod tests {
         let mut method_code = None;
         for slot in &map.slots {
             if slot.name == "foo" {
-                if let SlotValue::Constant(ConstEntry::Code(code)) = &slot.value
+                if let SlotValue::Constant(ConstEntry::Method {
+                    code, ..
+                }) = &slot.value
                 {
                     method_code = Some(code);
                 }
@@ -3422,8 +3550,10 @@ mod tests {
 
     fn find_code_const(constants: &[ConstEntry]) -> &CodeDesc {
         for c in constants {
-            if let ConstEntry::Code(code) = c {
-                return code;
+            match c {
+                ConstEntry::Code(code) => return code,
+                ConstEntry::Method { code, .. } => return code,
+                _ => {}
             }
         }
         panic!("no Code constant found");
@@ -3438,7 +3568,7 @@ mod tests {
             arg_count: u16,
         ) -> Option<&'a CodeDesc> {
             match entry {
-                ConstEntry::Code(code) => {
+                ConstEntry::Code(code) | ConstEntry::Method { code, .. } => {
                     if code.arg_count == arg_count {
                         Some(code)
                     } else {
@@ -3475,8 +3605,10 @@ mod tests {
             if let ConstEntry::Map(map) = c {
                 for slot in &map.slots {
                     if slot.name == slot_name {
-                        if let SlotValue::Constant(ConstEntry::Code(code)) =
-                            &slot.value
+                        if let SlotValue::Constant(ConstEntry::Method {
+                            code,
+                            ..
+                        }) = &slot.value
                         {
                             return code;
                         }

@@ -962,10 +962,29 @@ fn dispatch_slot(
 
     if let Some(target) = extract_method_target(slot.value, vm.special.none)? {
         match target {
-            MethodTarget::Code(code_val) => {
+            MethodTarget::Code {
+                code: code_val,
+                tail_call,
+            } => {
                 let method_module = vm
                     .module_owner_of_value(holder)
                     .or_else(|| state.frames[frame_idx].module_path.clone());
+                if try_tail_recursive_self_call(
+                    vm,
+                    state,
+                    frame_idx,
+                    receiver,
+                    holder,
+                    slot_index,
+                    code_val,
+                    reg,
+                    argc,
+                    method_module.clone(),
+                    false,
+                    tail_call,
+                )? {
+                    return Ok(());
+                }
                 return push_method_frame(
                     vm,
                     state,
@@ -1001,6 +1020,131 @@ fn dispatch_slot(
 
     state.acc = slot.value;
     Ok(())
+}
+
+fn next_instruction_is_local_return(
+    state: &InterpreterState,
+    frame_idx: usize,
+) -> bool {
+    let frame = &state.frames[frame_idx];
+    if !frame.code.is_ref() {
+        return false;
+    }
+    let code: &Code = unsafe { frame.code.as_ref() };
+    let bytecode = unsafe { code.bytecode() };
+    if frame.pc >= bytecode.len() {
+        return false;
+    }
+    let (instr, _) = decode_at(bytecode, frame.pc);
+    matches!(instr, Instruction::LocalReturn)
+}
+
+fn try_tail_recursive_self_call(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    frame_idx: usize,
+    receiver: Value,
+    holder: Value,
+    holder_slot_index: u32,
+    code_val: Value,
+    reg: u16,
+    argc: u8,
+    module_path: Option<String>,
+    module_dynamic: bool,
+    tail_call: bool,
+) -> Result<bool, RuntimeError> {
+    if !tail_call {
+        return Ok(false);
+    }
+    let mut method_idx = None;
+    for idx in (0..=frame_idx).rev() {
+        let frame = &state.frames[idx];
+        if frame.is_block {
+            continue;
+        }
+        if frame.code.raw() != code_val.raw() {
+            continue;
+        }
+        if frame.holder.raw() != holder.raw()
+            || frame.holder_slot_index != holder_slot_index
+        {
+            continue;
+        }
+        if frame.registers.first().map(|v| v.raw()) != Some(receiver.raw()) {
+            continue;
+        }
+        method_idx = Some(idx);
+        break;
+    }
+    let Some(method_idx) = method_idx else {
+        return Ok(false);
+    };
+    for idx in method_idx..=frame_idx {
+        if !next_instruction_is_local_return(state, idx) {
+            return Ok(false);
+        }
+    }
+
+    let code = unsafe { &*expect_code(code_val)? };
+    let arg_count = code.arg_count() as usize;
+    let provided = argc as usize;
+    if provided != arg_count {
+        return Err(RuntimeError::TypeError {
+            expected: "argument count",
+            got: Value::from_i64(provided as i64),
+        });
+    }
+
+    let none = vm.special.none;
+    let reg_count = code.register_count() as usize;
+    let mut new_registers = vec![none; reg_count.max(1)];
+    new_registers[0] = receiver;
+
+    let start = reg as usize;
+    let end = start + argc as usize;
+    {
+        let old_registers = &state.frames[frame_idx].registers;
+        if end > old_registers.len() {
+            return Err(RuntimeError::TypeError {
+                expected: "argument register range",
+                got: Value::from_i64(end as i64),
+            });
+        }
+        for i in 0..argc as usize {
+            let dst = i + 1;
+            if dst >= new_registers.len() {
+                return Err(RuntimeError::TypeError {
+                    expected: "argument register range",
+                    got: Value::from_i64(dst as i64),
+                });
+            }
+            new_registers[dst] = old_registers[start + i];
+        }
+    }
+
+    let new_temp_array = if code.temp_count() > 0 {
+        state.acc = receiver;
+        alloc_temp_array(vm, state, code.temp_count(), none)?
+    } else {
+        none
+    };
+
+    if frame_idx > method_idx {
+        state.frames.truncate(method_idx + 1);
+    }
+
+    let frame = &mut state.frames[method_idx];
+    frame.code = code_val;
+    frame.pc = 0;
+    frame.registers = new_registers;
+    frame.temp_array = new_temp_array;
+    frame.method_frame_idx = method_idx;
+    frame.holder = holder;
+    frame.holder_slot_index = holder_slot_index;
+    frame.module_path = module_path;
+    frame.module_dynamic = module_dynamic;
+
+    Ok(true)
 }
 
 fn create_object(
@@ -1491,7 +1635,7 @@ fn collect_args_from_frame(
 }
 
 enum MethodTarget {
-    Code(Value),
+    Code { code: Value, tail_call: bool },
     Primitive(usize),
 }
 
@@ -1504,7 +1648,10 @@ fn extract_method_target(
     }
     let header: &Header = unsafe { value.as_ref() };
     match header.object_type() {
-        ObjectType::Code => Ok(Some(MethodTarget::Code(value))),
+        ObjectType::Code => Ok(Some(MethodTarget::Code {
+            code: value,
+            tail_call: false,
+        })),
         ObjectType::Slots => {
             let obj: &SlotObject = unsafe { value.as_ref() };
             let map: &Map = unsafe { obj.map.as_ref() };
@@ -1534,7 +1681,10 @@ fn extract_method_target(
                         got: map.code,
                     });
                 }
-                Ok(Some(MethodTarget::Code(map.code)))
+                Ok(Some(MethodTarget::Code {
+                    code: map.code,
+                    tail_call: map.is_tail_call(),
+                }))
             }
         }
         _ => Ok(None),
@@ -1892,21 +2042,25 @@ pub(crate) fn with_roots<T>(
     scratch: &mut Vec<Value>,
     f: impl FnOnce(&mut HeapProxy, &mut InterpreterRoots<'_>) -> T,
 ) -> T {
-    let (proxy, special, intern_table, assoc_map, dictionary, modules) = (
+    let (proxy, special, assoc_map, dictionary) = (
         &mut vm.heap_proxy,
         &mut vm.special,
-        &mut vm.intern_table,
         &mut vm.assoc_map,
         &mut vm.dictionary,
-        &mut vm.modules,
     );
+    let mut intern_table = vm
+        .shared
+        .intern_table
+        .lock()
+        .expect("intern table poisoned");
+    let mut modules = vm.shared.modules.lock().expect("modules poisoned");
     let mut roots = InterpreterRoots {
         state,
         special,
-        intern_table,
+        intern_table: &mut intern_table,
         assoc_map,
         dictionary,
-        modules,
+        modules: &mut modules,
         scratch,
     };
     f(proxy, &mut roots)
@@ -2424,6 +2578,45 @@ mod tests {
     }
 
     #[test]
+    fn while_true_deep_recursion_does_not_overflow_with_tco() {
+        let (vm, value) = run_source_with_vm(
+            "Object _Extend: Object With: { \
+                extend: target With: source = { self _Extend: target With: source } \
+            }. \
+            Object extend: Object With: { \
+                ifTrue: t IfFalse: f = { t call }. \
+                ifTrue: t = { self ifTrue: t IfFalse: [ None ] }. \
+                ifFalse: f = { self ifTrue: [ None ] IfFalse: f } \
+            }. \
+            Object extend: False With: { \
+                parent* = Object. \
+                ifTrue: t IfFalse: f = { f call } \
+            }. \
+            Object extend: True With: { parent* = Object }. \
+            Object extend: Fixnum With: { \
+                parent* = Object. \
+                <= rhs = { rhs leFixnum: self }. \
+                leFixnum: lhs = { lhs _FixnumLe: self }. \
+                + rhs = { rhs addFixnum: self }. \
+                addFixnum: lhs = { lhs _FixnumAdd: self } \
+            }. \
+            Object extend: Block With: { \
+                parent* = Object. \
+                whileTrue: body = { \
+                    self call ifTrue: [ \
+                        body call. \
+                        self whileTrue: body \
+                    ] IfFalse: [ None ] \
+                } _EnsureTailCall \
+            }. \
+            [ i := 0. cond := [ i <= 2000 ]. cond whileTrue: [ i := i + 1 ] ] call",
+        )
+        .expect("expected deep recursive whileTrue to complete");
+
+        assert_eq!(value.raw(), vm.special.none.raw());
+    }
+
+    #[test]
     fn interpret_nested_temp_chain() {
         let value = run_source(
             "[ i := 0. [ j := 1. [ i := i _FixnumAdd: j ] call. i ] call ] call",
@@ -2474,6 +2667,48 @@ mod tests {
             }
         }
         assert!(found, "whileTrue: slot not found on Block");
+    }
+
+    #[test]
+    fn while_true_method_slot_is_tail_call_method_object() {
+        let (vm, _value) = run_source_with_vm(
+            "Object _Extend: Object With: { \
+                extend: target With: source = { self _Extend: target With: source } \
+            }. \
+            Object extend: Block With: { \
+                parent* = Object. \
+                whileTrue: body = { \
+                    self call ifTrue: [ \
+                        body call. \
+                        self whileTrue: body \
+                    ] IfFalse: [ None ] \
+                } _EnsureTailCall \
+            }. \
+            None",
+        )
+        .expect("interpret error");
+
+        let block_traits = vm.special.block_traits;
+        let obj: &SlotObject = unsafe { block_traits.as_ref() };
+        let map: &Map = unsafe { obj.map.as_ref() };
+
+        let while_true_slot = unsafe { map.slots() }
+            .iter()
+            .find(|slot| {
+                let name: &VMString = unsafe { slot.name.as_ref() };
+                let slot_name = unsafe { name.as_str() };
+                slot_name == "whileTrue:"
+            })
+            .expect("whileTrue: slot missing on Block");
+
+        assert!(while_true_slot.value.is_ref());
+        let method_header: &Header = unsafe { while_true_slot.value.as_ref() };
+        assert_eq!(method_header.object_type(), ObjectType::Slots);
+
+        let method_obj: &SlotObject = unsafe { while_true_slot.value.as_ref() };
+        let method_map: &Map = unsafe { method_obj.map.as_ref() };
+        assert!(method_map.has_code());
+        assert!(method_map.is_tail_call());
     }
 
     #[test]
@@ -2678,7 +2913,7 @@ mod tests {
             return Some(value);
         }
 
-        let sym = vm.intern_table.get(name)?;
+        let sym = vm.with_intern_table(|table| table.get(name).copied())?;
         unsafe {
             let dict_obj: &SlotObject = vm.dictionary.as_ref();
             let map: &Map = dict_obj.map.as_ref();
@@ -3036,6 +3271,110 @@ mod tests {
         assert!(saw_build, "_CTypeBuildStruct: slot not found");
         assert!(saw_info, "_CTypeFieldInfoAt: slot not found");
         assert!(saw_tag, "_CTypeScalarTag slot not found");
+    }
+
+    #[test]
+    fn vm_has_platform_thread_primitives() {
+        let vm = bootstrap(test_settings());
+        let vm_value = lookup_dictionary_value(&vm, "VM").expect("VM missing");
+        let vm_obj: &SlotObject = unsafe { vm_value.as_ref() };
+        let map: &Map = unsafe { vm_obj.map.as_ref() };
+
+        let mut saw_spawn = false;
+        let mut saw_join = false;
+        let mut saw_current = false;
+        let mut saw_yield = false;
+        let mut saw_park = false;
+        let mut saw_park_for = false;
+        let mut saw_unpark = false;
+        let mut saw_millis = false;
+        let mut saw_unix_time = false;
+
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            let slot_name = unsafe { name.as_str() };
+            let expect = match slot_name {
+                "_SpawnPlatform:" => Some(("vm_spawn_platform", 1)),
+                "_ThreadJoin:" => Some(("vm_thread_join", 1)),
+                "_ThreadCurrent" => Some(("vm_thread_current", 0)),
+                "_ThreadYield" => Some(("vm_thread_yield", 0)),
+                "_ThreadPark" => Some(("vm_thread_park", 0)),
+                "_ThreadParkForMillis:" => {
+                    Some(("vm_thread_park_for_millis", 1))
+                }
+                "_ThreadUnpark:" => Some(("vm_thread_unpark", 1)),
+                "_Millis" => Some(("vm_millis", 0)),
+                "_UnixTime" => Some(("vm_unix_time", 0)),
+                _ => None,
+            };
+            let Some((prim_name, arity)) = expect else {
+                continue;
+            };
+
+            let method_obj: &SlotObject = unsafe { slot.value.as_ref() };
+            let method_map: &Map = unsafe { method_obj.map.as_ref() };
+            assert!(method_map.has_code());
+            assert!(method_map.is_primitive());
+            let idx = unsafe { method_map.code.to_i64() } as usize;
+            let prim = vm.primitives.get(idx).expect("primitive index");
+            assert_eq!(prim.name, prim_name);
+            assert_eq!(prim.arity, arity);
+
+            match slot_name {
+                "_SpawnPlatform:" => saw_spawn = true,
+                "_ThreadJoin:" => saw_join = true,
+                "_ThreadCurrent" => saw_current = true,
+                "_ThreadYield" => saw_yield = true,
+                "_ThreadPark" => saw_park = true,
+                "_ThreadParkForMillis:" => saw_park_for = true,
+                "_ThreadUnpark:" => saw_unpark = true,
+                "_Millis" => saw_millis = true,
+                "_UnixTime" => saw_unix_time = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_spawn, "_SpawnPlatform: slot not found");
+        assert!(saw_join, "_ThreadJoin: slot not found");
+        assert!(saw_current, "_ThreadCurrent slot not found");
+        assert!(saw_yield, "_ThreadYield slot not found");
+        assert!(saw_park, "_ThreadPark slot not found");
+        assert!(saw_park_for, "_ThreadParkForMillis: slot not found");
+        assert!(saw_unpark, "_ThreadUnpark: slot not found");
+        assert!(saw_millis, "_Millis slot not found");
+        assert!(saw_unix_time, "_UnixTime slot not found");
+    }
+
+    #[test]
+    fn vm_has_monitor_primitives() {
+        let vm = bootstrap(test_settings());
+        let vm_value = lookup_dictionary_value(&vm, "VM").expect("VM missing");
+        let vm_obj: &SlotObject = unsafe { vm_value.as_ref() };
+        let map: &Map = unsafe { vm_obj.map.as_ref() };
+
+        let mut saw_enter = false;
+        let mut saw_exit = false;
+        let mut saw_wait = false;
+        let mut saw_notify = false;
+        let mut saw_notify_all = false;
+
+        for slot in unsafe { map.slots() } {
+            let name: &VMString = unsafe { slot.name.as_ref() };
+            match unsafe { name.as_str() } {
+                "_MonitorEnter:" => saw_enter = true,
+                "_MonitorExit:" => saw_exit = true,
+                "_MonitorWait:" => saw_wait = true,
+                "_MonitorNotify:" => saw_notify = true,
+                "_MonitorNotifyAll:" => saw_notify_all = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_enter, "_MonitorEnter: slot not found");
+        assert!(saw_exit, "_MonitorExit: slot not found");
+        assert!(saw_wait, "_MonitorWait: slot not found");
+        assert!(saw_notify, "_MonitorNotify: slot not found");
+        assert!(saw_notify_all, "_MonitorNotifyAll: slot not found");
     }
 
     #[test]

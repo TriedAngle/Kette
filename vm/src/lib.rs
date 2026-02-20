@@ -4,11 +4,17 @@ pub mod interpreter;
 pub mod materialize;
 pub mod primitives;
 pub mod special;
+pub mod threading;
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Condvar, Mutex,
+};
 
+use crate::threading::PlatformThread;
 use heap::{HeapProxy, RootProvider, SizeFn};
-use libffi::middle::Cif;
 use object::{
     Array, BigNum, Block, ByteArray, Code, Float, Header, HeaderFlags, Map,
     ObjectType, Ratio, SlotObject, SpecialObjects, VMString, VMSymbol, Value,
@@ -24,7 +30,7 @@ pub struct ModuleImport {
     pub export_name: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ModuleState {
     pub bindings: HashMap<String, Value>,
     pub imports: HashMap<String, ModuleImport>,
@@ -32,33 +38,69 @@ pub struct ModuleState {
     pub exports: HashSet<String>,
 }
 
-pub struct VM {
-    pub heap_proxy: HeapProxy,
+pub struct SharedVMData {
+    pub heap: heap::Heap,
     pub special: SpecialObjects,
-    /// Interned symbols: Rust string -> heap symbol Value.
-    pub intern_table: HashMap<String, Value>,
     /// Registered primitive descriptors.
     pub primitives: Vec<primitives::PrimitiveDesc>,
     /// Shared map for all assoc objects (0 named slots, value_count=1).
     pub assoc_map: Value,
-    /// Cached libffi call interfaces keyed by function signature.
-    pub ffi_cif_cache: HashMap<primitives::alien::CifCacheKey, Cif>,
     /// The global dictionary object (SlotObject whose map has one CONSTANT
     /// slot per global).
     pub dictionary: Value,
+    /// Interned symbols: Rust string -> heap symbol Value.
+    pub intern_table: Mutex<HashMap<String, Value>>,
+    /// Runtime module registry.
+    pub modules: Mutex<HashMap<String, ModuleState>>,
+    /// Next platform-thread handle id.
+    pub next_thread_id: AtomicU64,
+    /// Join handles for spawned platform threads.
+    pub platform_threads: Mutex<HashMap<u64, PlatformThreadEntry>>,
+    /// Object lock records keyed by raw object pointer bits.
+    pub lock_records: Mutex<HashMap<u64, Arc<LockRecord>>>,
+}
+
+pub struct VMProxy {
+    pub heap_proxy: HeapProxy,
+    pub special: SpecialObjects,
+    pub assoc_map: Value,
+    pub dictionary: Value,
     /// Currently open module path. `None` means legacy global dictionary mode.
     pub current_module: Option<String>,
-    /// Runtime module registry.
-    pub modules: HashMap<String, ModuleState>,
     /// Optional global assoc name to trace load/store.
     #[cfg(debug_assertions)]
     pub trace_assoc_name: Option<String>,
     /// Optional message selector to trace sends.
     #[cfg(debug_assertions)]
     pub trace_send_name: Option<String>,
+    pub shared: Arc<SharedVMData>,
 }
 
-impl RootProvider for VM {
+pub type VM = VMProxy;
+
+pub struct PlatformThreadEntry {
+    pub handle: PlatformThread<Result<Value, String>>,
+    pub root_code: Value,
+}
+
+#[derive(Debug)]
+pub struct LockRecord {
+    pub monitor: Mutex<Option<Arc<Monitor>>>,
+}
+
+#[derive(Debug)]
+pub struct Monitor {
+    pub state: Mutex<MonitorState>,
+    pub cvar: Condvar,
+}
+
+#[derive(Debug, Default)]
+pub struct MonitorState {
+    pub owner: Option<u64>,
+    pub recursion: u32,
+}
+
+impl RootProvider for VMProxy {
     fn visit_roots(&mut self, visitor: &mut dyn FnMut(&mut Value)) {
         visitor(&mut self.special.none);
         visitor(&mut self.special.true_obj);
@@ -79,14 +121,101 @@ impl RootProvider for VM {
         visitor(&mut self.special.mirror);
         visitor(&mut self.assoc_map);
         visitor(&mut self.dictionary);
-        for module in self.modules.values_mut() {
-            for value in module.bindings.values_mut() {
-                visitor(value);
+        {
+            let mut modules =
+                self.shared.modules.lock().expect("modules poisoned");
+            for module in modules.values_mut() {
+                for value in module.bindings.values_mut() {
+                    visitor(value);
+                }
             }
         }
-        for v in self.intern_table.values_mut() {
-            visitor(v);
+        {
+            let mut threads = self
+                .shared
+                .platform_threads
+                .lock()
+                .expect("platform threads poisoned");
+            for thread in threads.values_mut() {
+                visitor(&mut thread.root_code);
+            }
         }
+        {
+            let mut table = self
+                .shared
+                .intern_table
+                .lock()
+                .expect("intern table poisoned");
+            for v in table.values_mut() {
+                visitor(v);
+            }
+        }
+    }
+}
+
+impl VMProxy {
+    pub fn new(shared: Arc<SharedVMData>) -> Self {
+        let heap_proxy = HeapProxy::new(shared.heap.clone());
+        Self {
+            heap_proxy,
+            special: shared.special,
+            assoc_map: shared.assoc_map,
+            dictionary: shared.dictionary,
+            current_module: None,
+            #[cfg(debug_assertions)]
+            trace_assoc_name: None,
+            #[cfg(debug_assertions)]
+            trace_send_name: None,
+            shared,
+        }
+    }
+
+    pub fn spawn_proxy(&self) -> Self {
+        Self::new(self.shared.clone())
+    }
+
+    pub fn next_thread_id(&self) -> u64 {
+        self.shared.next_thread_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn with_intern_table<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<String, Value>) -> R,
+    ) -> R {
+        let mut table = self
+            .shared
+            .intern_table
+            .lock()
+            .expect("intern table poisoned");
+        f(&mut table)
+    }
+
+    pub fn with_modules<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<String, ModuleState>) -> R,
+    ) -> R {
+        let mut modules = self.shared.modules.lock().expect("modules poisoned");
+        f(&mut modules)
+    }
+
+    pub fn with_platform_threads<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<u64, PlatformThreadEntry>) -> R,
+    ) -> R {
+        let mut threads = self
+            .shared
+            .platform_threads
+            .lock()
+            .expect("platform threads poisoned");
+        f(&mut threads)
+    }
+}
+
+impl Deref for VMProxy {
+    type Target = SharedVMData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shared
     }
 }
 
@@ -102,12 +231,18 @@ impl VM {
             return None;
         }
 
-        let module = self.modules.get(module_path)?;
-        if module.bindings.contains_key(name) {
+        let (has_binding, import) = self.with_modules(|modules| {
+            let module = modules.get(module_path)?;
+            Some((
+                module.bindings.contains_key(name),
+                module.imports.get(name).cloned(),
+            ))
+        })?;
+        if has_binding {
             return Some((module_path.to_string(), name.to_string()));
         }
 
-        let import = module.imports.get(name)?;
+        let import = import?;
         self.module_resolve_read_target(
             &import.module_path,
             &import.export_name,
@@ -126,8 +261,11 @@ impl VM {
             return None;
         }
 
-        let module = self.modules.get(module_path)?;
-        if let Some(import) = module.imports.get(name) {
+        let import = self.with_modules(|modules| {
+            let module = modules.get(module_path)?;
+            module.imports.get(name).cloned()
+        });
+        if let Some(import) = import {
             return self.module_resolve_write_target(
                 &import.module_path,
                 &import.export_name,
@@ -146,10 +284,12 @@ impl VM {
         let mut seen = HashSet::new();
         let (owner_path, owner_name) =
             self.module_resolve_read_target(module_path, name, &mut seen)?;
-        self.modules
-            .get(&owner_path)
-            .and_then(|m| m.bindings.get(&owner_name))
-            .copied()
+        self.with_modules(|modules| {
+            modules
+                .get(&owner_path)
+                .and_then(|m| m.bindings.get(&owner_name))
+                .copied()
+        })
     }
 
     pub fn module_store_in(
@@ -166,12 +306,14 @@ impl VM {
             .unwrap_or_else(|| (module_path.to_string(), name.to_string()));
         self.ensure_module(&owner_path);
 
-        if let Some(module) = self.modules.get_mut(&owner_path) {
-            module.bindings.insert(owner_name, value);
-            true
-        } else {
-            false
-        }
+        self.with_modules(|modules| {
+            if let Some(module) = modules.get_mut(&owner_path) {
+                module.bindings.insert(owner_name, value);
+                true
+            } else {
+                false
+            }
+        })
     }
 
     pub fn module_owner_of_value(&self, value: Value) -> Option<String> {
@@ -179,17 +321,23 @@ impl VM {
             return None;
         }
 
-        for (path, module) in &self.modules {
-            if module.bindings.values().any(|v| v.raw() == value.raw()) {
-                return Some(path.clone());
+        let mut result = None;
+        self.with_modules(|modules| {
+            for (path, module) in modules.iter() {
+                if module.bindings.values().any(|v| v.raw() == value.raw()) {
+                    result = Some(path.clone());
+                    break;
+                }
             }
-        }
+        });
 
-        None
+        result
     }
 
     pub fn ensure_module(&mut self, path: &str) {
-        self.modules.entry(path.to_string()).or_default();
+        self.with_modules(|modules| {
+            modules.entry(path.to_string()).or_default();
+        });
     }
 
     pub fn seed_user_module_from_dictionary(&mut self) {
@@ -226,19 +374,21 @@ impl VM {
             }
         }
 
-        if let Some(user) = self.modules.get_mut(USER_MODULE) {
-            for (name, value) in &entries {
-                user.bindings.insert(name.clone(), *value);
-                user.exports.insert(name.clone());
+        self.with_modules(|modules| {
+            if let Some(user) = modules.get_mut(USER_MODULE) {
+                for (name, value) in &entries {
+                    user.bindings.insert(name.clone(), *value);
+                    user.exports.insert(name.clone());
+                }
             }
-        }
 
-        if let Some(core) = self.modules.get_mut(CORE_MODULE) {
-            for (name, value) in &entries {
-                core.bindings.insert(name.clone(), *value);
-                core.exports.insert(name.clone());
+            if let Some(core) = modules.get_mut(CORE_MODULE) {
+                for (name, value) in &entries {
+                    core.bindings.insert(name.clone(), *value);
+                    core.exports.insert(name.clone());
+                }
             }
-        }
+        });
     }
 
     pub fn open_module(&mut self, path: &str) {
@@ -249,14 +399,9 @@ impl VM {
         }
     }
 
-    pub fn current_module_state(&self) -> Option<&ModuleState> {
+    pub fn current_module_state(&self) -> Option<ModuleState> {
         let path = self.current_module.as_ref()?;
-        self.modules.get(path)
-    }
-
-    pub fn current_module_state_mut(&mut self) -> Option<&mut ModuleState> {
-        let path = self.current_module.clone()?;
-        self.modules.get_mut(&path)
+        self.with_modules(|modules| modules.get(path).cloned())
     }
 
     pub fn module_store_current(&mut self, name: &str, value: Value) -> bool {
@@ -278,9 +423,11 @@ impl VM {
             );
         };
         self.ensure_module(&path);
-        if let Some(module) = self.modules.get_mut(&path) {
-            module.exports.insert(name.to_string());
-        }
+        self.with_modules(|modules| {
+            if let Some(module) = modules.get_mut(&path) {
+                module.exports.insert(name.to_string());
+            }
+        });
         Ok(())
     }
 
@@ -311,110 +458,111 @@ impl VM {
                 "no current module; call Module open: first".to_string()
             );
         };
-        self.ensure_module(&current_path);
-        self.ensure_module(target_path);
+        self.with_modules(|modules| {
+            modules.entry(current_path.clone()).or_default();
+            modules.entry(target_path.to_string()).or_default();
 
-        let target = self.modules.get(target_path).ok_or_else(|| {
-            format!("unknown module '{}': not found", target_path)
-        })?;
+            let target = modules.get(target_path).ok_or_else(|| {
+                format!("unknown module '{}': not found", target_path)
+            })?;
 
-        let mut imports: Vec<(String, ModuleImport)> = Vec::new();
-        let mut seen_targets: HashSet<String> = HashSet::new();
+            let mut imports: Vec<(String, ModuleImport)> = Vec::new();
+            let mut seen_targets: HashSet<String> = HashSet::new();
 
-        for exported in &target.exports {
-            if let Some(only) = only_names {
-                if !only.contains(exported) {
-                    continue;
+            for exported in &target.exports {
+                if let Some(only) = only_names {
+                    if !only.contains(exported) {
+                        continue;
+                    }
                 }
-            }
-            let local_name = aliases
-                .get(exported)
-                .cloned()
-                .unwrap_or_else(|| exported.clone());
-            if !seen_targets.insert(local_name.clone()) {
-                return Err(format!(
-                    "import alias collision: '{}' appears multiple times",
-                    local_name
-                ));
-            }
-            imports.push((
-                local_name,
-                ModuleImport {
-                    module_path: target_path.to_string(),
-                    export_name: exported.clone(),
-                },
-            ));
-        }
-
-        for from in aliases.keys() {
-            if !target.exports.contains(from) {
-                return Err(format!(
-                    "cannot alias non-exported symbol '{}' from module '{}'",
-                    from, target_path
-                ));
-            }
-        }
-
-        if let Some(only) = only_names {
-            for name in only {
-                if !target.exports.contains(name) {
+                let local_name = aliases
+                    .get(exported)
+                    .cloned()
+                    .unwrap_or_else(|| exported.clone());
+                if !seen_targets.insert(local_name.clone()) {
                     return Err(format!(
-                        "cannot import non-exported symbol '{}' from module '{}'",
-                        name, target_path
+                        "import alias collision: '{}' appears multiple times",
+                        local_name
+                    ));
+                }
+                imports.push((
+                    local_name,
+                    ModuleImport {
+                        module_path: target_path.to_string(),
+                        export_name: exported.clone(),
+                    },
+                ));
+            }
+
+            for from in aliases.keys() {
+                if !target.exports.contains(from) {
+                    return Err(format!(
+                        "cannot alias non-exported symbol '{}' from module '{}'",
+                        from, target_path
                     ));
                 }
             }
-        }
 
-        let current = self
-            .modules
-            .get(&current_path)
-            .ok_or_else(|| "current module missing".to_string())?;
-        for (local_name, import) in &imports {
-            if current.bindings.contains_key(local_name) {
-                return Err(format!(
-                    "import collision in module '{}': '{}' already exists",
-                    current_path, local_name
-                ));
+            if let Some(only) = only_names {
+                for name in only {
+                    if !target.exports.contains(name) {
+                        return Err(format!(
+                            "cannot import non-exported symbol '{}' from module '{}'",
+                            name, target_path
+                        ));
+                    }
+                }
             }
-            if let Some(existing) = current.imports.get(local_name) {
-                if existing != import {
+
+            let current = modules
+                .get(&current_path)
+                .ok_or_else(|| "current module missing".to_string())?;
+            for (local_name, import) in &imports {
+                if current.bindings.contains_key(local_name) {
                     return Err(format!(
                         "import collision in module '{}': '{}' already exists",
                         current_path, local_name
                     ));
                 }
+                if let Some(existing) = current.imports.get(local_name) {
+                    if existing != import {
+                        return Err(format!(
+                            "import collision in module '{}': '{}' already exists",
+                            current_path, local_name
+                        ));
+                    }
+                }
             }
-        }
 
-        let current = self
-            .modules
-            .get_mut(&current_path)
-            .ok_or_else(|| "current module missing".to_string())?;
-        for (local_name, import) in imports {
-            current.imports.insert(local_name, import);
-        }
-        if !current.uses.iter().any(|u| u == target_path) {
-            current.uses.push(target_path.to_string());
-        }
-        Ok(())
+            let current = modules
+                .get_mut(&current_path)
+                .ok_or_else(|| "current module missing".to_string())?;
+            for (local_name, import) in imports {
+                current.imports.insert(local_name, import);
+            }
+            if !current.uses.iter().any(|u| u == target_path) {
+                current.uses.push(target_path.to_string());
+            }
+            Ok(())
+        })
     }
 
     pub fn module_public_entries(
         &self,
         path: &str,
     ) -> Result<Vec<(String, Value)>, String> {
-        let module = self
-            .modules
-            .get(path)
-            .ok_or_else(|| format!("module '{}' not found", path))?;
-        let mut out = Vec::new();
-        for name in &module.exports {
-            if let Some(value) = module.bindings.get(name) {
-                out.push((name.clone(), *value));
+        self.with_modules(|modules| {
+            let module = modules
+                .get(path)
+                .ok_or_else(|| format!("module '{}' not found", path))?;
+            let mut out = Vec::new();
+            for name in &module.exports {
+                if let Some(value) = module.bindings.get(name) {
+                    out.push((name.clone(), *value));
+                }
             }
-        }
-        Ok(out)
+            Ok(out)
+        })
     }
 }
 

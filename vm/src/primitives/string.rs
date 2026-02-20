@@ -169,14 +169,17 @@ pub(crate) fn intern_symbol(
     state: &mut InterpreterState,
     name: &str,
 ) -> Result<Value, RuntimeError> {
-    if let Some(&symbol) = vm.intern_table.get(name) {
+    if let Some(symbol) = vm.with_intern_table(|table| table.get(name).copied())
+    {
         return Ok(symbol);
     }
     let symbol = alloc_vm_symbol(vm, state, name.as_bytes())?;
     let header: &Header = unsafe { symbol.as_ref() };
     debug_assert!(header.object_type() == ObjectType::Symbol);
-    vm.intern_table.insert(name.to_string(), symbol);
-    Ok(symbol)
+    let interned = vm.with_intern_table(|table| {
+        *table.entry(name.to_string()).or_insert(symbol)
+    });
+    Ok(interned)
 }
 
 pub(crate) fn alloc_vm_string_from_bytearray(

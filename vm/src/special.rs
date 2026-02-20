@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::mem::size_of;
+use std::sync::{atomic::AtomicU64, Arc, Mutex};
 
 use heap::{Heap, HeapProxy, HeapSettings, RootProvider};
 use object::{
@@ -10,7 +11,7 @@ use crate::alloc::{
     add_constant_slot, alloc_byte_array, alloc_map, alloc_slot_object,
 };
 use crate::primitives;
-use crate::{trace_object, VM};
+use crate::{trace_object, SharedVMData, VMProxy};
 
 /// Temporary root provider used during bootstrap.
 struct BootstrapRoots {
@@ -100,7 +101,7 @@ const NONE_PLACEHOLDER: Value = Value::from_raw(0);
 /// Creates the heap, allocates `map_map` (self-referential), `None`, `true`,
 /// `false`, and all trait maps for primitive types, then returns a fully
 /// initialized [`VM`].
-pub fn bootstrap(settings: HeapSettings) -> VM {
+pub fn bootstrap(settings: HeapSettings) -> VMProxy {
     let heap = Heap::new(settings, trace_object, crate::OBJECT_SIZE_FN);
     let mut proxy = heap.proxy();
     let mut roots = BootstrapRoots::new();
@@ -1268,11 +1269,23 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         let reflect_idx =
             primitives::primitive_index_by_name(&primitives, "object_reflect")
                 .expect("object_reflect primitive missing") as i64;
+        let method_ensure_tail_call_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "method_ensure_tail_call",
+        )
+        .expect("method_ensure_tail_call primitive missing")
+            as i64;
         let reflect_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
             &mut intern_table,
             "_Reflect:",
+        );
+        let ensure_tail_call_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_EnsureTailCall",
         );
         let ctype_build_struct_idx = primitives::primitive_index_by_name(
             &primitives,
@@ -1382,6 +1395,69 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         let vm_then_do_idx =
             primitives::primitive_index_by_name(&primitives, "vm_then_do")
                 .expect("vm_then_do primitive missing") as i64;
+        let vm_spawn_platform_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_spawn_platform",
+        )
+        .expect("vm_spawn_platform primitive missing")
+            as i64;
+        let vm_thread_join_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_thread_join")
+                .expect("vm_thread_join primitive missing") as i64;
+        let vm_thread_current_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_thread_current",
+        )
+        .expect("vm_thread_current primitive missing")
+            as i64;
+        let vm_thread_yield_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_thread_yield")
+                .expect("vm_thread_yield primitive missing") as i64;
+        let vm_thread_park_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_thread_park")
+                .expect("vm_thread_park primitive missing") as i64;
+        let vm_thread_park_for_millis_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_thread_park_for_millis",
+        )
+        .expect("vm_thread_park_for_millis primitive missing")
+            as i64;
+        let vm_thread_unpark_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_thread_unpark",
+        )
+        .expect("vm_thread_unpark primitive missing")
+            as i64;
+        let vm_millis_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_millis")
+                .expect("vm_millis primitive missing") as i64;
+        let vm_unix_time_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_unix_time")
+                .expect("vm_unix_time primitive missing") as i64;
+        let vm_monitor_enter_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_monitor_enter",
+        )
+        .expect("vm_monitor_enter primitive missing")
+            as i64;
+        let vm_monitor_exit_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_monitor_exit")
+                .expect("vm_monitor_exit primitive missing") as i64;
+        let vm_monitor_wait_idx =
+            primitives::primitive_index_by_name(&primitives, "vm_monitor_wait")
+                .expect("vm_monitor_wait primitive missing") as i64;
+        let vm_monitor_notify_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_monitor_notify",
+        )
+        .expect("vm_monitor_notify primitive missing")
+            as i64;
+        let vm_monitor_notify_all_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "vm_monitor_notify_all",
+        )
+        .expect("vm_monitor_notify_all primitive missing")
+            as i64;
         let vm_eval_name = intern_bootstrap(
             &mut proxy,
             &mut roots,
@@ -1465,6 +1541,90 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             &mut roots,
             &mut intern_table,
             "_Then:Do:",
+        );
+        let vm_spawn_platform_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_SpawnPlatform:",
+        );
+        let vm_thread_join_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ThreadJoin:",
+        );
+        let vm_thread_current_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ThreadCurrent",
+        );
+        let vm_thread_yield_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ThreadYield",
+        );
+        let vm_thread_park_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ThreadPark",
+        );
+        let vm_thread_park_for_millis_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ThreadParkForMillis:",
+        );
+        let vm_thread_unpark_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_ThreadUnpark:",
+        );
+        let vm_millis_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_Millis",
+        );
+        let vm_unix_time_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_UnixTime",
+        );
+        let vm_monitor_enter_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_MonitorEnter:",
+        );
+        let vm_monitor_exit_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_MonitorExit:",
+        );
+        let vm_monitor_wait_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_MonitorWait:",
+        );
+        let vm_monitor_notify_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_MonitorNotify:",
+        );
+        let vm_monitor_notify_all_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_MonitorNotifyAll:",
         );
 
         let mut object_map_val = alloc_map(
@@ -1736,6 +1896,40 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             map_map_val,
             reflect_name,
             reflect_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ensure_tail_call_code =
+            Value::from_i64(method_ensure_tail_call_idx);
+        let ensure_tail_call_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ensure_tail_call_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ensure_tail_call_map_val);
+
+        let ensure_tail_call_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ensure_tail_call_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ensure_tail_call_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ensure_tail_call_name,
+            ensure_tail_call_method_val,
         );
         roots.push(new_object_map);
         object_map_val = new_object_map;
@@ -2264,6 +2458,424 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
         );
         roots.push(vm_map_val);
 
+        let vm_spawn_platform_code = Value::from_i64(vm_spawn_platform_idx);
+        let vm_spawn_platform_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_spawn_platform_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_spawn_platform_map_val);
+        let vm_spawn_platform_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_spawn_platform_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_spawn_platform_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_spawn_platform_name,
+            vm_spawn_platform_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_thread_join_code = Value::from_i64(vm_thread_join_idx);
+        let vm_thread_join_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_thread_join_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_thread_join_map_val);
+        let vm_thread_join_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_thread_join_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_thread_join_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_thread_join_name,
+            vm_thread_join_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_thread_current_code = Value::from_i64(vm_thread_current_idx);
+        let vm_thread_current_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_thread_current_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_thread_current_map_val);
+        let vm_thread_current_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_thread_current_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_thread_current_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_thread_current_name,
+            vm_thread_current_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_thread_yield_code = Value::from_i64(vm_thread_yield_idx);
+        let vm_thread_yield_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_thread_yield_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_thread_yield_map_val);
+        let vm_thread_yield_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_thread_yield_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_thread_yield_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_thread_yield_name,
+            vm_thread_yield_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_thread_park_code = Value::from_i64(vm_thread_park_idx);
+        let vm_thread_park_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_thread_park_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_thread_park_map_val);
+        let vm_thread_park_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_thread_park_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_thread_park_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_thread_park_name,
+            vm_thread_park_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_thread_park_for_millis_code =
+            Value::from_i64(vm_thread_park_for_millis_idx);
+        let vm_thread_park_for_millis_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_thread_park_for_millis_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_thread_park_for_millis_map_val);
+        let vm_thread_park_for_millis_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_thread_park_for_millis_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_thread_park_for_millis_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_thread_park_for_millis_name,
+            vm_thread_park_for_millis_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_thread_unpark_code = Value::from_i64(vm_thread_unpark_idx);
+        let vm_thread_unpark_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_thread_unpark_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_thread_unpark_map_val);
+        let vm_thread_unpark_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_thread_unpark_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_thread_unpark_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_thread_unpark_name,
+            vm_thread_unpark_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_millis_code = Value::from_i64(vm_millis_idx);
+        let vm_millis_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_millis_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_millis_map_val);
+        let vm_millis_method_val =
+            alloc_slot_object(&mut proxy, &mut roots, vm_millis_map_val, &[])
+                .value();
+        roots.push(vm_millis_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_millis_name,
+            vm_millis_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_unix_time_code = Value::from_i64(vm_unix_time_idx);
+        let vm_unix_time_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_unix_time_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_unix_time_map_val);
+        let vm_unix_time_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_unix_time_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_unix_time_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_unix_time_name,
+            vm_unix_time_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_monitor_enter_code = Value::from_i64(vm_monitor_enter_idx);
+        let vm_monitor_enter_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_monitor_enter_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_monitor_enter_map_val);
+        let vm_monitor_enter_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_monitor_enter_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_monitor_enter_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_monitor_enter_name,
+            vm_monitor_enter_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_monitor_exit_code = Value::from_i64(vm_monitor_exit_idx);
+        let vm_monitor_exit_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_monitor_exit_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_monitor_exit_map_val);
+        let vm_monitor_exit_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_monitor_exit_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_monitor_exit_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_monitor_exit_name,
+            vm_monitor_exit_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_monitor_wait_code = Value::from_i64(vm_monitor_wait_idx);
+        let vm_monitor_wait_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_monitor_wait_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_monitor_wait_map_val);
+        let vm_monitor_wait_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_monitor_wait_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_monitor_wait_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_monitor_wait_name,
+            vm_monitor_wait_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_monitor_notify_code = Value::from_i64(vm_monitor_notify_idx);
+        let vm_monitor_notify_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_monitor_notify_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_monitor_notify_map_val);
+        let vm_monitor_notify_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_monitor_notify_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_monitor_notify_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_monitor_notify_name,
+            vm_monitor_notify_method_val,
+        );
+        roots.push(vm_map_val);
+
+        let vm_monitor_notify_all_code =
+            Value::from_i64(vm_monitor_notify_all_idx);
+        let vm_monitor_notify_all_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            vm_monitor_notify_all_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(vm_monitor_notify_all_map_val);
+        let vm_monitor_notify_all_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            vm_monitor_notify_all_map_val,
+            &[],
+        )
+        .value();
+        roots.push(vm_monitor_notify_all_method_val);
+        vm_map_val = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            vm_map_val,
+            map_map_val,
+            vm_monitor_notify_all_name,
+            vm_monitor_notify_all_method_val,
+        );
+        roots.push(vm_map_val);
+
         let vm_val =
             alloc_slot_object(&mut proxy, &mut roots, vm_map_val, &[]).value();
         roots.push(vm_val);
@@ -2503,20 +3115,29 @@ pub fn bootstrap(settings: HeapSettings) -> VM {
             mirror: mirror_val,
         };
 
-        let mut vm = VM {
-            heap_proxy: proxy,
+        let shared = Arc::new(SharedVMData {
+            heap: proxy.heap.clone(),
             special,
-            intern_table,
             primitives,
             assoc_map: assoc_map_val,
-            ffi_cif_cache: HashMap::new(),
             dictionary: dictionary_val,
+            intern_table: Mutex::new(intern_table),
+            modules: Mutex::new(HashMap::new()),
+            next_thread_id: AtomicU64::new(1),
+            platform_threads: Mutex::new(HashMap::new()),
+            lock_records: Mutex::new(HashMap::new()),
+        });
+        let mut vm = VMProxy {
+            heap_proxy: proxy,
+            special: shared.special,
+            assoc_map: shared.assoc_map,
+            dictionary: shared.dictionary,
             current_module: None,
-            modules: HashMap::new(),
             #[cfg(debug_assertions)]
             trace_assoc_name: None,
             #[cfg(debug_assertions)]
             trace_send_name: None,
+            shared,
         };
         vm.seed_user_module_from_dictionary();
         vm

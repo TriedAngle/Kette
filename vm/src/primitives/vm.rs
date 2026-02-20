@@ -1,7 +1,13 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 
+use bytecode::BytecodeBuilder;
 use object::Value;
-use object::{Array, MapFlags, ObjectType, Slot, SlotFlags, SlotObject};
+use object::{
+    Array, Header, HeaderFlags, MapFlags, ObjectType, Slot, SlotFlags,
+    SlotObject,
+};
 use parser::{Lexer, Parser};
 
 use crate::compiler0;
@@ -14,7 +20,10 @@ use crate::primitives::string::intern_symbol;
 use crate::primitives::{
     expect_string, expect_symbol, string::alloc_vm_string,
 };
-use crate::{USER_MODULE, VM};
+use crate::threading;
+use crate::{
+    LockRecord, Monitor, PlatformThreadEntry, VMProxy, USER_MODULE, VM,
+};
 
 pub fn vm_eval(
     vm: &mut VM,
@@ -218,6 +227,660 @@ pub fn vm_then_do(
     Ok(vm.special.none)
 }
 
+pub fn vm_spawn_platform(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let mut builder = BytecodeBuilder::new();
+    builder.load_constant(0);
+    builder.send(1, 0, 0, 0);
+    builder.local_return();
+
+    let code_desc = compiler0::CodeDesc {
+        bytecode: builder.into_bytes(),
+        constants: vec![
+            compiler0::ConstEntry::Value(args[0]),
+            compiler0::ConstEntry::Symbol("call".to_string()),
+        ],
+        register_count: 1,
+        arg_count: 0,
+        temp_count: 0,
+        feedback_count: 1,
+        source_map: vec![],
+    };
+
+    let code = materialize::materialize(vm, &code_desc);
+    let shared = vm.shared.clone();
+    let id = vm.next_thread_id();
+
+    let thread = crate::threading::spawn_platform(move || {
+        let mut thread_vm = VMProxy::new(shared);
+        match interpreter::interpret(&mut thread_vm, code) {
+            Ok(value) => Ok(value),
+            Err(err) => Err(format_runtime_error(&err)),
+        }
+    });
+
+    vm.with_platform_threads(|threads| {
+        threads.insert(
+            id,
+            PlatformThreadEntry {
+                handle: thread,
+                root_code: code,
+            },
+        );
+    });
+    Ok(Value::from_i64(id as i64))
+}
+
+pub fn vm_thread_join(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    if !args[0].is_fixnum() {
+        return Err(RuntimeError::TypeError {
+            expected: "thread handle id",
+            got: args[0],
+        });
+    }
+    let id = unsafe { args[0].to_i64() };
+    if id <= 0 {
+        return Err(RuntimeError::TypeError {
+            expected: "thread handle id",
+            got: args[0],
+        });
+    }
+    let id = id as u64;
+
+    let thread = vm
+        .with_platform_threads(|threads| threads.remove(&id))
+        .ok_or(RuntimeError::Unimplemented {
+            message: "unknown platform thread handle",
+        })?;
+
+    match thread.handle.join() {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(msg)) => Err(RuntimeError::Unimplemented {
+            message: Box::leak(
+                format!("platform thread failed: {msg}").into_boxed_str(),
+            ),
+        }),
+        Err(_) => Err(RuntimeError::Unimplemented {
+            message: "platform thread panicked",
+        }),
+    }
+}
+
+pub fn vm_thread_current(
+    _vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let raw = threading::current_thread_token() & ((1u64 << 62) - 1);
+    Ok(Value::from_i64(raw as i64))
+}
+
+pub fn vm_thread_yield(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    std::thread::yield_now();
+    Ok(vm.special.none)
+}
+
+pub fn vm_thread_park(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    threading::park_current_thread();
+    Ok(vm.special.none)
+}
+
+pub fn vm_thread_park_for_millis(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    if !args[0].is_fixnum() {
+        return Err(RuntimeError::TypeError {
+            expected: "millis",
+            got: args[0],
+        });
+    }
+    let millis = unsafe { args[0].to_i64() };
+    if millis < 0 {
+        return Err(RuntimeError::TypeError {
+            expected: "non-negative millis",
+            got: args[0],
+        });
+    }
+    threading::park_current_thread_for(std::time::Duration::from_millis(
+        millis as u64,
+    ));
+    Ok(vm.special.none)
+}
+
+pub fn vm_thread_unpark(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    if !args[0].is_fixnum() {
+        return Err(RuntimeError::TypeError {
+            expected: "thread token",
+            got: args[0],
+        });
+    }
+    let token = unsafe { args[0].to_i64() };
+    if token <= 0 {
+        return Err(RuntimeError::TypeError {
+            expected: "thread token",
+            got: args[0],
+        });
+    }
+    if threading::unpark_thread(token as u64) {
+        Ok(vm.special.true_obj)
+    } else {
+        Ok(vm.special.false_obj)
+    }
+}
+
+pub fn vm_millis(
+    _vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    Ok(Value::from_i64(threading::monotonic_millis() as i64))
+}
+
+pub fn vm_unix_time(
+    _vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    Ok(Value::from_i64(threading::unix_time_seconds()))
+}
+
+const LOCK_STATE_MASK: u8 = HeaderFlags::LOCK_MASK.0;
+const LOCK_STATE_UNLOCKED: u8 = HeaderFlags::LOCK_UNLOCKED.0;
+const LOCK_STATE_THIN: u8 = HeaderFlags::LOCK_THIN.0;
+const LOCK_STATE_INFLATING: u8 = HeaderFlags::LOCK_INFLATING.0;
+const LOCK_STATE_INFLATED: u8 = HeaderFlags::LOCK_INFLATED.0;
+
+thread_local! {
+    static THIN_LOCKS: RefCell<HashMap<u64, u32>> = RefCell::new(HashMap::new());
+}
+
+#[inline(always)]
+fn lock_state(flags: u8) -> u8 {
+    flags & LOCK_STATE_MASK
+}
+
+#[inline(always)]
+fn with_lock_state(flags: u8, state: u8) -> u8 {
+    (flags & !LOCK_STATE_MASK) | state
+}
+
+#[inline(always)]
+fn thin_depth(key: u64) -> Option<u32> {
+    THIN_LOCKS.with(|locks| locks.borrow().get(&key).copied())
+}
+
+#[inline(always)]
+fn thin_set_depth(key: u64, depth: u32) {
+    THIN_LOCKS.with(|locks| {
+        locks.borrow_mut().insert(key, depth);
+    });
+}
+
+#[inline(always)]
+fn thin_remove(key: u64) {
+    THIN_LOCKS.with(|locks| {
+        locks.borrow_mut().remove(&key);
+    });
+}
+
+fn ensure_ref_object(
+    value: Value,
+    what: &'static str,
+) -> Result<(), RuntimeError> {
+    if !value.is_ref() {
+        return Err(RuntimeError::TypeError {
+            expected: what,
+            got: value,
+        });
+    }
+    Ok(())
+}
+
+fn pin_monitor_target(value: Value) {
+    if !value.is_ref() {
+        return;
+    }
+    let header: &Header = unsafe { value.as_ref() };
+    header.add_flag(HeaderFlags::PINNED);
+}
+
+fn lock_record_for(vm: &mut VM, target: Value) -> std::sync::Arc<LockRecord> {
+    let key = target.ref_bits();
+    let mut table = vm.lock_records.lock().expect("lock table poisoned");
+    table
+        .entry(key)
+        .or_insert_with(|| {
+            std::sync::Arc::new(LockRecord {
+                monitor: std::sync::Mutex::new(None),
+            })
+        })
+        .clone()
+}
+
+fn monitor_for_record(
+    record: &std::sync::Arc<LockRecord>,
+) -> std::sync::Arc<Monitor> {
+    let mut monitor = record.monitor.lock().expect("monitor slot poisoned");
+    monitor
+        .get_or_insert_with(|| {
+            std::sync::Arc::new(Monitor {
+                state: std::sync::Mutex::new(Default::default()),
+                cvar: std::sync::Condvar::new(),
+            })
+        })
+        .clone()
+}
+
+fn monitor_enter_slow(monitor: &Monitor, token: u64) {
+    let mut guard = monitor.state.lock().expect("monitor state poisoned");
+    loop {
+        match guard.owner {
+            None => {
+                guard.owner = Some(token);
+                guard.recursion = 1;
+                return;
+            }
+            Some(owner) if owner == token => {
+                guard.recursion = guard.recursion.saturating_add(1);
+                return;
+            }
+            _ => {
+                guard =
+                    monitor.cvar.wait(guard).expect("monitor wait poisoned");
+            }
+        }
+    }
+}
+
+fn monitor_exit_slow(
+    monitor: &Monitor,
+    token: u64,
+) -> Result<(), RuntimeError> {
+    let mut guard = monitor.state.lock().expect("monitor state poisoned");
+    if guard.owner != Some(token) {
+        return Err(RuntimeError::Unimplemented {
+            message: "monitor exit without ownership",
+        });
+    }
+    if guard.recursion > 1 {
+        guard.recursion -= 1;
+    } else {
+        guard.owner = None;
+        guard.recursion = 0;
+        monitor.cvar.notify_one();
+    }
+    Ok(())
+}
+
+fn inflate_after_contention(
+    vm: &mut VM,
+    target: Value,
+    header: &Header,
+    token: u64,
+) {
+    let record = lock_record_for(vm, target);
+    let monitor = monitor_for_record(&record);
+    loop {
+        let flags = header.flags_acquire().0;
+        match lock_state(flags) {
+            LOCK_STATE_UNLOCKED => {
+                let next = with_lock_state(flags, LOCK_STATE_INFLATED);
+                if header
+                    .compare_exchange_flags(
+                        HeaderFlags(flags),
+                        HeaderFlags(next),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    monitor_enter_slow(&monitor, token);
+                    return;
+                }
+            }
+            LOCK_STATE_THIN => {
+                let next = with_lock_state(flags, LOCK_STATE_INFLATING);
+                if header
+                    .compare_exchange_flags(
+                        HeaderFlags(flags),
+                        HeaderFlags(next),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    continue;
+                }
+            }
+            LOCK_STATE_INFLATING => {
+                std::thread::yield_now();
+            }
+            LOCK_STATE_INFLATED => {
+                monitor_enter_slow(&monitor, token);
+                return;
+            }
+            _ => unreachable!("invalid lock state"),
+        }
+    }
+}
+
+fn ensure_inflated_owned(
+    vm: &mut VM,
+    target: Value,
+    header: &Header,
+    token: u64,
+) -> Result<std::sync::Arc<Monitor>, RuntimeError> {
+    let key = target.ref_bits();
+    if let Some(depth) = thin_depth(key) {
+        let record = lock_record_for(vm, target);
+        let monitor = monitor_for_record(&record);
+        {
+            let mut guard =
+                monitor.state.lock().expect("monitor state poisoned");
+            guard.owner = Some(token);
+            guard.recursion = depth.max(1);
+        }
+        loop {
+            let flags = header.flags_acquire().0;
+            if lock_state(flags) == LOCK_STATE_INFLATED {
+                break;
+            }
+            if lock_state(flags) != LOCK_STATE_THIN {
+                return Err(RuntimeError::Unimplemented {
+                    message: "invalid lock state during inflation",
+                });
+            }
+            let next = with_lock_state(flags, LOCK_STATE_INFLATED);
+            if header
+                .compare_exchange_flags(
+                    HeaderFlags(flags),
+                    HeaderFlags(next),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        thin_remove(key);
+        return Ok(monitor);
+    }
+
+    let record = lock_record_for(vm, target);
+    Ok(monitor_for_record(&record))
+}
+
+pub fn vm_monitor_enter(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let target = args[0];
+    ensure_ref_object(target, "monitor target")?;
+    pin_monitor_target(target);
+    let header: &Header = unsafe { target.as_ref() };
+    let key = target.ref_bits();
+    let token = threading::current_thread_token();
+
+    if let Some(depth) = thin_depth(key) {
+        thin_set_depth(key, depth.saturating_add(1));
+        return Ok(vm.special.none);
+    }
+
+    loop {
+        let flags = header.flags_acquire().0;
+        match lock_state(flags) {
+            LOCK_STATE_UNLOCKED => {
+                let next = with_lock_state(flags, LOCK_STATE_THIN);
+                if header
+                    .compare_exchange_flags(
+                        HeaderFlags(flags),
+                        HeaderFlags(next),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    thin_set_depth(key, 1);
+                    return Ok(vm.special.none);
+                }
+            }
+            LOCK_STATE_THIN => {
+                inflate_after_contention(vm, target, header, token);
+                return Ok(vm.special.none);
+            }
+            LOCK_STATE_INFLATING => std::thread::yield_now(),
+            LOCK_STATE_INFLATED => {
+                let record = lock_record_for(vm, target);
+                let monitor = monitor_for_record(&record);
+                monitor_enter_slow(&monitor, token);
+                return Ok(vm.special.none);
+            }
+            _ => unreachable!("invalid lock state"),
+        }
+    }
+}
+
+pub fn vm_monitor_exit(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let target = args[0];
+    ensure_ref_object(target, "monitor target")?;
+    let header: &Header = unsafe { target.as_ref() };
+    let key = target.ref_bits();
+    let token = threading::current_thread_token();
+
+    if let Some(depth) = thin_depth(key) {
+        if depth > 1 {
+            thin_set_depth(key, depth - 1);
+            return Ok(vm.special.none);
+        }
+        thin_remove(key);
+        loop {
+            let flags = header.flags_acquire().0;
+            match lock_state(flags) {
+                LOCK_STATE_THIN => {
+                    let next = with_lock_state(flags, LOCK_STATE_UNLOCKED);
+                    if header
+                        .compare_exchange_flags(
+                            HeaderFlags(flags),
+                            HeaderFlags(next),
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return Ok(vm.special.none);
+                    }
+                }
+                LOCK_STATE_INFLATING => {
+                    let record = lock_record_for(vm, target);
+                    let monitor = monitor_for_record(&record);
+                    {
+                        let mut guard = monitor
+                            .state
+                            .lock()
+                            .expect("monitor state poisoned");
+                        guard.owner = Some(token);
+                        guard.recursion = 1;
+                    }
+                    let next = with_lock_state(flags, LOCK_STATE_INFLATED);
+                    if header
+                        .compare_exchange_flags(
+                            HeaderFlags(flags),
+                            HeaderFlags(next),
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        monitor_exit_slow(&monitor, token)?;
+                        return Ok(vm.special.none);
+                    }
+                }
+                LOCK_STATE_INFLATED => {
+                    let record = lock_record_for(vm, target);
+                    let monitor = monitor_for_record(&record);
+                    monitor_exit_slow(&monitor, token)?;
+                    return Ok(vm.special.none);
+                }
+                _ => {
+                    return Err(RuntimeError::Unimplemented {
+                        message: "monitor exit without ownership",
+                    });
+                }
+            }
+        }
+    }
+
+    if lock_state(header.flags_acquire().0) == LOCK_STATE_INFLATED {
+        let record = lock_record_for(vm, target);
+        let monitor = monitor_for_record(&record);
+        monitor_exit_slow(&monitor, token)?;
+        return Ok(vm.special.none);
+    }
+
+    Err(RuntimeError::Unimplemented {
+        message: "monitor exit without ownership",
+    })
+}
+
+pub fn vm_monitor_wait(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let target = args[0];
+    ensure_ref_object(target, "monitor target")?;
+    let header: &Header = unsafe { target.as_ref() };
+    let token = threading::current_thread_token();
+
+    let monitor = ensure_inflated_owned(vm, target, header, token)?;
+
+    let mut guard = monitor.state.lock().expect("monitor state poisoned");
+    if guard.owner != Some(token) {
+        return Err(RuntimeError::Unimplemented {
+            message: "monitor wait without ownership",
+        });
+    }
+    let depth = guard.recursion.max(1);
+    guard.owner = None;
+    guard.recursion = 0;
+    monitor.cvar.notify_one();
+    loop {
+        guard = monitor.cvar.wait(guard).expect("monitor wait poisoned");
+        if guard.owner.is_none() {
+            guard.owner = Some(token);
+            guard.recursion = depth;
+            return Ok(vm.special.none);
+        }
+    }
+}
+
+pub fn vm_monitor_notify(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let target = args[0];
+    ensure_ref_object(target, "monitor target")?;
+    let header: &Header = unsafe { target.as_ref() };
+    let token = threading::current_thread_token();
+
+    if thin_depth(target.ref_bits()).is_some() {
+        return Ok(vm.special.none);
+    }
+
+    if lock_state(header.flags_acquire().0) != LOCK_STATE_INFLATED {
+        return Err(RuntimeError::Unimplemented {
+            message: "monitor notify without ownership",
+        });
+    }
+
+    let record = lock_record_for(vm, target);
+    let monitor = monitor_for_record(&record);
+    let guard = monitor.state.lock().expect("monitor state poisoned");
+    if guard.owner != Some(token) {
+        return Err(RuntimeError::Unimplemented {
+            message: "monitor notify without ownership",
+        });
+    }
+    drop(guard);
+    monitor.cvar.notify_one();
+    Ok(vm.special.none)
+}
+
+pub fn vm_monitor_notify_all(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let target = args[0];
+    ensure_ref_object(target, "monitor target")?;
+    let header: &Header = unsafe { target.as_ref() };
+    let token = threading::current_thread_token();
+
+    if thin_depth(target.ref_bits()).is_some() {
+        return Ok(vm.special.none);
+    }
+
+    if lock_state(header.flags_acquire().0) != LOCK_STATE_INFLATED {
+        return Err(RuntimeError::Unimplemented {
+            message: "monitor notifyAll without ownership",
+        });
+    }
+
+    let record = lock_record_for(vm, target);
+    let monitor = monitor_for_record(&record);
+    let guard = monitor.state.lock().expect("monitor state poisoned");
+    if guard.owner != Some(token) {
+        return Err(RuntimeError::Unimplemented {
+            message: "monitor notifyAll without ownership",
+        });
+    }
+    drop(guard);
+    monitor.cvar.notify_all();
+    Ok(vm.special.none)
+}
+
 pub fn vm_module_at(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -332,6 +995,7 @@ mod tests {
     use super::*;
     use heap::HeapSettings;
     use object::{Header, ObjectType, VMString, Value};
+    use std::fs;
 
     fn execute_source(vm: &mut VM, source: &str) -> Result<Value, String> {
         if vm.current_module.is_none() {
@@ -396,6 +1060,14 @@ mod tests {
             .map_err(|e| format!("Compile error: {e}"))
     }
 
+    fn load_core_init(vm: &mut VM) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../core/init.ktt");
+        let source =
+            fs::read_to_string(path).expect("read core/init.ktt for test");
+        execute_source(vm, &source).expect("load core/init.ktt");
+    }
+
     #[test]
     fn eval_computes_value_in_global_scope() {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
@@ -439,6 +1111,38 @@ mod tests {
         let text =
             as_string(value).expect("eval should return an error string");
         assert!(text.contains("Parse error"));
+    }
+
+    #[test]
+    fn vm_proxy_allows_parallel_eval() {
+        let vm = crate::special::bootstrap(HeapSettings::default());
+        let shared = vm.shared.clone();
+
+        let handle_left = std::thread::spawn({
+            let shared = shared.clone();
+            move || {
+                let mut proxy = crate::VMProxy::new(shared);
+                execute_source(&mut proxy, "1 _FixnumAdd: 2")
+            }
+        });
+
+        let handle_right = std::thread::spawn({
+            let shared = shared.clone();
+            move || {
+                let mut proxy = crate::VMProxy::new(shared);
+                execute_source(&mut proxy, "40 _FixnumAdd: 2")
+            }
+        });
+
+        let left = handle_left.join().expect("join left thread");
+        let right = handle_right.join().expect("join right thread");
+
+        let left_value = left.expect("left evaluation");
+        let right_value = right.expect("right evaluation");
+        assert!(left_value.is_fixnum());
+        assert!(right_value.is_fixnum());
+        assert_eq!(unsafe { left_value.to_i64() }, 3);
+        assert_eq!(unsafe { right_value.to_i64() }, 42);
     }
 
     #[test]
@@ -575,6 +1279,241 @@ mod tests {
         .expect("reusing module imports should succeed");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 45);
+    }
+
+    #[test]
+    fn spawn_platform_runs_block_and_join_returns_value() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "thread := VM _SpawnPlatform: [ 40 _FixnumAdd: 2 ]. VM _ThreadJoin: thread",
+        )
+        .expect("spawned platform thread should return block result");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn thread_current_returns_fixnum_handle() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(&mut vm, "VM _ThreadCurrent")
+            .expect("thread current should evaluate");
+        assert!(value.is_fixnum());
+        assert!(unsafe { value.to_i64() } > 0);
+    }
+
+    #[test]
+    fn thread_join_unknown_handle_is_error() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let err = execute_source(&mut vm, "VM _ThreadJoin: 999999")
+            .expect_err("joining unknown handle should fail");
+        assert!(err.contains("unknown platform thread handle"));
+    }
+
+    #[test]
+    fn thread_park_for_millis_advances_monotonic_clock() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "a := VM _Millis. VM _ThreadParkForMillis: 10. b := VM _Millis. b _FixnumSub: a",
+        )
+        .expect("park-for-millis should return");
+        assert!(value.is_fixnum());
+        assert!(unsafe { value.to_i64() } >= 1);
+    }
+
+    #[test]
+    fn unix_time_returns_positive_epoch_seconds() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(&mut vm, "VM _UnixTime")
+            .expect("unix time should evaluate");
+        assert!(value.is_fixnum());
+        assert!(unsafe { value.to_i64() } > 1_500_000_000);
+    }
+
+    #[test]
+    fn thread_unpark_self_pregrant_makes_park_nonblocking() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "tok := VM _ThreadCurrent. VM _ThreadUnpark: tok. VM _ThreadPark. 7",
+        )
+        .expect("self unpark permit should release park");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 7);
+    }
+
+    #[test]
+    fn thread_unpark_unknown_token_returns_false() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(&mut vm, "VM _ThreadUnpark: 999999")
+            .expect("thread unpark on unknown token should not error");
+        assert_eq!(value.raw(), vm.special.false_obj.raw());
+    }
+
+    #[test]
+    fn core_thread_wrapper_spawn_and_join() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm);
+        let value = execute_source(
+            &mut vm,
+            "t := Thread spawnPlatform: [ 40 _FixnumAdd: 2 ]. t join",
+        )
+        .expect("Thread wrapper should spawn and join");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn monitor_enter_exit_is_reentrant() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "lock := Object _Clone: Object. VM _MonitorEnter: lock. VM _MonitorEnter: lock. VM _MonitorExit: lock. VM _MonitorExit: lock. 7",
+        )
+        .expect("reentrant monitor enter/exit should succeed");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 7);
+    }
+
+    #[test]
+    fn monitor_exit_without_owner_is_error() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let err = execute_source(
+            &mut vm,
+            "lock := Object _Clone: Object. VM _MonitorExit: lock",
+        )
+        .expect_err("monitor exit without ownership should fail");
+        assert!(err.contains("monitor exit without ownership"));
+    }
+
+    #[test]
+    fn monitor_wait_without_owner_is_error() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let err = execute_source(
+            &mut vm,
+            "lock := Object _Clone: Object. VM _MonitorWait: lock",
+        )
+        .expect_err("monitor wait without ownership should fail");
+        assert!(err.contains("monitor wait without ownership"));
+    }
+
+    #[test]
+    fn core_reentrant_lock_reenters_and_unlocks() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm);
+        let value = execute_source(
+            &mut vm,
+            "l := ReentrantLock new. l lock. l lock. l unlock. l unlock. 1",
+        )
+        .expect("ReentrantLock should allow reentry");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 1);
+    }
+
+    #[test]
+    fn core_synchronized_executes_body() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm);
+        let value = execute_source(
+            &mut vm,
+            "obj := { parent* = Object. x := 0 }. obj synchronized: [ obj x: 42 ]. obj x",
+        )
+        .expect("synchronized: should execute block body");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn monitor_fast_path_uncontended_stays_thin() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let lock = execute_source(
+            &mut vm,
+            "lock := Object _Clone: Object. VM _MonitorEnter: lock. VM _MonitorExit: lock. lock",
+        )
+        .expect("monitor enter/exit should work");
+        let header: &Header = unsafe { lock.as_ref() };
+        assert_eq!(lock_state(header.flags_acquire().0), LOCK_STATE_UNLOCKED);
+
+        let table = vm.lock_records.lock().expect("lock table poisoned");
+        assert!(table.get(&lock.ref_bits()).is_none());
+    }
+
+    #[test]
+    fn monitor_thin_owner_can_inflate_to_monitor() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let lock = execute_source(
+            &mut vm,
+            "LockObj := Object _Clone: Object. VM _MonitorEnter: LockObj. LockObj",
+        )
+        .expect("thin lock acquisition should succeed");
+        let header: &Header = unsafe { lock.as_ref() };
+        assert_eq!(lock_state(header.flags_acquire().0), LOCK_STATE_THIN);
+
+        let token = threading::current_thread_token();
+        let monitor = ensure_inflated_owned(&mut vm, lock, header, token)
+            .expect("inflation should succeed");
+        assert_eq!(lock_state(header.flags_acquire().0), LOCK_STATE_INFLATED);
+        let guard = monitor.state.lock().expect("monitor state poisoned");
+        assert_eq!(guard.owner, Some(token));
+        assert_eq!(guard.recursion, 1);
+        drop(guard);
+
+        execute_source(&mut vm, "VM _MonitorExit: LockObj")
+            .expect("inflated monitor exit should succeed");
+    }
+
+    #[test]
+    fn monitor_cross_thread_contention_inflates_and_stays_inflated() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let lock = execute_source(
+            &mut vm,
+            "LockObj := Object _Clone: Object. VM _MonitorEnter: LockObj. LockObj",
+        )
+        .expect("cross-thread contention scenario should run");
+
+        let lock_raw = lock.raw();
+        let contender = std::thread::spawn(move || {
+            let lock = Value::from_raw(lock_raw);
+            let header: &Header = unsafe { lock.as_ref() };
+            loop {
+                let flags = header.flags_acquire().0;
+                match lock_state(flags) {
+                    LOCK_STATE_THIN => {
+                        let next = with_lock_state(flags, LOCK_STATE_INFLATING);
+                        if header
+                            .compare_exchange_flags(
+                                HeaderFlags(flags),
+                                HeaderFlags(next),
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            )
+                            .is_ok()
+                        {
+                            return;
+                        }
+                    }
+                    LOCK_STATE_INFLATING | LOCK_STATE_INFLATED => return,
+                    _ => std::thread::yield_now(),
+                }
+            }
+        });
+        contender
+            .join()
+            .expect("contending thread should transition to inflating");
+
+        execute_source(&mut vm, "VM _MonitorExit: LockObj")
+            .expect("thin owner exit should complete inflation handoff");
+
+        let header: &Header = unsafe { lock.as_ref() };
+        assert_eq!(lock_state(header.flags_acquire().0), LOCK_STATE_INFLATED);
+
+        execute_source(
+            &mut vm,
+            "VM _MonitorEnter: LockObj. VM _MonitorExit: LockObj. 0",
+        )
+        .expect("inflated lock should remain usable");
+        assert_eq!(lock_state(header.flags_acquire().0), LOCK_STATE_INFLATED);
     }
 
     #[test]

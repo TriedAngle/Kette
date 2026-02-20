@@ -9,6 +9,7 @@ use crate::Value;
 /// **Objects are not allocated here.** They must be allocated on the heap
 /// first and then stored as tagged references. Pass this struct by
 /// reference (`&SpecialObjects`) to subsystems that need it.
+#[derive(Clone, Copy)]
 pub struct SpecialObjects {
     // ── Singletons ─────────────────────────────────────────────────
     /// The canonical `None` object.
