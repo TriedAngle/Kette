@@ -1638,9 +1638,7 @@ impl Compiler {
         // Analyze captures (walks into nested scopes)
         self.analyze_captures(body, &[]);
 
-        self.emit_captured_param_inits(parent_params);
-
-        // Also analyze captures in slot values
+        // Also analyze captures in slot values before initializing captured params.
         let mut shadow = HashSet::new();
         for slot in slots {
             shadow.insert(slot_selector_name(slot));
@@ -1648,6 +1646,8 @@ impl Compiler {
                 shadow.insert(param.clone());
             }
         }
+
+        self.emit_captured_param_inits(parent_params);
         for param in parent_params {
             shadow.insert(param.clone());
         }
@@ -1744,9 +1744,8 @@ impl Compiler {
                 self.prescan_locals(body);
                 self.analyze_captures(body, &[]);
 
-                self.emit_captured_param_inits(&slot.params);
-
-                // Analyze captures in slot values
+                // Analyze captures in slot values before initializing
+                // captured params.
                 let mut shadow = HashSet::new();
                 for inner_slot in inner_slots {
                     shadow.insert(slot_selector_name(inner_slot));
@@ -1776,6 +1775,8 @@ impl Compiler {
                         );
                     }
                 }
+
+                self.emit_captured_param_inits(&slot.params);
 
                 for inner_slot in inner_slots {
                     let name = slot_selector_name(inner_slot);
@@ -3103,6 +3104,102 @@ mod tests {
         let second = load_temps.next().expect("missing LoadTemp");
         assert!(matches!(first, Instruction::LoadTemp { idx: 0, .. }));
         assert!(matches!(second, Instruction::LoadTemp { idx: 1, .. }));
+    }
+
+    #[test]
+    fn compile_block_inside_keyword_arg_captures_method_params() {
+        let code = compile_source(
+            "{ test: a B: b C: c = { out := True ifTrue: [ Target f: a B: b C: c ] IfFalse: [ 0 ]. out } }",
+        );
+        let method_code = find_code_const_by_args(&code.constants, 3);
+        let mut saw_capture_inits = 0;
+        for instr in decode(method_code) {
+            if matches!(instr, Instruction::MovToTemp { .. }) {
+                saw_capture_inits += 1;
+            }
+        }
+        let block_code = find_code_const(&method_code.constants);
+        let block_instrs = decode(block_code);
+        assert!(saw_capture_inits >= 3, "expected captures for a,b,c");
+        let load_temp_count = block_instrs
+            .iter()
+            .filter(|i| matches!(i, Instruction::LoadTemp { .. }))
+            .count();
+        assert!(
+            load_temp_count >= 3,
+            "expected block to load captured params from temps"
+        );
+        let assoc_loads: Vec<u16> = block_instrs
+            .iter()
+            .filter_map(|i| match i {
+                Instruction::LoadAssoc { idx } => Some(*idx),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(assoc_loads.len(), 1, "only Target should be global");
+        let target_idx = assoc_loads[0] as usize;
+        assert!(matches!(
+            block_code.constants.get(target_idx),
+            Some(ConstEntry::Symbol(s)) if s == "Target"
+        ));
+    }
+
+    #[test]
+    fn compile_keyword_method_uses_param_regs_in_keyword_send_args() {
+        let code = compile_source(
+            "{ test: path Flags: flags Mode: mode = { Posix open: path Flags: flags Mode: mode } }",
+        );
+        let method_code = find_code_const_by_args(&code.constants, 3);
+        let instrs = decode(method_code);
+
+        let mut saw_open_send = false;
+        for (i, instr) in instrs.iter().enumerate() {
+            if let Instruction::Send {
+                message_idx,
+                reg,
+                argc,
+                ..
+            } = instr
+            {
+                let Some(ConstEntry::Symbol(sel)) =
+                    method_code.constants.get(*message_idx as usize)
+                else {
+                    continue;
+                };
+                if sel == "open:Flags:Mode:" {
+                    saw_open_send = true;
+                    assert_eq!(*argc, 3);
+                    // Receiver temp then three arg temps should be contiguous.
+                    assert_eq!(*reg, 5);
+                    assert!(matches!(
+                        instrs.get(i.wrapping_sub(7)),
+                        Some(Instruction::LoadLocal { reg: 1 })
+                    ));
+                    assert!(matches!(
+                        instrs.get(i.wrapping_sub(6)),
+                        Some(Instruction::StoreLocal { reg: 5 })
+                    ));
+                    assert!(matches!(
+                        instrs.get(i.wrapping_sub(5)),
+                        Some(Instruction::LoadLocal { reg: 2 })
+                    ));
+                    assert!(matches!(
+                        instrs.get(i.wrapping_sub(4)),
+                        Some(Instruction::StoreLocal { reg: 6 })
+                    ));
+                    assert!(matches!(
+                        instrs.get(i.wrapping_sub(3)),
+                        Some(Instruction::LoadLocal { reg: 3 })
+                    ));
+                    assert!(matches!(
+                        instrs.get(i.wrapping_sub(2)),
+                        Some(Instruction::StoreLocal { reg: 7 })
+                    ));
+                }
+            }
+        }
+
+        assert!(saw_open_send, "expected open:Flags:Mode: send in method");
     }
 
     // ── Milestone 5: Globals + Cascade ──────────────────────────

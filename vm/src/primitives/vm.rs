@@ -569,6 +569,29 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires core/init method layer for high-level control flow"]
+    fn keyword_args_survive_if_branch_with_object_literal() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        let value = execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'App.
+            Target := { f: a B: b C: c = { ^ ((a _FixnumAdd: b) _FixnumAdd: c) }. }.
+            Broken := {
+                test: a B: b C: c = {
+                    ^ ({
+                        parent* = Object.
+                        value = (True ifTrue: [ Target f: a B: b C: c ] IfFalse: [ 0 ])
+                    } value)
+                }.
+            }.
+            Broken test: 1 B: 2 C: 3",
+        )
+        .expect("keyword args should remain intact through branch/object literal");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 6);
+    }
+
+    #[test]
     fn qualified_export_reference_works_without_use() {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
         let value = execute_source(
