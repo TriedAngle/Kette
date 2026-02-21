@@ -137,6 +137,7 @@ pub unsafe fn alloc_code(
     register_count: u16,
     arg_count: u16,
     temp_count: u16,
+    feedback: Value,
 ) -> Tagged<Code> {
     let constant_count = constants.len() as u32;
     let bytecode_len = bytecode.len() as u32;
@@ -153,6 +154,7 @@ pub unsafe fn alloc_code(
         bytecode_len,
         temp_count,
         0,
+        feedback,
     );
 
     if !constants.is_empty() {

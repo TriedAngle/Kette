@@ -3,6 +3,10 @@ name = "vm"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["ic-cache"]
+ic-cache = []
+
 [dependencies]
 object = { path = "../object" }
 heap = { path = "../heap" }
@@ -11,3 +15,10 @@ parser = { path = "../parser" }
 clap = { version = "4.5.53", features = ["derive"] }
 libffi = "3"
 libc = "0.2"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "ic_feedback"
+harness = false

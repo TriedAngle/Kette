@@ -53,9 +53,7 @@ Collector = {
     nextChunkSize := 8.
 
     with: first With: second = {
-        c := Collector clone init.
-        c add: first.
-        c add: second
+        (Collector clone init) add: first; add: second
     }.
 
     init = {

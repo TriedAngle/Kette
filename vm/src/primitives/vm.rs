@@ -996,6 +996,7 @@ mod tests {
     use heap::HeapSettings;
     use object::{Header, ObjectType, VMString, Value};
     use std::fs;
+    use std::time::Instant;
 
     fn execute_source(vm: &mut VM, source: &str) -> Result<Value, String> {
         if vm.current_module.is_none() {
@@ -1066,6 +1067,22 @@ mod tests {
         let source =
             fs::read_to_string(path).expect("read core/init.ktt for test");
         execute_source(vm, &source).expect("load core/init.ktt");
+    }
+
+    fn load_core_math(vm: &mut VM) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../core/math.ktt");
+        let source =
+            fs::read_to_string(path).expect("read core/math.ktt for test");
+        execute_source(vm, &source).expect("load core/math.ktt");
+    }
+
+    fn load_core_collections(vm: &mut VM) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../core/collections.ktt");
+        let source = fs::read_to_string(path)
+            .expect("read core/collections.ktt for test");
+        execute_source(vm, &source).expect("load core/collections.ktt");
     }
 
     #[test]
@@ -1653,5 +1670,149 @@ mod tests {
             compiler0::ConstEntry::ModuleAssoc { module, name }
                 if module == "Lib" && name == "Hello"
         )));
+    }
+
+    #[test]
+    fn high_level_module_export_exports_symbol_lists() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm);
+        load_core_math(&mut vm);
+        load_core_collections(&mut vm);
+
+        execute_source(
+            &mut vm,
+            "Module open: 'M. A := 1. B := 2. Module export: ('A & 'B).",
+        )
+        .expect("high-level module export should execute");
+
+        let entries = vm
+            .module_public_entries("M")
+            .expect("module M should exist");
+        assert!(entries.iter().any(|(name, _)| name == "A"));
+        assert!(entries.iter().any(|(name, _)| name == "B"));
+    }
+
+    #[test]
+    fn high_level_module_use_imports_symbol_lists() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm);
+        load_core_math(&mut vm);
+        load_core_collections(&mut vm);
+
+        execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'A. XA := 10. VM _ModuleExport: 'XA.",
+        )
+        .expect("setup module A");
+        execute_source(
+            &mut vm,
+            "VM _ModuleOpen: 'B. YB := 32. VM _ModuleExport: 'YB.",
+        )
+        .expect("setup module B");
+
+        let value = execute_source(
+            &mut vm,
+            "Module open: 'App. Module use: ('A & 'B). XA _FixnumAdd: YB",
+        )
+        .expect("high-level module use list should import both modules");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 42);
+    }
+
+    #[test]
+    fn collections_ampersand_builds_two_element_collector() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm);
+        load_core_math(&mut vm);
+        load_core_collections(&mut vm);
+
+        let count_manual = execute_source(
+            &mut vm,
+            "c := Collector clone init. c add: 'A. c add: 'B. c count",
+        )
+        .expect("manual collector adds should work");
+        assert!(count_manual.is_fixnum());
+        assert_eq!(unsafe { count_manual.to_i64() }, 2);
+
+        let count = execute_source(
+            &mut vm,
+            "c := Collector with: 'A With: 'B. c count",
+        )
+        .expect("collector with two values should work");
+        assert!(count.is_fixnum());
+        assert_eq!(unsafe { count.to_i64() }, 2);
+
+        let size = execute_source(&mut vm, "('A & 'B) asArray size")
+            .expect("ampersand collector expression should work");
+        assert!(size.is_fixnum());
+        assert_eq!(unsafe { size.to_i64() }, 2);
+    }
+
+    #[test]
+    #[ignore = "performance comparison"]
+    fn linked_list_chasing_ic_vs_no_ic() {
+        let workload_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/linked_list_chasing.ktt");
+        let workload = fs::read_to_string(workload_path)
+            .expect("read tests/linked_list_chasing.ktt");
+
+        let mut vm_with_ic = crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm_with_ic);
+        load_core_math(&mut vm_with_ic);
+        load_core_collections(&mut vm_with_ic);
+        let with_ic_desc = compile_source(&mut vm_with_ic, &workload)
+            .expect("compile with ic");
+        let with_ic_code =
+            materialize::materialize(&mut vm_with_ic, &with_ic_desc);
+
+        let mut vm_without_ic =
+            crate::special::bootstrap(HeapSettings::default());
+        load_core_init(&mut vm_without_ic);
+        load_core_math(&mut vm_without_ic);
+        load_core_collections(&mut vm_without_ic);
+        let without_ic_desc = compile_source(&mut vm_without_ic, &workload)
+            .expect("compile without ic");
+        let without_ic_code =
+            materialize::materialize(&mut vm_without_ic, &without_ic_desc);
+        unsafe {
+            let code_ptr = without_ic_code.ref_bits() as *mut object::Code;
+            (*code_ptr).feedback = vm_without_ic.special.none;
+        }
+
+        let warm_with = interpreter::interpret(&mut vm_with_ic, with_ic_code)
+            .expect("warmup with ic");
+        let warm_without =
+            interpreter::interpret(&mut vm_without_ic, without_ic_code)
+                .expect("warmup without ic");
+        assert_eq!(warm_with.raw(), warm_without.raw());
+
+        interpreter::ic_stats_reset();
+        let start_with = Instant::now();
+        let out_with = interpreter::interpret(&mut vm_with_ic, with_ic_code)
+            .expect("run with ic");
+        let elapsed_with = start_with.elapsed();
+        let with_ic_stats = interpreter::ic_stats_snapshot();
+
+        interpreter::ic_stats_reset();
+        let start_without = Instant::now();
+        let out_without =
+            interpreter::interpret(&mut vm_without_ic, without_ic_code)
+                .expect("run without ic");
+        let elapsed_without = start_without.elapsed();
+        let without_ic_stats = interpreter::ic_stats_snapshot();
+
+        assert_eq!(out_with.raw(), out_without.raw());
+        eprintln!(
+            "linked-list-chasing: with_ic={:?}, without_ic={:?}, speedup={:.3}x",
+            elapsed_with,
+            elapsed_without,
+            elapsed_without.as_secs_f64() / elapsed_with.as_secs_f64(),
+        );
+        eprintln!("IC stats with IC: {:?}", with_ic_stats);
+        eprintln!("IC stats without IC: {:?}", without_ic_stats);
+        assert!(
+            with_ic_stats.mono_poly_hits + with_ic_stats.megamorphic_hits > 0,
+            "expected IC fast-path hits in linked-list workload"
+        );
     }
 }

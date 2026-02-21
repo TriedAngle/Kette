@@ -174,6 +174,7 @@ pub unsafe fn init_byte_array(ptr: *mut ByteArray, length: u64) {
 /// ```text
 /// [Header 8B] [constant_count: u32] [register_count: u16] [arg_count: u16]
 /// [bytecode_len: u32] [temp_count: u16] [source_map_len: u16]
+/// [feedback: Value 8B]
 /// [constant_0: Value 8B] [constant_1: Value 8B] ...
 /// [bytecode byte_0] [bytecode byte_1] ...
 /// [source_map byte_0] [source_map byte_1] ...
@@ -190,9 +191,10 @@ pub struct Code {
     bytecode_len: u32,
     temp_count: u16,
     source_map_len: u16,
+    pub feedback: Value,
 }
 
-const _: () = assert!(size_of::<Code>() == 24);
+const _: () = assert!(size_of::<Code>() == 32);
 
 impl Code {
     #[inline(always)]
@@ -327,6 +329,7 @@ pub unsafe fn init_code(
     bytecode_len: u32,
     temp_count: u16,
     source_map_len: u16,
+    feedback: Value,
 ) {
     ptr.write(Code {
         header: Header::new(ObjectType::Code),
@@ -336,6 +339,7 @@ pub unsafe fn init_code(
         bytecode_len,
         temp_count,
         source_map_len,
+        feedback,
     });
 }
 

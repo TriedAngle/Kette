@@ -10,8 +10,8 @@ use object::{
 };
 
 use crate::alloc::{
-    add_constant_slot, alloc_bignum_from_i128, alloc_byte_array, alloc_float,
-    alloc_map, alloc_slot_object,
+    add_constant_slot, alloc_array, alloc_bignum_from_i128, alloc_byte_array,
+    alloc_float, alloc_map, alloc_slot_object,
 };
 use crate::compiler0::{CodeDesc, ConstEntry, MapDesc, SlotValue};
 use crate::VM;
@@ -91,6 +91,14 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         let bytecode_len = desc.bytecode.len() as u32;
         let source_map_len =
             desc.source_map.len().min(u16::MAX as usize) as u16;
+        let feedback_idx = self.roots.scratch.len();
+        self.roots.scratch.push(self.none());
+        if desc.feedback_count > 0 {
+            let feedback = vec![self.none(); desc.feedback_count as usize];
+            self.roots.scratch[feedback_idx] = unsafe {
+                alloc_array(self.proxy, self.roots, &feedback).value()
+            };
+        }
         let size = code_allocation_size(
             constant_count,
             bytecode_len,
@@ -109,6 +117,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
                 bytecode_len,
                 desc.temp_count,
                 source_map_len,
+                self.roots.scratch[feedback_idx],
             );
 
             // Re-read constants from scratch after allocation (GC safety)
@@ -503,7 +512,7 @@ mod tests {
     use crate::compiler0::SlotDesc;
     use crate::special::bootstrap;
     use heap::HeapSettings;
-    use object::{Float, Header, ObjectType};
+    use object::{Array, Float, Header, ObjectType};
 
     fn test_settings() -> HeapSettings {
         HeapSettings {
@@ -761,6 +770,31 @@ mod tests {
             let c = inner_code.constant(0);
             assert!(c.is_fixnum());
             assert_eq!(c.to_i64(), 99);
+        }
+    }
+
+    #[test]
+    fn materialize_code_feedback_vector() {
+        let mut vm = bootstrap(test_settings());
+        let desc = CodeDesc {
+            bytecode: empty_bytecode(),
+            constants: vec![],
+            register_count: 1,
+            arg_count: 0,
+            temp_count: 0,
+            feedback_count: 3,
+            source_map: vec![],
+        };
+
+        let code_val = materialize(&mut vm, &desc);
+        unsafe {
+            let code: &Code = code_val.as_ref();
+            assert!(code.feedback.is_ref());
+            let feedback: &Array = code.feedback.as_ref();
+            assert_eq!(feedback.len(), 3);
+            for i in 0..feedback.len() {
+                assert_eq!(feedback.element(i).raw(), vm.special.none.raw());
+            }
         }
     }
 

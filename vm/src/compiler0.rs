@@ -293,6 +293,7 @@ pub struct Compiler {
     module_env: Option<CompileModuleEnv>,
     current_module: Option<String>,
     top_level_expr_index: usize,
+    top_level_globals: HashSet<String>,
 }
 
 impl Compiler {
@@ -312,6 +313,7 @@ impl Compiler {
             module_env: None,
             current_module: None,
             top_level_expr_index: 0,
+            top_level_globals: HashSet::new(),
         }
     }
 
@@ -321,6 +323,7 @@ impl Compiler {
             current_module: module_env.initial_module.clone(),
             module_env: Some(module_env),
             top_level_expr_index: 0,
+            top_level_globals: HashSet::new(),
         }
     }
 
@@ -370,6 +373,13 @@ impl Compiler {
         &mut self,
         exprs: &[Expr],
     ) -> Result<CodeDesc, CompileError> {
+        self.top_level_globals.clear();
+        for expr in exprs {
+            if let Some(name) = top_level_assignment_name(expr) {
+                self.top_level_globals.insert(name.to_string());
+            }
+        }
+
         self.push_frame(ScopeKind::TopLevel);
         self.prescan_locals(exprs);
         self.analyze_captures(exprs, &[]);
@@ -400,6 +410,26 @@ impl Compiler {
 
         self.builder().local_return();
         Ok(self.pop_frame())
+    }
+
+    fn known_global_in_current_module(&self, name: &str) -> bool {
+        let Some(env) = &self.module_env else {
+            return self.top_level_globals.contains(name);
+        };
+        let Some(current_module) = &self.current_module else {
+            return self.top_level_globals.contains(name);
+        };
+        let Some(module) = env.modules.get(current_module) else {
+            return self.top_level_globals.contains(name);
+        };
+        module.bindings.contains(name)
+            || module.imports.contains_key(name)
+            || self.top_level_globals.contains(name)
+    }
+
+    fn should_assign_to_global(&self, name: &str) -> bool {
+        !self.has_local_in_enclosing_scopes(name)
+            && self.known_global_in_current_module(name)
     }
 
     // ── Frame management ────────────────────────────────────────
@@ -513,6 +543,11 @@ impl Compiler {
             ExprKind::Assignment { target, kind, .. } => {
                 if let ExprKind::Ident(name) = &target.kind {
                     if self.scope().kind == ScopeKind::TopLevel {
+                        return;
+                    }
+                    if *kind == AssignKind::Assign
+                        && self.should_assign_to_global(name)
+                    {
                         return;
                     }
                     if *kind == AssignKind::Assign
@@ -831,6 +866,11 @@ impl Compiler {
         }
 
         if self.scope().kind == ScopeKind::TopLevel {
+            let idx = self.add_global_ref(name, true, span)?;
+            return Ok(VarLoc::Global(idx));
+        }
+
+        if kind == AssignKind::Assign && self.should_assign_to_global(name) {
             let idx = self.add_global_ref(name, true, span)?;
             return Ok(VarLoc::Global(idx));
         }
@@ -3479,6 +3519,41 @@ mod tests {
     }
 
     #[test]
+    fn compile_symbol_ampersand_binary_message() {
+        let code = compile_source("'A & 'B");
+        let instrs = decode(&code);
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::Send { argc: 1, .. })));
+        let send = instrs
+            .iter()
+            .find_map(|i| match i {
+                Instruction::Send { message_idx, .. } => Some(*message_idx),
+                _ => None,
+            })
+            .expect("missing send");
+        assert!(matches!(
+            code.constants.get(send as usize),
+            Some(ConstEntry::Symbol(s)) if s == "&"
+        ));
+    }
+
+    #[test]
+    fn sequential_keyword_sends_get_distinct_feedback_slots() {
+        let code = compile_source("c add: 1. c add: 2. c");
+        let instrs = decode(&code);
+        let sends: Vec<_> = instrs
+            .iter()
+            .filter_map(|i| match i {
+                Instruction::Send { feedback_idx, .. } => Some(*feedback_idx),
+                _ => None,
+            })
+            .collect();
+        assert!(sends.len() >= 2);
+        assert_ne!(sends[0], sends[1]);
+    }
+
+    #[test]
     fn minimal_repro_trailing_ident_no_longer_clobbers_captured_temp() {
         let code = compile_source(
             "Obj = { m = { out := 1. i := 0. [ i < 1 ] whileTrue: [ out := out + 1. i := i + 1 ]. out } }.",
@@ -3543,6 +3618,81 @@ mod tests {
         assert!(
             !has_none_store_to_temp,
             "standalone block should not inject None into captured temps"
+        );
+    }
+
+    #[test]
+    fn global_assignment_captured_by_block_uses_assoc_not_temp() {
+        let code = compile_source("g := 1. [ g ] call");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
+
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadAssoc { .. })));
+        assert!(!instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadTemp { .. })));
+    }
+
+    #[test]
+    fn global_constant_captured_by_block_uses_assoc_not_temp() {
+        let code = compile_source("g = 1. [ g ] call");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
+
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadAssoc { .. })));
+        assert!(!instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadTemp { .. })));
+    }
+
+    #[test]
+    fn global_assign_in_block_updates_assoc_not_local_temp() {
+        let code = compile_source("g := 1. [ g := g _FixnumAdd: 1 ] call. g");
+        let block_code = find_code_const(&code.constants);
+        let instrs = decode(block_code);
+
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadAssoc { .. })));
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::StoreAssoc { .. })));
+        assert!(!instrs.iter().any(|i| {
+            matches!(
+                i,
+                Instruction::LoadTemp { .. } | Instruction::StoreTemp { .. }
+            )
+        }));
+    }
+
+    #[test]
+    fn block_param_in_module_export_shape_loads_local_not_global() {
+        let code = compile_source(
+            "{ export: names = { names asArray each: [ | name | VM _ModuleExport: name ] } }",
+        );
+        let method_code = find_code_const_by_args(&code.constants, 1);
+        let block_code = find_code_const(&method_code.constants);
+        let instrs = decode(block_code);
+
+        assert!(instrs
+            .iter()
+            .any(|i| matches!(i, Instruction::LoadLocal { reg: 1 })));
+        let has_name_global_load = instrs.iter().any(|i| {
+            let Instruction::LoadAssoc { idx } = i else {
+                return false;
+            };
+            matches!(
+                block_code.constants.get(*idx as usize),
+                Some(ConstEntry::Symbol(s)) if s == "name"
+            )
+        });
+        assert!(
+            !has_name_global_load,
+            "block param 'name' should not compile as global load"
         );
     }
 

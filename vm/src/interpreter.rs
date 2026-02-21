@@ -1,7 +1,10 @@
 use std::alloc::Layout;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::ptr;
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytecode::{source_map_lookup, Instruction, Op};
 use heap::{HeapProxy, RootProvider};
@@ -14,6 +17,138 @@ use object::{
 use crate::VM;
 
 const MAX_FRAMES: usize = 1024;
+const MAX_POLYMORPHIC_FEEDBACK_ENTRIES: usize = 4;
+const MEGAMORPHIC_CACHE_SIZE: usize = 1024;
+const MEGAMORPHIC_CACHE_MASK: usize = MEGAMORPHIC_CACHE_SIZE - 1;
+const FEEDBACK_ENTRY_STRIDE: usize = 5;
+const FEEDBACK_ENTRY_MAP_IDX: usize = 0;
+const FEEDBACK_ENTRY_HOLDER_IDX: usize = 1;
+const FEEDBACK_ENTRY_HOLDER_MAP_IDX: usize = 2;
+const FEEDBACK_ENTRY_SLOT_INDEX_IDX: usize = 3;
+const FEEDBACK_ENTRY_HOLDER_IS_RECEIVER_IDX: usize = 4;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MegamorphicKey {
+    message_raw: u64,
+    receiver_map_raw: u64,
+    holder_raw: u64,
+    delegate_raw: u64,
+}
+
+impl MegamorphicKey {
+    fn hash(self) -> u64 {
+        let mut x = self.message_raw.rotate_left(13)
+            ^ self.receiver_map_raw.rotate_left(29)
+            ^ self.holder_raw.rotate_left(7)
+            ^ self.delegate_raw.rotate_left(43);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51afd7ed558ccd);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+        x ^ (x >> 33)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MegamorphicEntry {
+    key: MegamorphicKey,
+    holder_raw: u64,
+    holder_map_raw: u64,
+    slot_index: u32,
+    holder_is_receiver: bool,
+}
+
+struct MegamorphicCache {
+    epoch: u8,
+    entries: Vec<Option<MegamorphicEntry>>,
+}
+
+impl MegamorphicCache {
+    fn new() -> Self {
+        Self {
+            epoch: 0,
+            entries: vec![None; MEGAMORPHIC_CACHE_SIZE],
+        }
+    }
+}
+
+thread_local! {
+    static MEGAMORPHIC_CACHE: RefCell<MegamorphicCache> = RefCell::new(MegamorphicCache::new());
+}
+
+const IC_CACHE_ENABLED: bool = cfg!(feature = "ic-cache");
+
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+static IC_MONO_POLY_HITS: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+static IC_MEGAMORPHIC_HITS: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+static IC_UPDATES: AtomicU64 = AtomicU64::new(0);
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+static IC_MISSES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy)]
+pub struct IcStats {
+    pub mono_poly_hits: u64,
+    pub megamorphic_hits: u64,
+    pub updates: u64,
+    pub misses: u64,
+}
+
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+pub fn ic_stats_reset() {
+    IC_MONO_POLY_HITS.store(0, Ordering::Relaxed);
+    IC_MEGAMORPHIC_HITS.store(0, Ordering::Relaxed);
+    IC_UPDATES.store(0, Ordering::Relaxed);
+    IC_MISSES.store(0, Ordering::Relaxed);
+}
+
+#[cfg(not(all(feature = "ic-cache", debug_assertions)))]
+pub fn ic_stats_reset() {}
+
+#[cfg(all(feature = "ic-cache", debug_assertions))]
+pub fn ic_stats_snapshot() -> IcStats {
+    IcStats {
+        mono_poly_hits: IC_MONO_POLY_HITS.load(Ordering::Relaxed),
+        megamorphic_hits: IC_MEGAMORPHIC_HITS.load(Ordering::Relaxed),
+        updates: IC_UPDATES.load(Ordering::Relaxed),
+        misses: IC_MISSES.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(not(all(feature = "ic-cache", debug_assertions)))]
+pub fn ic_stats_snapshot() -> IcStats {
+    IcStats {
+        mono_poly_hits: 0,
+        megamorphic_hits: 0,
+        updates: 0,
+        misses: 0,
+    }
+}
+
+#[inline]
+fn ic_count_mono_poly_hit() {
+    #[cfg(all(feature = "ic-cache", debug_assertions))]
+    IC_MONO_POLY_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn ic_count_megamorphic_hit() {
+    #[cfg(all(feature = "ic-cache", debug_assertions))]
+    IC_MEGAMORPHIC_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn ic_count_update() {
+    #[cfg(all(feature = "ic-cache", debug_assertions))]
+    IC_UPDATES.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn ic_count_miss() {
+    #[cfg(all(feature = "ic-cache", debug_assertions))]
+    IC_MISSES.fetch_add(1, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
@@ -346,7 +481,7 @@ fn run(
                 message_idx,
                 reg,
                 argc,
-                ..
+                feedback_idx,
             } => {
                 dispatch_send(
                     vm,
@@ -356,13 +491,14 @@ fn run(
                     message_idx,
                     reg,
                     argc,
+                    feedback_idx,
                 )?;
             }
             Instruction::Resend {
                 message_idx,
                 reg,
                 argc,
-                ..
+                feedback_idx,
             } => {
                 dispatch_resend(
                     vm,
@@ -372,6 +508,7 @@ fn run(
                     message_idx,
                     reg,
                     argc,
+                    feedback_idx,
                     None,
                 )?;
             }
@@ -379,8 +516,8 @@ fn run(
                 message_idx,
                 reg,
                 argc,
+                feedback_idx,
                 delegate_idx,
-                ..
             } => {
                 dispatch_resend(
                     vm,
@@ -390,6 +527,7 @@ fn run(
                     message_idx,
                     reg,
                     argc,
+                    feedback_idx,
                     Some(delegate_idx),
                 )?;
             }
@@ -699,6 +837,424 @@ fn push_block_frame_with_args(
     Ok(())
 }
 
+fn feedback_map_for_receiver(
+    vm: &VM,
+    receiver: Value,
+) -> Result<Value, RuntimeError> {
+    if receiver.is_fixnum() {
+        return Ok(vm.special.fixnum_traits);
+    }
+    let header: &Header = unsafe { receiver.as_ref() };
+    let map = match header.object_type() {
+        ObjectType::Slots => {
+            let obj: &SlotObject = unsafe { receiver.as_ref() };
+            obj.map
+        }
+        ObjectType::Block => vm.special.block_traits,
+        ObjectType::Map => receiver,
+        ObjectType::Array => vm.special.array_traits,
+        ObjectType::ByteArray => vm.special.bytearray_traits,
+        ObjectType::Str => vm.special.string_traits,
+        ObjectType::Symbol => vm.special.symbol_traits,
+        ObjectType::BigNum => vm.special.bignum_traits,
+        ObjectType::Alien => vm.special.alien_traits,
+        ObjectType::Ratio => vm.special.ratio_traits,
+        ObjectType::Code => vm.special.code_traits,
+        ObjectType::Float => vm.special.float_traits,
+    };
+    Ok(map)
+}
+
+fn decode_feedback_entries(entry: Value) -> Option<(*const Array, usize)> {
+    if !entry.is_ref() {
+        return None;
+    }
+    let header: &Header = unsafe { entry.as_ref() };
+    if header.object_type() != ObjectType::Array {
+        return None;
+    }
+    let array: &Array = unsafe { entry.as_ref() };
+    let len = array.len() as usize;
+    if len == 0 {
+        return Some((array as *const Array, 0));
+    }
+    if len % FEEDBACK_ENTRY_STRIDE != 0 {
+        return None;
+    }
+    let count = len / FEEDBACK_ENTRY_STRIDE;
+    Some((array as *const Array, count))
+}
+
+fn decode_feedback_vector(entry: Value) -> Option<*const Array> {
+    if !entry.is_ref() {
+        return None;
+    }
+    // let header: &Header = unsafe { entry.as_ref() };
+    // if header.object_type() != ObjectType::Array {
+    //     return None;
+    // }
+    let array: &Array = unsafe { entry.as_ref() };
+    Some(array as *const Array)
+}
+
+fn array_entry_at(array_ptr: *const Array, index: usize) -> Value {
+    let array = unsafe { &*array_ptr };
+    unsafe { array.element(index as u64) }
+}
+
+fn array_set_entry(vm: &mut VM, array_val: Value, index: usize, value: Value) {
+    unsafe {
+        let array_ptr = array_val.ref_bits() as *mut Array;
+        let elems = array_ptr.add(1) as *mut Value;
+        *elems.add(index) = value;
+    }
+    if value.is_ref() {
+        vm.heap_proxy.write_barrier(array_val, value);
+    }
+}
+
+#[inline(always)]
+fn decode_fixnum_i64_unchecked(value: Value) -> i64 {
+    debug_assert!(value.is_fixnum());
+    unsafe { value.to_i64() }
+}
+
+#[inline(always)]
+fn decode_cached_slot_index(value: Value) -> u32 {
+    let raw = decode_fixnum_i64_unchecked(value);
+    debug_assert!(raw >= 0 && raw <= u32::MAX as i64);
+    raw as u32
+}
+
+#[inline(always)]
+fn decode_cached_bool(value: Value) -> bool {
+    decode_fixnum_i64_unchecked(value) != 0
+}
+
+fn megamorphic_key_for_send(
+    message: Value,
+    receiver_feedback_map: Value,
+) -> MegamorphicKey {
+    MegamorphicKey {
+        message_raw: message.raw(),
+        receiver_map_raw: receiver_feedback_map.raw(),
+        holder_raw: 0,
+        delegate_raw: 0,
+    }
+}
+
+fn megamorphic_key_for_resend(
+    message: Value,
+    receiver_feedback_map: Value,
+    holder: Value,
+    delegate_name: Option<Value>,
+) -> MegamorphicKey {
+    MegamorphicKey {
+        message_raw: message.raw(),
+        receiver_map_raw: receiver_feedback_map.raw(),
+        holder_raw: holder.raw(),
+        delegate_raw: delegate_name.map(Value::raw).unwrap_or(0),
+    }
+}
+
+fn megamorphic_cache_get(
+    vm: &VM,
+    key: MegamorphicKey,
+) -> Option<MegamorphicEntry> {
+    let current_epoch = vm.heap_proxy.epoch;
+    MEGAMORPHIC_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.epoch != current_epoch {
+            cache.entries.fill(None);
+            cache.epoch = current_epoch;
+        }
+        let idx = (key.hash() as usize) & MEGAMORPHIC_CACHE_MASK;
+        let entry = cache.entries[idx]?;
+        if entry.key == key {
+            Some(entry)
+        } else {
+            None
+        }
+    })
+}
+
+fn megamorphic_cache_put(vm: &VM, entry: MegamorphicEntry) {
+    let current_epoch = vm.heap_proxy.epoch;
+    MEGAMORPHIC_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.epoch != current_epoch {
+            cache.entries.fill(None);
+            cache.epoch = current_epoch;
+        }
+        let idx = (entry.key.hash() as usize) & MEGAMORPHIC_CACHE_MASK;
+        cache.entries[idx] = Some(entry);
+    });
+}
+
+fn try_dispatch_cached_handler(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    frame_idx: usize,
+    receiver: Value,
+    holder: Value,
+    cached_holder_map: Value,
+    holder_is_receiver: bool,
+    slot_index: u32,
+    reg: u16,
+    argc: u8,
+) -> Result<bool, RuntimeError> {
+    let holder_for_dispatch =
+        if holder_is_receiver { receiver } else { holder };
+    let holder_map_val = holder_map(holder_for_dispatch)?;
+    if holder_map_val.raw() != cached_holder_map.raw() {
+        return Ok(false);
+    }
+
+    let holder_map_obj: &Map = unsafe { holder_map_val.as_ref() };
+    if slot_index >= holder_map_obj.slot_count() {
+        return Ok(false);
+    }
+    let canonical_slot = unsafe { holder_map_obj.slot(slot_index) };
+    let slot_value = if canonical_slot.is_assignable() {
+        let offset = unsafe { canonical_slot.value.to_i64() } as u32;
+        read_holder_value(holder_for_dispatch, offset)?
+    } else {
+        canonical_slot.value
+    };
+    let slot =
+        Slot::new(canonical_slot.flags(), canonical_slot.name, slot_value);
+
+    dispatch_slot(
+        vm,
+        state,
+        frame_idx,
+        receiver,
+        holder_for_dispatch,
+        slot,
+        slot_index,
+        reg,
+        argc,
+    )?;
+    Ok(true)
+}
+
+fn try_dispatch_feedback_entry(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    frame_idx: usize,
+    code: &Code,
+    feedback_idx: u16,
+    megamorphic_key: MegamorphicKey,
+    receiver: Value,
+    receiver_feedback_map: Value,
+    reg: u16,
+    argc: u8,
+) -> Result<bool, RuntimeError> {
+    let feedback = code.feedback;
+    if feedback.raw() == vm.special.none.raw() {
+        return Ok(false);
+    }
+    let Some(vector) = decode_feedback_vector(feedback) else {
+        return Ok(false);
+    };
+    let vector_len = unsafe { (&*vector).len() as usize };
+    if feedback_idx as usize >= vector_len {
+        return Ok(false);
+    }
+    let entry = array_entry_at(vector, feedback_idx as usize);
+    if entry.raw() == vm.special.none.raw() {
+        return Ok(false);
+    }
+
+    let Some((entries, entry_count)) = decode_feedback_entries(entry) else {
+        return Ok(false);
+    };
+
+    if entry_count == 0 {
+        if let Some(megamorphic) = megamorphic_cache_get(vm, megamorphic_key) {
+            let hit = try_dispatch_cached_handler(
+                vm,
+                state,
+                frame_idx,
+                receiver,
+                Value::from_raw(megamorphic.holder_raw),
+                Value::from_raw(megamorphic.holder_map_raw),
+                megamorphic.holder_is_receiver,
+                megamorphic.slot_index,
+                reg,
+                argc,
+            );
+            if matches!(hit, Ok(true)) {
+                ic_count_megamorphic_hit();
+            }
+            return hit;
+        }
+        return Ok(false);
+    }
+
+    for i in 0..entry_count {
+        let base = i * FEEDBACK_ENTRY_STRIDE;
+        let cached_map = array_entry_at(entries, base + FEEDBACK_ENTRY_MAP_IDX);
+        if cached_map.raw() != receiver_feedback_map.raw() {
+            continue;
+        }
+
+        let holder = array_entry_at(entries, base + FEEDBACK_ENTRY_HOLDER_IDX);
+        let cached_holder_map =
+            array_entry_at(entries, base + FEEDBACK_ENTRY_HOLDER_MAP_IDX);
+
+        let slot_index_val =
+            array_entry_at(entries, base + FEEDBACK_ENTRY_SLOT_INDEX_IDX);
+        let slot_index = decode_cached_slot_index(slot_index_val);
+
+        let holder_is_receiver_val = array_entry_at(
+            entries,
+            base + FEEDBACK_ENTRY_HOLDER_IS_RECEIVER_IDX,
+        );
+        let holder_is_receiver = decode_cached_bool(holder_is_receiver_val);
+
+        if try_dispatch_cached_handler(
+            vm,
+            state,
+            frame_idx,
+            receiver,
+            holder,
+            cached_holder_map,
+            holder_is_receiver,
+            slot_index,
+            reg,
+            argc,
+        )? {
+            ic_count_mono_poly_hit();
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn update_send_feedback_entry(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    code: &Code,
+    feedback_idx: u16,
+    megamorphic_key: MegamorphicKey,
+    receiver: Value,
+    receiver_feedback_map: Value,
+    holder: Value,
+    slot_index: u32,
+    traversed_assignable_parent: bool,
+) -> Result<(), RuntimeError> {
+    if traversed_assignable_parent {
+        return Ok(());
+    }
+    let feedback = code.feedback;
+    if feedback.raw() == vm.special.none.raw() {
+        return Ok(());
+    }
+    let Some(vector) = decode_feedback_vector(feedback) else {
+        return Ok(());
+    };
+    let vector_len = unsafe { (&*vector).len() as usize };
+    if feedback_idx as usize >= vector_len {
+        return Ok(());
+    }
+
+    let holder_feedback_map = holder_map(holder)?;
+    let new_entry_values = [
+        receiver_feedback_map,
+        holder,
+        holder_feedback_map,
+        Value::from_i64(slot_index as i64),
+        Value::from_i64((holder.raw() == receiver.raw()) as i64),
+    ];
+
+    let slot_entry = array_entry_at(vector, feedback_idx as usize);
+    if slot_entry.raw() == vm.special.none.raw() {
+        let mut scratch = new_entry_values.to_vec();
+        let new_entry =
+            with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+                let values = roots.scratch.to_vec();
+                crate::alloc::alloc_array(proxy, roots, &values).value()
+            });
+        array_set_entry(vm, feedback, feedback_idx as usize, new_entry);
+        ic_count_update();
+        return Ok(());
+    }
+
+    let Some((entries, entry_count)) = decode_feedback_entries(slot_entry)
+    else {
+        return Ok(());
+    };
+
+    if entry_count == 0 {
+        megamorphic_cache_put(
+            vm,
+            MegamorphicEntry {
+                key: megamorphic_key,
+                holder_raw: holder.raw(),
+                holder_map_raw: holder_feedback_map.raw(),
+                slot_index,
+                holder_is_receiver: holder.raw() == receiver.raw(),
+            },
+        );
+        ic_count_update();
+        return Ok(());
+    }
+
+    for i in 0..entry_count {
+        let base = i * FEEDBACK_ENTRY_STRIDE;
+        let cached_map = array_entry_at(entries, base + FEEDBACK_ENTRY_MAP_IDX);
+        if cached_map.raw() != receiver_feedback_map.raw() {
+            continue;
+        }
+        for (offset, value) in new_entry_values.iter().enumerate() {
+            array_set_entry(vm, slot_entry, base + offset, *value);
+        }
+        ic_count_update();
+        return Ok(());
+    }
+
+    if entry_count >= MAX_POLYMORPHIC_FEEDBACK_ENTRIES {
+        let mut empty = Vec::new();
+        let megamorphic_sentinel =
+            with_roots(vm, state, &mut empty, |proxy, roots| unsafe {
+                crate::alloc::alloc_array(proxy, roots, &[]).value()
+            });
+        array_set_entry(
+            vm,
+            feedback,
+            feedback_idx as usize,
+            megamorphic_sentinel,
+        );
+        megamorphic_cache_put(
+            vm,
+            MegamorphicEntry {
+                key: megamorphic_key,
+                holder_raw: holder.raw(),
+                holder_map_raw: holder_feedback_map.raw(),
+                slot_index,
+                holder_is_receiver: holder.raw() == receiver.raw(),
+            },
+        );
+        ic_count_update();
+        return Ok(());
+    }
+
+    let mut values = unsafe { (&*entries).elements() }.to_vec();
+    values.extend_from_slice(&new_entry_values);
+    let mut scratch = values;
+    let new_entry =
+        with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+            let values = roots.scratch.to_vec();
+            crate::alloc::alloc_array(proxy, roots, &values).value()
+        });
+    array_set_entry(vm, feedback, feedback_idx as usize, new_entry);
+    ic_count_update();
+
+    Ok(())
+}
+
 pub(crate) fn dispatch_send(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -707,6 +1263,7 @@ pub(crate) fn dispatch_send(
     message_idx: u16,
     reg: u16,
     argc: u8,
+    feedback_idx: u16,
 ) -> Result<(), RuntimeError> {
     let receiver = state.acc;
 
@@ -750,6 +1307,35 @@ pub(crate) fn dispatch_send(
             module_dynamic,
         );
     }
+
+    let mut receiver_feedback_map = vm.special.none;
+    let mut megamorphic_key = MegamorphicKey {
+        message_raw: 0,
+        receiver_map_raw: 0,
+        holder_raw: 0,
+        delegate_raw: 0,
+    };
+    if IC_CACHE_ENABLED {
+        receiver_feedback_map = feedback_map_for_receiver(vm, receiver)?;
+        megamorphic_key =
+            megamorphic_key_for_send(message, receiver_feedback_map);
+        if try_dispatch_feedback_entry(
+            vm,
+            state,
+            frame_idx,
+            code,
+            feedback_idx,
+            megamorphic_key,
+            receiver,
+            receiver_feedback_map,
+            reg,
+            argc,
+        )? {
+            return Ok(());
+        }
+        ic_count_miss();
+    }
+
     let result = unsafe { object::lookup(receiver, message, &vm.special) };
     match result {
         object::LookupResult::None => {
@@ -759,10 +1345,27 @@ pub(crate) fn dispatch_send(
             holder,
             slot,
             slot_index,
-            ..
-        } => dispatch_slot(
-            vm, state, frame_idx, receiver, holder, slot, slot_index, reg, argc,
-        ),
+            traversed_assignable_parent,
+        } => {
+            if IC_CACHE_ENABLED {
+                update_send_feedback_entry(
+                    vm,
+                    state,
+                    code,
+                    feedback_idx,
+                    megamorphic_key,
+                    receiver,
+                    receiver_feedback_map,
+                    holder,
+                    slot_index,
+                    traversed_assignable_parent,
+                )?;
+            }
+            dispatch_slot(
+                vm, state, frame_idx, receiver, holder, slot, slot_index, reg,
+                argc,
+            )
+        }
     }
 }
 
@@ -900,6 +1503,7 @@ fn dispatch_resend(
     message_idx: u16,
     reg: u16,
     argc: u8,
+    feedback_idx: u16,
     delegate_idx: Option<u16>,
 ) -> Result<(), RuntimeError> {
     let receiver = get_register(state, frame_idx, 0)?;
@@ -910,6 +1514,38 @@ fn dispatch_resend(
     let delegate_name =
         delegate_idx.map(|idx| unsafe { code.constant(idx as u32) });
 
+    let mut receiver_feedback_map = vm.special.none;
+    let mut megamorphic_key = MegamorphicKey {
+        message_raw: 0,
+        receiver_map_raw: 0,
+        holder_raw: 0,
+        delegate_raw: 0,
+    };
+    if IC_CACHE_ENABLED {
+        receiver_feedback_map = feedback_map_for_receiver(vm, receiver)?;
+        megamorphic_key = megamorphic_key_for_resend(
+            message,
+            receiver_feedback_map,
+            holder,
+            delegate_name,
+        );
+        if try_dispatch_feedback_entry(
+            vm,
+            state,
+            frame_idx,
+            code,
+            feedback_idx,
+            megamorphic_key,
+            receiver,
+            receiver_feedback_map,
+            reg,
+            argc,
+        )? {
+            return Ok(());
+        }
+        ic_count_miss();
+    }
+
     let result = lookup_resend(holder, message, delegate_name, &vm.special)?;
     match result {
         object::LookupResult::None => {
@@ -919,10 +1555,27 @@ fn dispatch_resend(
             holder,
             slot,
             slot_index,
-            ..
-        } => dispatch_slot(
-            vm, state, frame_idx, receiver, holder, slot, slot_index, reg, argc,
-        ),
+            traversed_assignable_parent,
+        } => {
+            if IC_CACHE_ENABLED {
+                update_send_feedback_entry(
+                    vm,
+                    state,
+                    code,
+                    feedback_idx,
+                    megamorphic_key,
+                    receiver,
+                    receiver_feedback_map,
+                    holder,
+                    slot_index,
+                    traversed_assignable_parent,
+                )?;
+            }
+            dispatch_slot(
+                vm, state, frame_idx, receiver, holder, slot, slot_index, reg,
+                argc,
+            )
+        }
     }
 }
 
@@ -2534,7 +3187,7 @@ mod tests {
     use crate::special::bootstrap;
     use crate::USER_MODULE;
     use heap::HeapSettings;
-    use object::{Map, ObjectType, SlotFlags, VMString};
+    use object::{Array, Header, Map, ObjectType, SlotFlags, VMString};
     use parser::{Lexer, Parser};
 
     #[repr(C)]
@@ -2629,6 +3282,79 @@ mod tests {
         let value = run_source_with_receiver("self", receiver)
             .expect("interpret error");
         assert_eq!(value.raw(), receiver.raw());
+    }
+
+    #[test]
+    fn global_assign_visible_inside_closure_assignment() {
+        let value = run_source("g := 1. [ g := g _FixnumAdd: 1 ] call. g")
+            .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 2);
+    }
+
+    #[test]
+    fn send_populates_feedback_vector_entry() {
+        let mut vm = bootstrap(test_settings());
+        let code_desc = crate::compiler0::CodeDesc {
+            bytecode: vec![Op::LocalReturn as u8],
+            constants: vec![],
+            register_count: 1,
+            arg_count: 0,
+            temp_count: 0,
+            feedback_count: 1,
+            source_map: vec![],
+        };
+        let code_val = materialize(&mut vm, &code_desc);
+
+        let mut state = InterpreterState {
+            acc: vm.special.none,
+            frames: Vec::new(),
+            register_stack: Vec::new(),
+            register_top: 0,
+            handlers: Vec::new(),
+            finalizers: Vec::new(),
+            pending_restores: Vec::new(),
+            unwind_cleanup_depths: Vec::new(),
+            unwind: None,
+            last_pc: 0,
+            last_code: code_val,
+        };
+
+        let code: &Code = unsafe { code_val.as_ref() };
+        let receiver_feedback_map = vm.special.fixnum_traits;
+        let megamorphic_key =
+            megamorphic_key_for_send(vm.special.none, receiver_feedback_map);
+        let receiver = Value::from_i64(1);
+        let holder = vm.special.object;
+        update_send_feedback_entry(
+            &mut vm,
+            &mut state,
+            code,
+            0,
+            megamorphic_key,
+            receiver,
+            receiver_feedback_map,
+            holder,
+            0,
+            false,
+        )
+        .expect("feedback update should succeed");
+
+        unsafe {
+            let code: &Code = code_val.as_ref();
+            assert!(code.feedback.is_ref());
+            let feedback: &Array = code.feedback.as_ref();
+            assert_eq!(feedback.len(), 1);
+            let entry = feedback.element(0);
+            let header: &Header = entry.as_ref();
+            assert_eq!(header.object_type(), ObjectType::Array);
+            let polymorphic: &Array = entry.as_ref();
+            assert_eq!(polymorphic.len(), FEEDBACK_ENTRY_STRIDE as u64);
+            assert_eq!(
+                polymorphic.element(FEEDBACK_ENTRY_MAP_IDX as u64).raw(),
+                vm.special.fixnum_traits.raw()
+            );
+        }
     }
 
     #[test]

@@ -667,7 +667,7 @@ mod tests {
         let mut code_buf = vec![0u8; size_of::<crate::Code>()];
         let code_ptr = code_buf.as_mut_ptr() as *mut crate::Code;
         unsafe {
-            crate::init_code(code_ptr, 0, 0, 0, 0, 0, 0);
+            crate::init_code(code_ptr, 0, 0, 0, 0, 0, 0, Value::from_i64(0));
         }
         let code_val = Value::from_ptr(code_buf.as_ptr());
 

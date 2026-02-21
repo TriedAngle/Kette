@@ -622,6 +622,8 @@ pub unsafe fn trace_object(
         }
         ObjectType::Code => {
             let code = &*(obj as *const Code);
+            let code_ptr = obj as *mut Code;
+            visitor(&mut (*code_ptr).feedback);
             let count = code.constant_count() as usize;
             // Constants start right after the Code struct
             let consts_base =

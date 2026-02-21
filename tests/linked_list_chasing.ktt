@@ -1,0 +1,61 @@
+Module open: 'LinkedListChasing.
+Module use: 'Collections.
+
+Node = {
+    parent* = Clonable.
+    value := 0.
+    next := None.
+}.
+
+ListBench = {
+    parent* = Object.
+
+    buildSize: size = {
+        head := {
+            parent* = Node.
+            value := 0.
+            next := None
+        }.
+        tail := head.
+        i := 1.
+        [ i <= size ] whileTrue: [
+            node := {
+                parent* = Node.
+                value := i.
+                next := None
+            }.
+            tail next: node.
+            tail := node.
+            i := i + 1
+        ].
+        head
+    }.
+
+    chase: head Steps: steps = {
+        current := head.
+        sum := 0.
+        i := 0.
+        [ i < steps ] whileTrue: [
+            sum := sum + current value.
+            nextNode := current next.
+            current := nextNode == None ifTrue: [ head ] IfFalse: [ nextNode ].
+            i := i + 1
+        ].
+        sum
+    }.
+
+    run = {
+        head := self buildSize: 120.
+        sink := Collector clone init.
+        total := 0.
+        i := 0.
+        [ i < 300 ] whileTrue: [
+            total := total + (self chase: head Steps: 120).
+            sink add: total.
+            i := i + 1
+        ].
+        total
+    }.
+}.
+
+ListBench run.

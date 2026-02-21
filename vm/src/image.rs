@@ -673,6 +673,42 @@ mod tests {
     }
 
     #[test]
+    fn core_alien_exports_include_ctype_before_system_load() {
+        let mut vm = crate::special::bootstrap(HeapSettings::default());
+        vm.open_module(crate::USER_MODULE);
+
+        for file in default_core_files_for_test() {
+            let name = file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if name == "system.ktt" {
+                break;
+            }
+            let source = std::fs::read_to_string(&file).unwrap_or_else(|e| {
+                panic!("read {} failed: {e}", file.display())
+            });
+            execute_source(&mut vm, &source).unwrap_or_else(|e| {
+                panic!("execute {} failed: {e}", file.display())
+            });
+        }
+
+        vm.with_modules(|modules| {
+            let alien =
+                modules.get("Alien").expect("Alien module should exist");
+            assert!(
+                alien.bindings.contains_key("CType"),
+                "Alien module should bind CType"
+            );
+            assert!(
+                alien.exports.contains("CType"),
+                "Alien module exports should include CType"
+            );
+        });
+    }
+
+    #[test]
     fn image_roundtrip_preserves_core_and_modules() {
         let mut vm = crate::special::bootstrap(HeapSettings::default());
         vm.open_module(crate::USER_MODULE);
