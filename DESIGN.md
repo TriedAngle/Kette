@@ -15,6 +15,31 @@ garbage collector. The core crates are:
 - `bytecode/`: bytecode encoding, decoding, and source map format.
 - `parser/`: lexer/parser producing AST for the compiler.
 
+## Quick Syntax Sketch
+
+This document is runtime-focused, but new contributors usually need a minimal
+syntax map to connect parser/compiler internals with source examples.
+
+- **Everything is a message send**:
+  - Unary: `receiver size`
+  - Binary: `receiver + arg`
+  - Keyword: `receiver at: 0 Put: 42`
+- **Objects are slot dictionaries**: `{ ... }` with `.` between slots/exprs.
+- **Slots**:
+  - Constant slot: `name = expr`
+  - Assignable slot: `name := expr`
+  - Parent/delegation slot: `parent* = SomeProto`
+- **Blocks/closures**: `[ ... ]` and `[ | x y | ... ]`.
+- **Returns**: `^ expr`.
+- **Cascades**: `obj foo; bar: 1; baz`.
+
+Compilation notes:
+
+- Top-level forms are compiled as module/global operations.
+- Object literals with executable bodies compile as method objects.
+- Methods are stored as code-bearing maps/objects; ordinary data objects are
+  map-plus-inline-values.
+
 ## Tagged Values and Pointer Tagging
 
 All values are 64-bit tagged words (`object/src/value.rs`). The low two bits
@@ -201,6 +226,22 @@ The interpreter is in `vm/src/interpreter.rs`.
 Instruction execution uses helpers like `dispatch_send`, `dispatch_resend`,
 `create_object`, and `create_block`.
 
+## Tail-Recursive Self Calls
+
+Kette has a targeted tail-call optimization for **simple self-recursive
+methods**.
+
+- The compiler marks method maps as tail-call-eligible when it can detect a
+  tail-position send to the same selector on `self`
+  (`vm/src/compiler0.rs`, `method_tail_call_eligible`).
+- `_EnsureTailCall` can be used to require that a method is eligible; otherwise
+  compilation fails with `"method is not tail-call eligible"`.
+- At runtime, the interpreter reuses the existing method frame instead of
+  pushing a new one when the guard conditions hold
+  (`vm/src/interpreter.rs`, `try_tail_recursive_self_call`).
+- This optimization is intentionally conservative: it is not a general proper
+  tail-call implementation for arbitrary call graphs.
+
 ## Temp Arrays and Runtime Capturing
 
 Captured variables are stored in heap-allocated temp arrays. Temp arrays are
@@ -234,6 +275,32 @@ materializer (`vm/src/materialize.rs`):
 
 The materializer uses a local root set to keep intermediate values live across
 allocations.
+
+## Image Save/Load (Heap Snapshotting)
+
+The VM can persist and restore a full runtime image (`vm/src/image.rs`, wired
+through CLI flags in `vm/src/main.rs` as `--save-image` / `--load-image`).
+
+What is saved:
+
+- Heap settings and full heap byte range.
+- Block/line allocator metadata and GC tracking counters.
+- Large-object allocations and bytes.
+- Special object roots, assoc map, dictionary, current module.
+- Interned symbol table, module states/imports/exports.
+- Next platform-thread id.
+
+Save/load contract and safety checks:
+
+- Save forces a major GC first, then validates preconditions again.
+- Save is rejected unless GC is idle and exactly one VM thread is active.
+- Save is rejected when platform thread handles are still registered.
+- Load validates image magic/version and primitive ABI hash.
+- Heap and large-object memory are mapped back at their recorded addresses.
+
+Practical implication: image files are runtime-coupled artifacts (same primitive
+set/ABI, compatible memory mapping environment), not a portable interchange
+format.
 
 ## Garbage Collector (Sticky Immix)
 
@@ -367,6 +434,33 @@ The VM integrates with GC via `vm/src/lib.rs`:
 - `trace_object` describes object graph edges for each object type.
 - `object_size` returns the byte size of each object type (0 for Alien).
 - `VM` implements `RootProvider` for global roots and interned symbols.
+
+## Multithreading Model
+
+Threading is shared-heap, multi-VM-proxy:
+
+- `SharedVMData` owns heap, module table, intern table, and global runtime
+  state.
+- Each OS thread gets a `VMProxy` with its own `HeapProxy` and interpreter
+  state, all pointing at the same `SharedVMData`.
+- `VM _SpawnPlatform: [ ... ]` creates an OS thread and runs a compiled block;
+  `VM _ThreadJoin:` waits and returns its value.
+
+Thread coordination primitives:
+
+- Thread tokens: `VM _ThreadCurrent`.
+- Parking API: `VM _ThreadPark`, `VM _ThreadParkForMillis:`,
+  `VM _ThreadUnpark:`.
+- Cooperative yield: `VM _ThreadYield`.
+
+Synchronization/monitors:
+
+- Object monitors are re-entrant and tied to object headers.
+- Fast uncontended path uses thin-lock states in header flags.
+- Contention inflates to monitor records (`Mutex + Condvar`) with owner token +
+  recursion depth.
+- Language-level helpers route through these primitives (`synchronized:` and
+  monitor ops in core/init + vm primitives).
 
 ## FFI and Proxy Model
 

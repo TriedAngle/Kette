@@ -207,6 +207,33 @@ Extra output/file-loading demo previously in init lives in:
 
 - `tests/init_runtime_demo.ktt`
 
+## Raylib FFI Example
+
+A minimal userspace raylib binding is available at:
+
+- `examples/raylib_min.ktt`
+
+Run it with:
+
+```bash
+cargo run -p vm -- examples/raylib_min.ktt
+```
+
+On Linux/WSL, install raylib first so `libraylib.so` is available to `dlopen`.
+For Ubuntu-based distros:
+
+```bash
+sudo apt update
+sudo apt install libraylib-dev
+```
+
+On Windows 11 with WSLg, the window should display automatically. If rendering is
+slow or broken, try software GL:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 cargo run -p vm -- examples/raylib_min.ktt
+```
+
 ## FizzBuzz Example
 
 ```
