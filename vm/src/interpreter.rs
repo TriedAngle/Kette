@@ -43,7 +43,8 @@ pub struct LocatedRuntimeError {
 struct Frame {
     code: Value,
     pc: usize,
-    registers: Vec<Value>,
+    reg_base: usize,
+    reg_len: usize,
     temp_array: Value,
     is_block: bool,
     method_frame_idx: usize,
@@ -80,6 +81,8 @@ struct UnwindState {
 pub struct InterpreterState {
     acc: Value,
     frames: Vec<Frame>,
+    register_stack: Vec<Value>,
+    register_top: usize,
     handlers: Vec<HandlerScope>,
     finalizers: Vec<FinalizerScope>,
     pending_restores: Vec<PendingRestore>,
@@ -106,7 +109,8 @@ impl RootProvider for InterpreterRoots<'_> {
             visitor(&mut frame.code);
             visitor(&mut frame.temp_array);
             visitor(&mut frame.holder);
-            for reg in frame.registers.iter_mut() {
+            for i in 0..frame.reg_len {
+                let reg = &mut self.state.register_stack[frame.reg_base + i];
                 visitor(reg);
             }
         }
@@ -169,6 +173,8 @@ pub fn interpret_with_receiver(
     let mut state = InterpreterState {
         acc: vm.special.none,
         frames: Vec::new(),
+        register_stack: Vec::new(),
+        register_top: 0,
         handlers: Vec::new(),
         finalizers: Vec::new(),
         pending_restores: Vec::new(),
@@ -232,50 +238,34 @@ fn run(
                 state.acc = Value::from_i64(value as i64);
             }
             Instruction::LoadLocal { reg } => {
-                let frame = &state.frames[frame_idx];
-                state.acc = get_register(frame, reg)?;
+                state.acc = get_register(state, frame_idx, reg)?;
             }
             Instruction::StoreLocal { reg } => {
                 let value = state.acc;
-                let frame = &mut state.frames[frame_idx];
-                set_register(frame, reg, value)?;
+                set_register(state, frame_idx, reg, value)?;
             }
             Instruction::Mov { dst, src } => {
-                let value = {
-                    let frame = &state.frames[frame_idx];
-                    get_register(frame, src)?
-                };
-                let frame = &mut state.frames[frame_idx];
-                set_register(frame, dst, value)?;
+                let value = get_register(state, frame_idx, src)?;
+                set_register(state, frame_idx, dst, value)?;
             }
             Instruction::LoadStack { offset } => {
                 let none = vm.special.none;
-                let frame = &mut state.frames[frame_idx];
-                state.acc = load_stack_slot(frame, offset, none);
+                state.acc = load_stack_slot(state, frame_idx, offset, none);
             }
             Instruction::StoreStack { offset } => {
                 let value = state.acc;
                 let none = vm.special.none;
-                let frame = &mut state.frames[frame_idx];
-                store_stack_slot(frame, offset, value, none);
+                store_stack_slot(state, frame_idx, offset, value, none);
             }
             Instruction::MovToStack { offset, src } => {
-                let value = {
-                    let frame = &state.frames[frame_idx];
-                    get_register(frame, src)?
-                };
+                let value = get_register(state, frame_idx, src)?;
                 let none = vm.special.none;
-                let frame = &mut state.frames[frame_idx];
-                store_stack_slot(frame, offset, value, none);
+                store_stack_slot(state, frame_idx, offset, value, none);
             }
             Instruction::MovFromStack { dst, offset } => {
                 let none = vm.special.none;
-                let value = {
-                    let frame = &mut state.frames[frame_idx];
-                    load_stack_slot(frame, offset, none)
-                };
-                let frame = &mut state.frames[frame_idx];
-                set_register(frame, dst, value)?;
+                let value = load_stack_slot(state, frame_idx, offset, none);
+                set_register(state, frame_idx, dst, value)?;
             }
             Instruction::LoadTemp { array_idx, idx } => {
                 let value = load_temp(vm, state, frame_idx, array_idx, idx)?;
@@ -290,10 +280,7 @@ fn run(
                 idx,
                 src,
             } => {
-                let value = {
-                    let frame = &state.frames[frame_idx];
-                    get_register(frame, src)?
-                };
+                let value = get_register(state, frame_idx, src)?;
                 store_temp(vm, state, frame_idx, array_idx, idx, value)?;
             }
             Instruction::MovFromTemp {
@@ -302,8 +289,7 @@ fn run(
                 idx,
             } => {
                 let value = load_temp(vm, state, frame_idx, array_idx, idx)?;
-                let frame = &mut state.frames[frame_idx];
-                set_register(frame, dst, value)?;
+                set_register(state, frame_idx, dst, value)?;
             }
             Instruction::LoadAssoc { idx } => {
                 let module_path = if state.frames[frame_idx].module_dynamic {
@@ -325,10 +311,7 @@ fn run(
                 store_assoc(vm, code_val, idx, value, module_path.as_deref())?;
             }
             Instruction::MovToAssoc { idx, src } => {
-                let value = {
-                    let frame = &state.frames[frame_idx];
-                    get_register(frame, src)?
-                };
+                let value = get_register(state, frame_idx, src)?;
                 let module_path = if state.frames[frame_idx].module_dynamic {
                     vm.current_module.clone()
                 } else {
@@ -344,8 +327,7 @@ fn run(
                 };
                 let value =
                     load_assoc(vm, code_val, idx, module_path.as_deref())?;
-                let frame = &mut state.frames[frame_idx];
-                set_register(frame, dst, value)?;
+                set_register(state, frame_idx, dst, value)?;
             }
             Instruction::CreateObject {
                 map_idx,
@@ -428,14 +410,14 @@ fn run(
                 }
             }
             Instruction::LocalReturn => {
-                state.frames.pop();
+                pop_frame(state);
             }
             Instruction::Return => {
                 let method_idx = state.frames[frame_idx].method_frame_idx;
                 if method_idx >= state.frames.len() {
                     return Err(RuntimeError::NonLocalReturnExpired);
                 }
-                state.frames.truncate(method_idx);
+                truncate_frames(state, method_idx);
             }
         }
     }
@@ -471,7 +453,7 @@ fn process_control(
             return Ok(true);
         }
         if frame_depth > unwind.target_depth {
-            state.frames.pop();
+            pop_frame(state);
             return Ok(true);
         }
         if frame_depth == unwind.target_depth {
@@ -562,8 +544,8 @@ fn push_method_frame(
 
     let reg_count = code.register_count() as usize;
     let none = vm.special.none;
-    let mut registers = vec![none; reg_count.max(1)];
-    registers[0] = receiver;
+    let (reg_base, reg_len) = alloc_frame_registers(state, reg_count, none);
+    unsafe { write_register_unchecked(state, reg_base, 0, receiver) };
 
     let temp_array = if code.temp_count() > 0 {
         state.acc = receiver;
@@ -573,14 +555,15 @@ fn push_method_frame(
     };
 
     if let Some((src_idx, reg, argc)) = args_source {
-        copy_args_from_frame(state, src_idx, reg, argc, &mut registers)?;
+        copy_args_from_frame(state, src_idx, reg, argc, reg_base, reg_len)?;
     }
 
     let method_frame_idx = state.frames.len();
     state.frames.push(Frame {
         code: code_val,
         pc: 0,
-        registers,
+        reg_base,
+        reg_len,
         temp_array,
         is_block: false,
         method_frame_idx,
@@ -619,14 +602,15 @@ fn push_block_frame(
 
     let reg_count = code.register_count() as usize;
     let none = vm.special.none;
-    let mut registers = vec![none; reg_count.max(1)];
-    registers[0] = receiver;
+    let (reg_base, reg_len) = alloc_frame_registers(state, reg_count, none);
+    unsafe { write_register_unchecked(state, reg_base, 0, receiver) };
     copy_args_from_frame(
         state,
         args_source.0,
         args_source.1,
         args_source.2,
-        &mut registers,
+        reg_base,
+        reg_len,
     )?;
 
     let method_frame_idx = find_enclosing_method_idx(&state.frames)
@@ -642,7 +626,8 @@ fn push_block_frame(
     state.frames.push(Frame {
         code: code_val,
         pc: 0,
-        registers,
+        reg_base,
+        reg_len,
         temp_array,
         is_block: true,
         method_frame_idx,
@@ -680,12 +665,12 @@ fn push_block_frame_with_args(
 
     let reg_count = code.register_count() as usize;
     let none = vm.special.none;
-    let mut registers = vec![none; reg_count.max(1)];
-    registers[0] = receiver;
+    let (reg_base, reg_len) = alloc_frame_registers(state, reg_count, none);
+    unsafe { write_register_unchecked(state, reg_base, 0, receiver) };
     for (i, arg) in args.iter().enumerate() {
         let idx = i + 1;
-        if idx < registers.len() {
-            registers[idx] = *arg;
+        if idx < reg_len {
+            unsafe { write_register_unchecked(state, reg_base, idx, *arg) };
         }
     }
 
@@ -700,7 +685,8 @@ fn push_block_frame_with_args(
     state.frames.push(Frame {
         code: code_val,
         pc: 0,
-        registers,
+        reg_base,
+        reg_len,
         temp_array,
         is_block: true,
         method_frame_idx,
@@ -916,7 +902,7 @@ fn dispatch_resend(
     argc: u8,
     delegate_idx: Option<u16>,
 ) -> Result<(), RuntimeError> {
-    let receiver = state.frames[frame_idx].registers[0];
+    let receiver = get_register(state, frame_idx, 0)?;
     let holder = state.frames[frame_idx].holder;
 
     let code: &Code = unsafe { code_val.as_ref() };
@@ -952,7 +938,7 @@ fn dispatch_slot(
     argc: u8,
 ) -> Result<(), RuntimeError> {
     if slot.is_assignment() {
-        let value = get_register(&state.frames[frame_idx], reg)?;
+        let value = get_register(state, frame_idx, reg)?;
         write_holder_value(vm, holder, slot.value, value)?;
         state.acc = value;
         return Ok(());
@@ -1073,7 +1059,9 @@ fn try_tail_recursive_self_call(
         {
             continue;
         }
-        if frame.registers.first().map(|v| v.raw()) != Some(receiver.raw()) {
+        if unsafe { read_register_unchecked(state, frame.reg_base, 0) }.raw()
+            != receiver.raw()
+        {
             continue;
         }
         method_idx = Some(idx);
@@ -1108,39 +1096,36 @@ fn try_tail_recursive_self_call(
     let receiver = state.acc;
 
     let reg_count = code.register_count() as usize;
-    let mut new_registers = vec![none; reg_count.max(1)];
-    new_registers[0] = receiver;
-
+    let method_reg_base = state.frames[method_idx].reg_base;
+    let method_reg_len = state.frames[method_idx].reg_len;
+    debug_assert_eq!(method_reg_len, reg_count.max(1));
+    let src_reg_len = state.frames[frame_idx].reg_len;
     let start = reg as usize;
     let end = start + argc as usize;
-    {
-        let old_registers = &state.frames[frame_idx].registers;
-        if end > old_registers.len() {
-            return Err(RuntimeError::TypeError {
-                expected: "argument register range",
-                got: Value::from_i64(end as i64),
-            });
-        }
-        for i in 0..argc as usize {
-            let dst = i + 1;
-            if dst >= new_registers.len() {
-                return Err(RuntimeError::TypeError {
-                    expected: "argument register range",
-                    got: Value::from_i64(dst as i64),
-                });
-            }
-            new_registers[dst] = old_registers[start + i];
-        }
+    if end > src_reg_len || argc as usize + 1 > method_reg_len {
+        return Err(RuntimeError::TypeError {
+            expected: "argument register range",
+            got: Value::from_i64(end as i64),
+        });
+    }
+    unsafe {
+        fill_registers_unchecked(state, method_reg_base, method_reg_len, none);
+        write_register_unchecked(state, method_reg_base, 0, receiver);
+    }
+    let src_base = state.frames[frame_idx].reg_base + start;
+    let args =
+        state.register_stack[src_base..src_base + argc as usize].to_vec();
+    for (i, arg) in args.into_iter().enumerate() {
+        state.register_stack[method_reg_base + 1 + i] = arg;
     }
 
     if frame_idx > method_idx {
-        state.frames.truncate(method_idx + 1);
+        truncate_frames(state, method_idx + 1);
     }
 
     let frame = &mut state.frames[method_idx];
     frame.code = code_val;
     frame.pc = 0;
-    frame.registers = new_registers;
     frame.temp_array = new_temp_array;
     frame.method_frame_idx = method_idx;
     frame.holder = holder;
@@ -1167,8 +1152,8 @@ fn create_object(
     let values_start = values_reg as usize;
     let values_end = values_start + value_count;
     if value_count > 0 {
-        let regs = &state.frames[frame_idx].registers;
-        if values_end > regs.len() {
+        let reg_len = state.frames[frame_idx].reg_len;
+        if values_end > reg_len {
             return Err(RuntimeError::TypeError {
                 expected: "register range",
                 got: Value::from_i64(values_end as i64),
@@ -1193,10 +1178,10 @@ fn create_object(
             );
 
             if value_count > 0 {
-                let regs = &roots.state.frames[frame_idx].registers;
                 let vals_dst = obj_ptr.add(1) as *mut Value;
                 for i in 0..value_count {
-                    *vals_dst.add(i) = regs[values_start + i];
+                    *vals_dst.add(i) =
+                        read_register(roots.state, frame_idx, values_start + i);
                 }
             }
 
@@ -1219,7 +1204,7 @@ fn create_block(
     let (env, self_value) = state
         .frames
         .last()
-        .map(|f| (f.temp_array, f.registers[0]))
+        .map(|f| (f.temp_array, read_register_at(state, f.reg_base, 0)))
         .unwrap_or((vm.special.none, vm.special.none));
     let mut scratch = vec![map_val, env, self_value];
     let block = with_roots(vm, state, &mut scratch, |proxy, roots| {
@@ -1592,30 +1577,39 @@ fn temp_array_parent(
 }
 
 fn copy_args_from_frame(
-    state: &InterpreterState,
+    state: &mut InterpreterState,
     frame_idx: usize,
     reg: u16,
     argc: u8,
-    out_registers: &mut [Value],
+    out_reg_base: usize,
+    out_reg_len: usize,
 ) -> Result<(), RuntimeError> {
+    if argc == 0 {
+        return Ok(());
+    }
+
     let start = reg as usize;
     let end = start + argc as usize;
-    let regs = &state.frames[frame_idx].registers;
-    if end > regs.len() {
+    let (in_reg_base, in_reg_len) = {
+        let frame = &state.frames[frame_idx];
+        (frame.reg_base, frame.reg_len)
+    };
+    if end > in_reg_len {
         return Err(RuntimeError::TypeError {
             expected: "argument register range",
             got: Value::from_i64(end as i64),
         });
     }
-    for i in 0..argc as usize {
-        let dst = i + 1;
-        if dst >= out_registers.len() {
-            return Err(RuntimeError::TypeError {
-                expected: "argument register range",
-                got: Value::from_i64(dst as i64),
-            });
-        }
-        out_registers[dst] = regs[start + i];
+    if 1 + argc as usize > out_reg_len {
+        return Err(RuntimeError::TypeError {
+            expected: "argument register range",
+            got: Value::from_i64((1 + argc as usize) as i64),
+        });
+    }
+    let args =
+        state.register_stack[in_reg_base + start..in_reg_base + end].to_vec();
+    for (i, arg) in args.into_iter().enumerate() {
+        state.register_stack[out_reg_base + 1 + i] = arg;
     }
     Ok(())
 }
@@ -1628,14 +1622,17 @@ fn collect_args_from_frame(
 ) -> Result<Vec<Value>, RuntimeError> {
     let start = reg as usize;
     let end = start + argc as usize;
-    let regs = &state.frames[frame_idx].registers;
-    if end > regs.len() {
+    let frame = &state.frames[frame_idx];
+    if end > frame.reg_len {
         return Err(RuntimeError::TypeError {
             expected: "argument register range",
             got: Value::from_i64(end as i64),
         });
     }
-    Ok(regs[start..end].to_vec())
+    unsafe {
+        let ptr = state.register_stack.as_ptr().add(frame.reg_base + start);
+        Ok(core::slice::from_raw_parts(ptr, argc as usize).to_vec())
+    }
 }
 
 enum MethodTarget {
@@ -1877,47 +1874,182 @@ fn is_truthy(vm: &VM, value: Value) -> bool {
     raw != none && raw != false_obj
 }
 
-fn get_register(frame: &Frame, reg: u16) -> Result<Value, RuntimeError> {
-    frame
-        .registers
-        .get(reg as usize)
-        .copied()
-        .ok_or(RuntimeError::TypeError {
-            expected: "register",
-            got: Value::from_i64(reg as i64),
-        })
+fn alloc_frame_registers(
+    state: &mut InterpreterState,
+    reg_count: usize,
+    none: Value,
+) -> (usize, usize) {
+    let reg_len = reg_count.max(1);
+    let reg_base = state.register_top;
+    let new_top = reg_base + reg_len;
+    state.register_stack.reserve(reg_len);
+    if new_top > state.register_stack.len() {
+        state.register_stack.resize(new_top, none);
+    }
+    unsafe { fill_registers_unchecked(state, reg_base, reg_len, none) };
+    state.register_top = new_top;
+    (reg_base, reg_len)
 }
 
+fn truncate_frames(state: &mut InterpreterState, len: usize) {
+    state.frames.truncate(len);
+    state.register_top = state
+        .frames
+        .last()
+        .map(|f| f.reg_base + f.reg_len)
+        .unwrap_or(0);
+}
+
+fn pop_frame(state: &mut InterpreterState) {
+    if state.frames.pop().is_some() {
+        state.register_top = state
+            .frames
+            .last()
+            .map(|f| f.reg_base + f.reg_len)
+            .unwrap_or(0);
+    }
+}
+
+#[inline(always)]
+unsafe fn read_register_unchecked(
+    state: &InterpreterState,
+    reg_base: usize,
+    reg: usize,
+) -> Value {
+    state.register_stack[reg_base + reg]
+}
+
+#[inline(always)]
+unsafe fn write_register_unchecked(
+    state: &mut InterpreterState,
+    reg_base: usize,
+    reg: usize,
+    value: Value,
+) {
+    state.register_stack[reg_base + reg] = value;
+}
+
+#[inline(always)]
+unsafe fn fill_registers_unchecked(
+    state: &mut InterpreterState,
+    reg_base: usize,
+    reg_len: usize,
+    value: Value,
+) {
+    state.register_stack[reg_base..reg_base + reg_len].fill(value);
+}
+
+#[inline(always)]
+fn read_register_at(
+    state: &InterpreterState,
+    reg_base: usize,
+    reg: usize,
+) -> Value {
+    unsafe { read_register_unchecked(state, reg_base, reg) }
+}
+
+#[inline(always)]
+fn read_register(
+    state: &InterpreterState,
+    frame_idx: usize,
+    reg: usize,
+) -> Value {
+    let frame = &state.frames[frame_idx];
+    debug_assert!(reg < frame.reg_len);
+    unsafe { read_register_unchecked(state, frame.reg_base, reg) }
+}
+
+#[inline(always)]
+fn get_register(
+    state: &InterpreterState,
+    frame_idx: usize,
+    reg: u16,
+) -> Result<Value, RuntimeError> {
+    let frame = &state.frames[frame_idx];
+    let idx = reg as usize;
+    if idx >= frame.reg_len {
+        return Err(RuntimeError::TypeError {
+            expected: "register",
+            got: Value::from_i64(reg as i64),
+        });
+    }
+    Ok(unsafe { read_register_unchecked(state, frame.reg_base, idx) })
+}
+
+#[inline(always)]
 fn set_register(
-    frame: &mut Frame,
+    state: &mut InterpreterState,
+    frame_idx: usize,
     reg: u16,
     value: Value,
 ) -> Result<(), RuntimeError> {
-    if let Some(slot) = frame.registers.get_mut(reg as usize) {
-        *slot = value;
-        Ok(())
-    } else {
-        Err(RuntimeError::TypeError {
+    let (reg_base, reg_len) = {
+        let frame = &state.frames[frame_idx];
+        (frame.reg_base, frame.reg_len)
+    };
+    let idx = reg as usize;
+    if idx >= reg_len {
+        return Err(RuntimeError::TypeError {
             expected: "register",
             got: Value::from_i64(reg as i64),
-        })
+        });
     }
+    unsafe { write_register_unchecked(state, reg_base, idx, value) };
+    Ok(())
 }
 
-fn load_stack_slot(frame: &mut Frame, offset: u32, none: Value) -> Value {
-    let idx = offset as usize;
-    if idx >= frame.registers.len() {
-        frame.registers.resize(idx + 1, none);
+fn ensure_frame_register_len(
+    state: &mut InterpreterState,
+    frame_idx: usize,
+    required_len: usize,
+    none: Value,
+) {
+    let (reg_base, reg_len) = {
+        let frame = &state.frames[frame_idx];
+        (frame.reg_base, frame.reg_len)
+    };
+    if required_len <= reg_len {
+        return;
     }
-    frame.registers[idx]
+    debug_assert_eq!(frame_idx + 1, state.frames.len());
+    debug_assert_eq!(reg_base + reg_len, state.register_top);
+
+    let grow_by = required_len - reg_len;
+    let new_top = state.register_top + grow_by;
+    state.register_stack.reserve(grow_by);
+    if new_top > state.register_stack.len() {
+        state.register_stack.resize(new_top, none);
+    }
+    unsafe {
+        fill_registers_unchecked(state, reg_base + reg_len, grow_by, none)
+    };
+    state.register_top = new_top;
+    state.frames[frame_idx].reg_len = required_len;
 }
 
-fn store_stack_slot(frame: &mut Frame, offset: u32, value: Value, none: Value) {
+fn load_stack_slot(
+    state: &mut InterpreterState,
+    frame_idx: usize,
+    offset: u32,
+    none: Value,
+) -> Value {
     let idx = offset as usize;
-    if idx >= frame.registers.len() {
-        frame.registers.resize(idx + 1, none);
-    }
-    frame.registers[idx] = value;
+    ensure_frame_register_len(state, frame_idx, idx + 1, none);
+    let base = state.frames[frame_idx].reg_base;
+    unsafe { read_register_unchecked(state, base, idx) }
+}
+
+fn store_stack_slot(
+    state: &mut InterpreterState,
+    frame_idx: usize,
+    offset: u32,
+    value: Value,
+    none: Value,
+) {
+    let idx = offset as usize;
+    ensure_frame_register_len(state, frame_idx, idx + 1, none);
+    let base = state.frames[frame_idx].reg_base;
+    unsafe { write_register_unchecked(state, base, idx, value) };
 }
 
 fn jump_target(pc: usize, offset: i16) -> Result<usize, RuntimeError> {
@@ -2484,7 +2616,8 @@ mod tests {
 
     #[test]
     fn interpret_string_literal() {
-        let value = run_source("\"hello\"").expect("interpret error");
+        let (_vm, value) =
+            run_source_with_vm("\"hello\"").expect("interpret error");
         assert!(value.is_ref());
         let s: &VMString = unsafe { value.as_ref() };
         assert_eq!(unsafe { s.as_str() }, "hello");
@@ -2514,7 +2647,8 @@ mod tests {
 
     #[test]
     fn interpret_data_object_creation() {
-        let value = run_source("{ x = 5 }").expect("interpret error");
+        let (_vm, value) =
+            run_source_with_vm("{ x = 5 }").expect("interpret error");
         assert!(value.is_ref());
         let obj: &SlotObject = unsafe { value.as_ref() };
         assert_eq!(obj.header.object_type(), ObjectType::Slots);
@@ -2566,7 +2700,7 @@ mod tests {
 
     #[test]
     fn interpret_block_creation() {
-        let value = run_source("[1]").expect("interpret error");
+        let (_vm, value) = run_source_with_vm("[1]").expect("interpret error");
         assert!(value.is_ref());
         let header: &Header = unsafe { value.as_ref() };
         assert_eq!(header.object_type(), ObjectType::Block);
@@ -3542,7 +3676,7 @@ mod tests {
 
     #[test]
     fn become_with_swaps_references() {
-        let value = run_source(
+        let (_vm, value) = run_source_with_vm(
             "a = { tag = \"A\" }. b = { tag = \"B\" }. o = { ref := None }. o ref: a. Object _Become: a With: b. (o ref) tag",
         )
         .expect("interpret error");
