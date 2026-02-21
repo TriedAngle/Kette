@@ -1,5 +1,6 @@
 pub mod alloc;
 pub mod compiler0;
+pub mod image;
 pub mod interpreter;
 pub mod materialize;
 pub mod primitives;

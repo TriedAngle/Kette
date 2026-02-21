@@ -479,6 +479,18 @@ impl HeapInner {
         trace_fn: TraceFn,
         size_fn: SizeFn,
     ) -> Self {
+        let heap_start = system::map_memory(settings.heap_size)
+            .expect("allocate memory")
+            .as_ptr();
+        Self::new_with_heap_start(settings, trace_fn, size_fn, heap_start)
+    }
+
+    pub fn new_with_heap_start(
+        settings: HeapSettings,
+        trace_fn: TraceFn,
+        size_fn: SizeFn,
+        heap_start: *mut u8,
+    ) -> Self {
         settings.validate().expect("Invalid Heap Settings");
 
         let block_size = settings.block_size;
@@ -487,10 +499,6 @@ impl HeapInner {
         let num_blocks = heap_size / block_size;
         let lines_per_block = block_size / line_size;
         let total_lines = num_blocks * lines_per_block;
-
-        let heap_start = system::map_memory(heap_size)
-            .expect("allocate memory")
-            .as_ptr();
 
         debug_assert!((heap_start as usize).is_multiple_of(OS_PAGE_SIZE));
 
@@ -1377,6 +1385,22 @@ impl HeapInner {
     }
 }
 
+impl Drop for HeapInner {
+    fn drop(&mut self) {
+        let mut large_objects =
+            self.large_objects.lock().expect("TODO: handle poisoning");
+        for alloc in large_objects.drain(..) {
+            let allocation = unsafe { alloc.as_ref() };
+            let raw = alloc.cast::<u8>();
+            system::unmap_memory(raw, allocation.size);
+        }
+
+        if let Some(ptr) = NonNull::new(self.heap_start) {
+            system::unmap_memory(ptr, self.settings.heap_size);
+        }
+    }
+}
+
 // ── Heap (Arc wrapper) ────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -1390,6 +1414,19 @@ impl Heap {
         size_fn: SizeFn,
     ) -> Self {
         let inner = HeapInner::new(settings, trace_fn, size_fn);
+        Self(Arc::new(inner))
+    }
+
+    #[must_use]
+    pub fn from_mapped(
+        settings: HeapSettings,
+        trace_fn: TraceFn,
+        size_fn: SizeFn,
+        heap_start: *mut u8,
+    ) -> Self {
+        let inner = HeapInner::new_with_heap_start(
+            settings, trace_fn, size_fn, heap_start,
+        );
         Self(Arc::new(inner))
     }
 
@@ -1884,6 +1921,11 @@ impl HeapProxy {
         if reacquire_block {
             self.exchange_block(roots);
         }
+    }
+
+    #[cold]
+    pub fn force_major_gc(&mut self, roots: &mut dyn RootProvider) {
+        self.execute_gc_with_reason(GcStatus::MajorRequested, true, roots);
     }
 
     #[cold]

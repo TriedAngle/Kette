@@ -1,7 +1,9 @@
 use clap::Parser as ClapParser;
 use std::{
+    collections::HashSet,
     fs,
     io::{self, Write},
+    path::Path,
     process,
 };
 
@@ -9,7 +11,9 @@ use heap::HeapSettings;
 use parser::token::TokenKind;
 use parser::{Lexer, Parser};
 
-use vm::{compiler0, interpreter, materialize, special, USER_MODULE, VM};
+use vm::{
+    compiler0, image, interpreter, materialize, special, USER_MODULE, VM,
+};
 
 const SLOT_PRINT_LIMIT: usize = 30;
 
@@ -27,6 +31,14 @@ struct Cli {
     /// Print bytecode and constants instead of executing
     #[arg(long, help = "Dump bytecode + constant pool for inputs")]
     dump_bytecode: bool,
+
+    /// Load VM/heap image file at startup
+    #[arg(long, help = "Load a saved VM image")]
+    load_image: Option<String>,
+
+    /// Save VM/heap image file before exit
+    #[arg(long, help = "Save VM image before exiting")]
+    save_image: Option<String>,
 
     /// Print receiver details for MessageNotUnderstood
     #[arg(long, help = "Trace MessageNotUnderstood receiver details")]
@@ -47,18 +59,70 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    let mut vm = special::bootstrap(HeapSettings::default());
+    let loaded_from_image = cli.load_image.is_some();
+
+    let mut vm = if let Some(path) = &cli.load_image {
+        match image::load_image(Path::new(path)) {
+            Ok(vm) => vm,
+            Err(err) => {
+                eprintln!("Error loading image '{}': {}", path, err);
+                process::exit(1);
+            }
+        }
+    } else {
+        special::bootstrap(HeapSettings::default())
+    };
     #[cfg(debug_assertions)]
     {
         vm.trace_assoc_name = cli.trace_assoc.clone();
         vm.trace_send_name = cli.trace_send.clone();
     }
 
-    if !cli.files.is_empty() {
+    if !loaded_from_image {
         vm.open_module(USER_MODULE);
     }
 
+    let trace_mnu = {
+        #[cfg(debug_assertions)]
+        {
+            cli.trace_mnu
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            false
+        }
+    };
+
+    let mut core_files = Vec::new();
+    if !loaded_from_image {
+        core_files = default_core_files();
+        if !cli.dump_bytecode {
+            for filename in &core_files {
+                let source_code = match fs::read_to_string(filename) {
+                    Ok(content) => content,
+                    Err(err) => {
+                        eprintln!("Error reading file '{}': {}", filename, err);
+                        process::exit(1);
+                    }
+                };
+
+                if let Err(err) =
+                    execute_source(&mut vm, &source_code, trace_mnu)
+                {
+                    eprintln!("Error executing {}: {}", filename, err);
+                    process::exit(1);
+                }
+            }
+        }
+    }
+    let core_file_set: HashSet<&str> =
+        core_files.iter().map(String::as_str).collect();
+
     for filename in &cli.files {
+        if !cli.dump_bytecode && core_file_set.contains(filename.as_str()) {
+            continue;
+        }
+
         let source_code = match fs::read_to_string(filename) {
             Ok(content) => content,
             Err(err) => {
@@ -79,16 +143,6 @@ fn main() {
                 }
             }
         } else {
-            let trace_mnu = {
-                #[cfg(debug_assertions)]
-                {
-                    cli.trace_mnu
-                }
-                #[cfg(not(debug_assertions))]
-                {
-                    false
-                }
-            };
             match execute_source(&mut vm, &source_code, trace_mnu) {
                 Ok(value) => {
                     if should_print_last_expr(&source_code) {
@@ -104,23 +158,60 @@ fn main() {
     }
 
     if cli.dump_bytecode {
+        if let Some(path) = &cli.save_image {
+            if let Err(err) = image::save_image(&mut vm, Path::new(path)) {
+                eprintln!("Error saving image '{}': {}", path, err);
+                process::exit(1);
+            }
+        }
         return;
     }
 
     if cli.repl || cli.files.is_empty() {
         vm.open_module(USER_MODULE);
-        let trace_mnu = {
-            #[cfg(debug_assertions)]
-            {
-                cli.trace_mnu
-            }
-            #[cfg(not(debug_assertions))]
-            {
-                false
-            }
-        };
         run_repl(&mut vm, trace_mnu);
     }
+
+    if let Some(path) = &cli.save_image {
+        if let Err(err) = image::save_image(&mut vm, Path::new(path)) {
+            eprintln!("Error saving image '{}': {}", path, err);
+            process::exit(1);
+        }
+    }
+}
+
+fn default_core_files() -> Vec<String> {
+    let core_dir = Path::new("core");
+    let mut files: Vec<String> = fs::read_dir(core_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("ktt")
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+
+    files.sort_by_key(|path| {
+        let name = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let rank = match name {
+            "init.ktt" => 0,
+            "math.ktt" => 1,
+            "collections.ktt" => 2,
+            "alien.ktt" => 3,
+            "system.ktt" => 4,
+            "os.ktt" => 5,
+            _ => 6,
+        };
+        (rank, name.to_string())
+    });
+
+    files
 }
 
 fn run_repl(vm: &mut VM, trace_mnu: bool) {

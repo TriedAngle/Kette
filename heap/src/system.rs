@@ -16,6 +16,8 @@ mod unix {
 
     #[cfg(target_os = "linux")]
     pub const MAP_ANON: i32 = 0x20;
+    #[cfg(target_os = "linux")]
+    pub const MAP_FIXED_NOREPLACE: i32 = 0x100000;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub const MAP_ANON: i32 = 0x1000;
 
@@ -68,6 +70,23 @@ mod unix {
         // SAFETY: safe if contract holds
         let _ = unsafe { munmap(ptr.cast(), len) };
     }
+
+    #[inline]
+    pub unsafe fn anonymous_mmap_at(addr: *mut u8, len: usize) -> *mut u8 {
+        #[cfg(target_os = "linux")]
+        let flags = MAP_PRIVATE | MAP_ANON | MAP_FIXED_NOREPLACE;
+        #[cfg(not(target_os = "linux"))]
+        let flags = MAP_PRIVATE | MAP_ANON;
+
+        let p = unsafe {
+            mmap(addr.cast(), len, PROT_READ | PROT_WRITE, flags, -1, 0)
+        };
+        if (p as isize) == MAP_FAILED {
+            core::ptr::null_mut()
+        } else {
+            p as *mut u8
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -109,6 +128,19 @@ mod windows {
     }
 
     #[inline]
+    pub unsafe fn reserve_and_commit_at(addr: *mut u8, len: usize) -> *mut u8 {
+        let p = unsafe {
+            VirtualAlloc(
+                addr.cast(),
+                len,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            )
+        };
+        p as *mut u8
+    }
+
+    #[inline]
     pub unsafe fn release(ptr: *mut u8) {
         // SAFETY: safe if contract holds
         let _ = unsafe { VirtualFree(ptr.cast(), 0, MEM_RELEASE) };
@@ -126,6 +158,21 @@ pub fn map_memory(size: usize) -> Option<NonNull<u8>> {
     // SAFETY: this is safe
     let ptr = unsafe { windows::reserve_and_commit(size) };
     NonNull::new(ptr)
+}
+
+#[must_use]
+pub fn map_memory_at(addr: NonNull<u8>, size: usize) -> Option<NonNull<u8>> {
+    #[cfg(unix)]
+    let ptr = unsafe { unix::anonymous_mmap_at(addr.as_ptr(), size) };
+    #[cfg(windows)]
+    let ptr = unsafe { windows::reserve_and_commit_at(addr.as_ptr(), size) };
+
+    let mapped = NonNull::new(ptr)?;
+    if mapped.as_ptr() != addr.as_ptr() {
+        unmap_memory(mapped, size);
+        return None;
+    }
+    Some(mapped)
 }
 
 pub fn unmap_memory(ptr: NonNull<u8>, size: usize) {
