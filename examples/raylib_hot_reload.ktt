@@ -1,0 +1,138 @@
+Module open: 'Core.
+Module use: 'Alien.
+
+Ray := {
+    parent* = Oddball.
+
+    lib := None.
+    fns := {
+        initWindow := None.
+        setTargetFPS := None.
+        windowShouldClose := None.
+        beginDrawing := None.
+        clearBackground := None.
+        drawRectangle := None.
+        drawCircle := None.
+        drawFPS := None.
+        drawText := None.
+        endDrawing := None.
+        closeWindow := None
+    }.
+
+    rgbaR: r G: g B: b A: a = {
+        r + (g * 256) + (b * 65536) + (a * 16777216)
+    }.
+
+    load = {
+        self lib: (Alien libraryOpen: "libraylib.so").
+        self fns initWindow: (self lib librarySym: "InitWindow").
+        self fns setTargetFPS: (self lib librarySym: "SetTargetFPS").
+        self fns windowShouldClose: (self lib librarySym: "WindowShouldClose").
+        self fns beginDrawing: (self lib librarySym: "BeginDrawing").
+        self fns clearBackground: (self lib librarySym: "ClearBackground").
+        self fns drawRectangle: (self lib librarySym: "DrawRectangle").
+        self fns drawCircle: (self lib librarySym: "DrawCircle").
+        self fns drawFPS: (self lib librarySym: "DrawFPS").
+        self fns drawText: (self lib librarySym: "DrawText").
+        self fns endDrawing: (self lib librarySym: "EndDrawing").
+        self fns closeWindow: (self lib librarySym: "CloseWindow").
+        self
+    }.
+}.
+
+NoArgs := Array cloneWithSize: 0.
+BgColor := Ray rgbaR: 16 G: 20 B: 32 A: 255.
+PanelColor := Ray rgbaR: 27 G: 38 B: 58 A: 255.
+AccentColor := Ray rgbaR: 90 G: 220 B: 255 A: 255.
+TextColor := Ray rgbaR: 235 G: 240 B: 250 A: 255.
+RayHotState := {
+    parent* = Object.
+    liveText := "Edit State liveText: in REPL for live reload".
+    renderHook := [
+        Ray fns drawText
+            callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32
+            Args: "hot hook: default" & 44 & 126 & 22 & AccentColor
+            ReturnType: CVoid
+    ]
+}.
+
+RunRenderer := [
+    Ray load.
+    circleX := 120.
+    velocity := 4.
+
+    Ray fns initWindow
+        callWithTypes: CInt32 & CInt32 & CPointer
+        Args: 900 & 520 & "Kette raylib hot reload"
+        ReturnType: CVoid.
+
+    Ray fns setTargetFPS
+        callWithTypes: CInt32
+        Args: 60
+        ReturnType: CVoid.
+
+    [ (Ray fns windowShouldClose callWithTypes: NoArgs Args: NoArgs ReturnType: CInt32) == 0 ] whileTrue: [
+        _safepoint := Array cloneWithSize: 0.
+        liveText := RayHotState liveText.
+        renderHook := RayHotState renderHook.
+
+        circleX := circleX + velocity.
+        circleX >= 840 ifTrue: [ velocity := 0 - velocity ] IfFalse: [ None ].
+        circleX <= 60 ifTrue: [ velocity := 0 - velocity ] IfFalse: [ None ].
+
+        Ray fns beginDrawing callWithTypes: NoArgs Args: NoArgs ReturnType: CVoid.
+
+        Ray fns clearBackground
+            callWithTypes: CUInt32
+            Args: BgColor
+            ReturnType: CVoid.
+
+        Ray fns drawRectangle
+            callWithTypes: CInt32 & CInt32 & CInt32 & CInt32 & CUInt32
+            Args: 24 & 24 & 852 & 110 & PanelColor
+            ReturnType: CVoid.
+
+        Ray fns drawText
+            callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32
+            Args: "Kette raylib hot reload" & 42 & 42 & 34 & TextColor
+            ReturnType: CVoid.
+
+        Ray fns drawText
+            callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32
+            Args: liveText & 42 & 86 & 23 & AccentColor
+            ReturnType: CVoid.
+
+        Ray fns drawCircle
+            callWithTypes: CInt32 & CInt32 & CFloat32 & CUInt32
+            Args: circleX & 300 & 54 & AccentColor
+            ReturnType: CVoid.
+
+        renderHook call.
+
+        Ray fns drawFPS
+            callWithTypes: CInt32 & CInt32
+            Args: 780 & 20
+            ReturnType: CVoid.
+
+        Ray fns endDrawing callWithTypes: NoArgs Args: NoArgs ReturnType: CVoid.
+        VM threadParkForMillis: 1
+    ].
+
+    Ray fns closeWindow callWithTypes: NoArgs Args: NoArgs ReturnType: CVoid.
+    Ray lib libraryClose
+].
+
+RayHotRendererThread := VM spawnPlatform: RunRenderer.
+
+Module export: 'RayHotState.
+Module export: 'RayHotRendererThread.
+
+"Renderer running on a platform thread." println.
+"Start with: cargo run -p vm -- --repl examples/raylib_hot_reload.ktt" println.
+"In REPL, try:" println.
+"RayHotState liveText: \"changed from REPL\"." println.
+"RayHotState renderHook: [ Ray fns drawText callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32 Args: \"hot swapped from REPL\" & 44 & 126 & 24 & (Ray rgbaR: 255 G: 190 B: 80 A: 255) ReturnType: CVoid ]." println.
+"RayHotState renderHook: [ Ray fns clearBackground callWithTypes: CUInt32 Args: (Ray rgbaR: 8 G: 40 B: 36 A: 255) ReturnType: CVoid. Ray fns drawText callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32 Args: \"new background\" & 44 & 126 & 24 & (Ray rgbaR: 230 G: 255 B: 200 A: 255) ReturnType: CVoid ]." println.
+"Stop with: VM threadJoin: RayHotRendererThread" println.
+
+RayHotRendererThread.

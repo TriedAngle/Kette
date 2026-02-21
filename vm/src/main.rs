@@ -5,6 +5,9 @@ use std::{
     io::{self, Write},
     path::Path,
     process,
+    sync::mpsc,
+    thread,
+    time::Duration,
 };
 
 use heap::HeapSettings;
@@ -168,7 +171,9 @@ fn main() {
     }
 
     if cli.repl || cli.files.is_empty() {
-        vm.open_module(USER_MODULE);
+        if cli.files.is_empty() {
+            vm.open_module(USER_MODULE);
+        }
         run_repl(&mut vm, trace_mnu);
     }
 
@@ -218,26 +223,55 @@ fn run_repl(vm: &mut VM, trace_mnu: bool) {
     println!("Kette VM REPL");
     println!("Type 'exit' to quit.");
 
-    let stdin = io::stdin();
     let mut stdout = io::stdout();
-    let mut input_buffer = String::new();
+    let (tx, rx) = mpsc::channel::<Result<String, String>>();
+
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        loop {
+            let mut input_buffer = String::new();
+            match stdin.read_line(&mut input_buffer) {
+                Ok(0) => {
+                    let _ = tx.send(Ok(String::new()));
+                    break;
+                }
+                Ok(_) => {
+                    if tx.send(Ok(input_buffer)).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(format!("Error reading input: {err}")));
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut need_prompt = true;
 
     loop {
-        print!("> ");
-        if let Err(err) = stdout.flush() {
-            eprintln!("Error flushing stdout: {}", err);
-            break;
+        if need_prompt {
+            print!("> ");
+            if let Err(err) = stdout.flush() {
+                eprintln!("Error flushing stdout: {}", err);
+                break;
+            }
+            need_prompt = false;
         }
 
-        input_buffer.clear();
-        match stdin.read_line(&mut input_buffer) {
-            Ok(0) => break,
-            Ok(_) => {
+        match rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(Ok(input_buffer)) => {
+                if input_buffer.is_empty() {
+                    break;
+                }
+
                 let input = input_buffer.trim();
                 if input == "exit" {
                     break;
                 }
                 if input.is_empty() {
+                    need_prompt = true;
                     continue;
                 }
 
@@ -245,11 +279,19 @@ fn run_repl(vm: &mut VM, trace_mnu: bool) {
                     Ok(value) => print_value(vm, value),
                     Err(err) => eprintln!("Error: {}", err),
                 }
+                need_prompt = true;
             }
-            Err(err) => {
-                eprintln!("Error reading input: {}", err);
+            Ok(Err(err)) => {
+                eprintln!("{err}");
                 break;
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Keep this thread participating in GC coordination while waiting
+                // for blocking stdin input on the reader thread.
+                let vm_ptr: *mut VM = vm;
+                unsafe { (*vm_ptr).heap_proxy.safepoint(&mut *vm_ptr) };
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }

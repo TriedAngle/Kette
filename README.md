@@ -219,6 +219,19 @@ Run it with:
 cargo run -p vm -- examples/raylib_min.ktt
 ```
 
+Hot-reload example (render loop on a platform thread + interactive REPL edits):
+
+```bash
+cargo run -p vm -- --repl examples/raylib_hot_reload.ktt
+```
+
+Then, in the REPL, you can live-update values and render code, e.g.:
+
+```text
+RayHotState liveText: "changed from REPL".
+RayHotState renderHook: [ Ray fns drawText callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32 Args: "hot swapped from REPL" & 44 & 126 & 24 & (Ray rgbaR: 255 G: 190 B: 80 A: 255) ReturnType: CVoid ].
+```
+
 On Linux/WSL, install raylib first so `libraylib.so` is available to `dlopen`.
 For Ubuntu-based distros:
 
