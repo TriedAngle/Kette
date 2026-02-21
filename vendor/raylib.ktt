@@ -1,0 +1,306 @@
+Module open: 'Raylib.
+Module use: 'Alien.
+
+NoArgs := Array cloneWithSize: 0.
+
+TInitWindow := (CInt32 & CInt32 & CPointer) asArray.
+TSetTargetFPS := (CInt32) asArray.
+TWindowShouldClose := NoArgs.
+TBeginDrawing := NoArgs.
+TClearBackground := (CUInt32) asArray.
+TDrawRectangle := (CInt32 & CInt32 & CInt32 & CInt32 & CUInt32) asArray.
+TDrawCircle := (CInt32 & CInt32 & CFloat32 & CUInt32) asArray.
+TDrawFPS := (CInt32 & CInt32) asArray.
+TDrawText := (CPointer & CInt32 & CInt32 & CInt32 & CUInt32) asArray.
+TEndDrawing := NoArgs.
+TCloseWindow := NoArgs.
+TGetFrameTime := NoArgs.
+
+CVector3 := CType struct: {
+    x = CFloat32.
+    y = CFloat32.
+    z = CFloat32.
+}.
+
+CCamera3D := CType struct: {
+    position = CVector3.
+    target = CVector3.
+    up = CVector3.
+    fovy = CFloat32.
+    projection = CInt32.
+}.
+
+TBeginMode3D := (CCamera3D) asArray.
+TEndMode3D := NoArgs.
+TDrawCube := (CVector3 & CFloat32 & CFloat32 & CFloat32 & CUInt32) asArray.
+TDrawCubeWires := (CVector3 & CFloat32 & CFloat32 & CFloat32 & CUInt32) asArray.
+TDrawGrid := (CInt32 & CFloat32) asArray.
+TDrawLine3D := (CVector3 & CVector3 & CUInt32) asArray.
+
+Raylib := {
+    parent* = Oddball.
+
+    libraryPath := "libraylib.so".
+    lib := None.
+    loaded := False.
+    CAMERA_PERSPECTIVE = 0.
+    CAMERA_ORTHOGRAPHIC = 1.
+    fns := {
+        initWindow := None.
+        setTargetFPS := None.
+        windowShouldClose := None.
+        beginDrawing := None.
+        clearBackground := None.
+        drawRectangle := None.
+        drawCircle := None.
+        drawFPS := None.
+        drawText := None.
+        endDrawing := None.
+        closeWindow := None.
+        getFrameTime := None.
+        beginMode3D := None.
+        endMode3D := None.
+        drawCube := None.
+        drawCubeWires := None.
+        drawGrid := None.
+        drawLine3D := None
+    }.
+    calls := {
+        initWindow := None.
+        setTargetFPS := None.
+        windowShouldClose := None.
+        beginDrawing := None.
+        clearBackground := None.
+        drawRectangle := None.
+        drawCircle := None.
+        drawFPS := None.
+        drawText := None.
+        endDrawing := None.
+        closeWindow := None.
+        getFrameTime := None.
+        beginMode3D := None.
+        endMode3D := None.
+        drawCube := None.
+        drawCubeWires := None.
+        drawGrid := None.
+        drawLine3D := None
+    }.
+
+    ensureLoaded = {
+        self synchronized: [
+            self loaded
+                ifTrue: [ self ]
+                IfFalse: [
+                    libHandle := Alien libraryOpen: self libraryPath.
+                    f := self fns.
+                    f initWindow: (libHandle librarySym: "InitWindow").
+                    f setTargetFPS: (libHandle librarySym: "SetTargetFPS").
+                    f windowShouldClose: (libHandle librarySym: "WindowShouldClose").
+                    f beginDrawing: (libHandle librarySym: "BeginDrawing").
+                    f clearBackground: (libHandle librarySym: "ClearBackground").
+                    f drawRectangle: (libHandle librarySym: "DrawRectangle").
+                    f drawCircle: (libHandle librarySym: "DrawCircle").
+                    f drawFPS: (libHandle librarySym: "DrawFPS").
+                    f drawText: (libHandle librarySym: "DrawText").
+                    f endDrawing: (libHandle librarySym: "EndDrawing").
+                    f closeWindow: (libHandle librarySym: "CloseWindow").
+                    f getFrameTime: (libHandle librarySym: "GetFrameTime").
+                    f beginMode3D: (libHandle librarySym: "BeginMode3D").
+                    f endMode3D: (libHandle librarySym: "EndMode3D").
+                    f drawCube: (libHandle librarySym: "DrawCube").
+                    f drawCubeWires: (libHandle librarySym: "DrawCubeWires").
+                    f drawGrid: (libHandle librarySym: "DrawGrid").
+                    f drawLine3D: (libHandle librarySym: "DrawLine3D").
+
+                    c := self calls.
+                    c initWindow: (PreparedAlienCall fromFn: (f initWindow) Types: TInitWindow ReturnType: CVoid).
+                    c setTargetFPS: (PreparedAlienCall fromFn: (f setTargetFPS) Types: TSetTargetFPS ReturnType: CVoid).
+                    c windowShouldClose: (PreparedAlienCall fromFn: (f windowShouldClose) Types: TWindowShouldClose ReturnType: CInt32).
+                    c beginDrawing: (PreparedAlienCall fromFn: (f beginDrawing) Types: TBeginDrawing ReturnType: CVoid).
+                    c clearBackground: (PreparedAlienCall fromFn: (f clearBackground) Types: TClearBackground ReturnType: CVoid).
+                    c drawRectangle: (PreparedAlienCall fromFn: (f drawRectangle) Types: TDrawRectangle ReturnType: CVoid).
+                    c drawCircle: (PreparedAlienCall fromFn: (f drawCircle) Types: TDrawCircle ReturnType: CVoid).
+                    c drawFPS: (PreparedAlienCall fromFn: (f drawFPS) Types: TDrawFPS ReturnType: CVoid).
+                    c drawText: (PreparedAlienCall fromFn: (f drawText) Types: TDrawText ReturnType: CVoid).
+                    c endDrawing: (PreparedAlienCall fromFn: (f endDrawing) Types: TEndDrawing ReturnType: CVoid).
+                    c closeWindow: (PreparedAlienCall fromFn: (f closeWindow) Types: TCloseWindow ReturnType: CVoid).
+                    c getFrameTime: (PreparedAlienCall fromFn: (f getFrameTime) Types: TGetFrameTime ReturnType: CFloat32).
+                    c beginMode3D: (PreparedAlienCall fromFn: (f beginMode3D) Types: TBeginMode3D ReturnType: CVoid).
+                    c endMode3D: (PreparedAlienCall fromFn: (f endMode3D) Types: TEndMode3D ReturnType: CVoid).
+                    c drawCube: (PreparedAlienCall fromFn: (f drawCube) Types: TDrawCube ReturnType: CVoid).
+                    c drawCubeWires: (PreparedAlienCall fromFn: (f drawCubeWires) Types: TDrawCubeWires ReturnType: CVoid).
+                    c drawGrid: (PreparedAlienCall fromFn: (f drawGrid) Types: TDrawGrid ReturnType: CVoid).
+                    c drawLine3D: (PreparedAlienCall fromFn: (f drawLine3D) Types: TDrawLine3D ReturnType: CVoid).
+
+                    self lib: libHandle.
+                    self loaded: True.
+                    self
+                ]
+        ]
+    }.
+
+    runtime = { self }.
+
+    libraryPath: path = {
+        self synchronized: [
+            self loaded
+                ifTrue: [
+                    VM signal: "Raylib is already loaded; set libraryPath before first call"
+                ]
+                IfFalse: [ self libraryPath: path ]
+        ]
+    }.
+
+    initWindowWidth: width Height: height Title: title = {
+        api := self ensureLoaded.
+        api calls initWindow call: width With: height With: title
+    }.
+
+    setTargetFPS: fps = {
+        api := self ensureLoaded.
+        api calls setTargetFPS call: fps
+    }.
+
+    windowShouldClose = {
+        api := self ensureLoaded.
+        api calls windowShouldClose call
+    }.
+
+    beginDrawing = {
+        api := self ensureLoaded.
+        api calls beginDrawing call
+    }.
+
+    clearBackground: color = {
+        api := self ensureLoaded.
+        api calls clearBackground call: color
+    }.
+
+    drawRectangleX: x Y: y Width: width Height: height Color: color = {
+        api := self ensureLoaded.
+        api calls drawRectangle call: x With: y With: width With: height With: color
+    }.
+
+    drawCircleX: x Y: y Radius: radius Color: color = {
+        api := self ensureLoaded.
+        api calls drawCircle call: x With: y With: radius With: color
+    }.
+
+    drawFPSX: x Y: y = {
+        api := self ensureLoaded.
+        api calls drawFPS call: x With: y
+    }.
+
+    drawText: text X: x Y: y Size: size Color: color = {
+        api := self ensureLoaded.
+        api calls drawText call: text With: x With: y With: size With: color
+    }.
+
+    frameTime = {
+        api := self ensureLoaded.
+        api calls getFrameTime call
+    }.
+
+    vector3NewX: x Y: y Z: z = {
+        vec := ByteArray cloneWithSize: CVector3 size.
+        self vector3Set: vec X: x Y: y Z: z
+    }.
+
+    vector3Set: vec X: x Y: y Z: z = {
+        vec f32At: (CVector3 fieldOffsetAt: "x") Put: x.
+        vec f32At: (CVector3 fieldOffsetAt: "y") Put: y.
+        vec f32At: (CVector3 fieldOffsetAt: "z") Put: z.
+        vec
+    }.
+
+    camera3DNewPositionX: px Y: py Z: pz TargetX: tx Y: ty Z: tz UpX: ux Y: uy Z: uz Fovy: fovy Projection: projection = {
+        camera := ByteArray cloneWithSize: CCamera3D size.
+        self camera3DSet: camera PositionX: px Y: py Z: pz TargetX: tx Y: ty Z: tz UpX: ux Y: uy Z: uz Fovy: fovy Projection: projection
+    }.
+
+    camera3DSet: camera PositionX: px Y: py Z: pz TargetX: tx Y: ty Z: tz UpX: ux Y: uy Z: uz Fovy: fovy Projection: projection = {
+        posOffset := CCamera3D fieldOffsetAt: "position".
+        targetOffset := CCamera3D fieldOffsetAt: "target".
+        upOffset := CCamera3D fieldOffsetAt: "up".
+        fovyOffset := CCamera3D fieldOffsetAt: "fovy".
+        projectionOffset := CCamera3D fieldOffsetAt: "projection".
+        xOffset := CVector3 fieldOffsetAt: "x".
+        yOffset := CVector3 fieldOffsetAt: "y".
+        zOffset := CVector3 fieldOffsetAt: "z".
+
+        camera f32At: (posOffset + xOffset) Put: px.
+        camera f32At: (posOffset + yOffset) Put: py.
+        camera f32At: (posOffset + zOffset) Put: pz.
+
+        camera f32At: (targetOffset + xOffset) Put: tx.
+        camera f32At: (targetOffset + yOffset) Put: ty.
+        camera f32At: (targetOffset + zOffset) Put: tz.
+
+        camera f32At: (upOffset + xOffset) Put: ux.
+        camera f32At: (upOffset + yOffset) Put: uy.
+        camera f32At: (upOffset + zOffset) Put: uz.
+
+        camera f32At: fovyOffset Put: fovy.
+        camera i32At: projectionOffset Put: projection.
+        camera
+    }.
+
+    beginMode3D: camera = {
+        api := self ensureLoaded.
+        api calls beginMode3D call: camera
+    }.
+
+    endMode3D = {
+        api := self ensureLoaded.
+        api calls endMode3D call
+    }.
+
+    drawCubePosition: position Width: width Height: height Length: length Color: color = {
+        api := self ensureLoaded.
+        api calls drawCube call: position With: width With: height With: length With: color
+    }.
+
+    drawCubeWiresPosition: position Width: width Height: height Length: length Color: color = {
+        api := self ensureLoaded.
+        api calls drawCubeWires call: position With: width With: height With: length With: color
+    }.
+
+    drawGridSlices: slices Spacing: spacing = {
+        api := self ensureLoaded.
+        api calls drawGrid call: slices With: spacing
+    }.
+
+    drawLine3DFrom: start To: stop Color: color = {
+        api := self ensureLoaded.
+        api calls drawLine3D call: start With: stop With: color
+    }.
+
+    endDrawing = {
+        api := self ensureLoaded.
+        api calls endDrawing call
+    }.
+
+    closeWindow = {
+        api := self ensureLoaded.
+        api calls closeWindow call
+    }.
+
+    close = {
+        self synchronized: [
+            self loaded
+                ifTrue: [
+                    self lib libraryClose.
+                    self lib: None.
+                    self loaded: False.
+                    self
+                ]
+                IfFalse: [ self ]
+        ]
+    }.
+
+    R: r G: g B: b A: a = {
+        r + (g * 256) + (b * 65536) + (a * 16777216)
+    }.
+}.
+
+Module export: 'Raylib.

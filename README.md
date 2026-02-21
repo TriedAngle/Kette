@@ -209,27 +209,30 @@ Extra output/file-loading demo previously in init lives in:
 
 ## Raylib FFI Example
 
-A minimal userspace raylib binding is available at:
+A userspace raylib wrapper and examples are available under:
 
-- `examples/raylib_min.ktt`
+- `examples/raylib/`
 
 Run it with:
 
 ```bash
-cargo run -p vm -- examples/raylib_min.ktt
+cargo run -p vm -- vendor/raylib.ktt examples/raylib/min.ktt
+
+# 3D scene example
+cargo run -p vm -- vendor/raylib.ktt examples/raylib/scene3d.ktt
 ```
 
 Hot-reload example (render loop on a platform thread + interactive REPL edits):
 
 ```bash
-cargo run -p vm -- --repl examples/raylib_hot_reload.ktt
+cargo run -p vm -- --repl vendor/raylib.ktt examples/raylib/hot_reload.ktt
 ```
 
 Then, in the REPL, you can live-update values and render code, e.g.:
 
 ```text
 RayHotState liveText: "changed from REPL".
-RayHotState renderHook: [ Ray fns drawText callWithTypes: CPointer & CInt32 & CInt32 & CInt32 & CUInt32 Args: "hot swapped from REPL" & 44 & 126 & 24 & (Ray rgbaR: 255 G: 190 B: 80 A: 255) ReturnType: CVoid ].
+RayHotState renderHook: [ | rl | rl drawText: "hot swapped from REPL" X: 44 Y: 126 Size: 24 Color: (Raylib R: 255 G: 190 B: 80 A: 255) ].
 ```
 
 On Linux/WSL, install raylib first so `libraylib.so` is available to `dlopen`.
@@ -244,7 +247,7 @@ On Windows 11 with WSLg, the window should display automatically. If rendering i
 slow or broken, try software GL:
 
 ```bash
-LIBGL_ALWAYS_SOFTWARE=1 cargo run -p vm -- examples/raylib_min.ktt
+LIBGL_ALWAYS_SOFTWARE=1 cargo run -p vm -- vendor/raylib.ktt examples/raylib/min.ktt
 ```
 
 ## FizzBuzz Example

@@ -157,8 +157,8 @@ PosixFile := {
     statSize = {
         self isOpen
             ifTrue: [
-                alien := Module at: 'Alien.
-                statType := alien CStatLinuxX64.
+                system := Module at: 'System.
+                statType := system CStatLinuxX64.
                 statBuf := ByteArray cloneWithSize: statType size.
                 posix := (Module at: 'System) Posix.
                 rc := posix fstatFd: self fd Into: statBuf.

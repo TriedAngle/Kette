@@ -100,39 +100,6 @@ Object extend: CSize With: {
     proxyWriteTo: p At: o Value: v = { p u64At: o Put: v }.
 }.
 
-CStatPairExample := CType struct: {
-    first = CInt32.
-    second = CInt32.
-}.
-
-CDivT := CType struct: {
-    quot = CInt32.
-    rem = CInt32.
-}.
-
-CStatLinuxX64 := CType struct: {
-    st_dev = CUInt64.
-    st_ino = CUInt64.
-    st_nlink = CUInt64.
-    st_mode = CUInt32.
-    st_uid = CUInt32.
-    st_gid = CUInt32.
-    st_pad0 = CUInt32.
-    st_rdev = CUInt64.
-    st_size = CInt64.
-    st_blksize = CInt64.
-    st_blocks = CInt64.
-    st_atime = CInt64.
-    st_atime_nsec = CInt64.
-    st_mtime = CInt64.
-    st_mtime_nsec = CInt64.
-    st_ctime = CInt64.
-    st_ctime_nsec = CInt64.
-    st_reserved0 = CInt64.
-    st_reserved1 = CInt64.
-    st_reserved2 = CInt64.
-}.
-
 Object extend: Alien With: {
     parent* = Clonable.
     new: s = { self _AlienNew: s }.
@@ -183,6 +150,87 @@ Object extend: Alien With: {
         ].
         self _AlienCallWithTypes: typeArray Args: lowered ReturnType: ret
     }.
+}.
+
+PreparedAlienCall := {
+    parent* = Clonable.
+    fn := None.
+    types := None.
+    returnType := None.
+
+    fromFn: fn Types: sigTypes ReturnType: ret = {
+        typesArray := sigTypes asArray.
+        {
+            parent* = PreparedAlienCall.
+            fn := fn.
+            types := typesArray.
+            returnType := ret
+        }
+    }.
+
+    call = {
+        args := Array cloneWithSize: 0.
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
+    call: a0 = {
+        args := Array cloneWithSize: 1.
+        args at: 0 Put: (a0 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
+    call: a0 With: a1 = {
+        args := Array cloneWithSize: 2.
+        args at: 0 Put: (a0 cArgValue).
+        args at: 1 Put: (a1 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
+    call: a0 With: a1 With: a2 = {
+        args := Array cloneWithSize: 3.
+        args at: 0 Put: (a0 cArgValue).
+        args at: 1 Put: (a1 cArgValue).
+        args at: 2 Put: (a2 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
+    call: a0 With: a1 With: a2 With: a3 = {
+        args := Array cloneWithSize: 4.
+        args at: 0 Put: (a0 cArgValue).
+        args at: 1 Put: (a1 cArgValue).
+        args at: 2 Put: (a2 cArgValue).
+        args at: 3 Put: (a3 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
+    call: a0 With: a1 With: a2 With: a3 With: a4 = {
+        args := Array cloneWithSize: 5.
+        args at: 0 Put: (a0 cArgValue).
+        args at: 1 Put: (a1 cArgValue).
+        args at: 2 Put: (a2 cArgValue).
+        args at: 3 Put: (a3 cArgValue).
+        args at: 4 Put: (a4 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
 }.
 
 Proxy := {
@@ -276,7 +324,5 @@ Module export:
     & 'CFloat64
     & 'CPointer
     & 'CSize
-    & 'CStatPairExample
-    & 'CDivT
-    & 'CStatLinuxX64
+    & 'PreparedAlienCall
     & 'Proxy.

@@ -1,0 +1,77 @@
+Module open: 'RaylibExample3D.
+Module use: 'Raylib.
+Module use: 'Math.
+
+rl := Raylib.
+bg := Raylib R: 12 G: 16 B: 26 A: 255.
+cubeColor := Raylib R: 92 G: 214 B: 255 A: 255.
+wireColor := Raylib R: 210 G: 242 B: 255 A: 255.
+hudColor := Raylib R: 232 G: 238 B: 248 A: 255.
+pathColor := Raylib R: 200 G: 50 B: 20 A: 255.
+
+camera := rl 
+    camera3DNewPositionX: 8 Y: 8 Z: 8 
+    TargetX: 0 Y: 1 Z: 0 UpX: 0 Y: 1 Z: 0 
+    Fovy: 45 Projection: rl CAMERA_PERSPECTIVE.
+
+cubePos := rl vector3NewX: 0 Y: 1 Z: 0.
+
+motion := {
+    parent* = Object.
+    x := 0.
+    angle := 0.
+    radius := 4.
+    angularVelocity := 0.54
+}.
+
+segments := 64.
+step := 2 * Math Pi / segments.
+orbitPoints := Array cloneWithSize: (segments + 1).
+builder := {
+    parent* = Clonable.
+    idx := 0.
+    angle := 0
+}.
+
+[ builder idx <= segments ] whileTrue: [
+    point := rl vector3NewX: motion radius * builder angle cos Y: 1 Z: motion radius * builder angle sin.
+    orbitPoints at: (builder idx) Put: point.
+    builder idx: builder idx + 1.
+    builder angle: builder angle + step.
+].
+
+rl initWindowWidth: 980 Height: 620 Title: "Kette raylib 3D scene".
+rl setTargetFPS: 60.
+
+[ rl windowShouldClose == 0 ] whileTrue: [
+    dt := rl frameTime.
+    motion angle: motion angle + motion angularVelocity * dt * 3.
+    x := motion radius * motion angle cos.
+    z := motion radius * motion angle sin.
+
+    rl vector3Set: cubePos X: x Y: 1 Z: z.
+
+    rl beginDrawing.
+    rl clearBackground: bg.
+
+    rl beginMode3D: camera.
+    rl drawGridSlices: 20 Spacing: 1.
+
+    builder idx: 0.
+    [ builder idx < segments ] whileTrue: [
+        rl drawLine3DFrom: (orbitPoints at: builder idx) To: (orbitPoints at: builder idx + 1) Color: pathColor.
+        builder idx: (builder idx + 1)
+    ].
+
+    rl drawCubePosition: cubePos Width: 2 Height: 2 Length: 2 Color: cubeColor.
+    rl drawCubeWiresPosition: cubePos Width: 2 Height: 2 Length: 2 Color: wireColor.
+    rl endMode3D.
+
+    rl drawText: "raylib 3D scene (via Alien FFI)" X: 26 Y: 22 Size: 28 Color: hudColor.
+    rl drawText: "Cube moves in a circle" X: 26 Y: 58 Size: 20 Color: wireColor.
+    rl drawFPSX: 860 Y: 18.
+    rl endDrawing
+].
+
+rl closeWindow.
+Raylib close.

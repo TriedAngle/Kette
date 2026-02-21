@@ -1,5 +1,51 @@
 Module open: 'Math.
 
+Math := {
+    parent* = Oddball.
+    Pi = 3.141592653589793
+}.
+
+MathFFI := {
+    parent* = Oddball.
+    lib := None.
+    sinfFn := None.
+    cosfFn := None.
+    floatType := None.
+
+    ensureLoaded = {
+        self synchronized: [
+            self lib == None
+                ifTrue: [
+                    alien := Module at: 'Alien.
+                    cfloat := alien CFloat32.
+                    libHandle := Alien libraryOpen: "libm.so.6".
+                    self lib: libHandle.
+                    self sinfFn: (libHandle librarySym: "sinf").
+                    self cosfFn: (libHandle librarySym: "cosf").
+                    self floatType: cfloat.
+                    self
+                ]
+                IfFalse: [ self ]
+        ]
+    }.
+
+    sin: value = {
+        self ensureLoaded.
+        self sinfFn
+            callWithTypes: self floatType
+            Args: value
+            ReturnType: self floatType
+    }.
+
+    cos: value = {
+        self ensureLoaded.
+        self cosfFn
+            callWithTypes: self floatType
+            Args: value
+            ReturnType: self floatType
+    }.
+}.
+
 Object extend: Fixnum With: {
     parent* = Clonable.
     + rhs = { rhs addFixnum: self }.
@@ -41,6 +87,8 @@ Object extend: Fixnum With: {
 
     neg = { self _FixnumNeg }.
     sqrt = { (self _FixnumToFloat) sqrt }.
+    sin = { MathFFI sin: (self _FixnumToFloat) }.
+    cos = { MathFFI cos: (self _FixnumToFloat) }.
 
     toString = { self _FixnumToString }.
     toStringRadix: r = { self _FixnumToStringRadix: r }.
@@ -291,6 +339,8 @@ Object extend: Float With: {
     geFloat: lhs = { lhs _FloatGe: self }.
 
     neg = { self _FloatNeg }.
+    sin = { MathFFI sin: self }.
+    cos = { MathFFI cos: self }.
     toString = { self _FloatToString }.
     toStringDigits: d = { self _FloatToStringDigits: d }.
 }.
@@ -384,3 +434,4 @@ Object extend: Float With: {
 }.
 
 VM _ModuleExport: 'Complex.
+VM _ModuleExport: 'Math.

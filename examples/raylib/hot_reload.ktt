@@ -1,0 +1,66 @@
+Module open: 'RaylibExampleHotReload.
+Module use: 'Raylib.
+
+BgColor := Raylib R: 16 G: 20 B: 32 A: 255.
+PanelColor := Raylib R: 27 G: 38 B: 58 A: 255.
+AccentColor := Raylib R: 90 G: 220 B: 255 A: 255.
+TextColor := Raylib R: 235 G: 240 B: 250 A: 255.
+RayHotState := {
+    parent* = Object.
+    liveText := "Edit State liveText: in REPL for live reload".
+    renderHook := [ | rl |
+        rl drawText: "hot hook: default" X: 44 Y: 126 Size: 22 Color: AccentColor
+    ]
+}.
+
+RunRenderer := [
+    rl := Raylib.
+    motion := {
+        parent* = Object.
+        x := 120.
+        velocity := 4
+    }.
+
+    rl initWindowWidth: 900 Height: 520 Title: "Kette raylib hot reload".
+    rl setTargetFPS: 60.
+
+    [ (rl windowShouldClose) == 0 ] whileTrue: [
+        liveText := RayHotState liveText.
+        renderHook := RayHotState renderHook.
+
+        motion x: (motion x + motion velocity).
+        motion x >= 840 ifTrue: [ motion velocity: (0 - motion velocity) ] IfFalse: [ None ].
+        motion x <= 60 ifTrue: [ motion velocity: (0 - motion velocity) ] IfFalse: [ None ].
+
+        rl beginDrawing.
+        rl clearBackground: BgColor.
+        rl drawRectangleX: 24 Y: 24 Width: 852 Height: 110 Color: PanelColor.
+        rl drawText: "Kette raylib hot reload" X: 42 Y: 42 Size: 34 Color: TextColor.
+        rl drawText: liveText X: 42 Y: 86 Size: 23 Color: AccentColor.
+        rl drawCircleX: (motion x) Y: 300 Radius: 54 Color: AccentColor.
+
+        renderHook call: rl.
+
+        rl drawFPSX: 780 Y: 20.
+        rl endDrawing.
+        VM threadParkForMillis: 1
+    ].
+
+    rl closeWindow.
+    Raylib close
+].
+
+RayHotRendererThread := VM spawnPlatform: RunRenderer.
+
+Module export: 'RayHotState.
+Module export: 'RayHotRendererThread.
+
+"Renderer running on a platform thread." println.
+"Start with: cargo run -p vm -- --repl vendor/raylib.ktt examples/raylib/hot_reload.ktt" println.
+"In REPL, try:" println.
+"RayHotState liveText: \"changed from REPL\"." println.
+"RayHotState renderHook: [ | rl | rl drawText: \"hot swapped from REPL\" X: 44 Y: 126 Size: 24 Color: (Raylib R: 255 G: 190 B: 80 A: 255) ]." println.
+"RayHotState renderHook: [ | rl | rl clearBackground: (Raylib R: 8 G: 40 B: 36 A: 255). rl drawText: \"new background\" X: 44 Y: 126 Size: 24 Color: (Raylib R: 230 G: 255 B: 200 A: 255) ]." println.
+"Stop with: VM threadJoin: RayHotRendererThread" println.
+
+RayHotRendererThread.

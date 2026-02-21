@@ -1,0 +1,37 @@
+Module open: 'RaylibExampleMin.
+Module use: 'Raylib.
+
+rl := Raylib.
+bg := Raylib R: 18 G: 22 B: 35 A: 255.
+panel := Raylib R: 28 G: 36 B: 58 A: 255.
+accent := Raylib R: 80 G: 200 B: 255 A: 255.
+text := Raylib R: 230 G: 235 B: 245 A: 255.
+
+motion := {
+    parent* = Object.
+    x := 120.
+    velocity := 4
+}.
+
+rl initWindowWidth: 900 Height: 520 Title: "Kette raylib demo scene".
+rl setTargetFPS: 60.
+
+[ (rl windowShouldClose) == 0 ] whileTrue: [
+    motion x: (motion x + motion velocity).
+    motion x >= 840 ifTrue: [ motion velocity: (0 - motion velocity) ] IfFalse: [ None ].
+    motion x <= 60 ifTrue: [ motion velocity: (0 - motion velocity) ] IfFalse: [ None ].
+
+    rl beginDrawing.
+    rl clearBackground: bg.
+
+    rl drawRectangleX: 24 Y: 24 Width: 852 Height: 110 Color: panel.
+    rl drawText: "Kette + raylib demo scene" X: 44 Y: 44 Size: 34 Color: text.
+    rl drawText: "Bouncing circle Alien calls" X: 44 Y: 86 Size: 24 Color: accent.
+    rl drawCircleX: (motion x) Y: 300 Radius: 54 Color: accent.
+    rl drawFPSX: 780 Y: 20.
+
+    rl endDrawing
+].
+
+rl closeWindow.
+Raylib close.
