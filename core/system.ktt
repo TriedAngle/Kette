@@ -29,6 +29,19 @@ CStatLinuxX64 := CType struct: {
     st_reserved2 = CInt64.
 }.
 
+TPosixOpen := (CPointer & CInt32 & CInt32) asArray.
+TPosixLseek := (CInt32 & CInt32 & CInt64) asArray.
+TPosixClose := (CInt32) asArray.
+TPosixFstat := (CInt32 & CPointer) asArray.
+TPosixRead := (CInt32 & CPointer & CSize) asArray.
+TPosixDiv := (CInt32 & CInt32) asArray.
+
+TWinCreateFileA := (CPointer & CUInt32 & CUInt32 & CPointer & CUInt32 & CUInt32 & CPointer) asArray.
+TWinReadFile := (CPointer & CPointer & CUInt32 & CPointer & CPointer) asArray.
+TWinSetFilePointerEx := (CPointer & CInt64 & CPointer & CUInt32) asArray.
+TWinGetFileSizeEx := (CPointer & CPointer) asArray.
+TWinCloseHandle := (CPointer) asArray.
+
 Posix := {
     parent* = Oddball.
     SEEK_SET = 0.
@@ -37,8 +50,8 @@ Posix := {
     O_RDONLY = 0.
 
     libc := None.
-    initialized := False.
-    functions := {
+    loaded := False.
+    calls := {
         open := None.
         lseek := None.
         close := None.
@@ -47,71 +60,67 @@ Posix := {
         div := None
     }.
 
-    ensureFunctions = {
-        fns := self functions.
-        self initialized
-            ifTrue: [ None ]
-            IfFalse: [
-                self libc == None
-                    ifTrue: [ self libc: (Alien libraryOpen: "libc.so.6") ]
-                    IfFalse: [ None ].
-                fns open: (self libc librarySym: "open").
-                fns lseek: (self libc librarySym: "lseek").
-                fns close: (self libc librarySym: "close").
-                fns fstat: (self libc librarySym: "fstat").
-                fns read: (self libc librarySym: "read").
-                fns div: (self libc librarySym: "div").
-                self initialized: True
-            ].
-        fns
+    ensureLoaded = {
+        self synchronized: [
+            self loaded
+                ifTrue: [ self ]
+                IfFalse: [
+                    libHandle := Alien libraryOpen: "libc.so.6".
+                    c := self calls.
+                    c open: (PreparedAlienCall fromFn: (libHandle librarySym: "open") Types: TPosixOpen ReturnType: CInt32).
+                    c lseek: (PreparedAlienCall fromFn: (libHandle librarySym: "lseek") Types: TPosixLseek ReturnType: CInt64).
+                    c close: (PreparedAlienCall fromFn: (libHandle librarySym: "close") Types: TPosixClose ReturnType: CInt32).
+                    c fstat: (PreparedAlienCall fromFn: (libHandle librarySym: "fstat") Types: TPosixFstat ReturnType: CInt32).
+                    c read: (PreparedAlienCall fromFn: (libHandle librarySym: "read") Types: TPosixRead ReturnType: CInt64).
+                    c div: (PreparedAlienCall fromFn: (libHandle librarySym: "div") Types: TPosixDiv ReturnType: CDivT).
+                    self libc: libHandle.
+                    self loaded: True.
+                    self
+                ]
+        ]
     }.
 
     open: path Flags: flags Mode: mode = {
-        self ensureFunctions open
-            callWithTypes: CPointer & CInt32 & CInt32
-            Args: path & flags & mode
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls open call: path With: flags With: mode
     }.
 
     seekFd: fd Offset: offset Whence: whence = {
-        self ensureFunctions lseek
-            callWithTypes: CInt32 & CInt32 & CInt64
-            Args: fd & offset & whence
-            ReturnType: CInt64
+        api := self ensureLoaded.
+        api calls lseek call: fd With: offset With: whence
     }.
 
     closeFd: fd = {
-        self ensureFunctions close
-            callWithTypes: CInt32
-            Args: fd
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls close call: fd
     }.
 
     fstatFd: fd Into: buffer = {
-        self ensureFunctions fstat
-            callWithTypes: CInt32 & CPointer
-            Args: fd & buffer
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls fstat call: fd With: buffer
     }.
 
     readFd: fd Into: buffer Length: len = {
-        self ensureFunctions read
-            callWithTypes: CInt32 & CPointer & CSize
-            Args: fd & buffer & len
-            ReturnType: CInt64
+        api := self ensureLoaded.
+        api calls read call: fd With: buffer With: len
     }.
 
     div: lhs By: rhs = {
-        self ensureFunctions div
-            callWithTypes: CInt32 & CInt32
-            Args: lhs & rhs
-            ReturnType: CDivT
+        api := self ensureLoaded.
+        api calls div call: lhs With: rhs
     }.
 
     close = {
-        self libc == None
-            ifTrue: [ 0 ]
-            IfFalse: [ self libc libraryClose ]
+        self synchronized: [
+            self libc == None
+                ifTrue: [ 0 ]
+                IfFalse: [
+                    rc := self libc libraryClose.
+                    self libc: None.
+                    self loaded: False.
+                    rc
+                ]
+        ]
     }.
 }.
 
@@ -125,8 +134,8 @@ Win32 := {
     INVALID_HANDLE_VALUE = 18446744073709551615.
 
     kernel32 := None.
-    initialized := False.
-    functions := {
+    loaded := False.
+    calls := {
         createFileA := None.
         readFile := None.
         setFilePointerEx := None.
@@ -134,63 +143,68 @@ Win32 := {
         closeHandle := None
     }.
 
-    ensureFunctions = {
-        fns := self functions.
-        self initialized
-            ifTrue: [ None ]
-            IfFalse: [
-                self kernel32 == None
-                    ifTrue: [ self kernel32: (Alien libraryOpen: "kernel32.dll") ]
-                    IfFalse: [ None ].
-                fns createFileA: (self kernel32 librarySym: "CreateFileA").
-                fns readFile: (self kernel32 librarySym: "ReadFile").
-                fns setFilePointerEx: (self kernel32 librarySym: "SetFilePointerEx").
-                fns getFileSizeEx: (self kernel32 librarySym: "GetFileSizeEx").
-                fns closeHandle: (self kernel32 librarySym: "CloseHandle").
-                self initialized: True
-            ].
-        fns
+    ensureLoaded = {
+        self synchronized: [
+            self loaded
+                ifTrue: [ self ]
+                IfFalse: [
+                    libHandle := Alien libraryOpen: "kernel32.dll".
+                    c := self calls.
+                    c createFileA: (PreparedAlienCall fromFn: (libHandle librarySym: "CreateFileA") Types: TWinCreateFileA ReturnType: CUInt64).
+                    c readFile: (PreparedAlienCall fromFn: (libHandle librarySym: "ReadFile") Types: TWinReadFile ReturnType: CInt32).
+                    c setFilePointerEx: (PreparedAlienCall fromFn: (libHandle librarySym: "SetFilePointerEx") Types: TWinSetFilePointerEx ReturnType: CInt32).
+                    c getFileSizeEx: (PreparedAlienCall fromFn: (libHandle librarySym: "GetFileSizeEx") Types: TWinGetFileSizeEx ReturnType: CInt32).
+                    c closeHandle: (PreparedAlienCall fromFn: (libHandle librarySym: "CloseHandle") Types: TWinCloseHandle ReturnType: CInt32).
+                    self kernel32: libHandle.
+                    self loaded: True.
+                    self
+                ]
+        ]
     }.
 
     openRead: path = {
-        self ensureFunctions createFileA
-            callWithTypes: CPointer & CUInt32 & CUInt32 & CPointer & CUInt32 & CUInt32 & CPointer
-            Args: path & self GENERIC_READ & self FILE_SHARE_READ & 0 & self OPEN_EXISTING & self FILE_ATTRIBUTE_NORMAL & 0
-            ReturnType: CUInt64
+        api := self ensureLoaded.
+        api calls createFileA
+            call: path
+            With: self GENERIC_READ
+            With: self FILE_SHARE_READ
+            With: 0
+            With: self OPEN_EXISTING
+            With: self FILE_ATTRIBUTE_NORMAL
+            With: 0
     }.
 
     readHandle: handle Into: buffer Length: len BytesReadInto: bytesRead = {
-        self ensureFunctions readFile
-            callWithTypes: CPointer & CPointer & CUInt32 & CPointer & CPointer
-            Args: handle & buffer & len & bytesRead & 0
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls readFile call: handle With: buffer With: len With: bytesRead With: 0
     }.
 
     rewindHandle: handle NewPositionInto: newPos = {
-        self ensureFunctions setFilePointerEx
-            callWithTypes: CPointer & CInt64 & CPointer & CUInt32
-            Args: handle & 0 & newPos & self FILE_BEGIN
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls setFilePointerEx call: handle With: 0 With: newPos With: self FILE_BEGIN
     }.
 
     fileSizeHandle: handle Into: sizeOut = {
-        self ensureFunctions getFileSizeEx
-            callWithTypes: CPointer & CPointer
-            Args: handle & sizeOut
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls getFileSizeEx call: handle With: sizeOut
     }.
 
     closeHandle: handle = {
-        self ensureFunctions closeHandle
-            callWithTypes: CPointer
-            Args: handle
-            ReturnType: CInt32
+        api := self ensureLoaded.
+        api calls closeHandle call: handle
     }.
 
     close = {
-        self kernel32 == None
-            ifTrue: [ 0 ]
-            IfFalse: [ self kernel32 libraryClose ]
+        self synchronized: [
+            self kernel32 == None
+                ifTrue: [ 0 ]
+                IfFalse: [
+                    rc := self kernel32 libraryClose.
+                    self kernel32: None.
+                    self loaded: False.
+                    rc
+                ]
+        ]
     }.
 }.
 

@@ -45,26 +45,6 @@ Raylib := {
     loaded := False.
     CAMERA_PERSPECTIVE = 0.
     CAMERA_ORTHOGRAPHIC = 1.
-    fns := {
-        initWindow := None.
-        setTargetFPS := None.
-        windowShouldClose := None.
-        beginDrawing := None.
-        clearBackground := None.
-        drawRectangle := None.
-        drawCircle := None.
-        drawFPS := None.
-        drawText := None.
-        endDrawing := None.
-        closeWindow := None.
-        getFrameTime := None.
-        beginMode3D := None.
-        endMode3D := None.
-        drawCube := None.
-        drawCubeWires := None.
-        drawGrid := None.
-        drawLine3D := None
-    }.
     calls := {
         initWindow := None.
         setTargetFPS := None.
@@ -92,45 +72,25 @@ Raylib := {
                 ifTrue: [ self ]
                 IfFalse: [
                     libHandle := Alien libraryOpen: self libraryPath.
-                    f := self fns.
-                    f initWindow: (libHandle librarySym: "InitWindow").
-                    f setTargetFPS: (libHandle librarySym: "SetTargetFPS").
-                    f windowShouldClose: (libHandle librarySym: "WindowShouldClose").
-                    f beginDrawing: (libHandle librarySym: "BeginDrawing").
-                    f clearBackground: (libHandle librarySym: "ClearBackground").
-                    f drawRectangle: (libHandle librarySym: "DrawRectangle").
-                    f drawCircle: (libHandle librarySym: "DrawCircle").
-                    f drawFPS: (libHandle librarySym: "DrawFPS").
-                    f drawText: (libHandle librarySym: "DrawText").
-                    f endDrawing: (libHandle librarySym: "EndDrawing").
-                    f closeWindow: (libHandle librarySym: "CloseWindow").
-                    f getFrameTime: (libHandle librarySym: "GetFrameTime").
-                    f beginMode3D: (libHandle librarySym: "BeginMode3D").
-                    f endMode3D: (libHandle librarySym: "EndMode3D").
-                    f drawCube: (libHandle librarySym: "DrawCube").
-                    f drawCubeWires: (libHandle librarySym: "DrawCubeWires").
-                    f drawGrid: (libHandle librarySym: "DrawGrid").
-                    f drawLine3D: (libHandle librarySym: "DrawLine3D").
-
                     c := self calls.
-                    c initWindow: (PreparedAlienCall fromFn: (f initWindow) Types: TInitWindow ReturnType: CVoid).
-                    c setTargetFPS: (PreparedAlienCall fromFn: (f setTargetFPS) Types: TSetTargetFPS ReturnType: CVoid).
-                    c windowShouldClose: (PreparedAlienCall fromFn: (f windowShouldClose) Types: TWindowShouldClose ReturnType: CInt32).
-                    c beginDrawing: (PreparedAlienCall fromFn: (f beginDrawing) Types: TBeginDrawing ReturnType: CVoid).
-                    c clearBackground: (PreparedAlienCall fromFn: (f clearBackground) Types: TClearBackground ReturnType: CVoid).
-                    c drawRectangle: (PreparedAlienCall fromFn: (f drawRectangle) Types: TDrawRectangle ReturnType: CVoid).
-                    c drawCircle: (PreparedAlienCall fromFn: (f drawCircle) Types: TDrawCircle ReturnType: CVoid).
-                    c drawFPS: (PreparedAlienCall fromFn: (f drawFPS) Types: TDrawFPS ReturnType: CVoid).
-                    c drawText: (PreparedAlienCall fromFn: (f drawText) Types: TDrawText ReturnType: CVoid).
-                    c endDrawing: (PreparedAlienCall fromFn: (f endDrawing) Types: TEndDrawing ReturnType: CVoid).
-                    c closeWindow: (PreparedAlienCall fromFn: (f closeWindow) Types: TCloseWindow ReturnType: CVoid).
-                    c getFrameTime: (PreparedAlienCall fromFn: (f getFrameTime) Types: TGetFrameTime ReturnType: CFloat32).
-                    c beginMode3D: (PreparedAlienCall fromFn: (f beginMode3D) Types: TBeginMode3D ReturnType: CVoid).
-                    c endMode3D: (PreparedAlienCall fromFn: (f endMode3D) Types: TEndMode3D ReturnType: CVoid).
-                    c drawCube: (PreparedAlienCall fromFn: (f drawCube) Types: TDrawCube ReturnType: CVoid).
-                    c drawCubeWires: (PreparedAlienCall fromFn: (f drawCubeWires) Types: TDrawCubeWires ReturnType: CVoid).
-                    c drawGrid: (PreparedAlienCall fromFn: (f drawGrid) Types: TDrawGrid ReturnType: CVoid).
-                    c drawLine3D: (PreparedAlienCall fromFn: (f drawLine3D) Types: TDrawLine3D ReturnType: CVoid).
+                    c initWindow: (PreparedAlienCall fromFn: (libHandle librarySym: "InitWindow") Types: TInitWindow ReturnType: CVoid).
+                    c setTargetFPS: (PreparedAlienCall fromFn: (libHandle librarySym: "SetTargetFPS") Types: TSetTargetFPS ReturnType: CVoid).
+                    c windowShouldClose: (PreparedAlienCall fromFn: (libHandle librarySym: "WindowShouldClose") Types: TWindowShouldClose ReturnType: CInt32).
+                    c beginDrawing: (PreparedAlienCall fromFn: (libHandle librarySym: "BeginDrawing") Types: TBeginDrawing ReturnType: CVoid).
+                    c clearBackground: (PreparedAlienCall fromFn: (libHandle librarySym: "ClearBackground") Types: TClearBackground ReturnType: CVoid).
+                    c drawRectangle: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawRectangle") Types: TDrawRectangle ReturnType: CVoid).
+                    c drawCircle: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawCircle") Types: TDrawCircle ReturnType: CVoid).
+                    c drawFPS: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawFPS") Types: TDrawFPS ReturnType: CVoid).
+                    c drawText: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawText") Types: TDrawText ReturnType: CVoid).
+                    c endDrawing: (PreparedAlienCall fromFn: (libHandle librarySym: "EndDrawing") Types: TEndDrawing ReturnType: CVoid).
+                    c closeWindow: (PreparedAlienCall fromFn: (libHandle librarySym: "CloseWindow") Types: TCloseWindow ReturnType: CVoid).
+                    c getFrameTime: (PreparedAlienCall fromFn: (libHandle librarySym: "GetFrameTime") Types: TGetFrameTime ReturnType: CFloat32).
+                    c beginMode3D: (PreparedAlienCall fromFn: (libHandle librarySym: "BeginMode3D") Types: TBeginMode3D ReturnType: CVoid).
+                    c endMode3D: (PreparedAlienCall fromFn: (libHandle librarySym: "EndMode3D") Types: TEndMode3D ReturnType: CVoid).
+                    c drawCube: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawCube") Types: TDrawCube ReturnType: CVoid).
+                    c drawCubeWires: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawCubeWires") Types: TDrawCubeWires ReturnType: CVoid).
+                    c drawGrid: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawGrid") Types: TDrawGrid ReturnType: CVoid).
+                    c drawLine3D: (PreparedAlienCall fromFn: (libHandle librarySym: "DrawLine3D") Types: TDrawLine3D ReturnType: CVoid).
 
                     self lib: libHandle.
                     self loaded: True.

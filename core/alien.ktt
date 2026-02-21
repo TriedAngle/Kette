@@ -231,6 +231,35 @@ PreparedAlienCall := {
             ReturnType: self returnType
     }.
 
+    call: a0 With: a1 With: a2 With: a3 With: a4 With: a5 = {
+        args := Array cloneWithSize: 6.
+        args at: 0 Put: (a0 cArgValue).
+        args at: 1 Put: (a1 cArgValue).
+        args at: 2 Put: (a2 cArgValue).
+        args at: 3 Put: (a3 cArgValue).
+        args at: 4 Put: (a4 cArgValue).
+        args at: 5 Put: (a5 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
+    call: a0 With: a1 With: a2 With: a3 With: a4 With: a5 With: a6 = {
+        args := Array cloneWithSize: 7.
+        args at: 0 Put: (a0 cArgValue).
+        args at: 1 Put: (a1 cArgValue).
+        args at: 2 Put: (a2 cArgValue).
+        args at: 3 Put: (a3 cArgValue).
+        args at: 4 Put: (a4 cArgValue).
+        args at: 5 Put: (a5 cArgValue).
+        args at: 6 Put: (a6 cArgValue).
+        self fn
+            _AlienCallWithTypes: self types
+            Args: args
+            ReturnType: self returnType
+    }.
+
 }.
 
 Proxy := {
