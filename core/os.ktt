@@ -1,4 +1,5 @@
 Module open: 'OS.
+Module use: 'System.
 
 Disposable := {
     parent* = Clonable.
@@ -122,8 +123,7 @@ PosixFile := {
     fd := -1.
 
     openPath: path Flags: flags Mode: mode = {
-        posix := (Module at: 'System) Posix.
-        fd := posix open: path Flags: flags Mode: mode.
+        fd := Posix open: path Flags: flags Mode: mode.
         {
             parent* = PosixFile.
             fd := fd.
@@ -137,8 +137,7 @@ PosixFile := {
     close = {
         self isOpen
             ifTrue: [
-                posix := (Module at: 'System) Posix.
-                rc := posix closeFd: self fd.
+                rc := Posix closeFd: self fd.
                 self fd: -1.
                 rc
             ]
@@ -148,8 +147,7 @@ PosixFile := {
     size = {
         self isOpen
             ifTrue: [
-                posix := (Module at: 'System) Posix.
-                posix seekFd: self fd Offset: 0 Whence: posix SEEK_END
+                Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_END
             ]
             IfFalse: [ self _FileClosed ]
     }.
@@ -157,11 +155,9 @@ PosixFile := {
     statSize = {
         self isOpen
             ifTrue: [
-                system := Module at: 'System.
-                statType := system CStatLinuxX64.
+                statType := CStatLinuxX64.
                 statBuf := ByteArray cloneWithSize: statType size.
-                posix := (Module at: 'System) Posix.
-                rc := posix fstatFd: self fd Into: statBuf.
+                rc := Posix fstatFd: self fd Into: statBuf.
                 rc == 0
                     ifTrue: [
                         statInfo := statType _CTypeFieldInfoAt: "st_size".
@@ -176,8 +172,7 @@ PosixFile := {
     readInto: buffer Length: len = {
         self isOpen
             ifTrue: [
-                posix := (Module at: 'System) Posix.
-                posix readFd: self fd Into: buffer Length: len
+                Posix readFd: self fd Into: buffer Length: len
             ]
             IfFalse: [ self _FileClosed ]
     }.
@@ -185,8 +180,7 @@ PosixFile := {
     rewind = {
         self isOpen
             ifTrue: [
-                posix := (Module at: 'System) Posix.
-                posix seekFd: self fd Offset: 0 Whence: posix SEEK_SET
+                Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_SET
             ]
             IfFalse: [ self _FileClosed ]
     }.
@@ -197,8 +191,7 @@ WindowsFile := {
     handle := 0.
 
     openPath: path Flags: flags Mode: mode = {
-        win32 := (Module at: 'System) Win32.
-        handle := win32 openRead: path.
+        handle := Win32 openRead: path.
         {
             parent* = WindowsFile.
             handle := handle.
@@ -208,15 +201,13 @@ WindowsFile := {
     }.
 
     isOpen = {
-        win32 := (Module at: 'System) Win32.
-        self handle != 0 && self handle != win32 INVALID_HANDLE_VALUE
+        self handle != 0 && self handle != Win32 INVALID_HANDLE_VALUE
     }.
 
     close = {
         self isOpen
             ifTrue: [
-                win32 := (Module at: 'System) Win32.
-                rc := win32 closeHandle: self handle.
+                rc := Win32 closeHandle: self handle.
                 self handle: 0.
                 rc
             ]
@@ -228,9 +219,8 @@ WindowsFile := {
     statSize = {
         self isOpen
             ifTrue: [
-                win32 := (Module at: 'System) Win32.
                 sizeOut := ByteArray cloneWithSize: 8.
-                rc := win32 fileSizeHandle: self handle Into: sizeOut.
+                rc := Win32 fileSizeHandle: self handle Into: sizeOut.
                 rc == 0
                     ifTrue: [ self _FstatFailed: rc ]
                     IfFalse: [ sizeOut i64At: 0 ]
@@ -241,9 +231,8 @@ WindowsFile := {
     readInto: buffer Length: len = {
         self isOpen
             ifTrue: [
-                win32 := (Module at: 'System) Win32.
                 bytesRead := ByteArray cloneWithSize: 4.
-                rc := win32 readHandle: self handle Into: buffer Length: len BytesReadInto: bytesRead.
+                rc := Win32 readHandle: self handle Into: buffer Length: len BytesReadInto: bytesRead.
                 rc == 0
                     ifTrue: [ 0 ]
                     IfFalse: [ bytesRead u32At: 0 ]
@@ -254,9 +243,8 @@ WindowsFile := {
     rewind = {
         self isOpen
             ifTrue: [
-                win32 := (Module at: 'System) Win32.
                 newPos := ByteArray cloneWithSize: 8.
-                win32 rewindHandle: self handle NewPositionInto: newPos
+                Win32 rewindHandle: self handle NewPositionInto: newPos
             ]
             IfFalse: [ self _FileClosed ]
     }.
