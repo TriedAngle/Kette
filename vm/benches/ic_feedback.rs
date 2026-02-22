@@ -89,7 +89,7 @@ fn run_case(c: &mut Criterion, name: &str, src: &str, iters_per_sample: usize) {
 fn bench_ic_feedback(c: &mut Criterion) {
     let mut stress_dispatch = String::from("[ x := 0. ");
     for _ in 0..120 {
-        stress_dispatch.push_str("x := x _FixnumAdd: 1. ");
+        stress_dispatch.push_str("x := x + 1. ");
     }
     stress_dispatch.push_str("x ] call");
 

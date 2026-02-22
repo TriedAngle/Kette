@@ -428,40 +428,48 @@ fn run(
             }
             Instruction::LoadAssoc { idx } => {
                 let module_path = if state.frames[frame_idx].module_dynamic {
-                    vm.current_module.clone()
+                    vm.current_module.as_deref()
                 } else {
-                    state.frames[frame_idx].module_path.clone()
+                    state.frames[frame_idx].module_path.as_deref()
                 };
-                let value =
-                    load_assoc(vm, code_val, idx, module_path.as_deref())?;
+                let value = load_assoc(vm, code_val, idx, module_path)?;
                 state.acc = value;
             }
             Instruction::StoreAssoc { idx } => {
                 let value = state.acc;
-                let module_path = if state.frames[frame_idx].module_dynamic {
-                    vm.current_module.clone()
-                } else {
-                    state.frames[frame_idx].module_path.clone()
-                };
-                store_assoc(vm, code_val, idx, value, module_path.as_deref())?;
+                let module_dynamic = state.frames[frame_idx].module_dynamic;
+                let module_path =
+                    state.frames[frame_idx].module_path.as_deref();
+                store_assoc(
+                    vm,
+                    code_val,
+                    idx,
+                    value,
+                    module_path,
+                    module_dynamic,
+                )?;
             }
             Instruction::MovToAssoc { idx, src } => {
                 let value = get_register(state, frame_idx, src)?;
-                let module_path = if state.frames[frame_idx].module_dynamic {
-                    vm.current_module.clone()
-                } else {
-                    state.frames[frame_idx].module_path.clone()
-                };
-                store_assoc(vm, code_val, idx, value, module_path.as_deref())?;
+                let module_dynamic = state.frames[frame_idx].module_dynamic;
+                let module_path =
+                    state.frames[frame_idx].module_path.as_deref();
+                store_assoc(
+                    vm,
+                    code_val,
+                    idx,
+                    value,
+                    module_path,
+                    module_dynamic,
+                )?;
             }
             Instruction::MovFromAssoc { dst, idx } => {
                 let module_path = if state.frames[frame_idx].module_dynamic {
-                    vm.current_module.clone()
+                    vm.current_module.as_deref()
                 } else {
-                    state.frames[frame_idx].module_path.clone()
+                    state.frames[frame_idx].module_path.as_deref()
                 };
-                let value =
-                    load_assoc(vm, code_val, idx, module_path.as_deref())?;
+                let value = load_assoc(vm, code_val, idx, module_path)?;
                 set_register(state, frame_idx, dst, value)?;
             }
             Instruction::CreateObject {
@@ -1174,8 +1182,11 @@ fn update_send_feedback_entry(
         let mut scratch = new_entry_values.to_vec();
         let new_entry =
             with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-                let values = roots.scratch.to_vec();
-                crate::alloc::alloc_array(proxy, roots, &values).value()
+                let values_ptr = roots.scratch.as_ptr();
+                let values_len = roots.scratch.len();
+                let values =
+                    core::slice::from_raw_parts(values_ptr, values_len);
+                crate::alloc::alloc_array(proxy, roots, values).value()
             });
         array_set_entry(vm, feedback, feedback_idx as usize, new_entry);
         ic_count_update();
@@ -1246,8 +1257,10 @@ fn update_send_feedback_entry(
     let mut scratch = values;
     let new_entry =
         with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-            let values = roots.scratch.to_vec();
-            crate::alloc::alloc_array(proxy, roots, &values).value()
+            let values_ptr = roots.scratch.as_ptr();
+            let values_len = roots.scratch.len();
+            let values = core::slice::from_raw_parts(values_ptr, values_len);
+            crate::alloc::alloc_array(proxy, roots, values).value()
         });
     array_set_entry(vm, feedback, feedback_idx as usize, new_entry);
     ic_count_update();
@@ -1621,7 +1634,7 @@ fn dispatch_slot(
                     code_val,
                     reg,
                     argc,
-                    method_module.clone(),
+                    method_module.as_deref(),
                     false,
                     tail_call,
                 )? {
@@ -1652,9 +1665,24 @@ fn dispatch_slot(
                         got: Value::from_i64(argc as i64),
                     });
                 }
-                let args =
-                    collect_args_from_frame(state, frame_idx, reg, argc)?;
-                state.acc = (primitive.func)(vm, state, receiver, &args)?;
+                let start = reg as usize;
+                let end = start + argc as usize;
+                let (reg_base, reg_len) = {
+                    let frame = &state.frames[frame_idx];
+                    (frame.reg_base, frame.reg_len)
+                };
+                if end > reg_len {
+                    return Err(RuntimeError::TypeError {
+                        expected: "argument register range",
+                        got: Value::from_i64(end as i64),
+                    });
+                }
+                let args = unsafe {
+                    let ptr =
+                        state.register_stack.as_ptr().add(reg_base + start);
+                    core::slice::from_raw_parts(ptr, argc as usize)
+                };
+                state.acc = (primitive.func)(vm, state, receiver, args)?;
                 return Ok(());
             }
         }
@@ -1691,7 +1719,7 @@ fn try_tail_recursive_self_call(
     code_val: Value,
     reg: u16,
     argc: u8,
-    module_path: Option<String>,
+    module_path: Option<&str>,
     module_dynamic: bool,
     tail_call: bool,
 ) -> Result<bool, RuntimeError> {
@@ -1761,15 +1789,17 @@ fn try_tail_recursive_self_call(
             got: Value::from_i64(end as i64),
         });
     }
+    let src_base = state.frames[frame_idx].reg_base + start;
     unsafe {
-        fill_registers_unchecked(state, method_reg_base, method_reg_len, none);
+        let src = state.register_stack.as_ptr().add(src_base);
+        let dst = state.register_stack.as_mut_ptr().add(method_reg_base + 1);
+        core::ptr::copy(src, dst, argc as usize);
         write_register_unchecked(state, method_reg_base, 0, receiver);
     }
-    let src_base = state.frames[frame_idx].reg_base + start;
-    let args =
-        state.register_stack[src_base..src_base + argc as usize].to_vec();
-    for (i, arg) in args.into_iter().enumerate() {
-        state.register_stack[method_reg_base + 1 + i] = arg;
+    let clear_start = method_reg_base + 1 + argc as usize;
+    let clear_end = method_reg_base + method_reg_len;
+    if clear_start < clear_end {
+        state.register_stack[clear_start..clear_end].fill(none);
     }
 
     if frame_idx > method_idx {
@@ -1783,7 +1813,7 @@ fn try_tail_recursive_self_call(
     frame.method_frame_idx = method_idx;
     frame.holder = holder;
     frame.holder_slot_index = holder_slot_index;
-    frame.module_path = module_path;
+    frame.module_path = module_path.map(str::to_owned);
     frame.module_dynamic = module_dynamic;
 
     Ok(true)
@@ -1996,7 +2026,18 @@ fn store_assoc(
     idx: u16,
     value: Value,
     module_path: Option<&str>,
+    module_dynamic: bool,
 ) -> Result<(), RuntimeError> {
+    let current_module = if module_dynamic {
+        vm.current_module.clone()
+    } else {
+        None
+    };
+    let module_path = if module_dynamic {
+        current_module.as_deref()
+    } else {
+        module_path
+    };
     let code: &Code = unsafe { code_val.as_ref() };
     let assoc_or_name = unsafe { code.constant(idx as u32) };
 
@@ -2259,33 +2300,12 @@ fn copy_args_from_frame(
             got: Value::from_i64((1 + argc as usize) as i64),
         });
     }
-    let args =
-        state.register_stack[in_reg_base + start..in_reg_base + end].to_vec();
-    for (i, arg) in args.into_iter().enumerate() {
-        state.register_stack[out_reg_base + 1 + i] = arg;
+    unsafe {
+        let src = state.register_stack.as_ptr().add(in_reg_base + start);
+        let dst = state.register_stack.as_mut_ptr().add(out_reg_base + 1);
+        core::ptr::copy(src, dst, argc as usize);
     }
     Ok(())
-}
-
-fn collect_args_from_frame(
-    state: &InterpreterState,
-    frame_idx: usize,
-    reg: u16,
-    argc: u8,
-) -> Result<Vec<Value>, RuntimeError> {
-    let start = reg as usize;
-    let end = start + argc as usize;
-    let frame = &state.frames[frame_idx];
-    if end > frame.reg_len {
-        return Err(RuntimeError::TypeError {
-            expected: "argument register range",
-            got: Value::from_i64(end as i64),
-        });
-    }
-    unsafe {
-        let ptr = state.register_stack.as_ptr().add(frame.reg_base + start);
-        Ok(core::slice::from_raw_parts(ptr, argc as usize).to_vec())
-    }
 }
 
 enum MethodTarget {
