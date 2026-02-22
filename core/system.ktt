@@ -29,11 +29,25 @@ CStatLinuxX64 := CType struct: {
     st_reserved2 = CInt64.
 }.
 
+CSockAddrIn := CType struct: {
+    sin_family = CUInt16.
+    sin_port = CUInt16.
+    sin_addr = CUInt32.
+    sin_zero = CUInt64.
+}.
+
 TPosixOpen := (CPointer & CInt32 & CInt32) asArray.
 TPosixLseek := (CInt32 & CInt32 & CInt64) asArray.
 TPosixClose := (CInt32) asArray.
 TPosixFstat := (CInt32 & CPointer) asArray.
 TPosixRead := (CInt32 & CPointer & CSize) asArray.
+TPosixWrite := (CInt32 & CPointer & CSize) asArray.
+TPosixSocket := (CInt32 & CInt32 & CInt32) asArray.
+TPosixBind := (CInt32 & CPointer & CUInt32) asArray.
+TPosixListen := (CInt32 & CInt32) asArray.
+TPosixAccept := (CInt32 & CPointer & CPointer) asArray.
+TPosixSetsockopt := (CInt32 & CInt32 & CInt32 & CPointer & CUInt32) asArray.
+TPosixHtons := (CUInt16) asArray.
 TPosixDiv := (CInt32 & CInt32) asArray.
 
 TWinCreateFileA := (CPointer & CUInt32 & CUInt32 & CPointer & CUInt32 & CUInt32 & CPointer) asArray.
@@ -48,6 +62,10 @@ Posix := {
     SEEK_CUR = 1.
     SEEK_END = 2.
     O_RDONLY = 0.
+    AF_INET = 2.
+    SOCK_STREAM = 1.
+    SOL_SOCKET = 1.
+    SO_REUSEADDR = 2.
 
     libc := None.
     loaded := False.
@@ -57,6 +75,13 @@ Posix := {
         close := None.
         fstat := None.
         read := None.
+        write := None.
+        socket := None.
+        bind := None.
+        listen := None.
+        accept := None.
+        setsockopt := None.
+        htons := None.
         div := None
     }.
 
@@ -72,6 +97,13 @@ Posix := {
                     c close: (PreparedAlienCall fromFn: (libHandle librarySym: "close") Types: TPosixClose ReturnType: CInt32).
                     c fstat: (PreparedAlienCall fromFn: (libHandle librarySym: "fstat") Types: TPosixFstat ReturnType: CInt32).
                     c read: (PreparedAlienCall fromFn: (libHandle librarySym: "read") Types: TPosixRead ReturnType: CInt64).
+                    c write: (PreparedAlienCall fromFn: (libHandle librarySym: "write") Types: TPosixWrite ReturnType: CInt64).
+                    c socket: (PreparedAlienCall fromFn: (libHandle librarySym: "socket") Types: TPosixSocket ReturnType: CInt32).
+                    c bind: (PreparedAlienCall fromFn: (libHandle librarySym: "bind") Types: TPosixBind ReturnType: CInt32).
+                    c listen: (PreparedAlienCall fromFn: (libHandle librarySym: "listen") Types: TPosixListen ReturnType: CInt32).
+                    c accept: (PreparedAlienCall fromFn: (libHandle librarySym: "accept") Types: TPosixAccept ReturnType: CInt32).
+                    c setsockopt: (PreparedAlienCall fromFn: (libHandle librarySym: "setsockopt") Types: TPosixSetsockopt ReturnType: CInt32).
+                    c htons: (PreparedAlienCall fromFn: (libHandle librarySym: "htons") Types: TPosixHtons ReturnType: CUInt16).
                     c div: (PreparedAlienCall fromFn: (libHandle librarySym: "div") Types: TPosixDiv ReturnType: CDivT).
                     self libc: libHandle.
                     self loaded: True.
@@ -103,6 +135,41 @@ Posix := {
     readFd: fd Into: buffer Length: len = {
         api := self ensureLoaded.
         api calls read call: fd With: buffer With: len
+    }.
+
+    writeFd: fd Buffer: buffer Length: len = {
+        api := self ensureLoaded.
+        api calls write call: fd With: buffer With: len
+    }.
+
+    socketDomain: domain Type: type Protocol: protocol = {
+        api := self ensureLoaded.
+        api calls socket call: domain With: type With: protocol
+    }.
+
+    bindFd: fd Addr: addr Length: len = {
+        api := self ensureLoaded.
+        api calls bind call: fd With: addr With: len
+    }.
+
+    listenFd: fd Backlog: backlog = {
+        api := self ensureLoaded.
+        api calls listen call: fd With: backlog
+    }.
+
+    acceptFd: fd = {
+        api := self ensureLoaded.
+        api calls accept call: fd With: 0 With: 0
+    }.
+
+    setSockOptFd: fd Level: level Name: name Value: value Length: len = {
+        api := self ensureLoaded.
+        api calls setsockopt call: fd With: level With: name With: value With: len
+    }.
+
+    htons: value = {
+        api := self ensureLoaded.
+        api calls htons call: value
     }.
 
     div: lhs By: rhs = {
@@ -208,4 +275,4 @@ Win32 := {
     }.
 }.
 
-Module export: 'Posix & 'Win32 & 'CDivT & 'CStatLinuxX64.
+Module export: 'Posix & 'Win32 & 'CDivT & 'CStatLinuxX64 & 'CSockAddrIn.

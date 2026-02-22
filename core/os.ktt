@@ -186,6 +186,82 @@ PosixFile := {
     }.
 }.
 
+PosixSocket := {
+    parent* = Disposable.
+    fd := -1.
+
+    openStreamIPv4 = {
+        sockFd := Posix socketDomain: Posix AF_INET Type: Posix SOCK_STREAM Protocol: 0.
+        sock := self clone.
+        sock fd: sockFd.
+        sock
+    }.
+
+    fromFd: socketFd = {
+        sock := self clone.
+        sock fd: socketFd.
+        sock
+    }.
+
+    isOpen = { self fd >= 0 }.
+    disposed = { self isOpen not }.
+
+    close = {
+        self isOpen
+            ifTrue: [
+                rc := Posix closeFd: self fd.
+                self fd: -1.
+                rc
+            ]
+            IfFalse: [ 0 ]
+    }.
+
+    dispose = { self close. self }.
+
+    setReuseAddr = {
+        opt := ByteArray cloneWithSize: 4.
+        opt i32At: 0 Put: 1.
+        Posix setSockOptFd: self fd Level: Posix SOL_SOCKET Name: Posix SO_REUSEADDR Value: opt Length: 4
+    }.
+
+    bindAnyPort: port = {
+        addr := ByteArray cloneWithSize: 16.
+        addr u16At: 0 Put: Posix AF_INET.
+        addr u16At: 2 Put: (Posix htons: port).
+        addr u32At: 4 Put: 0.
+        addr u64At: 8 Put: 0.
+        Posix bindFd: self fd Addr: addr Length: 16
+    }.
+
+    listenBacklog: backlog = {
+        Posix listenFd: self fd Backlog: backlog
+    }.
+
+    accept = {
+        clientFd := Posix acceptFd: self fd.
+        clientFd < 0
+            ifTrue: [ None ]
+            IfFalse: [ self fromFd: clientFd ]
+    }.
+
+    readInto: buffer Length: len = {
+        self isOpen
+            ifTrue: [
+                Posix readFd: self fd Into: buffer Length: len
+            ]
+            IfFalse: [ 0 ]
+    }.
+
+    writeString: text = {
+        bytes := text toByteArray.
+        self isOpen
+            ifTrue: [
+                Posix writeFd: self fd Buffer: bytes Length: text length
+            ]
+            IfFalse: [ 0 ]
+    }.
+}.
+
 WindowsFile := {
     parent* = PlatformFile.
     handle := 0.
@@ -289,6 +365,7 @@ WinFile := WindowsFile.
 Module export:
     'Disposable
     & 'File
+    & 'PosixSocket
     & 'PosixFile
     & 'WindowsFile
     & 'WinFile.

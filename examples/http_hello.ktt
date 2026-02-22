@@ -1,0 +1,31 @@
+Module open: 'Examples::HttpHello.
+Module use: 'OS.
+
+PosixSocket openStreamIPv4 using: [ | server |
+    server setReuseAddr.
+    bindRc := server bindAnyPort: 8080.
+    listenRc := server listenBacklog: 16.
+
+    ready := (bindRc == 0) && (listenRc == 0).
+    ready
+        ifTrue: [
+            "Listening on http://127.0.0.1:8080" println.
+            [ True ] whileTrue: [
+                client := server accept.
+                client == None
+                    ifTrue: [ "accept failed" println ]
+                    IfFalse: [
+                        client using: [ | conn |
+                            reqBuf := ByteArray cloneWithSize: 2048.
+                            conn readInto: reqBuf Length: 2048.
+                            body := "hello world".
+                            response := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 11\r\nConnection: close\r\n\r\n" + body.
+                            conn writeString: response
+                        ]
+                    ]
+            ]
+        ]
+        IfFalse: [
+            ("socket setup failed: bind=" + bindRc toString + ", listen=" + listenRc toString) println
+        ]
+].
