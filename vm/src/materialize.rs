@@ -1,6 +1,7 @@
 use std::alloc::Layout;
 use std::collections::HashMap;
 use std::ptr;
+use std::sync::Arc;
 
 use heap::{HeapProxy, RootProvider};
 use object::{
@@ -14,7 +15,7 @@ use crate::alloc::{
     alloc_float, alloc_map, alloc_slot_object,
 };
 use crate::compiler0::{CodeDesc, ConstEntry, MapDesc, SlotValue};
-use crate::VM;
+use crate::{SharedVMData, VM};
 
 // ── Root management ─────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ impl RootProvider for MaterializeRoots<'_> {
 struct MaterializeEnv<'a, 'b> {
     proxy: &'a mut HeapProxy,
     roots: &'a mut MaterializeRoots<'b>,
+    shared: Arc<SharedVMData>,
     // Indices into roots.scratch for well-known values
     none_idx: usize,
     map_map_idx: usize,
@@ -178,10 +180,11 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
             ConstEntry::Value(value) => *value,
             ConstEntry::Symbol(s) => self.intern(s),
             ConstEntry::ModuleAssoc { module, name } => {
-                self.resolve_assoc(&format!("{module}::{name}"))
+                self.resolve_module_assoc(module, name)
             }
-            ConstEntry::Assoc(name) => self.resolve_assoc(name),
-            ConstEntry::AssocValue(name) => self.resolve_assoc_value(name),
+            ConstEntry::ModuleAssocValue { module, name } => {
+                self.resolve_module_assoc_value(module, name)
+            }
             ConstEntry::Code(desc) => self.materialize_code(desc),
             ConstEntry::Method { code, tail_call } => {
                 let code_val = self.materialize_code(code);
@@ -303,8 +306,32 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         result
     }
 
-    fn resolve_assoc_value(&mut self, name: &str) -> Value {
-        let assoc = self.resolve_assoc(name);
+    fn resolve_module_assoc(&mut self, module: &str, name: &str) -> Value {
+        if let Some(cell) =
+            self.shared.modules.lock().ok().and_then(|modules| {
+                modules
+                    .get(module)
+                    .and_then(|m| m.bindings.get(name))
+                    .copied()
+            })
+        {
+            return cell;
+        }
+
+        let assoc = self.resolve_assoc(&format!("{module}::{name}"));
+        if let Ok(mut modules) = self.shared.modules.lock() {
+            let module_state = modules.entry(module.to_string()).or_default();
+            module_state.bindings.insert(name.to_string(), assoc);
+        }
+        assoc
+    }
+
+    fn resolve_module_assoc_value(
+        &mut self,
+        module: &str,
+        name: &str,
+    ) -> Value {
+        let assoc = self.resolve_module_assoc(module, name);
         let assoc_obj: &SlotObject = unsafe { assoc.as_ref() };
         unsafe { assoc_obj.read_value(SlotObject::VALUES_OFFSET) }
     }
@@ -430,6 +457,7 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
 /// all constants (symbols, assocs, nested code/maps) against the VM's
 /// dictionary and intern table.
 pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
+    let shared = vm.shared.clone();
     // Snapshot VM specials into scratch so they survive GC
     let mut scratch = Vec::with_capacity(32);
 
@@ -474,6 +502,7 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
         let mut env = MaterializeEnv {
             proxy: &mut vm.heap_proxy,
             roots: &mut roots,
+            shared,
             none_idx,
             map_map_idx,
             assoc_map_idx,
@@ -663,7 +692,10 @@ mod tests {
         let base_slots = dict_slot_count(&vm);
         let desc = CodeDesc {
             bytecode: empty_bytecode(),
-            constants: vec![ConstEntry::Assoc("myGlobal".to_string())],
+            constants: vec![ConstEntry::ModuleAssoc {
+                module: "User".to_string(),
+                name: "myGlobal".to_string(),
+            }],
             register_count: 1,
             arg_count: 0,
             temp_count: 0,
@@ -684,8 +716,8 @@ mod tests {
             assert_eq!(map.slot_count(), base_slots + 1);
             let mut found = false;
             let sym = vm
-                .with_intern_table(|table| table.get("myGlobal").copied())
-                .expect("interned myGlobal");
+                .with_intern_table(|table| table.get("User::myGlobal").copied())
+                .expect("interned User::myGlobal");
             for slot in map.slots() {
                 if slot.name.raw() == sym.raw() {
                     found = true;
@@ -704,7 +736,10 @@ mod tests {
         // First materialization creates the assoc
         let desc1 = CodeDesc {
             bytecode: empty_bytecode(),
-            constants: vec![ConstEntry::Assoc("shared".to_string())],
+            constants: vec![ConstEntry::ModuleAssoc {
+                module: "User".to_string(),
+                name: "shared".to_string(),
+            }],
             register_count: 1,
             arg_count: 0,
             temp_count: 0,
@@ -716,7 +751,10 @@ mod tests {
         // Second materialization should reuse the same assoc
         let desc2 = CodeDesc {
             bytecode: empty_bytecode(),
-            constants: vec![ConstEntry::Assoc("shared".to_string())],
+            constants: vec![ConstEntry::ModuleAssoc {
+                module: "User".to_string(),
+                name: "shared".to_string(),
+            }],
             register_count: 1,
             arg_count: 0,
             temp_count: 0,
@@ -859,9 +897,18 @@ mod tests {
         let desc = CodeDesc {
             bytecode: empty_bytecode(),
             constants: vec![
-                ConstEntry::Assoc("a".to_string()),
-                ConstEntry::Assoc("b".to_string()),
-                ConstEntry::Assoc("c".to_string()),
+                ConstEntry::ModuleAssoc {
+                    module: "User".to_string(),
+                    name: "a".to_string(),
+                },
+                ConstEntry::ModuleAssoc {
+                    module: "User".to_string(),
+                    name: "b".to_string(),
+                },
+                ConstEntry::ModuleAssoc {
+                    module: "User".to_string(),
+                    name: "c".to_string(),
+                },
             ],
             register_count: 1,
             arg_count: 0,

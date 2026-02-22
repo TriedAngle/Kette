@@ -12,7 +12,7 @@ use parser::semantic::{
 };
 use parser::span::{Pos, Span};
 
-use crate::{CORE_MODULE, VM};
+use crate::{CORE_MODULE, USER_MODULE, VM};
 
 #[derive(Debug, Clone)]
 struct ModuleCompileState {
@@ -236,8 +236,7 @@ pub enum ConstEntry {
     Value(Value),
     Symbol(String),
     ModuleAssoc { module: String, name: String },
-    Assoc(String),
-    AssocValue(String),
+    ModuleAssocValue { module: String, name: String },
     Code(CodeDesc),
     Method { code: CodeDesc, tail_call: bool },
     Map(MapDesc),
@@ -943,12 +942,11 @@ impl Compiler {
         is_store: bool,
         span: Span,
     ) -> Result<u16, CompileError> {
-        if self.module_env.is_none() {
-            return Ok(self.add_symbol(name));
-        }
-
-        let (module, export_name) =
-            self.resolve_module_global(name, is_store, span)?;
+        let (module, export_name) = if self.module_env.is_none() {
+            (USER_MODULE.to_string(), name.to_string())
+        } else {
+            self.resolve_module_global(name, is_store, span)?
+        };
         let constants = &self.frame().constants;
         for (i, c) in constants.iter().enumerate() {
             if let ConstEntry::ModuleAssoc { module: m, name: n } = c {
@@ -1228,7 +1226,7 @@ impl Compiler {
         &mut self,
         name: &str,
         skip_current_scope: bool,
-        _span: Span,
+        span: Span,
     ) -> Result<(), CompileError> {
         if let Some(loc) =
             self.resolve_lexical_for_load(name, skip_current_scope)
@@ -1241,7 +1239,7 @@ impl Compiler {
                 }
             }
         } else {
-            let none_idx = self.add_symbol("None");
+            let none_idx = self.add_global_ref("None", false, span)?;
             self.builder().load_assoc(none_idx);
         }
         Ok(())
@@ -1995,7 +1993,17 @@ impl Compiler {
             ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
             ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
             ExprKind::Symbol(s) => Ok(ConstEntry::Symbol(s.clone())),
-            ExprKind::Ident(name) => Ok(ConstEntry::AssocValue(name.clone())),
+            ExprKind::Ident(name) => {
+                let (module, export_name) = if self.module_env.is_some() {
+                    self.resolve_module_global(name, false, expr.span)?
+                } else {
+                    (USER_MODULE.to_string(), name.clone())
+                };
+                Ok(ConstEntry::ModuleAssocValue {
+                    module,
+                    name: export_name,
+                })
+            }
             ExprKind::Object { slots, body } if body.is_empty() => {
                 // Nested data object as a constant — build a MapDesc
                 let mut slot_descs = Vec::new();
@@ -3189,7 +3197,11 @@ mod tests {
     fn top_level_const_uses_assoc_constant() {
         let code = compile_source("Boolean = { }. Boolean");
         assert!(code.constants.iter().any(|c| {
-            matches!(c, ConstEntry::Symbol(name) if name == "Boolean")
+            matches!(
+                c,
+                ConstEntry::ModuleAssoc { module, name }
+                    if module == USER_MODULE && name == "Boolean"
+            )
         }));
     }
 
@@ -3257,7 +3269,10 @@ mod tests {
                 _ => None,
             })
             .expect("missing store_assoc");
-        assert!(matches!(code.constants[idx], ConstEntry::Symbol(_)));
+        assert!(matches!(
+            code.constants[idx],
+            ConstEntry::ModuleAssoc { .. }
+        ));
     }
 
     #[test]
@@ -3360,7 +3375,8 @@ mod tests {
         let target_idx = assoc_loads[0] as usize;
         assert!(matches!(
             block_code.constants.get(target_idx),
-            Some(ConstEntry::Symbol(s)) if s == "Target"
+            Some(ConstEntry::ModuleAssoc { module, name })
+                if module == USER_MODULE && name == "Target"
         ));
     }
 
@@ -3432,9 +3448,11 @@ mod tests {
             instrs,
             vec![Instruction::LoadAssoc { idx: 0 }, Instruction::LocalReturn,]
         );
-        assert!(
-            matches!(&code.constants[0], ConstEntry::Symbol(s) if s == "Console")
-        );
+        assert!(matches!(
+            &code.constants[0],
+            ConstEntry::ModuleAssoc { module, name }
+                if module == USER_MODULE && name == "Console"
+        ));
     }
 
     #[test]

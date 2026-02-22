@@ -466,8 +466,9 @@ fn format_const_entry(entry: &compiler0::ConstEntry) -> String {
         compiler0::ConstEntry::ModuleAssoc { module, name } => {
             format!("ModuleAssoc({module}::{name})")
         }
-        compiler0::ConstEntry::Assoc(s) => format!("Assoc({s})"),
-        compiler0::ConstEntry::AssocValue(s) => format!("AssocValue({s})"),
+        compiler0::ConstEntry::ModuleAssocValue { module, name } => {
+            format!("ModuleAssocValue({module}::{name})")
+        }
         compiler0::ConstEntry::Code(code) => {
             format!(
                 "Code(regs={}, args={}, temps={}, consts={})",
@@ -509,8 +510,9 @@ fn format_const_entry_short(entry: &compiler0::ConstEntry) -> String {
         compiler0::ConstEntry::ModuleAssoc { module, name } => {
             format!("ModuleAssoc({module}::{name})")
         }
-        compiler0::ConstEntry::Assoc(s) => format!("Assoc({s})"),
-        compiler0::ConstEntry::AssocValue(s) => format!("AssocValue({s})"),
+        compiler0::ConstEntry::ModuleAssocValue { module, name } => {
+            format!("ModuleAssocValue({module}::{name})")
+        }
         compiler0::ConstEntry::Code(code) => format!(
             "Code(regs={}, args={}, temps={})",
             code.register_count, code.arg_count, code.temp_count

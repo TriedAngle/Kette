@@ -427,49 +427,19 @@ fn run(
                 set_register(state, frame_idx, dst, value)?;
             }
             Instruction::LoadAssoc { idx } => {
-                let module_path = if state.frames[frame_idx].module_dynamic {
-                    vm.current_module.as_deref()
-                } else {
-                    state.frames[frame_idx].module_path.as_deref()
-                };
-                let value = load_assoc(vm, code_val, idx, module_path)?;
+                let value = load_assoc(vm, code_val, idx)?;
                 state.acc = value;
             }
             Instruction::StoreAssoc { idx } => {
                 let value = state.acc;
-                let module_dynamic = state.frames[frame_idx].module_dynamic;
-                let module_path =
-                    state.frames[frame_idx].module_path.as_deref();
-                store_assoc(
-                    vm,
-                    code_val,
-                    idx,
-                    value,
-                    module_path,
-                    module_dynamic,
-                )?;
+                store_assoc(vm, code_val, idx, value)?;
             }
             Instruction::MovToAssoc { idx, src } => {
                 let value = get_register(state, frame_idx, src)?;
-                let module_dynamic = state.frames[frame_idx].module_dynamic;
-                let module_path =
-                    state.frames[frame_idx].module_path.as_deref();
-                store_assoc(
-                    vm,
-                    code_val,
-                    idx,
-                    value,
-                    module_path,
-                    module_dynamic,
-                )?;
+                store_assoc(vm, code_val, idx, value)?;
             }
             Instruction::MovFromAssoc { dst, idx } => {
-                let module_path = if state.frames[frame_idx].module_dynamic {
-                    vm.current_module.as_deref()
-                } else {
-                    state.frames[frame_idx].module_path.as_deref()
-                };
-                let value = load_assoc(vm, code_val, idx, module_path)?;
+                let value = load_assoc(vm, code_val, idx)?;
                 set_register(state, frame_idx, dst, value)?;
             }
             Instruction::CreateObject {
@@ -1517,9 +1487,7 @@ fn dispatch_slot(
                 code: code_val,
                 tail_call,
             } => {
-                let method_module = vm
-                    .module_owner_of_value(holder)
-                    .or_else(|| state.frames[frame_idx].module_path.clone());
+                let method_module = state.frames[frame_idx].module_path.clone();
                 if try_tail_recursive_self_call(
                     vm,
                     state,
@@ -1842,64 +1810,40 @@ fn load_assoc(
     vm: &VM,
     code_val: Value,
     idx: u16,
-    module_path: Option<&str>,
 ) -> Result<Value, RuntimeError> {
     let code: &Code = unsafe { code_val.as_ref() };
-    let assoc_or_name = unsafe { code.constant(idx as u32) };
-
-    if assoc_or_name.is_ref() {
-        let header: &Header = unsafe { assoc_or_name.as_ref() };
-        match header.object_type() {
-            ObjectType::Slots => {
-                if let Some(name) = assoc_name(vm, assoc_or_name) {
-                    if let Some((module, export_name)) = name.rsplit_once("::")
-                    {
-                        if let Some(value) =
-                            vm.module_lookup_in(module, export_name)
-                        {
-                            return Ok(value);
-                        }
-                    }
-                }
-                let assoc_obj = unsafe { &*expect_slot_object(assoc_or_name)? };
-                let value =
-                    unsafe { assoc_obj.read_value(SlotObject::VALUES_OFFSET) };
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(name) = vm.trace_assoc_name.as_deref() {
-                        if let Some(assoc_name) = assoc_name(vm, assoc_or_name)
-                        {
-                            if assoc_name == name {
-                                eprintln!(
-                                    "trace_assoc load {} -> {:?}",
-                                    assoc_name, value
-                                );
-                            }
-                        }
-                    }
-                }
-                return Ok(value);
-            }
-            ObjectType::Symbol => {
-                let name = symbol_to_string(assoc_or_name)
-                    .unwrap_or_else(|| "<symbol>".to_string());
-
-                if let Some(path) = module_path {
-                    if let Some(value) = vm.module_lookup_in(path, &name) {
-                        return Ok(value);
-                    }
-                }
-
-                return Err(RuntimeError::UndefinedGlobal { name });
-            }
-            _ => {}
-        }
+    let cell = unsafe { code.constant(idx as u32) };
+    let assoc_obj = unsafe { &*expect_slot_object(cell)? };
+    if assoc_obj.map.raw() != vm.assoc_map.raw() {
+        return Err(RuntimeError::TypeError {
+            expected: "global cell",
+            got: cell,
+        });
     }
+    let value = unsafe { assoc_obj.read_value(SlotObject::VALUES_OFFSET) };
+    Ok(value)
+}
 
-    Err(RuntimeError::TypeError {
-        expected: "assoc or symbol",
-        got: assoc_or_name,
-    })
+fn store_assoc(
+    vm: &mut VM,
+    code_val: Value,
+    idx: u16,
+    value: Value,
+) -> Result<(), RuntimeError> {
+    let code: &Code = unsafe { code_val.as_ref() };
+    let cell = unsafe { code.constant(idx as u32) };
+    let assoc_obj = unsafe { &mut *expect_slot_object_mut(cell)? };
+    if assoc_obj.map.raw() != vm.assoc_map.raw() {
+        return Err(RuntimeError::TypeError {
+            expected: "global cell",
+            got: cell,
+        });
+    }
+    unsafe { assoc_obj.write_value(SlotObject::VALUES_OFFSET, value) };
+    if value.is_ref() {
+        vm.heap_proxy.write_barrier(cell, value);
+    }
+    Ok(())
 }
 
 fn symbol_to_string(sym: Value) -> Option<String> {
@@ -1914,99 +1858,6 @@ fn symbol_to_string(sym: Value) -> Option<String> {
 
     let s: &VMSymbol = unsafe { sym.as_ref() };
     Some(unsafe { s.as_str() }.to_string())
-}
-
-fn store_assoc(
-    vm: &mut VM,
-    code_val: Value,
-    idx: u16,
-    value: Value,
-    module_path: Option<&str>,
-    module_dynamic: bool,
-) -> Result<(), RuntimeError> {
-    let current_module = if module_dynamic {
-        vm.current_module.clone()
-    } else {
-        None
-    };
-    let module_path = if module_dynamic {
-        current_module.as_deref()
-    } else {
-        module_path
-    };
-    let code: &Code = unsafe { code_val.as_ref() };
-    let assoc_or_name = unsafe { code.constant(idx as u32) };
-
-    if assoc_or_name.is_ref() {
-        let header: &Header = unsafe { assoc_or_name.as_ref() };
-        match header.object_type() {
-            ObjectType::Slots => {
-                let assoc_obj =
-                    unsafe { &mut *expect_slot_object_mut(assoc_or_name)? };
-                unsafe {
-                    assoc_obj.write_value(SlotObject::VALUES_OFFSET, value)
-                };
-                if value.is_ref() {
-                    vm.heap_proxy.write_barrier(assoc_or_name, value);
-                }
-                if let Some(name) = assoc_name(vm, assoc_or_name) {
-                    if let Some((module, export_name)) = name.rsplit_once("::")
-                    {
-                        let _ = vm.module_store_in(module, export_name, value);
-                    } else if let Some(path) = module_path {
-                        let _ = vm.module_store_in(path, &name, value);
-                    }
-                }
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(name) = vm.trace_assoc_name.as_deref() {
-                        if let Some(assoc_name) = assoc_name(vm, assoc_or_name)
-                        {
-                            if assoc_name == name {
-                                eprintln!(
-                                    "trace_assoc store {} <- {:?} {}",
-                                    assoc_name,
-                                    value,
-                                    debug_value_summary(value)
-                                );
-                            }
-                        }
-                    }
-                }
-                return Ok(());
-            }
-            ObjectType::Symbol => {
-                let name = symbol_to_string(assoc_or_name)
-                    .unwrap_or_else(|| "<symbol>".to_string());
-                if let Some(path) = module_path {
-                    if vm.module_store_in(path, &name, value) {
-                        return Ok(());
-                    }
-                }
-                return Err(RuntimeError::UndefinedGlobal { name });
-            }
-            _ => {}
-        }
-    }
-
-    Err(RuntimeError::TypeError {
-        expected: "assoc or symbol",
-        got: assoc_or_name,
-    })
-}
-
-fn assoc_name(vm: &VM, assoc: Value) -> Option<String> {
-    let dict: &SlotObject = unsafe { vm.dictionary.as_ref() };
-    let map: &Map = unsafe { dict.map.as_ref() };
-    unsafe {
-        for slot in map.slots() {
-            if slot.value.raw() == assoc.raw() {
-                let name: &VMSymbol = slot.name.as_ref();
-                return Some(name.as_str().to_string());
-            }
-        }
-    }
-    None
 }
 
 #[cfg(debug_assertions)]

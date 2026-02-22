@@ -221,6 +221,41 @@ impl Deref for VMProxy {
 }
 
 impl VM {
+    fn binding_value_from_cell_or_raw(&self, binding: Value) -> Value {
+        if !binding.is_ref() {
+            return binding;
+        }
+        let header: &Header = unsafe { binding.as_ref() };
+        if header.object_type() != ObjectType::Slots {
+            return binding;
+        }
+        let obj: &SlotObject = unsafe { binding.as_ref() };
+        if obj.map.raw() != self.assoc_map.raw() {
+            return binding;
+        }
+        unsafe { obj.read_value(SlotObject::VALUES_OFFSET) }
+    }
+
+    fn write_binding_cell(&mut self, cell: Value, value: Value) -> bool {
+        if !cell.is_ref() {
+            return false;
+        }
+        let header: &Header = unsafe { cell.as_ref() };
+        if header.object_type() != ObjectType::Slots {
+            return false;
+        }
+        let obj: &mut SlotObject =
+            unsafe { &mut *(cell.ref_bits() as *mut SlotObject) };
+        if obj.map.raw() != self.assoc_map.raw() {
+            return false;
+        }
+        unsafe { obj.write_value(SlotObject::VALUES_OFFSET, value) };
+        if value.is_ref() {
+            self.heap_proxy.write_barrier(cell, value);
+        }
+        true
+    }
+
     fn module_resolve_read_target(
         &self,
         module_path: &str,
@@ -289,7 +324,7 @@ impl VM {
             modules
                 .get(&owner_path)
                 .and_then(|m| m.bindings.get(&owner_name))
-                .copied()
+                .map(|v| self.binding_value_from_cell_or_raw(*v))
         })
     }
 
@@ -307,32 +342,28 @@ impl VM {
             .unwrap_or_else(|| (module_path.to_string(), name.to_string()));
         self.ensure_module(&owner_path);
 
+        let mut existing = None;
         self.with_modules(|modules| {
             if let Some(module) = modules.get_mut(&owner_path) {
-                module.bindings.insert(owner_name, value);
-                true
-            } else {
-                false
-            }
-        })
-    }
-
-    pub fn module_owner_of_value(&self, value: Value) -> Option<String> {
-        if !value.is_ref() {
-            return None;
-        }
-
-        let mut result = None;
-        self.with_modules(|modules| {
-            for (path, module) in modules.iter() {
-                if module.bindings.values().any(|v| v.raw() == value.raw()) {
-                    result = Some(path.clone());
-                    break;
+                existing = module.bindings.get(&owner_name).copied();
+                if existing.is_none() {
+                    module.bindings.insert(owner_name.clone(), value);
                 }
             }
         });
-
-        result
+        if let Some(cell) = existing {
+            if self.write_binding_cell(cell, value) {
+                return true;
+            }
+            self.with_modules(|modules| {
+                if let Some(module) = modules.get_mut(&owner_path) {
+                    module.bindings.insert(owner_name.clone(), value);
+                    return;
+                }
+            });
+            return true;
+        }
+        true
     }
 
     pub fn ensure_module(&mut self, path: &str) {
@@ -359,18 +390,7 @@ impl VM {
                         continue;
                     }
                     let sym: &VMSymbol = slot.name.as_ref();
-                    let binding_value = if slot.value.is_ref() {
-                        let value_header: &Header = slot.value.as_ref();
-                        if value_header.object_type() == ObjectType::Slots {
-                            let assoc: &SlotObject = slot.value.as_ref();
-                            assoc.read_value(SlotObject::VALUES_OFFSET)
-                        } else {
-                            slot.value
-                        }
-                    } else {
-                        slot.value
-                    };
-                    entries.push((sym.as_str().to_string(), binding_value));
+                    entries.push((sym.as_str().to_string(), slot.value));
                 }
             }
         }
@@ -559,7 +579,10 @@ impl VM {
             let mut out = Vec::new();
             for name in &module.exports {
                 if let Some(value) = module.bindings.get(name) {
-                    out.push((name.clone(), *value));
+                    out.push((
+                        name.clone(),
+                        self.binding_value_from_cell_or_raw(*value),
+                    ));
                 }
             }
             Ok(out)
