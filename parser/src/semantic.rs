@@ -84,20 +84,8 @@ pub fn analyze_semantics_with_mode(
     mode: AnalysisMode,
 ) -> SemanticAnalysis {
     let mut classified = Classified::default();
-    let unary_index = UnarySelectorIndex::new(tokens);
 
     classify_keyword_operator_and_literal_tokens(tokens, &mut classified);
-
-    let mut unary_selector_spans = HashSet::new();
-    for expr in exprs {
-        collect_unary_selector_spans(
-            expr,
-            tokens,
-            &unary_index,
-            &mut unary_selector_spans,
-            &mut classified,
-        );
-    }
 
     for expr in exprs {
         classify_slot_param_declarations(expr, tokens, &mut classified);
@@ -105,12 +93,7 @@ pub fn analyze_semantics_with_mode(
 
     let mut scopes = Vec::new();
     for expr in exprs {
-        classify_identifier_usage(
-            expr,
-            &mut scopes,
-            &unary_selector_spans,
-            &mut classified,
-        );
+        classify_identifier_usage(expr, &mut scopes, &mut classified);
     }
 
     let mut issues = Vec::new();
@@ -225,171 +208,9 @@ fn classify_keyword_operator_and_literal_tokens(
     }
 }
 
-fn collect_unary_selector_spans(
-    expr: &Expr,
-    tokens: &[Token],
-    index: &UnarySelectorIndex,
-    span_set: &mut HashSet<(usize, usize)>,
-    out: &mut Classified,
-) {
-    match &expr.kind {
-        ExprKind::UnaryMessage { receiver, selector } => {
-            collect_unary_selector_spans(
-                receiver, tokens, index, span_set, out,
-            );
-            if let Some(span) = find_unary_selector_span(
-                expr, receiver, selector, tokens, index,
-            ) {
-                span_set.insert(span);
-                out.add(span.0, span.1, SemanticKind::UnaryMethod);
-            }
-        }
-        ExprKind::BinaryMessage {
-            receiver, argument, ..
-        } => {
-            collect_unary_selector_spans(
-                receiver, tokens, index, span_set, out,
-            );
-            collect_unary_selector_spans(
-                argument, tokens, index, span_set, out,
-            );
-        }
-        ExprKind::KeywordMessage { receiver, pairs } => {
-            collect_unary_selector_spans(
-                receiver, tokens, index, span_set, out,
-            );
-            for pair in pairs {
-                collect_unary_selector_spans(
-                    &pair.argument,
-                    tokens,
-                    index,
-                    span_set,
-                    out,
-                );
-            }
-        }
-        ExprKind::Paren(inner)
-        | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => {
-            collect_unary_selector_spans(inner, tokens, index, span_set, out);
-        }
-        ExprKind::DirectedResend { message, .. } => {
-            collect_unary_selector_spans(message, tokens, index, span_set, out);
-        }
-        ExprKind::Block { body, .. } | ExprKind::Sequence(body) => {
-            for e in body {
-                collect_unary_selector_spans(e, tokens, index, span_set, out);
-            }
-        }
-        ExprKind::Object { slots, body } => {
-            for slot in slots {
-                collect_unary_selector_spans(
-                    &slot.value,
-                    tokens,
-                    index,
-                    span_set,
-                    out,
-                );
-            }
-            for e in body {
-                collect_unary_selector_spans(e, tokens, index, span_set, out);
-            }
-        }
-        ExprKind::Assignment { target, value, .. } => {
-            collect_unary_selector_spans(target, tokens, index, span_set, out);
-            collect_unary_selector_spans(value, tokens, index, span_set, out);
-        }
-        ExprKind::Cascade { receiver, messages } => {
-            collect_unary_selector_spans(
-                receiver, tokens, index, span_set, out,
-            );
-            for msg in messages {
-                collect_unary_selector_spans(msg, tokens, index, span_set, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn find_unary_selector_span(
-    expr: &Expr,
-    receiver: &Expr,
-    selector: &str,
-    tokens: &[Token],
-    index: &UnarySelectorIndex,
-) -> Option<(usize, usize)> {
-    index.find(
-        expr.span.end.offset,
-        receiver.span.end.offset,
-        selector,
-        tokens,
-    )
-}
-
-struct UnarySelectorIndex {
-    identifier_token_indices: Vec<usize>,
-}
-
-impl UnarySelectorIndex {
-    fn new(tokens: &[Token]) -> Self {
-        let mut identifier_token_indices = Vec::new();
-        for (idx, tok) in tokens.iter().enumerate() {
-            if matches!(tok.kind, TokenKind::Identifier(_)) {
-                identifier_token_indices.push(idx);
-            }
-        }
-        Self {
-            identifier_token_indices,
-        }
-    }
-
-    fn find(
-        &self,
-        expr_end: usize,
-        receiver_end: usize,
-        selector: &str,
-        tokens: &[Token],
-    ) -> Option<(usize, usize)> {
-        let upper = self
-            .identifier_token_indices
-            .partition_point(|&idx| tokens[idx].span.end.offset <= expr_end);
-
-        for &idx in self.identifier_token_indices[..upper].iter().rev() {
-            let tok = &tokens[idx];
-            if tok.span.start.offset < receiver_end {
-                break;
-            }
-            if tok.span.end.offset == expr_end {
-                if let TokenKind::Identifier(name) = &tok.kind {
-                    if name == selector {
-                        return Some((
-                            tok.span.start.offset,
-                            tok.span.end.offset,
-                        ));
-                    }
-                }
-            }
-        }
-
-        for &idx in self.identifier_token_indices[..upper].iter().rev() {
-            let tok = &tokens[idx];
-            if tok.span.start.offset < receiver_end {
-                break;
-            }
-            if let TokenKind::Identifier(name) = &tok.kind {
-                if name == selector {
-                    return Some((tok.span.start.offset, tok.span.end.offset));
-                }
-            }
-        }
-        None
-    }
-}
-
 fn classify_identifier_usage(
     expr: &Expr,
     scopes: &mut Vec<Scope>,
-    unary_selector_spans: &HashSet<(usize, usize)>,
     out: &mut Classified,
 ) {
     match &expr.kind {
@@ -402,9 +223,6 @@ fn classify_identifier_usage(
         }
         ExprKind::Ident(name) => {
             let span = (expr.span.start.offset, expr.span.end.offset);
-            if unary_selector_spans.contains(&span) {
-                return;
-            }
             if is_literal_ident(name) {
                 out.add(span.0, span.1, SemanticKind::LiteralNumber);
                 return;
@@ -418,67 +236,17 @@ fn classify_identifier_usage(
             };
             out.add(span.0, span.1, kind);
         }
-        ExprKind::UnaryMessage { receiver, .. } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-        }
-        ExprKind::BinaryMessage {
-            receiver, argument, ..
+        ExprKind::UnaryMessage {
+            receiver,
+            selector_span,
+            ..
         } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
+            out.add(
+                selector_span.start.offset,
+                selector_span.end.offset,
+                SemanticKind::UnaryMethod,
             );
-            classify_identifier_usage(
-                argument,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-        }
-        ExprKind::KeywordMessage { receiver, pairs } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            for pair in pairs {
-                classify_identifier_usage(
-                    &pair.argument,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
-            }
-        }
-        ExprKind::Paren(inner)
-        | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => {
-            classify_identifier_usage(inner, scopes, unary_selector_spans, out);
-        }
-        ExprKind::DirectedResend { message, .. } => {
-            classify_identifier_usage(
-                message,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-        }
-        ExprKind::Assignment { target, value, .. } => {
-            classify_identifier_usage(
-                target,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            classify_identifier_usage(value, scopes, unary_selector_spans, out);
+            classify_identifier_usage(receiver, scopes, out);
         }
         ExprKind::Block { args, body } => {
             let mut scope = Scope::default();
@@ -488,11 +256,11 @@ fn classify_identifier_usage(
             for name in collect_assignment_names(body) {
                 scope.locals.insert(name);
             }
-            scopes.push(scope);
-            for e in body {
-                classify_identifier_usage(e, scopes, unary_selector_spans, out);
-            }
-            scopes.pop();
+            with_scope(scopes, scope, |scopes| {
+                for e in body {
+                    classify_identifier_usage(e, scopes, out);
+                }
+            });
         }
         ExprKind::Object { slots, body } => {
             let mut object_scope = Scope::default();
@@ -501,77 +269,42 @@ fn classify_identifier_usage(
                     object_scope.locals.insert(name);
                 }
             }
-            scopes.push(object_scope);
+            with_scope(scopes, object_scope, |scopes| {
+                for slot in slots {
+                    let mut scope = Scope::default();
+                    for param in &slot.params {
+                        scope.params.insert(param.clone());
+                    }
+                    for name in immediate_assignment_names_in_expr(&slot.value)
+                    {
+                        scope.locals.insert(name);
+                    }
+                    with_scope(scopes, scope, |scopes| {
+                        classify_identifier_usage(&slot.value, scopes, out);
+                    });
+                }
 
-            for slot in slots {
-                let mut scope = Scope::default();
-                for param in &slot.params {
-                    scope.params.insert(param.clone());
+                let locals = collect_assignment_names(body);
+                if !locals.is_empty() {
+                    let mut scope = Scope::default();
+                    for name in locals {
+                        scope.locals.insert(name);
+                    }
+                    with_scope(scopes, scope, |scopes| {
+                        for e in body {
+                            classify_identifier_usage(e, scopes, out);
+                        }
+                    });
+                } else {
+                    for e in body {
+                        classify_identifier_usage(e, scopes, out);
+                    }
                 }
-                for name in immediate_assignment_names_in_expr(&slot.value) {
-                    scope.locals.insert(name);
-                }
-                scopes.push(scope);
-                classify_identifier_usage(
-                    &slot.value,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
-                scopes.pop();
-            }
-
-            let locals = collect_assignment_names(body);
-            if !locals.is_empty() {
-                let mut scope = Scope::default();
-                for name in locals {
-                    scope.locals.insert(name);
-                }
-                scopes.push(scope);
-                for e in body {
-                    classify_identifier_usage(
-                        e,
-                        scopes,
-                        unary_selector_spans,
-                        out,
-                    );
-                }
-                scopes.pop();
-            } else {
-                for e in body {
-                    classify_identifier_usage(
-                        e,
-                        scopes,
-                        unary_selector_spans,
-                        out,
-                    );
-                }
-            }
-
-            scopes.pop();
+            });
         }
-        ExprKind::Sequence(exprs) => {
-            for e in exprs {
-                classify_identifier_usage(e, scopes, unary_selector_spans, out);
-            }
-        }
-        ExprKind::Cascade { receiver, messages } => {
-            classify_identifier_usage(
-                receiver,
-                scopes,
-                unary_selector_spans,
-                out,
-            );
-            for msg in messages {
-                classify_identifier_usage(
-                    msg,
-                    scopes,
-                    unary_selector_spans,
-                    out,
-                );
-            }
-        }
-        _ => {}
+        _ => for_each_direct_child(expr, |child| {
+            classify_identifier_usage(child, scopes, out)
+        }),
     }
 }
 
@@ -580,56 +313,15 @@ fn classify_slot_param_declarations(
     tokens: &[Token],
     out: &mut Classified,
 ) {
-    match &expr.kind {
-        ExprKind::Object { slots, body } => {
-            for slot in slots {
-                classify_slot_params_for_slot(slot, tokens, out);
-                classify_slot_param_declarations(&slot.value, tokens, out);
-            }
-            for e in body {
-                classify_slot_param_declarations(e, tokens, out);
-            }
+    if let ExprKind::Object { slots, .. } = &expr.kind {
+        for slot in slots {
+            classify_slot_params_for_slot(slot, tokens, out);
         }
-        ExprKind::UnaryMessage { receiver, .. } => {
-            classify_slot_param_declarations(receiver, tokens, out);
-        }
-        ExprKind::BinaryMessage {
-            receiver, argument, ..
-        } => {
-            classify_slot_param_declarations(receiver, tokens, out);
-            classify_slot_param_declarations(argument, tokens, out);
-        }
-        ExprKind::KeywordMessage { receiver, pairs } => {
-            classify_slot_param_declarations(receiver, tokens, out);
-            for pair in pairs {
-                classify_slot_param_declarations(&pair.argument, tokens, out);
-            }
-        }
-        ExprKind::Paren(inner)
-        | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => {
-            classify_slot_param_declarations(inner, tokens, out);
-        }
-        ExprKind::DirectedResend { message, .. } => {
-            classify_slot_param_declarations(message, tokens, out);
-        }
-        ExprKind::Assignment { target, value, .. } => {
-            classify_slot_param_declarations(target, tokens, out);
-            classify_slot_param_declarations(value, tokens, out);
-        }
-        ExprKind::Sequence(exprs) => {
-            for e in exprs {
-                classify_slot_param_declarations(e, tokens, out);
-            }
-        }
-        ExprKind::Cascade { receiver, messages } => {
-            classify_slot_param_declarations(receiver, tokens, out);
-            for msg in messages {
-                classify_slot_param_declarations(msg, tokens, out);
-            }
-        }
-        _ => {}
     }
+
+    for_each_direct_child(expr, |child| {
+        classify_slot_param_declarations(child, tokens, out)
+    });
 }
 
 fn classify_slot_params_for_slot(
@@ -768,40 +460,6 @@ fn collect_strict_issues(
             }
             collect_strict_issues(value, scopes, out);
         }
-        ExprKind::UnaryMessage { receiver, .. } => {
-            collect_strict_issues(receiver, scopes, out)
-        }
-        ExprKind::BinaryMessage {
-            receiver, argument, ..
-        } => {
-            collect_strict_issues(receiver, scopes, out);
-            collect_strict_issues(argument, scopes, out);
-        }
-        ExprKind::KeywordMessage { receiver, pairs } => {
-            collect_strict_issues(receiver, scopes, out);
-            for pair in pairs {
-                collect_strict_issues(&pair.argument, scopes, out);
-            }
-        }
-        ExprKind::Paren(inner)
-        | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => {
-            collect_strict_issues(inner, scopes, out)
-        }
-        ExprKind::DirectedResend { message, .. } => {
-            collect_strict_issues(message, scopes, out)
-        }
-        ExprKind::Sequence(exprs) => {
-            for e in exprs {
-                collect_strict_issues(e, scopes, out);
-            }
-        }
-        ExprKind::Cascade { receiver, messages } => {
-            collect_strict_issues(receiver, scopes, out);
-            for msg in messages {
-                collect_strict_issues(msg, scopes, out);
-            }
-        }
         ExprKind::Block { args, body } => {
             let mut scope = StrictScope::default();
             for arg in args {
@@ -814,11 +472,11 @@ fn collect_strict_issues(
             {
                 scope.bindings.insert(name, BindingInfo { mutable });
             }
-            scopes.push(scope);
-            for e in body {
-                collect_strict_issues(e, scopes, out);
-            }
-            scopes.pop();
+            with_scope(scopes, scope, |scopes| {
+                for e in body {
+                    collect_strict_issues(e, scopes, out);
+                }
+            });
         }
         ExprKind::Object { slots, body } => {
             let mut scope = StrictScope::default();
@@ -830,40 +488,102 @@ fn collect_strict_issues(
                     },
                 );
             }
-            scopes.push(scope);
+            with_scope(scopes, scope, |scopes| {
+                for slot in slots {
+                    let mut slot_scope = StrictScope::default();
+                    for param in &slot.params {
+                        slot_scope.bindings.insert(
+                            param.clone(),
+                            BindingInfo { mutable: false },
+                        );
+                    }
+                    for (name, mutable) in
+                        collect_assignment_decls_in_expr(&slot.value)
+                    {
+                        slot_scope
+                            .bindings
+                            .insert(name, BindingInfo { mutable });
+                    }
+                    with_scope(scopes, slot_scope, |scopes| {
+                        collect_strict_issues(&slot.value, scopes, out);
+                    });
+                }
 
+                if !body.is_empty() {
+                    let mut body_scope = StrictScope::default();
+                    for (name, mutable) in
+                        collect_assignment_decls_with_mutability(body)
+                    {
+                        body_scope
+                            .bindings
+                            .insert(name, BindingInfo { mutable });
+                    }
+                    with_scope(scopes, body_scope, |scopes| {
+                        for e in body {
+                            collect_strict_issues(e, scopes, out);
+                        }
+                    });
+                }
+            });
+        }
+        _ => for_each_direct_child(expr, |child| {
+            collect_strict_issues(child, scopes, out)
+        }),
+    }
+}
+
+fn with_scope<T, R>(
+    scopes: &mut Vec<T>,
+    scope: T,
+    f: impl FnOnce(&mut Vec<T>) -> R,
+) -> R {
+    scopes.push(scope);
+    let result = f(scopes);
+    scopes.pop();
+    result
+}
+
+fn for_each_direct_child(expr: &Expr, mut f: impl FnMut(&Expr)) {
+    match &expr.kind {
+        ExprKind::UnaryMessage { receiver, .. } => f(receiver),
+        ExprKind::BinaryMessage {
+            receiver, argument, ..
+        } => {
+            f(receiver);
+            f(argument);
+        }
+        ExprKind::KeywordMessage { receiver, pairs } => {
+            f(receiver);
+            for pair in pairs {
+                f(&pair.argument);
+            }
+        }
+        ExprKind::Paren(inner)
+        | ExprKind::Return(inner)
+        | ExprKind::Resend { message: inner } => f(inner),
+        ExprKind::DirectedResend { message, .. } => f(message),
+        ExprKind::Assignment { target, value, .. } => {
+            f(target);
+            f(value);
+        }
+        ExprKind::Block { body, .. } | ExprKind::Sequence(body) => {
+            for e in body {
+                f(e);
+            }
+        }
+        ExprKind::Object { slots, body } => {
             for slot in slots {
-                let mut slot_scope = StrictScope::default();
-                for param in &slot.params {
-                    slot_scope
-                        .bindings
-                        .insert(param.clone(), BindingInfo { mutable: false });
-                }
-                for (name, mutable) in
-                    collect_assignment_decls_in_expr(&slot.value)
-                {
-                    slot_scope.bindings.insert(name, BindingInfo { mutable });
-                }
-                scopes.push(slot_scope);
-                collect_strict_issues(&slot.value, scopes, out);
-                scopes.pop();
+                f(&slot.value);
             }
-
-            if !body.is_empty() {
-                let mut body_scope = StrictScope::default();
-                for (name, mutable) in
-                    collect_assignment_decls_with_mutability(body)
-                {
-                    body_scope.bindings.insert(name, BindingInfo { mutable });
-                }
-                scopes.push(body_scope);
-                for e in body {
-                    collect_strict_issues(e, scopes, out);
-                }
-                scopes.pop();
+            for e in body {
+                f(e);
             }
-
-            scopes.pop();
+        }
+        ExprKind::Cascade { receiver, messages } => {
+            f(receiver);
+            for msg in messages {
+                f(msg);
+            }
         }
         _ => {}
     }

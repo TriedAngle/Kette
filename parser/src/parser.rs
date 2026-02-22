@@ -191,27 +191,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
 
     fn parse_assignment_level(&mut self) -> Result<Expr, ParseError> {
         let left = self.parse_cascade_level()?;
-        match self.peek_kind().clone() {
-            TokenKind::Assign | TokenKind::Equals => {
-                let op = self.advance();
-                let right = self.parse_assignment_level()?;
-                let kind = match op.kind {
-                    TokenKind::Assign => AssignKind::Assign,
-                    TokenKind::Equals => AssignKind::Const,
-                    _ => unreachable!(),
-                };
-                let span = left.span.merge(right.span);
-                Ok(Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(left),
-                        kind,
-                        value: Box::new(right),
-                    },
-                    span,
-                ))
-            }
-            _ => Ok(left),
-        }
+        self.parse_assignment_tail(left)
     }
 
     fn cascade_receiver_from_expr(&self, expr: &Expr) -> Expr {
@@ -323,20 +303,12 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         let start = receiver.span;
         let mut pairs = Vec::new();
 
-        if let TokenKind::Keyword(kw) = self.peek_kind().clone() {
-            let kt = self.advance();
-            let arg = self.parse_binary_level()?;
-            pairs.push(KeywordPair {
-                keyword: kw,
-                span: kt.span.merge(arg.span),
-                argument: arg,
-            });
-        }
         while let TokenKind::Keyword(kw) = self.peek_kind().clone() {
             let kt = self.advance();
             let arg = self.parse_binary_level()?;
             pairs.push(KeywordPair {
                 keyword: kw,
+                keyword_span: kt.span,
                 span: kt.span.merge(arg.span),
                 argument: arg,
             });
@@ -387,6 +359,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 ExprKind::BinaryMessage {
                     receiver: Box::new(left),
                     operator: op,
+                    operator_span: self.last_span,
                     argument: Box::new(right),
                 },
                 span,
@@ -417,6 +390,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     ExprKind::UnaryMessage {
                         receiver: Box::new(expr),
                         selector: sel,
+                        selector_span: tok.span,
                     },
                     span,
                 );
@@ -813,7 +787,13 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         primary: Expr,
     ) -> Result<Expr, ParseError> {
         let expr = self.parse_message_chain_from(primary)?;
-        // Assignment level
+        self.parse_assignment_tail(expr)
+    }
+
+    fn parse_assignment_tail(
+        &mut self,
+        left: Expr,
+    ) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::Assign | TokenKind::Equals => {
                 let op = self.advance();
@@ -823,17 +803,17 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Equals => AssignKind::Const,
                     _ => unreachable!(),
                 };
-                let span = expr.span.merge(right.span);
+                let span = left.span.merge(right.span);
                 Ok(Expr::new(
                     ExprKind::Assignment {
-                        target: Box::new(expr),
+                        target: Box::new(left),
                         kind,
                         value: Box::new(right),
                     },
                     span,
                 ))
             }
-            _ => Ok(expr),
+            _ => Ok(left),
         }
     }
 

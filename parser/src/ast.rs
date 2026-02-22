@@ -91,6 +91,7 @@ pub enum ExprKind {
     UnaryMessage {
         receiver: Box<Expr>,
         selector: String,
+        selector_span: Span,
     },
 
     /// A binary message send: `receiver op argument`.
@@ -99,6 +100,7 @@ pub enum ExprKind {
     BinaryMessage {
         receiver: Box<Expr>,
         operator: String,
+        operator_span: Span,
         argument: Box<Expr>,
     },
 
@@ -171,6 +173,7 @@ pub enum ExprKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeywordPair {
     pub keyword: String,
+    pub keyword_span: Span,
     pub argument: Expr,
     pub span: Span,
 }

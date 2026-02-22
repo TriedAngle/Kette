@@ -1152,13 +1152,16 @@ impl Compiler {
             ExprKind::Ident(name) => {
                 self.compile_ident(name, expr.span)?;
             }
-            ExprKind::UnaryMessage { receiver, selector } => {
+            ExprKind::UnaryMessage {
+                receiver, selector, ..
+            } => {
                 self.compile_unary_message(receiver, selector, expr.span)?;
             }
             ExprKind::BinaryMessage {
                 receiver,
                 operator,
                 argument,
+                ..
             } => {
                 self.compile_binary_message(
                     receiver, operator, argument, expr.span,
@@ -1502,7 +1505,10 @@ impl Compiler {
     }
 
     fn unwrap_ensure_tail_call<'a>(&self, expr: &'a Expr) -> (&'a Expr, bool) {
-        if let ExprKind::UnaryMessage { receiver, selector } = &expr.kind {
+        if let ExprKind::UnaryMessage {
+            receiver, selector, ..
+        } = &expr.kind
+        {
             if selector == "_EnsureTailCall" {
                 return (receiver.as_ref(), true);
             }
@@ -1534,7 +1540,9 @@ impl Compiler {
         method_selector: &str,
     ) -> bool {
         match &expr.kind {
-            ExprKind::UnaryMessage { receiver, selector } => {
+            ExprKind::UnaryMessage {
+                receiver, selector, ..
+            } => {
                 (selector == method_selector
                     && matches!(receiver.kind, ExprKind::SelfRef))
                     || self
@@ -1544,6 +1552,7 @@ impl Compiler {
                 receiver,
                 operator,
                 argument,
+                ..
             } => {
                 (operator == method_selector
                     && matches!(receiver.kind, ExprKind::SelfRef))
@@ -2580,6 +2589,7 @@ fn collect_symbol_list_expr(expr: &Expr, out: &mut Vec<String>) -> Option<()> {
             receiver,
             operator,
             argument,
+            ..
         } if operator == "&" => {
             collect_symbol_list_expr(receiver, out)?;
             collect_symbol_list_expr(argument, out)?;
@@ -2600,6 +2610,7 @@ fn collect_symbol_expr(expr: &Expr, out: &mut HashSet<String>) -> Option<()> {
             receiver,
             operator,
             argument,
+            ..
         } if operator == "&" => {
             collect_symbol_expr(receiver, out)?;
             collect_symbol_expr(argument, out)?;

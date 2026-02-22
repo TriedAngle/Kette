@@ -163,7 +163,9 @@ mod tests {
     fn unary_chain() {
         let e = parse_one("5 factorial print");
         match &e.kind {
-            ExprKind::UnaryMessage { receiver, selector } => {
+            ExprKind::UnaryMessage {
+                receiver, selector, ..
+            } => {
                 assert_eq!(selector, "print");
                 assert!(matches!(receiver.kind, ExprKind::UnaryMessage { .. }));
             }
@@ -179,6 +181,7 @@ mod tests {
                 receiver,
                 operator,
                 argument,
+                ..
             } => {
                 assert!(matches!(receiver.kind, ExprKind::Integer(3)));
                 assert_eq!(operator, "+");
@@ -203,6 +206,7 @@ mod tests {
                 receiver,
                 operator,
                 argument,
+                ..
             } => {
                 assert_eq!(operator, "+");
                 assert!(matches!(argument.kind, ExprKind::Integer(3)));
@@ -223,6 +227,7 @@ mod tests {
                 receiver,
                 operator,
                 argument,
+                ..
             } => {
                 assert_eq!(operator, "+");
                 assert!(matches!(receiver.kind, ExprKind::Integer(3)));
@@ -231,6 +236,7 @@ mod tests {
                         receiver: inner_recv,
                         operator: inner_op,
                         argument: inner_arg,
+                        ..
                     } => {
                         assert_eq!(inner_op, "*");
                         assert!(matches!(
@@ -254,6 +260,7 @@ mod tests {
                 receiver,
                 operator,
                 argument,
+                ..
             } => {
                 assert_eq!(operator, "-");
                 assert!(matches!(argument.kind, ExprKind::Integer(2)));
@@ -274,14 +281,18 @@ mod tests {
                 assert!(matches!(receiver.kind, ExprKind::Integer(3)));
                 assert_eq!(messages.len(), 2);
                 match &messages[0].kind {
-                    ExprKind::UnaryMessage { receiver, selector } => {
+                    ExprKind::UnaryMessage {
+                        receiver, selector, ..
+                    } => {
                         assert_eq!(selector, "factorial");
                         assert!(matches!(receiver.kind, ExprKind::Integer(3)));
                     }
                     _ => panic!("expected unary"),
                 }
                 match &messages[1].kind {
-                    ExprKind::UnaryMessage { receiver, selector } => {
+                    ExprKind::UnaryMessage {
+                        receiver, selector, ..
+                    } => {
                         assert_eq!(selector, "print");
                         assert!(matches!(receiver.kind, ExprKind::Integer(3)));
                     }
@@ -826,6 +837,7 @@ mod tests {
                         receiver,
                         operator,
                         argument,
+                        ..
                     } => {
                         assert_eq!(operator, "&");
                         assert!(
@@ -915,9 +927,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(
-                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
-                );
+                assert!(body
+                    .iter()
+                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
             }
             _ => panic!("expected block"),
         }
