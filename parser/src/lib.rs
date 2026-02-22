@@ -51,8 +51,8 @@ pub mod span;
 pub mod token;
 
 pub use ast::{
-    Comment, CommentKind, Expr, ExprKind, KeywordPair, SlotDescriptor,
-    SlotSelector,
+    AstArena, Comment, CommentKind, ExprId, ExprKind, ExprNode, KeywordPair,
+    SlotDescriptor, SlotSelector,
 };
 pub use lexer::Lexer;
 pub use parser::{ParseError, Parser};
@@ -61,13 +61,217 @@ pub use token::{Token, TokenKind};
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::*;
+    use crate::ast::{
+        AssignKind, AstArena, Comment, CommentKind, ExprId,
+        ExprKind as ExprNodeKind, KeywordPair as AstKeywordPair,
+        SlotDescriptor as AstSlotDescriptor, SlotSelector,
+    };
     use crate::lexer::Lexer;
     use crate::parser::{ParseError, Parser};
 
+    #[derive(Debug, Clone, PartialEq)]
+    struct Expr {
+        kind: TestExprKind,
+        span: crate::Span,
+        leading_comments: Vec<Comment>,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum TestExprKind {
+        Integer(i128),
+        Float(f64),
+        String(String),
+        Symbol(String),
+        SelfRef,
+        Ident(String),
+        UnaryMessage {
+            receiver: Box<Expr>,
+            selector: String,
+            selector_span: crate::Span,
+        },
+        BinaryMessage {
+            receiver: Box<Expr>,
+            operator: String,
+            operator_span: crate::Span,
+            argument: Box<Expr>,
+        },
+        KeywordMessage {
+            receiver: Box<Expr>,
+            pairs: Vec<KeywordPair>,
+        },
+        Resend {
+            message: Box<Expr>,
+        },
+        DirectedResend {
+            delegate: String,
+            message: Box<Expr>,
+        },
+        Paren(Box<Expr>),
+        Block {
+            args: Vec<String>,
+            body: Vec<Expr>,
+        },
+        Object {
+            slots: Vec<SlotDescriptor>,
+            body: Vec<Expr>,
+        },
+        Return(Box<Expr>),
+        Assignment {
+            target: Box<Expr>,
+            kind: AssignKind,
+            value: Box<Expr>,
+        },
+        Sequence(Vec<Expr>),
+        Cascade {
+            receiver: Box<Expr>,
+            messages: Vec<Expr>,
+        },
+        Comment(Comment),
+        Error(String),
+    }
+
+    type ExprKind = TestExprKind;
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct KeywordPair {
+        keyword: String,
+        keyword_span: crate::Span,
+        argument: Expr,
+        span: crate::Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct SlotDescriptor {
+        selector: SlotSelector,
+        params: Vec<String>,
+        mutable: bool,
+        is_parent: bool,
+        shorthand: bool,
+        value: Expr,
+        span: crate::Span,
+        leading_comments: Vec<Comment>,
+    }
+
+    fn lower_expr(arena: &AstArena, id: ExprId) -> Expr {
+        let node = arena.get(id);
+        let kind = match &node.kind {
+            ExprNodeKind::Integer(v) => TestExprKind::Integer(*v),
+            ExprNodeKind::Float(v) => TestExprKind::Float(*v),
+            ExprNodeKind::String(v) => TestExprKind::String(v.clone()),
+            ExprNodeKind::Symbol(v) => TestExprKind::Symbol(v.clone()),
+            ExprNodeKind::SelfRef => TestExprKind::SelfRef,
+            ExprNodeKind::Ident(name) => TestExprKind::Ident(name.clone()),
+            ExprNodeKind::UnaryMessage {
+                receiver,
+                selector,
+                selector_span,
+            } => TestExprKind::UnaryMessage {
+                receiver: Box::new(lower_expr(arena, *receiver)),
+                selector: selector.clone(),
+                selector_span: *selector_span,
+            },
+            ExprNodeKind::BinaryMessage {
+                receiver,
+                operator,
+                operator_span,
+                argument,
+            } => TestExprKind::BinaryMessage {
+                receiver: Box::new(lower_expr(arena, *receiver)),
+                operator: operator.clone(),
+                operator_span: *operator_span,
+                argument: Box::new(lower_expr(arena, *argument)),
+            },
+            ExprNodeKind::KeywordMessage { receiver, pairs } => {
+                TestExprKind::KeywordMessage {
+                    receiver: Box::new(lower_expr(arena, *receiver)),
+                    pairs: pairs.iter().map(|p| lower_pair(arena, p)).collect(),
+                }
+            }
+            ExprNodeKind::Resend { message } => TestExprKind::Resend {
+                message: Box::new(lower_expr(arena, *message)),
+            },
+            ExprNodeKind::DirectedResend { delegate, message } => {
+                TestExprKind::DirectedResend {
+                    delegate: delegate.clone(),
+                    message: Box::new(lower_expr(arena, *message)),
+                }
+            }
+            ExprNodeKind::Paren(inner) => {
+                TestExprKind::Paren(Box::new(lower_expr(arena, *inner)))
+            }
+            ExprNodeKind::Block { args, body } => TestExprKind::Block {
+                args: args.clone(),
+                body: body.iter().map(|e| lower_expr(arena, *e)).collect(),
+            },
+            ExprNodeKind::Object { slots, body } => TestExprKind::Object {
+                slots: slots.iter().map(|s| lower_slot(arena, s)).collect(),
+                body: body.iter().map(|e| lower_expr(arena, *e)).collect(),
+            },
+            ExprNodeKind::Return(inner) => {
+                TestExprKind::Return(Box::new(lower_expr(arena, *inner)))
+            }
+            ExprNodeKind::Assignment {
+                target,
+                kind,
+                value,
+            } => TestExprKind::Assignment {
+                target: Box::new(lower_expr(arena, *target)),
+                kind: *kind,
+                value: Box::new(lower_expr(arena, *value)),
+            },
+            ExprNodeKind::Sequence(exprs) => TestExprKind::Sequence(
+                exprs.iter().map(|e| lower_expr(arena, *e)).collect(),
+            ),
+            ExprNodeKind::Cascade { receiver, messages } => {
+                TestExprKind::Cascade {
+                    receiver: Box::new(lower_expr(arena, *receiver)),
+                    messages: messages
+                        .iter()
+                        .map(|m| lower_expr(arena, *m))
+                        .collect(),
+                }
+            }
+            ExprNodeKind::Comment(c) => TestExprKind::Comment(c.clone()),
+            ExprNodeKind::Error(msg) => TestExprKind::Error(msg.clone()),
+        };
+        Expr {
+            kind,
+            span: node.span,
+            leading_comments: node.leading_comments.clone(),
+        }
+    }
+
+    fn lower_pair(arena: &AstArena, p: &AstKeywordPair) -> KeywordPair {
+        KeywordPair {
+            keyword: p.keyword.clone(),
+            keyword_span: p.keyword_span,
+            argument: lower_expr(arena, p.argument),
+            span: p.span,
+        }
+    }
+
+    fn lower_slot(arena: &AstArena, s: &AstSlotDescriptor) -> SlotDescriptor {
+        SlotDescriptor {
+            selector: s.selector.clone(),
+            params: s.params.clone(),
+            mutable: s.mutable,
+            is_parent: s.is_parent,
+            shorthand: s.shorthand,
+            value: lower_expr(arena, s.value),
+            span: s.span,
+            leading_comments: s.leading_comments.clone(),
+        }
+    }
+
     fn parse(src: &str) -> Vec<Result<Expr, ParseError>> {
         let lexer = Lexer::from_str(src);
-        Parser::new(lexer).collect()
+        let mut parser = Parser::new(lexer);
+        let parsed: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
+        parsed
+            .into_iter()
+            .map(|r| r.map(|id| lower_expr(&arena, id)))
+            .collect()
     }
 
     fn parse_ok(src: &str) -> Vec<Expr> {
@@ -98,8 +302,11 @@ mod tests {
 
     #[test]
     fn graphviz_export_basic() {
-        let expr = parse_one("1 + 2");
-        let dot = crate::ast::to_dot(&[expr]);
+        let mut parser = Parser::new(Lexer::from_str("1 + 2"));
+        let roots: Vec<_> =
+            parser.by_ref().map(|r| r.expect("parse error")).collect();
+        let arena = parser.into_arena();
+        let dot = crate::ast::to_dot(&arena, &roots);
         assert!(dot.contains("digraph AST"));
         assert!(
             dot.contains("BinaryMessage(+)")
@@ -876,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn comment_attached_to_expr() {
+    fn comment_attached_to_node() {
         let e = parse_one("// doc comment\n42");
         assert!(matches!(e.kind, ExprKind::Integer(42)));
         assert_eq!(e.leading_comments.len(), 1);
@@ -927,9 +1134,9 @@ mod tests {
             ExprKind::Block { body, .. } => {
                 // body should have the expressions and then the trailing comment
                 assert!(body.len() >= 1);
-                assert!(body
-                    .iter()
-                    .any(|e| matches!(e.kind, ExprKind::Comment(_))));
+                assert!(
+                    body.iter().any(|e| matches!(e.kind, ExprKind::Comment(_)))
+                );
             }
             _ => panic!("expected block"),
         }

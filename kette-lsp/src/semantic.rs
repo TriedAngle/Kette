@@ -1,4 +1,4 @@
-use parser::{Expr, Token, semantic};
+use parser::{AstArena, ExprId, Token, semantic};
 #[cfg(test)]
 use parser::{Lexer, Parser, TokenKind};
 use tower_lsp::lsp_types::{
@@ -43,19 +43,22 @@ pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
         .filter(|t| !t.is_eof() && !matches!(t.kind, TokenKind::Error(_)))
         .collect();
 
-    let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
-    let exprs: Vec<Expr> =
+    let mut parser = Parser::new(Lexer::from_str(source));
+    let parse_results: Vec<_> = parser.by_ref().collect();
+    let arena = parser.into_arena();
+    let exprs: Vec<ExprId> =
         parse_results.into_iter().filter_map(Result::ok).collect();
 
-    semantic_tokens_from(source, &tokens, &exprs)
+    semantic_tokens_from(source, &tokens, &arena, &exprs)
 }
 
 pub fn semantic_tokens_from(
     source: &str,
     tokens: &[Token],
-    exprs: &[Expr],
+    arena: &AstArena,
+    exprs: &[ExprId],
 ) -> Vec<SemanticToken> {
-    let spans = semantic::analyze_semantics(tokens, exprs);
+    let spans = semantic::analyze_semantics_ids(tokens, arena, exprs);
     let mut out = Vec::with_capacity(spans.len());
     let mut cursor = OffsetCursor::new(source);
     let mut prev_line = 0u32;

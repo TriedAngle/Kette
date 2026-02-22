@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use parser::ast::Expr;
+use parser::ast::{AstArena, ExprId};
 use parser::token::Token;
 use parser::{Lexer, ParseError, Parser};
 use tokio::sync::RwLock;
@@ -44,43 +44,48 @@ impl Backend {
     }
 
     fn analyze_source(source: &str) -> (Vec<Diagnostic>, Vec<SemanticToken>) {
-        let parse_results: Vec<_> =
-            Parser::new(Lexer::from_str(source)).collect();
+        let mut parser = Parser::new(Lexer::from_str(source));
+        let parse_results: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
 
         let parse_errors: Vec<ParseError> = parse_results
             .iter()
             .filter_map(|r| r.as_ref().err().cloned())
             .collect();
-        let exprs: Vec<Expr> =
+        let exprs: Vec<ExprId> =
             parse_results.into_iter().filter_map(|r| r.ok()).collect();
 
         let mut diagnostics =
             diagnostics_from_parse_errors(source, &parse_errors);
-        let semantic = parser::semantic::analyze_semantics_with_mode(
+        let semantic = parser::semantic::analyze_semantics_with_mode_ids(
             &[],
+            &arena,
             &exprs,
             parser::semantic::AnalysisMode::Strict,
         );
         diagnostics
             .extend(diagnostics_from_semantic_issues(source, &semantic.issues));
-        let semantic_tokens = Self::semantic_tokens_for_source(source, &exprs);
+        let semantic_tokens =
+            Self::semantic_tokens_for_source(source, &arena, &exprs);
         (diagnostics, semantic_tokens)
     }
 
     fn diagnostics_for_source(source: &str) -> Vec<Diagnostic> {
-        let parse_results: Vec<_> =
-            Parser::new(Lexer::from_str(source)).collect();
+        let mut parser = Parser::new(Lexer::from_str(source));
+        let parse_results: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
         let parse_errors: Vec<ParseError> = parse_results
             .iter()
             .filter_map(|r| r.as_ref().err().cloned())
             .collect();
-        let exprs: Vec<Expr> =
+        let exprs: Vec<ExprId> =
             parse_results.into_iter().filter_map(|r| r.ok()).collect();
 
         let mut diagnostics =
             diagnostics_from_parse_errors(source, &parse_errors);
-        let semantic = parser::semantic::analyze_semantics_with_mode(
+        let semantic = parser::semantic::analyze_semantics_with_mode_ids(
             &[],
+            &arena,
             &exprs,
             parser::semantic::AnalysisMode::Strict,
         );
@@ -91,7 +96,8 @@ impl Backend {
 
     fn semantic_tokens_for_source(
         source: &str,
-        exprs: &[Expr],
+        arena: &AstArena,
+        exprs: &[ExprId],
     ) -> Vec<SemanticToken> {
         let semantic_input: Vec<Token> = Lexer::from_str(source)
             .filter(|t| {
@@ -99,15 +105,16 @@ impl Backend {
                     && !matches!(t.kind, parser::token::TokenKind::Error(_))
             })
             .collect();
-        semantic::semantic_tokens_from(source, &semantic_input, exprs)
+        semantic::semantic_tokens_from(source, &semantic_input, arena, exprs)
     }
 
     fn semantic_tokens_from_text(source: &str) -> Vec<SemanticToken> {
-        let parse_results: Vec<_> =
-            Parser::new(Lexer::from_str(source)).collect();
-        let exprs: Vec<Expr> =
+        let mut parser = Parser::new(Lexer::from_str(source));
+        let parse_results: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
+        let exprs: Vec<ExprId> =
             parse_results.into_iter().filter_map(|r| r.ok()).collect();
-        Self::semantic_tokens_for_source(source, &exprs)
+        Self::semantic_tokens_for_source(source, &arena, &exprs)
     }
 
     async fn analyze_store_and_publish(

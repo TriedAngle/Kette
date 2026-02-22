@@ -1,13 +1,7 @@
-/// Streaming parser for Self expression syntax.
-///
-/// Consumes tokens and produces [`Expr`] AST nodes.
-///
-/// # Comment preservation
-///
-/// Comments are **never discarded**.  Before an expression they are
-/// attached as [`Expr::leading_comments`].  At the end of a body they
-/// are emitted as [`ExprKind::Comment`] nodes for LSP reflection.
-use crate::ast::*;
+use crate::ast::{
+    AssignKind, AstArena, Comment, CommentKind, ExprId, ExprKind, ExprNode,
+    KeywordPair, SlotDescriptor, SlotSelector,
+};
 use crate::span::{Pos, Span};
 use crate::token::{Token, TokenKind};
 use std::collections::HashMap;
@@ -37,9 +31,9 @@ impl std::error::Error for ParseError {}
 
 pub struct Parser<I: Iterator<Item = Token>> {
     tokens: std::iter::Peekable<I>,
+    arena: AstArena,
     last_span: Span,
     at_eof: bool,
-    /// Comments buffered while scanning for the next meaningful token.
     pending_comments: Vec<Comment>,
     op_precedence: HashMap<String, u8>,
 }
@@ -53,11 +47,32 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         op_precedence.insert("/".to_string(), 2);
         Self {
             tokens: tokens.peekable(),
+            arena: AstArena::default(),
             last_span: Span::point(Pos::origin()),
             at_eof: false,
             pending_comments: Vec::new(),
             op_precedence,
         }
+    }
+
+    pub fn arena(&self) -> &AstArena {
+        &self.arena
+    }
+
+    pub fn into_arena(self) -> AstArena {
+        self.arena
+    }
+
+    fn alloc_expr(&mut self, kind: ExprKind, span: Span) -> ExprId {
+        self.arena.alloc(ExprNode {
+            kind,
+            span,
+            leading_comments: Vec::new(),
+        })
+    }
+
+    fn span_of(&self, id: ExprId) -> Span {
+        self.arena.get(id).span
     }
 
     fn peek_kind(&mut self) -> &TokenKind {
@@ -80,7 +95,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         loop {
             match self.tokens.peek() {
                 Some(tok) if tok.kind.is_comment() => {
-                    let tok = self.tokens.next().unwrap();
+                    let tok = self.tokens.next().expect("peeked token exists");
                     self.last_span = tok.span;
                     self.pending_comments.push(token_to_comment(&tok));
                 }
@@ -131,54 +146,59 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(kind)
     }
 
-    fn parse_expression_with_comments(&mut self) -> Result<Expr, ParseError> {
+    fn parse_expression_with_comments(&mut self) -> Result<ExprId, ParseError> {
         let comments = self.take_pending_comments();
         let expr = self.parse_expression()?;
-        Ok(expr.with_comments(comments))
+        self.arena.get_mut(expr).leading_comments = comments;
+        Ok(expr)
     }
 
-    pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
+    pub fn parse_expression(&mut self) -> Result<ExprId, ParseError> {
         self.parse_assignment_level()
     }
 
-    fn parse_cascade_level(&mut self) -> Result<Expr, ParseError> {
+    fn parse_cascade_level(&mut self) -> Result<ExprId, ParseError> {
         let expr = self.parse_keyword_level()?;
         self.parse_cascade_tail(expr)
     }
 
-    fn parse_cascade_tail(&mut self, expr: Expr) -> Result<Expr, ParseError> {
+    fn parse_cascade_tail(
+        &mut self,
+        expr: ExprId,
+    ) -> Result<ExprId, ParseError> {
         if !matches!(self.peek_kind(), TokenKind::Semicolon) {
             return Ok(expr);
         }
 
-        if !self.is_message_expr(&expr) {
-            return Err(ParseError::new("expected cascade message", expr.span));
+        if !self.is_message_expr(expr) {
+            return Err(ParseError::new(
+                "expected cascade message",
+                self.span_of(expr),
+            ));
         }
 
-        let receiver = self.cascade_receiver_from_expr(&expr);
+        let receiver = self.cascade_receiver_from_expr(expr);
         let mut messages = vec![expr];
 
         while matches!(self.peek_kind(), TokenKind::Semicolon) {
             self.advance();
-            let msg = self.parse_cascade_message(receiver.clone())?;
+            let msg = self.parse_cascade_message(receiver)?;
             messages.push(msg);
         }
 
-        let start = receiver.span;
-        let end = messages.last().map(|e| e.span).unwrap_or(start);
-        Ok(Expr::new(
-            ExprKind::Cascade {
-                receiver: Box::new(receiver),
-                messages,
-            },
+        let start = self.span_of(receiver);
+        let end =
+            self.span_of(*messages.last().expect("messages always non-empty"));
+        Ok(self.alloc_expr(
+            ExprKind::Cascade { receiver, messages },
             start.merge(end),
         ))
     }
 
     fn parse_message_chain_from(
         &mut self,
-        primary: Expr,
-    ) -> Result<Expr, ParseError> {
+        primary: ExprId,
+    ) -> Result<ExprId, ParseError> {
         let expr = self.parse_unary_tail(primary);
         let expr = self.parse_binary_with_left(expr, 0)?;
         let expr = if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
@@ -189,26 +209,27 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         self.parse_cascade_tail(expr)
     }
 
-    fn parse_assignment_level(&mut self) -> Result<Expr, ParseError> {
+    fn parse_assignment_level(&mut self) -> Result<ExprId, ParseError> {
         let left = self.parse_cascade_level()?;
         self.parse_assignment_tail(left)
     }
 
-    fn cascade_receiver_from_expr(&self, expr: &Expr) -> Expr {
-        match &expr.kind {
-            ExprKind::UnaryMessage { receiver, .. } => (**receiver).clone(),
-            ExprKind::BinaryMessage { receiver, .. } => (**receiver).clone(),
-            ExprKind::KeywordMessage { receiver, .. } => (**receiver).clone(),
+    fn cascade_receiver_from_expr(&mut self, expr_id: ExprId) -> ExprId {
+        let span = self.span_of(expr_id);
+        match &self.arena.get(expr_id).kind {
+            ExprKind::UnaryMessage { receiver, .. } => *receiver,
+            ExprKind::BinaryMessage { receiver, .. } => *receiver,
+            ExprKind::KeywordMessage { receiver, .. } => *receiver,
             ExprKind::Resend { .. } | ExprKind::DirectedResend { .. } => {
-                Expr::new(ExprKind::SelfRef, expr.span)
+                self.alloc_expr(ExprKind::SelfRef, span)
             }
-            _ => expr.clone(),
+            _ => expr_id,
         }
     }
 
-    fn is_message_expr(&self, expr: &Expr) -> bool {
+    fn is_message_expr(&self, expr_id: ExprId) -> bool {
         matches!(
-            expr.kind,
+            self.arena.get(expr_id).kind,
             ExprKind::UnaryMessage { .. }
                 | ExprKind::BinaryMessage { .. }
                 | ExprKind::KeywordMessage { .. }
@@ -219,8 +240,8 @@ impl<I: Iterator<Item = Token>> Parser<I> {
 
     fn parse_cascade_message(
         &mut self,
-        receiver: Expr,
-    ) -> Result<Expr, ParseError> {
+        receiver: ExprId,
+    ) -> Result<ExprId, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::Identifier(_) => {
                 let expr = self.parse_unary_tail(receiver);
@@ -269,12 +290,12 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             }
         };
 
-        let receiver = Expr::new(ExprKind::SelfRef, delegate_span);
+        let receiver = self.alloc_expr(ExprKind::SelfRef, delegate_span);
         let message = self.parse_cascade_message(receiver)?;
-        if !self.is_message_expr(&message) {
+        if !self.is_message_expr(message) {
             return Err(ParseError::new(
                 "expected resend message",
-                message.span,
+                self.span_of(message),
             ));
         }
 
@@ -287,7 +308,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         }
     }
 
-    fn parse_keyword_level(&mut self) -> Result<Expr, ParseError> {
+    fn parse_keyword_level(&mut self) -> Result<ExprId, ParseError> {
         let recv = self.parse_binary_level()?;
         if matches!(self.peek_kind(), TokenKind::Keyword(_)) {
             self.parse_keyword_tail(recv)
@@ -298,9 +319,9 @@ impl<I: Iterator<Item = Token>> Parser<I> {
 
     fn parse_keyword_tail(
         &mut self,
-        receiver: Expr,
-    ) -> Result<Expr, ParseError> {
-        let start = receiver.span;
+        receiver: ExprId,
+    ) -> Result<ExprId, ParseError> {
+        let start = self.span_of(receiver);
         let mut pairs = Vec::new();
 
         while let TokenKind::Keyword(kw) = self.peek_kind().clone() {
@@ -309,38 +330,35 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             pairs.push(KeywordPair {
                 keyword: kw,
                 keyword_span: kt.span,
-                span: kt.span.merge(arg.span),
+                span: kt.span.merge(self.span_of(arg)),
                 argument: arg,
             });
         }
 
         let end = pairs.last().map(|p| p.span).unwrap_or(start);
-        Ok(Expr::new(
-            ExprKind::KeywordMessage {
-                receiver: Box::new(receiver),
-                pairs,
-            },
+        Ok(self.alloc_expr(
+            ExprKind::KeywordMessage { receiver, pairs },
             start.merge(end),
         ))
     }
 
-    fn parse_binary_level(&mut self) -> Result<Expr, ParseError> {
+    fn parse_binary_level(&mut self) -> Result<ExprId, ParseError> {
         self.parse_binary_with_min_precedence(0)
     }
 
     fn parse_binary_with_min_precedence(
         &mut self,
         min_prec: u8,
-    ) -> Result<Expr, ParseError> {
+    ) -> Result<ExprId, ParseError> {
         let left = self.parse_unary_level()?;
         self.parse_binary_with_left(left, min_prec)
     }
 
     fn parse_binary_with_left(
         &mut self,
-        mut left: Expr,
+        mut left: ExprId,
         min_prec: u8,
-    ) -> Result<Expr, ParseError> {
+    ) -> Result<ExprId, ParseError> {
         loop {
             let (op, prec) = match self.peek_kind().clone() {
                 TokenKind::Operator(op) => {
@@ -354,13 +372,13 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             }
             self.advance();
             let right = self.parse_binary_with_min_precedence(prec + 1)?;
-            let span = left.span.merge(right.span);
-            left = Expr::new(
+            let span = self.span_of(left).merge(self.span_of(right));
+            left = self.alloc_expr(
                 ExprKind::BinaryMessage {
-                    receiver: Box::new(left),
+                    receiver: left,
                     operator: op,
                     operator_span: self.last_span,
-                    argument: Box::new(right),
+                    argument: right,
                 },
                 span,
             );
@@ -372,12 +390,12 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         *self.op_precedence.get(op).unwrap_or(&1)
     }
 
-    fn parse_unary_level(&mut self) -> Result<Expr, ParseError> {
+    fn parse_unary_level(&mut self) -> Result<ExprId, ParseError> {
         let expr = self.parse_primary()?;
         Ok(self.parse_unary_tail(expr))
     }
 
-    fn parse_unary_tail(&mut self, mut expr: Expr) -> Expr {
+    fn parse_unary_tail(&mut self, mut expr: ExprId) -> ExprId {
         loop {
             if let TokenKind::Identifier(_) = self.peek_kind() {
                 let tok = self.advance();
@@ -385,10 +403,10 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Identifier(s) => s,
                     _ => unreachable!(),
                 };
-                let span = expr.span.merge(tok.span);
-                expr = Expr::new(
+                let span = self.span_of(expr).merge(tok.span);
+                expr = self.alloc_expr(
                     ExprKind::UnaryMessage {
-                        receiver: Box::new(expr),
+                        receiver: expr,
                         selector: sel,
                         selector_span: tok.span,
                     },
@@ -401,7 +419,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         expr
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+    fn parse_primary(&mut self) -> Result<ExprId, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::Integer(_) => {
                 let t = self.advance();
@@ -409,7 +427,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Integer(v) => v,
                     _ => unreachable!(),
                 };
-                Ok(Expr::new(ExprKind::Integer(v), t.span))
+                Ok(self.alloc_expr(ExprKind::Integer(v), t.span))
             }
             TokenKind::Float(_) => {
                 let t = self.advance();
@@ -417,7 +435,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Float(v) => v,
                     _ => unreachable!(),
                 };
-                Ok(Expr::new(ExprKind::Float(v), t.span))
+                Ok(self.alloc_expr(ExprKind::Float(v), t.span))
             }
             TokenKind::String(_) => {
                 let t = self.advance();
@@ -425,7 +443,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::String(v) => v,
                     _ => unreachable!(),
                 };
-                Ok(Expr::new(ExprKind::String(v), t.span))
+                Ok(self.alloc_expr(ExprKind::String(v), t.span))
             }
             TokenKind::Symbol(_) => {
                 let t = self.advance();
@@ -433,11 +451,11 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Symbol(v) => v,
                     _ => unreachable!(),
                 };
-                Ok(Expr::new(ExprKind::Symbol(v), t.span))
+                Ok(self.alloc_expr(ExprKind::Symbol(v), t.span))
             }
             TokenKind::SelfKw => {
                 let t = self.advance();
-                Ok(Expr::new(ExprKind::SelfRef, t.span))
+                Ok(self.alloc_expr(ExprKind::SelfRef, t.span))
             }
             TokenKind::Identifier(_) => {
                 let t = self.advance();
@@ -446,29 +464,22 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     _ => unreachable!(),
                 };
                 let (n, span) = self.parse_qualified_ident_tail(n, t.span)?;
-                Ok(Expr::new(ExprKind::Ident(n), span))
+                Ok(self.alloc_expr(ExprKind::Ident(n), span))
             }
             TokenKind::ResendKw => {
                 let t = self.advance();
                 let start = t.span;
                 let msg = self.parse_resend_message()?;
-                let span = start.merge(msg.span());
+                let span = start.merge(msg.span(self));
                 match msg {
-                    ResendMessage::Undirected(message) => Ok(Expr::new(
-                        ExprKind::Resend {
-                            message: Box::new(message),
-                        },
-                        span,
-                    )),
-                    ResendMessage::Directed { delegate, message } => {
-                        Ok(Expr::new(
-                            ExprKind::DirectedResend {
-                                delegate,
-                                message: Box::new(message),
-                            },
-                            span,
-                        ))
+                    ResendMessage::Undirected(message) => {
+                        Ok(self.alloc_expr(ExprKind::Resend { message }, span))
                     }
+                    ResendMessage::Directed { delegate, message } => Ok(self
+                        .alloc_expr(
+                            ExprKind::DirectedResend { delegate, message },
+                            span,
+                        )),
                 }
             }
             TokenKind::LParen => self.parse_paren(),
@@ -477,8 +488,8 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             TokenKind::Caret => {
                 let t = self.advance();
                 let e = self.parse_expression()?;
-                let span = t.span.merge(e.span);
-                Ok(Expr::new(ExprKind::Return(Box::new(e)), span))
+                let span = t.span.merge(self.span_of(e));
+                Ok(self.alloc_expr(ExprKind::Return(e), span))
             }
             TokenKind::Keyword(_) | TokenKind::Operator(_) => {
                 let _ = self.advance();
@@ -525,7 +536,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         Ok((name, span))
     }
 
-    fn parse_paren(&mut self) -> Result<Expr, ParseError> {
+    fn parse_paren(&mut self) -> Result<ExprId, ParseError> {
         let open = self.advance();
         let start = open.span;
 
@@ -549,36 +560,28 @@ impl<I: Iterator<Item = Token>> Parser<I> {
             }
             let close = self.expect(&TokenKind::RParen)?;
             let span = start.merge(close.span);
-            Ok(Expr::new(ExprKind::Sequence(exprs), span))
+            Ok(self.alloc_expr(ExprKind::Sequence(exprs), span))
         } else {
             let close = self.expect(&TokenKind::RParen)?;
-            Ok(Expr::new(
-                ExprKind::Paren(Box::new(expr)),
-                start.merge(close.span),
-            ))
+            Ok(self.alloc_expr(ExprKind::Paren(expr), start.merge(close.span)))
         }
     }
 
-    fn parse_object_literal(&mut self) -> Result<Expr, ParseError> {
+    fn parse_object_literal(&mut self) -> Result<ExprId, ParseError> {
         let open = self.advance();
         let start = open.span;
 
-        // Parse body: interleaved slot definitions and bare expressions.
-        // - `ident =`/`:=`/`*` at statement start → slot definition
-        // - `keyword:`/`operator` at statement start → slot definition
-        //   (these can't start an expression without a receiver)
-        // - anything else → bare expression (goes to body)
-        let mut slots = Vec::new();
-        let mut body = Vec::new();
+        let mut slots: Vec<SlotDescriptor> = Vec::new();
+        let mut body: Vec<ExprId> = Vec::new();
         let mut used_shorthand = false;
         let mut saw_non_assignment_body_expr = false;
 
         loop {
-            let _ = self.peek_kind(); // collect comments
+            let _ = self.peek_kind();
             if self.check(&TokenKind::RBrace) || self.at_eof {
                 for c in self.take_pending_comments() {
                     let span = c.span;
-                    body.push(Expr::new(ExprKind::Comment(c), span));
+                    body.push(self.alloc_expr(ExprKind::Comment(c), span));
                 }
                 break;
             }
@@ -587,8 +590,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
 
             match self.peek_kind().clone() {
                 TokenKind::Identifier(_) => {
-                    // Could be a slot definition or the start of an expression.
-                    // Consume the identifier and look at what follows.
                     let ident_tok = self.advance();
                     let name = match ident_tok.kind {
                         TokenKind::Identifier(s) => s,
@@ -596,24 +597,27 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     };
 
                     if saw_non_assignment_body_expr {
-                        let ident_expr =
-                            Expr::new(ExprKind::Ident(name), ident_tok.span)
-                                .with_comments(comments);
+                        let ident_expr = self
+                            .alloc_expr(ExprKind::Ident(name), ident_tok.span);
+                        self.arena.get_mut(ident_expr).leading_comments =
+                            comments;
                         let expr = self.continue_expression_from(ident_expr)?;
-                        if !matches!(expr.kind, ExprKind::Assignment { .. }) {
+                        if !matches!(
+                            self.arena.get(expr).kind,
+                            ExprKind::Assignment { .. }
+                        ) {
                             saw_non_assignment_body_expr = true;
                         }
                         body.push(expr);
                     } else {
                         match self.peek_kind().clone() {
                             TokenKind::Equals => {
-                                // Unary const slot: name = expr
                                 let t = self.advance();
                                 let value = self.parse_expression()?;
                                 let span = ident_tok
                                     .span
                                     .merge(t.span)
-                                    .merge(value.span);
+                                    .merge(self.span_of(value));
                                 slots.push(SlotDescriptor {
                                     selector: SlotSelector::Unary(name),
                                     params: vec![],
@@ -626,13 +630,12 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 });
                             }
                             TokenKind::Assign => {
-                                // Unary mutable slot: name := expr
                                 let t = self.advance();
                                 let value = self.parse_expression()?;
                                 let span = ident_tok
                                     .span
                                     .merge(t.span)
-                                    .merge(value.span);
+                                    .merge(self.span_of(value));
                                 slots.push(SlotDescriptor {
                                     selector: SlotSelector::Unary(name),
                                     params: vec![],
@@ -645,7 +648,6 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 });
                             }
                             TokenKind::Operator(ref op) if op == "*" => {
-                                // Parent slot: name* = expr
                                 self.advance();
                                 let (mutable, op_span) = match self
                                     .peek_kind()
@@ -670,7 +672,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 let span = ident_tok
                                     .span
                                     .merge(op_span)
-                                    .merge(value.span);
+                                    .merge(self.span_of(value));
                                 slots.push(SlotDescriptor {
                                     selector: SlotSelector::Unary(name),
                                     params: vec![],
@@ -683,8 +685,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 });
                             }
                             TokenKind::Dot | TokenKind::RBrace => {
-                                // Shorthand slot: name. or { name }
-                                let value = Expr::new(
+                                let value = self.alloc_expr(
                                     ExprKind::Ident(name.clone()),
                                     ident_tok.span,
                                 );
@@ -701,23 +702,23 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                                 used_shorthand = true;
                             }
                             _ => {
-                                // Not a slot — parse as expression from the
-                                // already-consumed identifier.
-                                let ident_expr = Expr::new(
+                                let ident_expr = self.alloc_expr(
                                     ExprKind::Ident(name),
                                     ident_tok.span,
-                                )
-                                .with_comments(comments);
+                                );
+                                self.arena
+                                    .get_mut(ident_expr)
+                                    .leading_comments = comments;
                                 let expr =
                                     self.continue_expression_from(ident_expr)?;
                                 if !matches!(
-                                    expr.kind,
+                                    self.arena.get(expr).kind,
                                     ExprKind::Assignment { .. }
                                 ) {
                                     if used_shorthand {
                                         return Err(ParseError::new(
                                             "shorthand slots are only allowed in pure data objects",
-                                            expr.span,
+                                            self.span_of(expr),
                                         ));
                                     }
                                     saw_non_assignment_body_expr = true;
@@ -729,29 +730,32 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 }
                 TokenKind::Keyword(_) | TokenKind::Operator(_) => {
                     if saw_non_assignment_body_expr {
-                        let expr =
-                            self.parse_expression()?.with_comments(comments);
-                        if !matches!(expr.kind, ExprKind::Assignment { .. }) {
+                        let expr = self.parse_expression()?;
+                        self.arena.get_mut(expr).leading_comments = comments;
+                        if !matches!(
+                            self.arena.get(expr).kind,
+                            ExprKind::Assignment { .. }
+                        ) {
                             saw_non_assignment_body_expr = true;
                         }
                         body.push(expr);
                     } else {
-                        // Keywords and operators at statement position are always
-                        // slot definitions (they can't start an expression without
-                        // a receiver).
                         let mut sd = self.parse_slot_descriptor()?;
                         sd.leading_comments = comments;
                         slots.push(sd);
                     }
                 }
                 _ => {
-                    // Everything else is a bare expression.
-                    let expr = self.parse_expression()?.with_comments(comments);
-                    if !matches!(expr.kind, ExprKind::Assignment { .. }) {
+                    let expr = self.parse_expression()?;
+                    self.arena.get_mut(expr).leading_comments = comments;
+                    if !matches!(
+                        self.arena.get(expr).kind,
+                        ExprKind::Assignment { .. }
+                    ) {
                         if used_shorthand {
                             return Err(ParseError::new(
                                 "shorthand slots are only allowed in pure data objects",
-                                expr.span,
+                                self.span_of(expr),
                             ));
                         }
                         saw_non_assignment_body_expr = true;
@@ -760,40 +764,37 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 }
             }
 
-            // Consume statement separator
             if matches!(self.peek_kind(), TokenKind::Dot) {
                 self.advance();
             } else {
                 let _ = self.peek_kind();
                 for c in self.take_pending_comments() {
                     let span = c.span;
-                    body.push(Expr::new(ExprKind::Comment(c), span));
+                    body.push(self.alloc_expr(ExprKind::Comment(c), span));
                 }
                 break;
             }
         }
 
         let close = self.expect(&TokenKind::RBrace)?;
-        Ok(Expr::new(
+        Ok(self.alloc_expr(
             ExprKind::Object { slots, body },
             start.merge(close.span),
         ))
     }
 
-    /// Continue parsing an expression given a pre-parsed primary token.
-    /// Chains through: unary → binary → keyword → assignment → cascade.
     fn continue_expression_from(
         &mut self,
-        primary: Expr,
-    ) -> Result<Expr, ParseError> {
+        primary: ExprId,
+    ) -> Result<ExprId, ParseError> {
         let expr = self.parse_message_chain_from(primary)?;
         self.parse_assignment_tail(expr)
     }
 
     fn parse_assignment_tail(
         &mut self,
-        left: Expr,
-    ) -> Result<Expr, ParseError> {
+        left: ExprId,
+    ) -> Result<ExprId, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::Assign | TokenKind::Equals => {
                 let op = self.advance();
@@ -803,12 +804,12 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     TokenKind::Equals => AssignKind::Const,
                     _ => unreachable!(),
                 };
-                let span = left.span.merge(right.span);
-                Ok(Expr::new(
+                let span = self.span_of(left).merge(self.span_of(right));
+                Ok(self.alloc_expr(
                     ExprKind::Assignment {
-                        target: Box::new(left),
+                        target: left,
                         kind,
-                        value: Box::new(right),
+                        value: right,
                     },
                     span,
                 ))
@@ -817,7 +818,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         }
     }
 
-    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+    fn parse_block(&mut self) -> Result<ExprId, ParseError> {
         let open = self.advance();
         let start = open.span;
         let mut args = Vec::new();
@@ -847,7 +848,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
 
         let body = self.parse_code_body(&TokenKind::RBracket)?;
         let close = self.expect(&TokenKind::RBracket)?;
-        Ok(Expr::new(
+        Ok(self.alloc_expr(
             ExprKind::Block { args, body },
             start.merge(close.span),
         ))
@@ -856,14 +857,14 @@ impl<I: Iterator<Item = Token>> Parser<I> {
     fn parse_code_body(
         &mut self,
         terminator: &TokenKind,
-    ) -> Result<Vec<Expr>, ParseError> {
+    ) -> Result<Vec<ExprId>, ParseError> {
         let mut exprs = Vec::new();
         loop {
-            let _ = self.peek_kind(); // collect comments
+            let _ = self.peek_kind();
             if self.check(terminator) || self.at_eof {
                 for c in self.take_pending_comments() {
                     let span = c.span;
-                    exprs.push(Expr::new(ExprKind::Comment(c), span));
+                    exprs.push(self.alloc_expr(ExprKind::Comment(c), span));
                 }
                 break;
             }
@@ -874,7 +875,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 let _ = self.peek_kind();
                 for c in self.take_pending_comments() {
                     let span = c.span;
-                    exprs.push(Expr::new(ExprKind::Comment(c), span));
+                    exprs.push(self.alloc_expr(ExprKind::Comment(c), span));
                 }
                 break;
             }
@@ -924,7 +925,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     }
                 };
                 let value = self.parse_expression()?;
-                let span = start.merge(op_span).merge(value.span);
+                let span = start.merge(op_span).merge(self.span_of(value));
                 Ok(SlotDescriptor {
                     selector: SlotSelector::Unary(name),
                     params: vec![],
@@ -986,7 +987,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     }
                 };
                 let value = self.parse_expression()?;
-                let span = start.merge(op_span).merge(value.span);
+                let span = start.merge(op_span).merge(self.span_of(value));
                 Ok(SlotDescriptor {
                     selector: SlotSelector::Keyword(selector),
                     params: arguments,
@@ -1022,7 +1023,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                     }
                 };
                 let value = self.parse_expression()?;
-                let span = start.merge(op_span).merge(value.span);
+                let span = start.merge(op_span).merge(self.span_of(value));
                 Ok(SlotDescriptor {
                     selector: SlotSelector::Binary(op),
                     params: arguments,
@@ -1059,23 +1060,23 @@ fn token_to_comment(tok: &Token) -> Comment {
 }
 
 enum ResendMessage {
-    Undirected(Expr),
-    Directed { delegate: String, message: Expr },
+    Undirected(ExprId),
+    Directed { delegate: String, message: ExprId },
 }
 
 impl ResendMessage {
-    fn span(&self) -> Span {
+    fn span<I: Iterator<Item = Token>>(&self, parser: &Parser<I>) -> Span {
         match self {
-            ResendMessage::Undirected(expr) => expr.span,
-            ResendMessage::Directed { message, .. } => message.span,
+            ResendMessage::Undirected(expr_id) => parser.span_of(*expr_id),
+            ResendMessage::Directed { message, .. } => parser.span_of(*message),
         }
     }
 }
 
 impl<I: Iterator<Item = Token>> Iterator for Parser<I> {
-    type Item = Result<Expr, ParseError>;
+    type Item = Result<ExprId, ParseError>;
 
-    fn next(&mut self) -> Option<Result<Expr, ParseError>> {
+    fn next(&mut self) -> Option<Result<ExprId, ParseError>> {
         if self.at_eof {
             return None;
         }
@@ -1087,7 +1088,8 @@ impl<I: Iterator<Item = Token>> Iterator for Parser<I> {
             if !self.pending_comments.is_empty() {
                 let c = self.pending_comments.remove(0);
                 let span = c.span;
-                return Some(Ok(Expr::new(ExprKind::Comment(c), span)));
+                let id = self.alloc_expr(ExprKind::Comment(c), span);
+                return Some(Ok(id));
             }
             self.at_eof = true;
             return None;

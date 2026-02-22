@@ -38,7 +38,9 @@ pub fn vm_eval(
     let source_ptr = expect_string(args[0])?;
     let source = unsafe { (*source_ptr).as_str() };
 
-    let parse_results: Vec<_> = Parser::new(Lexer::from_str(source)).collect();
+    let mut parser = Parser::new(Lexer::from_str(source));
+    let parse_results: Vec<_> = parser.by_ref().collect();
+    let arena = parser.into_arena();
     let parse_errors: Vec<String> = parse_results
         .iter()
         .filter_map(|r| r.as_ref().err())
@@ -49,16 +51,17 @@ pub fn vm_eval(
         return alloc_vm_string(vm, state, msg.as_bytes());
     }
 
-    let exprs: Vec<parser::ast::Expr> =
+    let exprs: Vec<parser::ExprId> =
         parse_results.into_iter().map(|r| r.unwrap()).collect();
 
-    let code_desc = match compiler0::Compiler::compile_for_vm(vm, &exprs) {
-        Ok(code_desc) => code_desc,
-        Err(err) => {
-            let msg = format!("Compile error: {err}");
-            return alloc_vm_string(vm, state, msg.as_bytes());
-        }
-    };
+    let code_desc =
+        match compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs) {
+            Ok(code_desc) => code_desc,
+            Err(err) => {
+                let msg = format!("Compile error: {err}");
+                return alloc_vm_string(vm, state, msg.as_bytes());
+            }
+        };
 
     let code = materialize::materialize(vm, &code_desc);
     match interpreter::interpret(vm, code) {
@@ -1003,8 +1006,9 @@ mod tests {
             vm.open_module(USER_MODULE);
         }
 
-        let parse_results: Vec<_> =
-            Parser::new(Lexer::from_str(source)).collect();
+        let mut parser = Parser::new(Lexer::from_str(source));
+        let parse_results: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
         let parse_errors: Vec<String> = parse_results
             .iter()
             .filter_map(|r| r.as_ref().err())
@@ -1014,10 +1018,11 @@ mod tests {
             return Err(parse_errors.join("\n"));
         }
 
-        let exprs: Vec<parser::ast::Expr> =
+        let exprs: Vec<parser::ExprId> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        let code_desc = compiler0::Compiler::compile_for_vm(vm, &exprs)
-            .map_err(|e| format!("Compile error: {e}"))?;
+        let code_desc =
+            compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
+                .map_err(|e| format!("Compile error: {e}"))?;
         let code = materialize::materialize(vm, &code_desc);
         interpreter::interpret(vm, code)
             .map(|v| v)
@@ -1044,8 +1049,9 @@ mod tests {
             vm.open_module(USER_MODULE);
         }
 
-        let parse_results: Vec<_> =
-            Parser::new(Lexer::from_str(source)).collect();
+        let mut parser = Parser::new(Lexer::from_str(source));
+        let parse_results: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
         let parse_errors: Vec<String> = parse_results
             .iter()
             .filter_map(|r| r.as_ref().err())
@@ -1055,9 +1061,9 @@ mod tests {
             return Err(parse_errors.join("\n"));
         }
 
-        let exprs: Vec<parser::ast::Expr> =
+        let exprs: Vec<parser::ExprId> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        compiler0::Compiler::compile_for_vm(vm, &exprs)
+        compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
             .map_err(|e| format!("Compile error: {e}"))
     }
 

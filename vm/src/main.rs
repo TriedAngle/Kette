@@ -314,7 +314,9 @@ fn compile_source(
 ) -> Result<compiler0::CodeDesc, String> {
     let lexer = Lexer::from_str(source);
 
-    let results: Vec<_> = Parser::new(lexer).collect();
+    let mut parser = Parser::new(lexer);
+    let results: Vec<_> = parser.by_ref().collect();
+    let arena = parser.into_arena();
 
     let errors: Vec<String> = results
         .iter()
@@ -326,10 +328,10 @@ fn compile_source(
         return Err(errors.join("\n"));
     }
 
-    let exprs: Vec<parser::ast::Expr> =
+    let exprs: Vec<parser::ExprId> =
         results.into_iter().map(|r| r.unwrap()).collect();
 
-    compiler0::Compiler::compile_for_vm(vm, &exprs)
+    compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
         .map_err(|e| format_compile_error(source, &e))
 }
 

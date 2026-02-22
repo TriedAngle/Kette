@@ -595,8 +595,9 @@ mod tests {
             vm.open_module(crate::USER_MODULE);
         }
 
-        let parse_results: Vec<_> =
-            Parser::new(Lexer::from_str(source)).collect();
+        let mut parser = Parser::new(Lexer::from_str(source));
+        let parse_results: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
         let parse_errors: Vec<String> = parse_results
             .iter()
             .filter_map(|r| r.as_ref().err())
@@ -606,10 +607,11 @@ mod tests {
             return Err(parse_errors.join("\n"));
         }
 
-        let exprs: Vec<parser::ast::Expr> =
+        let exprs: Vec<parser::ExprId> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        let code_desc = crate::compiler0::Compiler::compile_for_vm(vm, &exprs)
-            .map_err(|e| format!("Compile error: {e}"))?;
+        let code_desc =
+            crate::compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
+                .map_err(|e| format!("Compile error: {e}"))?;
         let code = crate::materialize::materialize(vm, &code_desc);
         crate::interpreter::interpret(vm, code)
             .map_err(|e| format!("Runtime error: {:?}", e.error))

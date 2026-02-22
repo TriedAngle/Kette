@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::ast::{AssignKind, Expr, ExprKind, SlotDescriptor, SlotSelector};
+use crate::ast::{
+    AssignKind, AstArena, ExprId, ExprKind, SlotDescriptor, SlotSelector,
+};
 use crate::span::Span;
 use crate::token::{Token, TokenKind};
 
@@ -71,16 +73,24 @@ struct Scope {
     locals: HashSet<String>,
 }
 
-pub fn analyze_semantics(
+pub fn analyze_semantics_ids(
     tokens: &[Token],
-    exprs: &[Expr],
+    arena: &AstArena,
+    exprs: &[ExprId],
 ) -> Vec<SemanticSpan> {
-    analyze_semantics_with_mode(tokens, exprs, AnalysisMode::BestEffort).spans
+    analyze_semantics_with_mode_ids(
+        tokens,
+        arena,
+        exprs,
+        AnalysisMode::BestEffort,
+    )
+    .spans
 }
 
-pub fn analyze_semantics_with_mode(
+pub fn analyze_semantics_with_mode_ids(
     tokens: &[Token],
-    exprs: &[Expr],
+    arena: &AstArena,
+    exprs: &[ExprId],
     mode: AnalysisMode,
 ) -> SemanticAnalysis {
     let mut classified = Classified::default();
@@ -88,19 +98,19 @@ pub fn analyze_semantics_with_mode(
     classify_keyword_operator_and_literal_tokens(tokens, &mut classified);
 
     for expr in exprs {
-        classify_slot_param_declarations(expr, tokens, &mut classified);
+        classify_slot_param_declarations(*expr, arena, tokens, &mut classified);
     }
 
     let mut scopes = Vec::new();
     for expr in exprs {
-        classify_identifier_usage(expr, &mut scopes, &mut classified);
+        classify_identifier_usage(*expr, arena, &mut scopes, &mut classified);
     }
 
     let mut issues = Vec::new();
     if mode == AnalysisMode::Strict {
         let mut scopes = Vec::new();
         for expr in exprs {
-            collect_strict_issues(expr, &mut scopes, &mut issues);
+            collect_strict_issues(*expr, arena, &mut scopes, &mut issues);
         }
     }
 
@@ -110,18 +120,12 @@ pub fn analyze_semantics_with_mode(
     }
 }
 
-pub fn slot_selector_name(slot: &SlotDescriptor) -> String {
-    match &slot.selector {
+fn slot_selector_name_from_selector(selector: &SlotSelector) -> String {
+    match selector {
         SlotSelector::Unary(s) => s.clone(),
         SlotSelector::Binary(s) => s.clone(),
         SlotSelector::Keyword(s) => s.clone(),
     }
-}
-
-pub fn collect_assignment_names(exprs: &[Expr]) -> HashSet<String> {
-    let mut names = HashSet::new();
-    collect_assignment_names_into(exprs, &mut names);
-    names
 }
 
 fn classify_keyword_operator_and_literal_tokens(
@@ -209,10 +213,12 @@ fn classify_keyword_operator_and_literal_tokens(
 }
 
 fn classify_identifier_usage(
-    expr: &Expr,
+    expr_id: ExprId,
+    arena: &AstArena,
     scopes: &mut Vec<Scope>,
     out: &mut Classified,
 ) {
+    let expr = arena.get(expr_id);
     match &expr.kind {
         ExprKind::SelfRef => {
             out.add(
@@ -246,19 +252,19 @@ fn classify_identifier_usage(
                 selector_span.end.offset,
                 SemanticKind::UnaryMethod,
             );
-            classify_identifier_usage(receiver, scopes, out);
+            classify_identifier_usage(*receiver, arena, scopes, out);
         }
         ExprKind::Block { args, body } => {
             let mut scope = Scope::default();
             for arg in args {
                 scope.params.insert(arg.clone());
             }
-            for name in collect_assignment_names(body) {
+            for name in collect_assignment_names_in_ids(arena, body) {
                 scope.locals.insert(name);
             }
             with_scope(scopes, scope, |scopes| {
                 for e in body {
-                    classify_identifier_usage(e, scopes, out);
+                    classify_identifier_usage(*e, arena, scopes, out);
                 }
             });
         }
@@ -275,16 +281,19 @@ fn classify_identifier_usage(
                     for param in &slot.params {
                         scope.params.insert(param.clone());
                     }
-                    for name in immediate_assignment_names_in_expr(&slot.value)
+                    for name in
+                        immediate_assignment_names_in_expr(arena, slot.value)
                     {
                         scope.locals.insert(name);
                     }
                     with_scope(scopes, scope, |scopes| {
-                        classify_identifier_usage(&slot.value, scopes, out);
+                        classify_identifier_usage(
+                            slot.value, arena, scopes, out,
+                        );
                     });
                 }
 
-                let locals = collect_assignment_names(body);
+                let locals = collect_assignment_names_in_ids(arena, body);
                 if !locals.is_empty() {
                     let mut scope = Scope::default();
                     for name in locals {
@@ -292,40 +301,43 @@ fn classify_identifier_usage(
                     }
                     with_scope(scopes, scope, |scopes| {
                         for e in body {
-                            classify_identifier_usage(e, scopes, out);
+                            classify_identifier_usage(*e, arena, scopes, out);
                         }
                     });
                 } else {
                     for e in body {
-                        classify_identifier_usage(e, scopes, out);
+                        classify_identifier_usage(*e, arena, scopes, out);
                     }
                 }
             });
         }
         _ => for_each_direct_child(expr, |child| {
-            classify_identifier_usage(child, scopes, out)
+            classify_identifier_usage(child, arena, scopes, out)
         }),
     }
 }
 
 fn classify_slot_param_declarations(
-    expr: &Expr,
+    expr_id: ExprId,
+    arena: &AstArena,
     tokens: &[Token],
     out: &mut Classified,
 ) {
+    let expr = arena.get(expr_id);
     if let ExprKind::Object { slots, .. } = &expr.kind {
         for slot in slots {
-            classify_slot_params_for_slot(slot, tokens, out);
+            classify_slot_params_for_slot(slot, arena, tokens, out);
         }
     }
 
     for_each_direct_child(expr, |child| {
-        classify_slot_param_declarations(child, tokens, out)
+        classify_slot_param_declarations(child, arena, tokens, out)
     });
 }
 
 fn classify_slot_params_for_slot(
     slot: &SlotDescriptor,
+    arena: &AstArena,
     tokens: &[Token],
     out: &mut Classified,
 ) {
@@ -334,7 +346,7 @@ fn classify_slot_params_for_slot(
     }
 
     let header_start = slot.span.start.offset;
-    let header_end = slot.value.span.start.offset;
+    let header_end = arena.get(slot.value).span.start.offset;
     if header_end <= header_start {
         return;
     }
@@ -371,29 +383,48 @@ fn is_param(name: &str, scopes: &[Scope]) -> bool {
     scopes.iter().rev().any(|s| s.params.contains(name))
 }
 
-fn immediate_assignment_names_in_expr(expr: &Expr) -> HashSet<String> {
-    match &expr.kind {
+fn immediate_assignment_names_in_expr(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> HashSet<String> {
+    match &arena.get(expr_id).kind {
         ExprKind::Object { body, .. }
         | ExprKind::Block { body, .. }
-        | ExprKind::Sequence(body) => collect_assignment_names(body),
+        | ExprKind::Sequence(body) => {
+            collect_assignment_names_in_ids(arena, body)
+        }
         _ => HashSet::new(),
     }
 }
 
-fn collect_assignment_names_into(exprs: &[Expr], out: &mut HashSet<String>) {
-    for expr in exprs {
-        match &expr.kind {
+fn collect_assignment_names_in_ids(
+    arena: &AstArena,
+    exprs: &[ExprId],
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    collect_assignment_names_ids_into(arena, exprs, &mut names);
+    names
+}
+
+fn collect_assignment_names_ids_into(
+    arena: &AstArena,
+    exprs: &[ExprId],
+    out: &mut HashSet<String>,
+) {
+    for expr_id in exprs {
+        match &arena.get(*expr_id).kind {
             ExprKind::Assignment { target, .. } => {
-                if let ExprKind::Ident(name) = &target.kind {
+                if let ExprKind::Ident(name) = &arena.get(*target).kind {
                     out.insert(name.clone());
                 }
             }
             ExprKind::Sequence(nested) => {
-                collect_assignment_names_into(nested, out);
+                collect_assignment_names_ids_into(arena, nested, out);
             }
             ExprKind::Paren(inner) => {
-                collect_assignment_names_into(
-                    std::slice::from_ref(inner.as_ref()),
+                collect_assignment_names_ids_into(
+                    arena,
+                    std::slice::from_ref(inner),
                     out,
                 );
             }
@@ -424,10 +455,12 @@ struct StrictScope {
 }
 
 fn collect_strict_issues(
-    expr: &Expr,
+    expr_id: ExprId,
+    arena: &AstArena,
     scopes: &mut Vec<StrictScope>,
     out: &mut Vec<SemanticIssue>,
 ) {
+    let expr = arena.get(expr_id);
     match &expr.kind {
         ExprKind::Error(msg) => out.push(SemanticIssue {
             message: msg.clone(),
@@ -438,7 +471,7 @@ fn collect_strict_issues(
             kind,
             value,
         } => {
-            match &target.kind {
+            match &arena.get(*target).kind {
                 ExprKind::Ident(name) => {
                     if *kind == AssignKind::Assign {
                         if let Some(info) = lookup_binding(name, scopes) {
@@ -446,7 +479,7 @@ fn collect_strict_issues(
                                 out.push(SemanticIssue {
                                     message: "cannot assign to constant"
                                         .to_string(),
-                                    span: target.span,
+                                    span: arena.get(*target).span,
                                 });
                             }
                         }
@@ -455,10 +488,10 @@ fn collect_strict_issues(
                 _ => out.push(SemanticIssue {
                     message: "assignment target must be an identifier"
                         .to_string(),
-                    span: target.span,
+                    span: arena.get(*target).span,
                 }),
             }
-            collect_strict_issues(value, scopes, out);
+            collect_strict_issues(*value, arena, scopes, out);
         }
         ExprKind::Block { args, body } => {
             let mut scope = StrictScope::default();
@@ -468,13 +501,13 @@ fn collect_strict_issues(
                     .insert(arg.clone(), BindingInfo { mutable: false });
             }
             for (name, mutable) in
-                collect_assignment_decls_with_mutability(body)
+                collect_assignment_decls_with_mutability_in_ids(arena, body)
             {
                 scope.bindings.insert(name, BindingInfo { mutable });
             }
             with_scope(scopes, scope, |scopes| {
                 for e in body {
-                    collect_strict_issues(e, scopes, out);
+                    collect_strict_issues(*e, arena, scopes, out);
                 }
             });
         }
@@ -482,7 +515,7 @@ fn collect_strict_issues(
             let mut scope = StrictScope::default();
             for slot in slots {
                 scope.bindings.insert(
-                    slot_selector_name(slot),
+                    slot_selector_name_from_selector(&slot.selector),
                     BindingInfo {
                         mutable: slot.mutable,
                     },
@@ -498,21 +531,23 @@ fn collect_strict_issues(
                         );
                     }
                     for (name, mutable) in
-                        collect_assignment_decls_in_expr(&slot.value)
+                        collect_assignment_decls_in_expr(arena, slot.value)
                     {
                         slot_scope
                             .bindings
                             .insert(name, BindingInfo { mutable });
                     }
                     with_scope(scopes, slot_scope, |scopes| {
-                        collect_strict_issues(&slot.value, scopes, out);
+                        collect_strict_issues(slot.value, arena, scopes, out);
                     });
                 }
 
                 if !body.is_empty() {
                     let mut body_scope = StrictScope::default();
                     for (name, mutable) in
-                        collect_assignment_decls_with_mutability(body)
+                        collect_assignment_decls_with_mutability_in_ids(
+                            arena, body,
+                        )
                     {
                         body_scope
                             .bindings
@@ -520,14 +555,14 @@ fn collect_strict_issues(
                     }
                     with_scope(scopes, body_scope, |scopes| {
                         for e in body {
-                            collect_strict_issues(e, scopes, out);
+                            collect_strict_issues(*e, arena, scopes, out);
                         }
                     });
                 }
             });
         }
         _ => for_each_direct_child(expr, |child| {
-            collect_strict_issues(child, scopes, out)
+            collect_strict_issues(child, arena, scopes, out)
         }),
     }
 }
@@ -543,89 +578,98 @@ fn with_scope<T, R>(
     result
 }
 
-fn for_each_direct_child(expr: &Expr, mut f: impl FnMut(&Expr)) {
+fn for_each_direct_child(
+    expr: &crate::ast::ExprNode,
+    mut f: impl FnMut(ExprId),
+) {
     match &expr.kind {
-        ExprKind::UnaryMessage { receiver, .. } => f(receiver),
+        ExprKind::UnaryMessage { receiver, .. } => f(*receiver),
         ExprKind::BinaryMessage {
             receiver, argument, ..
         } => {
-            f(receiver);
-            f(argument);
+            f(*receiver);
+            f(*argument);
         }
         ExprKind::KeywordMessage { receiver, pairs } => {
-            f(receiver);
+            f(*receiver);
             for pair in pairs {
-                f(&pair.argument);
+                f(pair.argument);
             }
         }
         ExprKind::Paren(inner)
         | ExprKind::Return(inner)
-        | ExprKind::Resend { message: inner } => f(inner),
-        ExprKind::DirectedResend { message, .. } => f(message),
+        | ExprKind::Resend { message: inner } => f(*inner),
+        ExprKind::DirectedResend { message, .. } => f(*message),
         ExprKind::Assignment { target, value, .. } => {
-            f(target);
-            f(value);
+            f(*target);
+            f(*value);
         }
         ExprKind::Block { body, .. } | ExprKind::Sequence(body) => {
             for e in body {
-                f(e);
+                f(*e);
             }
         }
         ExprKind::Object { slots, body } => {
             for slot in slots {
-                f(&slot.value);
+                f(slot.value);
             }
             for e in body {
-                f(e);
+                f(*e);
             }
         }
         ExprKind::Cascade { receiver, messages } => {
-            f(receiver);
+            f(*receiver);
             for msg in messages {
-                f(msg);
+                f(*msg);
             }
         }
         _ => {}
     }
 }
 
-fn collect_assignment_decls_with_mutability(
-    exprs: &[Expr],
+fn collect_assignment_decls_with_mutability_in_ids(
+    arena: &AstArena,
+    exprs: &[ExprId],
 ) -> HashMap<String, bool> {
     let mut decls = HashMap::new();
-    collect_assignment_decls_into(exprs, &mut decls);
+    collect_assignment_decls_ids_into(arena, exprs, &mut decls);
     decls
 }
 
-fn collect_assignment_decls_in_expr(expr: &Expr) -> HashMap<String, bool> {
-    match &expr.kind {
+fn collect_assignment_decls_in_expr(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> HashMap<String, bool> {
+    match &arena.get(expr_id).kind {
         ExprKind::Object { body, .. }
         | ExprKind::Block { body, .. }
         | ExprKind::Sequence(body) => {
-            collect_assignment_decls_with_mutability(body)
+            collect_assignment_decls_with_mutability_in_ids(arena, body)
         }
         _ => HashMap::new(),
     }
 }
 
-fn collect_assignment_decls_into(
-    exprs: &[Expr],
+fn collect_assignment_decls_ids_into(
+    arena: &AstArena,
+    exprs: &[ExprId],
     out: &mut HashMap<String, bool>,
 ) {
-    for expr in exprs {
-        match &expr.kind {
+    for expr_id in exprs {
+        match &arena.get(*expr_id).kind {
             ExprKind::Assignment { target, kind, .. } => {
-                if let ExprKind::Ident(name) = &target.kind {
+                if let ExprKind::Ident(name) = &arena.get(*target).kind {
                     out.entry(name.clone())
                         .or_insert(*kind == AssignKind::Assign);
                 }
             }
             ExprKind::Sequence(nested) => {
-                collect_assignment_decls_into(nested, out);
+                collect_assignment_decls_ids_into(arena, nested, out);
             }
             ExprKind::Paren(inner) => {
-                collect_assignment_decls_into(
-                    std::slice::from_ref(inner.as_ref()),
+                collect_assignment_decls_ids_into(
+                    arena,
+                    std::slice::from_ref(inner),
                     out,
                 );
             }
@@ -647,29 +691,31 @@ mod tests {
 
     use super::*;
 
-    fn parse_source(src: &str) -> (Vec<Token>, Vec<Expr>) {
+    fn parse_source(src: &str) -> (Vec<Token>, AstArena, Vec<ExprId>) {
         let tokens: Vec<Token> = Lexer::from_str(src)
             .filter(|t| !t.is_eof() && !matches!(t.kind, TokenKind::Error(_)))
             .collect();
-        let exprs: Vec<Expr> = Parser::new(Lexer::from_str(src))
-            .filter_map(Result::ok)
-            .collect();
-        (tokens, exprs)
+        let mut parser = Parser::new(Lexer::from_str(src));
+        let parsed: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
+        let exprs: Vec<ExprId> =
+            parsed.into_iter().filter_map(Result::ok).collect();
+        (tokens, arena, exprs)
     }
 
     #[test]
     fn semantic_marks_assignment_and_local() {
-        let (tokens, exprs) = parse_source("[ x := 1. x ]");
-        let spans = analyze_semantics(&tokens, &exprs);
+        let (tokens, arena, exprs) = parse_source("[ x := 1. x ]");
+        let spans = analyze_semantics_ids(&tokens, &arena, &exprs);
         assert!(spans.iter().any(|s| s.kind == SemanticKind::Operator));
         assert!(spans.iter().any(|s| s.kind == SemanticKind::Local));
     }
 
     #[test]
     fn semantic_marks_slot_params() {
-        let (tokens, exprs) =
+        let (tokens, arena, exprs) =
             parse_source("{ + rhs = { rhs }. foo: a Bar: b = { a + b } }");
-        let spans = analyze_semantics(&tokens, &exprs);
+        let spans = analyze_semantics_ids(&tokens, &arena, &exprs);
         let count = spans
             .iter()
             .filter(|s| s.kind == SemanticKind::Parameter)
@@ -679,8 +725,9 @@ mod tests {
 
     #[test]
     fn semantic_marks_strings_numbers_and_delimiters() {
-        let (tokens, exprs) = parse_source("[ | x | { x := 42. \"ok\" } ]");
-        let spans = analyze_semantics(&tokens, &exprs);
+        let (tokens, arena, exprs) =
+            parse_source("[ | x | { x := 42. \"ok\" } ]");
+        let spans = analyze_semantics_ids(&tokens, &arena, &exprs);
         assert!(spans.iter().any(|s| s.kind == SemanticKind::LiteralNumber));
         assert!(spans.iter().any(|s| s.kind == SemanticKind::LiteralString));
         assert!(spans.iter().any(|s| s.kind == SemanticKind::Operator));
@@ -688,9 +735,13 @@ mod tests {
 
     #[test]
     fn strict_collects_multiple_issues() {
-        let (tokens, exprs) = parse_source("[ x = 1. x := 2. y := 3 ]");
-        let analysis =
-            analyze_semantics_with_mode(&tokens, &exprs, AnalysisMode::Strict);
+        let (tokens, arena, exprs) = parse_source("[ x = 1. x := 2. y := 3 ]");
+        let analysis = analyze_semantics_with_mode_ids(
+            &tokens,
+            &arena,
+            &exprs,
+            AnalysisMode::Strict,
+        );
         assert!(!analysis.issues.is_empty());
     }
 }

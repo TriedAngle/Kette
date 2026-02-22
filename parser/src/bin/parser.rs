@@ -29,15 +29,16 @@ fn main() {
     };
 
     let lexer = Lexer::from_str(&source);
-    let parser = Parser::new(lexer);
+    let mut parser = Parser::new(lexer);
     let mut exprs = Vec::new();
     let mut errors = Vec::new();
-    for result in parser {
+    for result in parser.by_ref() {
         match result {
-            Ok(expr) => exprs.push(expr),
+            Ok(id) => exprs.push(id),
             Err(err) => errors.push(err),
         }
     }
+    let arena = parser.into_arena();
 
     if !errors.is_empty() {
         for err in errors {
@@ -46,7 +47,7 @@ fn main() {
         exit(1);
     }
 
-    let dot = to_dot(&exprs);
+    let dot = to_dot(&arena, &exprs);
     if let Some(output) = output {
         if let Err(err) = fs::write(&output, dot) {
             eprintln!("failed to write {}: {}", output, err);

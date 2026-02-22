@@ -3,14 +3,11 @@ use std::collections::{HashMap, HashSet};
 use bytecode::{BytecodeBuilder, SourceMapBuilder};
 use object::{BigNum, Value};
 use parser::ast::{
-    AssignKind, Expr, ExprKind, KeywordPair, SlotDescriptor, SlotSelector,
+    AssignKind, AstArena, ExprId, ExprKind as AstExprKind, SlotDescriptor,
+    SlotSelector,
 };
-use parser::semantic::{
-    analyze_semantics_with_mode,
-    collect_assignment_names as parser_collect_assignment_names,
-    slot_selector_name, AnalysisMode,
-};
-use parser::span::{Pos, Span};
+use parser::semantic::{analyze_semantics_with_mode_ids, AnalysisMode};
+use parser::span::Span;
 
 use crate::{CORE_MODULE, USER_MODULE, VM};
 
@@ -328,8 +325,11 @@ impl Compiler {
 
     // ── Public API ──────────────────────────────────────────────
 
-    pub fn compile(exprs: &[Expr]) -> Result<CodeDesc, CompileError> {
-        match Self::compile_with_issues(exprs) {
+    pub fn compile_ids(
+        arena: &AstArena,
+        exprs: &[ExprId],
+    ) -> Result<CodeDesc, CompileError> {
+        match Self::compile_with_issues_ids(arena, exprs) {
             Ok(code) => Ok(code),
             Err(mut errs) => {
                 if let Some(first) = errs.drain(..).next() {
@@ -341,11 +341,16 @@ impl Compiler {
         }
     }
 
-    pub fn compile_with_issues(
-        exprs: &[Expr],
+    pub fn compile_with_issues_ids(
+        arena: &AstArena,
+        exprs: &[ExprId],
     ) -> Result<CodeDesc, Vec<CompileError>> {
-        let analysis =
-            analyze_semantics_with_mode(&[], exprs, AnalysisMode::Strict);
+        let analysis = analyze_semantics_with_mode_ids(
+            &[],
+            arena,
+            exprs,
+            AnalysisMode::Strict,
+        );
         if !analysis.issues.is_empty() {
             let errs = analysis
                 .issues
@@ -356,41 +361,47 @@ impl Compiler {
         }
 
         let mut c = Compiler::new();
-        c.compile_program(exprs).map_err(|err| vec![err])
+        c.compile_program_ids(arena, exprs).map_err(|err| vec![err])
     }
 
-    pub fn compile_for_vm(
+    pub fn compile_for_vm_ids(
         vm: &VM,
-        exprs: &[Expr],
+        arena: &AstArena,
+        exprs: &[ExprId],
     ) -> Result<CodeDesc, CompileError> {
-        let module_env = build_compile_module_env(vm, exprs)?;
+        let module_env = build_compile_module_env_ids(vm, arena, exprs)?;
         let mut c = Compiler::with_module_env(module_env);
-        c.compile_program(exprs)
+        c.compile_program_ids(arena, exprs)
     }
 
-    fn compile_program(
+    fn compile_program_ids(
         &mut self,
-        exprs: &[Expr],
+        arena: &AstArena,
+        exprs: &[ExprId],
     ) -> Result<CodeDesc, CompileError> {
         self.top_level_globals.clear();
-        for expr in exprs {
-            if let Some(name) = top_level_assignment_name(expr) {
-                self.top_level_globals.insert(name.to_string());
+        for expr_id in exprs {
+            if let Some(name) = top_level_assignment_name_id(arena, *expr_id) {
+                self.top_level_globals.insert(name);
             }
         }
 
         self.push_frame(ScopeKind::TopLevel);
-        self.prescan_locals(exprs);
-        self.analyze_captures(exprs, &[]);
+        self.prescan_locals_ids(arena, exprs);
+        self.analyze_captures_ids(arena, exprs, &[]);
 
-        let non_comment: Vec<&Expr> = exprs
+        let non_comment: Vec<ExprId> = exprs
             .iter()
-            .filter(|e| !matches!(e.kind, ExprKind::Comment(_)))
+            .copied()
+            .filter(|id| {
+                !matches!(arena.get(*id).kind, parser::ExprKind::Comment(_))
+            })
             .collect();
+
         if non_comment.is_empty() {
             self.builder().load_local(0);
         } else {
-            for (i, expr) in non_comment.iter().enumerate() {
+            for (i, expr_id) in non_comment.iter().copied().enumerate() {
                 if let Some(env) = &self.module_env {
                     if let Some(module) =
                         env.expr_modules.get(self.top_level_expr_index).cloned()
@@ -400,7 +411,7 @@ impl Compiler {
                 }
                 self.top_level_expr_index += 1;
                 let mark = self.scope().reg_mark();
-                self.compile_expr(expr)?;
+                self.compile_expr_id(arena, expr_id)?;
                 if i < non_comment.len() - 1 {
                     self.scope_mut().restore_regs(mark);
                 }
@@ -409,6 +420,934 @@ impl Compiler {
 
         self.builder().local_return();
         Ok(self.pop_frame())
+    }
+
+    fn compile_expr_id(
+        &mut self,
+        arena: &AstArena,
+        expr_id: ExprId,
+    ) -> Result<(), CompileError> {
+        let expr = arena.get(expr_id);
+        self.note(expr.span);
+        match &expr.kind {
+            parser::ExprKind::Integer(v) => {
+                if let Ok(v32) = i32::try_from(*v) {
+                    self.builder().load_smi(v32);
+                } else {
+                    let idx = self.add_constant(Self::int_const_entry(*v));
+                    self.builder().load_constant(idx);
+                }
+            }
+            parser::ExprKind::Float(v) => {
+                let idx = self.add_constant(ConstEntry::Float(*v));
+                self.builder().load_constant(idx);
+            }
+            parser::ExprKind::String(s) => {
+                let idx = self.add_string_const(s);
+                self.builder().load_constant(idx);
+            }
+            parser::ExprKind::Symbol(s) => {
+                let idx = self.add_symbol(s);
+                self.builder().load_constant(idx);
+            }
+            parser::ExprKind::SelfRef => self.builder().load_local(0),
+            parser::ExprKind::Ident(name) => {
+                self.compile_ident(name, expr.span)?;
+            }
+            parser::ExprKind::UnaryMessage {
+                receiver, selector, ..
+            } => {
+                self.compile_expr_id(arena, *receiver)?;
+                let sel_idx = self.add_symbol(selector);
+                let fb = self.scope_mut().next_feedback();
+                self.note(expr.span);
+                self.builder().send(sel_idx, 0, 0, fb);
+            }
+            parser::ExprKind::BinaryMessage {
+                receiver,
+                operator,
+                argument,
+                ..
+            } => {
+                self.compile_expr_id(arena, *receiver)?;
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+
+                self.compile_expr_id(arena, *argument)?;
+                let tmp_arg = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_arg);
+
+                self.builder().load_local(tmp_recv);
+                let op_idx = self.add_symbol(operator);
+                let fb = self.scope_mut().next_feedback();
+                self.note(expr.span);
+                self.builder().send(op_idx, tmp_arg, 1, fb);
+            }
+            parser::ExprKind::KeywordMessage { receiver, pairs } => {
+                self.compile_expr_id(arena, *receiver)?;
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+
+                let mut arg_regs = Vec::with_capacity(pairs.len());
+                for _ in pairs {
+                    arg_regs.push(self.scope_mut().alloc_temp());
+                }
+                for (pair, &arg_reg) in pairs.iter().zip(arg_regs.iter()) {
+                    self.compile_expr_id(arena, pair.argument)?;
+                    self.builder().store_local(arg_reg);
+                }
+
+                self.builder().load_local(tmp_recv);
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                let sel_idx = self.add_symbol(&selector);
+                let fb = self.scope_mut().next_feedback();
+                let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
+                self.note(expr.span);
+                self.builder().send(
+                    sel_idx,
+                    first_arg_reg,
+                    pairs.len() as u8,
+                    fb,
+                );
+            }
+            parser::ExprKind::Assignment {
+                target,
+                kind,
+                value,
+            } => {
+                self.compile_expr_id(arena, *value)?;
+                match &arena.get(*target).kind {
+                    parser::ExprKind::Ident(name) => {
+                        let loc = self.resolve_for_store(
+                            name,
+                            *kind,
+                            arena.get(*target).span,
+                        )?;
+                        match loc {
+                            VarLoc::Local(reg) => {
+                                self.builder().store_local(reg)
+                            }
+                            VarLoc::Temp(arr, idx) => {
+                                self.builder().store_temp(arr, idx)
+                            }
+                            VarLoc::Global(const_idx) => {
+                                self.builder().store_assoc(const_idx)
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(CompileError::new(
+                            "assignment target must be an identifier",
+                            arena.get(*target).span,
+                        ));
+                    }
+                }
+            }
+            parser::ExprKind::Return(inner) => {
+                self.compile_expr_id(arena, *inner)?;
+                self.builder().return_();
+            }
+            parser::ExprKind::Paren(inner) => {
+                self.compile_expr_id(arena, *inner)?;
+            }
+            parser::ExprKind::Sequence(exprs) => {
+                self.compile_body_ids(arena, exprs)?;
+            }
+            parser::ExprKind::Cascade { receiver, messages } => {
+                self.compile_expr_id(arena, *receiver)?;
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+                for msg in messages {
+                    self.builder().load_local(tmp_recv);
+                    self.compile_message_tail_id(arena, *msg)?;
+                }
+            }
+            parser::ExprKind::Resend { message } => {
+                self.compile_resend_id(arena, *message, None, expr.span)?;
+            }
+            parser::ExprKind::DirectedResend { delegate, message } => {
+                self.compile_resend_id(
+                    arena,
+                    *message,
+                    Some(delegate.as_str()),
+                    expr.span,
+                )?;
+            }
+            parser::ExprKind::Comment(_) => {}
+            parser::ExprKind::Error(msg) => {
+                return Err(CompileError::new(msg.as_str(), expr.span));
+            }
+            parser::ExprKind::Object { slots, body } => {
+                self.compile_object_id(arena, slots, body, &[])?;
+            }
+            parser::ExprKind::Block { args, body } => {
+                self.compile_block_id(arena, args, body)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_body_ids(
+        &mut self,
+        arena: &AstArena,
+        body: &[ExprId],
+    ) -> Result<(), CompileError> {
+        let non_comment: Vec<ExprId> = body
+            .iter()
+            .copied()
+            .filter(|id| {
+                !matches!(arena.get(*id).kind, parser::ExprKind::Comment(_))
+            })
+            .collect();
+
+        if non_comment.is_empty() {
+            self.builder().load_local(0);
+            return Ok(());
+        }
+        for (i, expr_id) in non_comment.iter().copied().enumerate() {
+            let mark = self.scope().reg_mark();
+            self.compile_expr_id(arena, expr_id)?;
+            if i < non_comment.len() - 1 {
+                self.scope_mut().restore_regs(mark);
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_message_tail_id(
+        &mut self,
+        arena: &AstArena,
+        msg_id: ExprId,
+    ) -> Result<(), CompileError> {
+        let msg = arena.get(msg_id);
+        match &msg.kind {
+            parser::ExprKind::UnaryMessage { selector, .. } => {
+                let sel_idx = self.add_symbol(selector);
+                let fb = self.scope_mut().next_feedback();
+                self.note(msg.span);
+                self.builder().send(sel_idx, 0, 0, fb);
+            }
+            parser::ExprKind::BinaryMessage {
+                argument, operator, ..
+            } => {
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+
+                self.compile_expr_id(arena, *argument)?;
+                let tmp_arg = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_arg);
+
+                self.builder().load_local(tmp_recv);
+                let op_idx = self.add_symbol(operator);
+                let fb = self.scope_mut().next_feedback();
+                self.note(msg.span);
+                self.builder().send(op_idx, tmp_arg, 1, fb);
+            }
+            parser::ExprKind::KeywordMessage { pairs, .. } => {
+                let tmp_recv = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp_recv);
+
+                let mut arg_regs = Vec::with_capacity(pairs.len());
+                for _ in pairs {
+                    arg_regs.push(self.scope_mut().alloc_temp());
+                }
+                for (pair, &arg_reg) in pairs.iter().zip(arg_regs.iter()) {
+                    self.compile_expr_id(arena, pair.argument)?;
+                    self.builder().store_local(arg_reg);
+                }
+
+                self.builder().load_local(tmp_recv);
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                let sel_idx = self.add_symbol(&selector);
+                let fb = self.scope_mut().next_feedback();
+                let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
+                self.note(msg.span);
+                self.builder().send(
+                    sel_idx,
+                    first_arg_reg,
+                    pairs.len() as u8,
+                    fb,
+                );
+            }
+            _ => {
+                self.compile_expr_id(arena, msg_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_resend_id(
+        &mut self,
+        arena: &AstArena,
+        message_id: ExprId,
+        delegate: Option<&str>,
+        resend_span: Span,
+    ) -> Result<(), CompileError> {
+        let message = arena.get(message_id);
+        match &message.kind {
+            parser::ExprKind::UnaryMessage { selector, .. } => {
+                let sel_idx = self.add_symbol(selector);
+                let fb = self.scope_mut().next_feedback();
+                self.note(resend_span);
+                if let Some(del) = delegate {
+                    let del_idx = self.add_symbol(del);
+                    self.builder().directed_resend(sel_idx, 0, 0, fb, del_idx);
+                } else {
+                    self.builder().resend(sel_idx, 0, 0, fb);
+                }
+            }
+            parser::ExprKind::BinaryMessage {
+                argument, operator, ..
+            } => {
+                self.compile_expr_id(arena, *argument)?;
+                let arg_reg = self.scope_mut().alloc_temp();
+                self.builder().store_local(arg_reg);
+
+                let sel_idx = self.add_symbol(operator);
+                let fb = self.scope_mut().next_feedback();
+                self.note(resend_span);
+                if let Some(del) = delegate {
+                    let del_idx = self.add_symbol(del);
+                    self.builder()
+                        .directed_resend(sel_idx, arg_reg, 1, fb, del_idx);
+                } else {
+                    self.builder().resend(sel_idx, arg_reg, 1, fb);
+                }
+            }
+            parser::ExprKind::KeywordMessage { pairs, .. } => {
+                let first_arg_reg = self.scope().next_reg;
+                for pair in pairs {
+                    self.compile_expr_id(arena, pair.argument)?;
+                    let tmp = self.scope_mut().alloc_temp();
+                    self.builder().store_local(tmp);
+                }
+
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                let sel_idx = self.add_symbol(&selector);
+                let fb = self.scope_mut().next_feedback();
+                let argc = pairs.len() as u8;
+                self.note(resend_span);
+                if let Some(del) = delegate {
+                    let del_idx = self.add_symbol(del);
+                    self.builder().directed_resend(
+                        sel_idx,
+                        first_arg_reg,
+                        argc,
+                        fb,
+                        del_idx,
+                    );
+                } else {
+                    self.builder().resend(sel_idx, first_arg_reg, argc, fb);
+                }
+            }
+            _ => {
+                return Err(CompileError::new(
+                    "resend requires a message expression",
+                    message.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_object_id(
+        &mut self,
+        arena: &AstArena,
+        slots: &[SlotDescriptor],
+        body: &[ExprId],
+        parent_params: &[String],
+    ) -> Result<(), CompileError> {
+        let is_method = !body.is_empty() || !parent_params.is_empty();
+        if is_method {
+            self.compile_method_object_id(arena, slots, body, parent_params)
+        } else {
+            self.compile_data_object_id(arena, slots)
+        }
+    }
+
+    fn compile_data_object_id(
+        &mut self,
+        arena: &AstArena,
+        slots: &[SlotDescriptor],
+    ) -> Result<(), CompileError> {
+        let mut value_count: u32 = 0;
+        let mut slot_descs = Vec::new();
+        let mut value_regs = Vec::new();
+        let values_base_offset: u32 = 16;
+
+        for slot in slots {
+            let name = slot_selector_name_from_selector(&slot.selector);
+            let is_parent = slot.is_parent;
+            let base_flags =
+                SLOT_ENUMERABLE | if is_parent { SLOT_PARENT } else { 0 };
+
+            if slot.mutable {
+                let offset = values_base_offset + value_count * 8;
+                if slot.shorthand {
+                    self.compile_shorthand_value(&name, false, slot.span)?;
+                } else {
+                    self.compile_expr_id(arena, slot.value)?;
+                }
+                let tmp = self.scope_mut().alloc_temp();
+                self.builder().store_local(tmp);
+                value_regs.push(tmp);
+
+                slot_descs.push(SlotDesc {
+                    flags: base_flags | SLOT_ASSIGNABLE,
+                    name: name.clone(),
+                    value: SlotValue::Offset(offset),
+                });
+                slot_descs.push(SlotDesc {
+                    flags: base_flags | SLOT_ASSIGNMENT,
+                    name: format!("{}:", name),
+                    value: SlotValue::Offset(offset),
+                });
+                value_count += 1;
+            } else {
+                let has_params = !slot.params.is_empty();
+                let is_method_value = has_params
+                    || matches!(&arena.get(slot.value).kind, AstExprKind::Object { body, .. } if !body.is_empty());
+
+                if is_method_value {
+                    let nested = self.compile_nested_method_id(arena, slot)?;
+                    slot_descs.push(SlotDesc {
+                        flags: base_flags | SLOT_CONSTANT,
+                        name,
+                        value: SlotValue::Constant(ConstEntry::Method {
+                            code: nested.code,
+                            tail_call: nested.tail_call,
+                        }),
+                    });
+                } else if self.slot_value_requires_runtime_id(arena, slot.value)
+                {
+                    let offset = values_base_offset + value_count * 8;
+                    if slot.shorthand {
+                        self.compile_shorthand_value(&name, false, slot.span)?;
+                    } else {
+                        self.compile_expr_id(arena, slot.value)?;
+                    }
+                    let tmp = self.scope_mut().alloc_temp();
+                    self.builder().store_local(tmp);
+                    value_regs.push(tmp);
+                    slot_descs.push(SlotDesc {
+                        flags: base_flags | SLOT_ASSIGNABLE,
+                        name,
+                        value: SlotValue::Offset(offset),
+                    });
+                    value_count += 1;
+                } else {
+                    let const_entry =
+                        self.expr_to_const_entry_id(arena, slot.value)?;
+                    slot_descs.push(SlotDesc {
+                        flags: base_flags | SLOT_CONSTANT,
+                        name,
+                        value: SlotValue::Constant(const_entry),
+                    });
+                }
+            }
+        }
+
+        let map_desc = MapDesc {
+            slots: slot_descs,
+            value_count,
+            code: None,
+            tail_call: false,
+        };
+        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
+
+        let first_value_reg = if value_regs.is_empty() {
+            0
+        } else {
+            let contiguous = value_regs.windows(2).all(|w| w[1] == w[0] + 1);
+            if contiguous {
+                value_regs[0]
+            } else {
+                let mut dst_regs = Vec::with_capacity(value_regs.len());
+                for _ in 0..value_regs.len() {
+                    dst_regs.push(self.scope_mut().alloc_temp());
+                }
+                for (&src, &dst) in value_regs.iter().zip(dst_regs.iter()) {
+                    if src != dst {
+                        self.builder().load_local(src);
+                        self.builder().store_local(dst);
+                    }
+                }
+                dst_regs[0]
+            }
+        };
+        self.builder().create_object(map_idx, first_value_reg);
+        Ok(())
+    }
+
+    fn compile_method_object_id(
+        &mut self,
+        arena: &AstArena,
+        slots: &[SlotDescriptor],
+        body: &[ExprId],
+        parent_params: &[String],
+    ) -> Result<(), CompileError> {
+        self.push_frame(ScopeKind::Object);
+        for param in parent_params {
+            self.scope_mut().declare_param(param.clone());
+        }
+        for slot in slots {
+            let name = slot_selector_name_from_selector(&slot.selector);
+            self.scope_mut().declare_local(name, slot.mutable);
+        }
+
+        self.prescan_locals_ids(arena, body);
+        self.analyze_captures_ids(arena, body, &[]);
+
+        let mut shadow = HashSet::new();
+        for slot in slots {
+            shadow.insert(slot_selector_name_from_selector(&slot.selector));
+            for param in &slot.params {
+                shadow.insert(param.clone());
+            }
+        }
+
+        self.emit_captured_param_inits(parent_params);
+        for param in parent_params {
+            shadow.insert(param.clone());
+        }
+        let new_shadows = vec![shadow];
+        for slot in slots {
+            if slot.shorthand {
+                let mut slot_shadows = new_shadows.clone();
+                if let Some(last) = slot_shadows.last_mut() {
+                    last.remove(&slot_selector_name_from_selector(
+                        &slot.selector,
+                    ));
+                }
+                self.analyze_capture_expr_id(arena, slot.value, &slot_shadows);
+            } else {
+                self.analyze_capture_expr_id(arena, slot.value, &new_shadows);
+            }
+        }
+
+        for slot in slots {
+            let name = slot_selector_name_from_selector(&slot.selector);
+            if slot.shorthand {
+                self.compile_shorthand_value(&name, true, slot.span)?;
+            } else {
+                self.compile_expr_id(arena, slot.value)?;
+            }
+            let (captured, reg, temp_idx) = {
+                let var = self.scope().find_local(&name).expect("slot local");
+                (var.captured, var.reg, var.temp_idx)
+            };
+            if captured {
+                self.builder().store_temp(0, temp_idx.unwrap());
+            } else {
+                self.builder().store_local(reg);
+            }
+        }
+
+        self.compile_body_ids(arena, body)?;
+        self.builder().local_return();
+        let code_desc = self.pop_frame();
+
+        let code_idx = self.add_constant(ConstEntry::Code(code_desc));
+        let mut slot_descs = Vec::new();
+        for slot in slots {
+            let name = slot_selector_name_from_selector(&slot.selector);
+            let is_parent = slot.is_parent;
+            let base_flags =
+                SLOT_ENUMERABLE | if is_parent { SLOT_PARENT } else { 0 };
+            slot_descs.push(SlotDesc {
+                flags: base_flags | SLOT_CONSTANT,
+                name,
+                value: SlotValue::Constant(ConstEntry::Symbol(
+                    "slot".to_string(),
+                )),
+            });
+        }
+        let map_desc = MapDesc {
+            slots: slot_descs,
+            value_count: 0,
+            code: Some(code_idx as usize),
+            tail_call: false,
+        };
+        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
+        self.builder().create_object(map_idx, 0);
+        Ok(())
+    }
+
+    fn compile_nested_method_id(
+        &mut self,
+        arena: &AstArena,
+        slot: &SlotDescriptor,
+    ) -> Result<NestedMethodDesc, CompileError> {
+        let method_selector = slot_selector_name_from_selector(&slot.selector);
+        let (method_expr, ensure_tail_call) =
+            self.unwrap_ensure_tail_call_id(arena, slot.value);
+        match &arena.get(method_expr).kind {
+            AstExprKind::Object {
+                slots: inner_slots,
+                body,
+            } => {
+                self.push_frame(ScopeKind::Object);
+                for param in &slot.params {
+                    self.scope_mut().declare_param(param.clone());
+                }
+                for inner_slot in inner_slots {
+                    let name =
+                        slot_selector_name_from_selector(&inner_slot.selector);
+                    self.scope_mut().declare_local(name, inner_slot.mutable);
+                }
+
+                self.prescan_locals_ids(arena, body);
+                self.analyze_captures_ids(arena, body, &[]);
+
+                let mut shadow = HashSet::new();
+                for inner_slot in inner_slots {
+                    shadow.insert(slot_selector_name_from_selector(
+                        &inner_slot.selector,
+                    ));
+                    for param in &inner_slot.params {
+                        shadow.insert(param.clone());
+                    }
+                }
+                for param in &slot.params {
+                    shadow.insert(param.clone());
+                }
+                let new_shadows = vec![shadow];
+                for inner_slot in inner_slots {
+                    if inner_slot.shorthand {
+                        let mut slot_shadows = new_shadows.clone();
+                        if let Some(last) = slot_shadows.last_mut() {
+                            last.remove(&slot_selector_name_from_selector(
+                                &inner_slot.selector,
+                            ));
+                        }
+                        self.analyze_capture_expr_id(
+                            arena,
+                            inner_slot.value,
+                            &slot_shadows,
+                        );
+                    } else {
+                        self.analyze_capture_expr_id(
+                            arena,
+                            inner_slot.value,
+                            &new_shadows,
+                        );
+                    }
+                }
+
+                self.emit_captured_param_inits(&slot.params);
+                for inner_slot in inner_slots {
+                    let name =
+                        slot_selector_name_from_selector(&inner_slot.selector);
+                    if inner_slot.shorthand {
+                        self.compile_shorthand_value(
+                            &name,
+                            true,
+                            inner_slot.span,
+                        )?;
+                    } else {
+                        self.compile_expr_id(arena, inner_slot.value)?;
+                    }
+                    let (captured, reg, temp_idx) = {
+                        let var =
+                            self.scope().find_local(&name).expect("slot local");
+                        (var.captured, var.reg, var.temp_idx)
+                    };
+                    if captured {
+                        self.builder().store_temp(0, temp_idx.unwrap());
+                    } else {
+                        self.builder().store_local(reg);
+                    }
+                }
+
+                self.compile_body_ids(arena, body)?;
+                self.builder().local_return();
+
+                let tail_call = self.method_tail_call_eligible_id(
+                    arena,
+                    body,
+                    &method_selector,
+                );
+                if ensure_tail_call && !tail_call {
+                    return Err(CompileError::new(
+                        "method is not tail-call eligible",
+                        arena.get(method_expr).span,
+                    ));
+                }
+
+                Ok(NestedMethodDesc {
+                    code: self.pop_frame(),
+                    tail_call,
+                })
+            }
+            _ => {
+                self.push_frame(ScopeKind::Object);
+                for param in &slot.params {
+                    self.scope_mut().declare_param(param.clone());
+                }
+                self.compile_expr_id(arena, method_expr)?;
+                self.builder().local_return();
+
+                let tail_call = self.expr_contains_tail_self_call_id(
+                    arena,
+                    method_expr,
+                    &method_selector,
+                );
+                if ensure_tail_call && !tail_call {
+                    return Err(CompileError::new(
+                        "method is not tail-call eligible",
+                        arena.get(method_expr).span,
+                    ));
+                }
+                Ok(NestedMethodDesc {
+                    code: self.pop_frame(),
+                    tail_call,
+                })
+            }
+        }
+    }
+
+    fn expr_to_const_entry_id(
+        &mut self,
+        arena: &AstArena,
+        expr_id: ExprId,
+    ) -> Result<ConstEntry, CompileError> {
+        let expr = arena.get(expr_id);
+        match &expr.kind {
+            AstExprKind::Integer(v) => Ok(Self::int_const_entry(*v)),
+            AstExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
+            AstExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
+            AstExprKind::Symbol(s) => Ok(ConstEntry::Symbol(s.clone())),
+            AstExprKind::Ident(name) => {
+                let (module, export_name) = if self.module_env.is_some() {
+                    self.resolve_module_global(name, false, expr.span)?
+                } else {
+                    (USER_MODULE.to_string(), name.clone())
+                };
+                Ok(ConstEntry::ModuleAssocValue {
+                    module,
+                    name: export_name,
+                })
+            }
+            AstExprKind::Object { slots, body } if body.is_empty() => {
+                let mut slot_descs = Vec::new();
+                for slot in slots {
+                    let name = slot_selector_name_from_selector(&slot.selector);
+                    let const_val =
+                        self.expr_to_const_entry_id(arena, slot.value)?;
+                    slot_descs.push(SlotDesc {
+                        flags: SLOT_CONSTANT | SLOT_ENUMERABLE,
+                        name,
+                        value: SlotValue::Constant(const_val),
+                    });
+                }
+                Ok(ConstEntry::Map(MapDesc {
+                    slots: slot_descs,
+                    value_count: 0,
+                    code: None,
+                    tail_call: false,
+                }))
+            }
+            AstExprKind::Block { args, body } => {
+                let code = self.compile_block_inner_id(arena, args, body)?;
+                Ok(ConstEntry::Code(code))
+            }
+            _ => {
+                self.push_frame(ScopeKind::Object);
+                self.compile_expr_id(arena, expr_id)?;
+                self.builder().local_return();
+                Ok(ConstEntry::Code(self.pop_frame()))
+            }
+        }
+    }
+
+    fn slot_value_requires_runtime_id(
+        &mut self,
+        arena: &AstArena,
+        expr_id: ExprId,
+    ) -> bool {
+        match &arena.get(expr_id).kind {
+            AstExprKind::Integer(_)
+            | AstExprKind::Float(_)
+            | AstExprKind::String(_) => false,
+            AstExprKind::Ident(_) => true,
+            AstExprKind::Object { slots, body } => {
+                if !body.is_empty() {
+                    return true;
+                }
+                slots.iter().any(|s| {
+                    !s.params.is_empty()
+                        || self.slot_value_requires_runtime_id(arena, s.value)
+                })
+            }
+            AstExprKind::Block { .. } => false,
+            _ => true,
+        }
+    }
+
+    fn compile_block_id(
+        &mut self,
+        arena: &AstArena,
+        args: &[String],
+        body: &[ExprId],
+    ) -> Result<(), CompileError> {
+        let code_desc = self.compile_block_inner_id(arena, args, body)?;
+        let code_idx = self.add_constant(ConstEntry::Code(code_desc));
+        let map_desc = MapDesc {
+            slots: Vec::new(),
+            value_count: 0,
+            code: Some(code_idx as usize),
+            tail_call: false,
+        };
+        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
+        self.builder().create_block(map_idx);
+        Ok(())
+    }
+
+    fn compile_block_inner_id(
+        &mut self,
+        arena: &AstArena,
+        args: &[String],
+        body: &[ExprId],
+    ) -> Result<CodeDesc, CompileError> {
+        self.push_frame(ScopeKind::Block);
+        for arg in args {
+            self.scope_mut().declare_param(arg.clone());
+        }
+        self.prescan_locals_ids(arena, body);
+        self.analyze_captures_ids(arena, body, &[]);
+        self.emit_captured_param_inits(args);
+        self.compile_body_ids(arena, body)?;
+        self.builder().local_return();
+        Ok(self.pop_frame())
+    }
+
+    fn unwrap_ensure_tail_call_id(
+        &self,
+        arena: &AstArena,
+        expr_id: ExprId,
+    ) -> (ExprId, bool) {
+        if let AstExprKind::UnaryMessage {
+            receiver, selector, ..
+        } = &arena.get(expr_id).kind
+        {
+            if selector == "_EnsureTailCall" {
+                return (*receiver, true);
+            }
+        }
+        (expr_id, false)
+    }
+
+    fn method_tail_call_eligible_id(
+        &self,
+        arena: &AstArena,
+        body: &[ExprId],
+        method_selector: &str,
+    ) -> bool {
+        let Some(last) = Self::last_meaningful_expr_id(arena, body) else {
+            return false;
+        };
+        self.expr_contains_tail_self_call_id(arena, last, method_selector)
+    }
+
+    fn last_meaningful_expr_id(
+        arena: &AstArena,
+        exprs: &[ExprId],
+    ) -> Option<ExprId> {
+        exprs
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| !matches!(arena.get(*id).kind, AstExprKind::Comment(_)))
+    }
+
+    fn expr_contains_tail_self_call_id(
+        &self,
+        arena: &AstArena,
+        expr_id: ExprId,
+        method_selector: &str,
+    ) -> bool {
+        match &arena.get(expr_id).kind {
+            AstExprKind::UnaryMessage {
+                receiver, selector, ..
+            } => {
+                (selector == method_selector
+                    && matches!(
+                        arena.get(*receiver).kind,
+                        AstExprKind::SelfRef
+                    ))
+                    || self.expr_contains_tail_self_call_id(
+                        arena,
+                        *receiver,
+                        method_selector,
+                    )
+            }
+            AstExprKind::BinaryMessage {
+                receiver,
+                operator,
+                argument,
+                ..
+            } => {
+                (operator == method_selector
+                    && matches!(
+                        arena.get(*receiver).kind,
+                        AstExprKind::SelfRef
+                    ))
+                    || self.expr_contains_tail_self_call_id(
+                        arena,
+                        *receiver,
+                        method_selector,
+                    )
+                    || self.expr_contains_tail_self_call_id(
+                        arena,
+                        *argument,
+                        method_selector,
+                    )
+            }
+            AstExprKind::KeywordMessage { receiver, pairs } => {
+                let selector: String =
+                    pairs.iter().map(|p| p.keyword.as_str()).collect();
+                (selector == method_selector
+                    && matches!(
+                        arena.get(*receiver).kind,
+                        AstExprKind::SelfRef
+                    ))
+                    || self.expr_contains_tail_self_call_id(
+                        arena,
+                        *receiver,
+                        method_selector,
+                    )
+                    || pairs.iter().any(|p| {
+                        self.expr_contains_tail_self_call_id(
+                            arena,
+                            p.argument,
+                            method_selector,
+                        )
+                    })
+            }
+            AstExprKind::Paren(inner) | AstExprKind::Return(inner) => self
+                .expr_contains_tail_self_call_id(
+                    arena,
+                    *inner,
+                    method_selector,
+                ),
+            AstExprKind::Sequence(exprs)
+            | AstExprKind::Block { body: exprs, .. }
+            | AstExprKind::Object { body: exprs, .. } => {
+                let Some(last) = Self::last_meaningful_expr_id(arena, exprs)
+                else {
+                    return false;
+                };
+                self.expr_contains_tail_self_call_id(
+                    arena,
+                    last,
+                    method_selector,
+                )
+            }
+            _ => false,
+        }
     }
 
     fn known_global_in_current_module(&self, name: &str) -> bool {
@@ -529,247 +1468,6 @@ impl Compiler {
         self.add_constant(ConstEntry::String(s.to_string()))
     }
 
-    // ── Prescan: discover local variables ───────────────────────
-
-    fn prescan_locals(&mut self, body: &[Expr]) {
-        for expr in body {
-            self.prescan_expr(expr);
-        }
-    }
-
-    fn prescan_expr(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::Assignment { target, kind, .. } => {
-                if let ExprKind::Ident(name) = &target.kind {
-                    if self.scope().kind == ScopeKind::TopLevel {
-                        return;
-                    }
-                    if *kind == AssignKind::Assign
-                        && self.should_assign_to_global(name)
-                    {
-                        return;
-                    }
-                    if *kind == AssignKind::Assign
-                        && self.has_local_in_enclosing_scopes(name)
-                    {
-                        return;
-                    }
-                    let mutable = *kind == AssignKind::Assign;
-                    self.scope_mut().declare_local(name.clone(), mutable);
-                }
-            }
-            ExprKind::Sequence(exprs) => {
-                for e in exprs {
-                    self.prescan_expr(e);
-                }
-            }
-            ExprKind::Paren(inner) => self.prescan_expr(inner),
-            ExprKind::Cascade { messages, .. } => {
-                for msg in messages {
-                    self.prescan_expr(msg);
-                }
-            }
-            // Don't recurse into Object or Block (different scopes)
-            _ => {}
-        }
-    }
-
-    // ── Capture analysis ────────────────────────────────────────
-
-    fn analyze_captures(&mut self, body: &[Expr], shadows: &[HashSet<String>]) {
-        for expr in body {
-            self.analyze_capture_expr(expr, shadows);
-        }
-    }
-
-    fn mark_captures_in_block(
-        &mut self,
-        body: &[Expr],
-        shadow: &HashSet<String>,
-    ) {
-        for expr in body {
-            self.mark_captures_in_block_expr(expr, shadow);
-        }
-    }
-
-    fn mark_captures_in_block_expr(
-        &mut self,
-        expr: &Expr,
-        shadow: &HashSet<String>,
-    ) {
-        match &expr.kind {
-            ExprKind::Ident(name) => {
-                if !shadow.contains(name.as_str()) {
-                    self.mark_captured_if_found(name);
-                }
-            }
-            ExprKind::Assignment { value, .. } => {
-                self.mark_captures_in_block_expr(value, shadow);
-            }
-            ExprKind::Sequence(exprs) => {
-                for e in exprs {
-                    self.mark_captures_in_block_expr(e, shadow);
-                }
-            }
-            ExprKind::Paren(inner) => {
-                self.mark_captures_in_block_expr(inner, shadow);
-            }
-            ExprKind::UnaryMessage { receiver, .. } => {
-                self.mark_captures_in_block_expr(receiver, shadow);
-            }
-            ExprKind::BinaryMessage {
-                receiver, argument, ..
-            } => {
-                self.mark_captures_in_block_expr(receiver, shadow);
-                self.mark_captures_in_block_expr(argument, shadow);
-            }
-            ExprKind::KeywordMessage { receiver, pairs } => {
-                self.mark_captures_in_block_expr(receiver, shadow);
-                for pair in pairs {
-                    self.mark_captures_in_block_expr(&pair.argument, shadow);
-                }
-            }
-            ExprKind::Cascade { receiver, messages } => {
-                self.mark_captures_in_block_expr(receiver, shadow);
-                for msg in messages {
-                    self.mark_captures_in_block_expr(msg, shadow);
-                }
-            }
-            ExprKind::Block { args, body } => {
-                let mut nested = HashSet::new();
-                for arg in args {
-                    nested.insert(arg.clone());
-                }
-                self.collect_assignment_names_filtered(body, &mut nested);
-                for expr in body {
-                    self.mark_captures_in_block_expr(expr, &nested);
-                }
-            }
-            ExprKind::Object { .. } => {
-                // New scope; ignore here.
-            }
-            _ => {}
-        }
-    }
-
-    fn analyze_capture_expr(
-        &mut self,
-        expr: &Expr,
-        shadows: &[HashSet<String>],
-    ) {
-        match &expr.kind {
-            ExprKind::Ident(name) => {
-                if shadows.is_empty() {
-                    // Directly in current scope — local ref, not a capture
-                    return;
-                }
-
-                // If the innermost scope defines the name, it's local.
-                if shadows.last().is_some_and(|s| s.contains(name.as_str())) {
-                    return;
-                }
-
-                // Otherwise, try to mark capture (no-op if it's global).
-                self.mark_captured_if_found(name);
-            }
-            ExprKind::Block { args, body } => {
-                let mut shadow = HashSet::new();
-                for arg in args {
-                    shadow.insert(arg.clone());
-                }
-                self.collect_assignment_names_filtered(body, &mut shadow);
-                let mut new_shadows = shadows.to_vec();
-                new_shadows.push(shadow);
-                self.mark_captures_in_block(body, new_shadows.last().unwrap());
-                self.analyze_captures(body, &new_shadows);
-            }
-            ExprKind::Object { slots, body }
-                if !body.is_empty()
-                    || slots.iter().any(|s| !s.params.is_empty()) =>
-            {
-                // Method object — creates its own scope
-                let mut shadow = HashSet::new();
-                for slot in slots {
-                    shadow.insert(slot_selector_name(slot));
-                    for param in &slot.params {
-                        shadow.insert(param.clone());
-                    }
-                }
-                Self::collect_assignment_names(body, &mut shadow);
-                let mut new_shadows = shadows.to_vec();
-                new_shadows.push(shadow);
-                self.analyze_captures(body, &new_shadows);
-                for slot in slots {
-                    if slot.shorthand {
-                        let mut slot_shadows = new_shadows.clone();
-                        if let Some(last) = slot_shadows.last_mut() {
-                            last.remove(&slot_selector_name(slot));
-                        }
-                        self.analyze_capture_expr(&slot.value, &slot_shadows);
-                    } else {
-                        self.analyze_capture_expr(&slot.value, &new_shadows);
-                    }
-                }
-            }
-            ExprKind::Object { slots, .. } => {
-                // Data object — no new scope
-                for slot in slots {
-                    self.analyze_capture_expr(&slot.value, shadows);
-                }
-            }
-            ExprKind::UnaryMessage { receiver, .. } => {
-                self.analyze_capture_expr(receiver, shadows);
-            }
-            ExprKind::BinaryMessage {
-                receiver, argument, ..
-            } => {
-                self.analyze_capture_expr(receiver, shadows);
-                self.analyze_capture_expr(argument, shadows);
-            }
-            ExprKind::KeywordMessage { receiver, pairs } => {
-                self.analyze_capture_expr(receiver, shadows);
-                for pair in pairs {
-                    self.analyze_capture_expr(&pair.argument, shadows);
-                }
-            }
-            ExprKind::Assignment {
-                target,
-                kind,
-                value,
-            } => {
-                if *kind == AssignKind::Assign {
-                    if let ExprKind::Ident(name) = &target.kind {
-                        if shadows
-                            .last()
-                            .is_none_or(|s| !s.contains(name.as_str()))
-                        {
-                            self.mark_captured_if_found(name);
-                        }
-                    }
-                }
-                self.analyze_capture_expr(value, shadows);
-            }
-            ExprKind::Return(inner) | ExprKind::Paren(inner) => {
-                self.analyze_capture_expr(inner, shadows);
-            }
-            ExprKind::Sequence(exprs) => {
-                self.analyze_captures(exprs, shadows);
-            }
-            ExprKind::Cascade { receiver, messages } => {
-                self.analyze_capture_expr(receiver, shadows);
-                for msg in messages {
-                    self.analyze_capture_expr(msg, shadows);
-                }
-            }
-            ExprKind::Resend { message }
-            | ExprKind::DirectedResend { message, .. } => {
-                self.analyze_capture_expr(message, shadows);
-            }
-            // Leaves: Integer, Float, String, SelfRef, Comment, Error
-            _ => {}
-        }
-    }
-
     fn mark_captured_if_found(&mut self, name: &str) {
         let depth = self.frames.len();
         if depth == 0 {
@@ -788,30 +1486,319 @@ impl Compiler {
         // Not found — global, nothing to mark
     }
 
-    fn collect_assignment_names(body: &[Expr], out: &mut HashSet<String>) {
-        out.extend(parser_collect_assignment_names(body));
+    fn prescan_locals_ids(&mut self, arena: &AstArena, body: &[ExprId]) {
+        for expr_id in body {
+            self.prescan_expr_id(arena, *expr_id);
+        }
     }
 
-    fn collect_assignment_names_filtered(
-        &self,
-        body: &[Expr],
+    fn prescan_expr_id(&mut self, arena: &AstArena, expr_id: ExprId) {
+        match &arena.get(expr_id).kind {
+            AstExprKind::Assignment { target, kind, .. } => {
+                if let AstExprKind::Ident(name) = &arena.get(*target).kind {
+                    if self.scope().kind == ScopeKind::TopLevel {
+                        return;
+                    }
+                    if *kind == AssignKind::Assign
+                        && self.should_assign_to_global(name)
+                    {
+                        return;
+                    }
+                    if *kind == AssignKind::Assign
+                        && self.has_local_in_enclosing_scopes(name)
+                    {
+                        return;
+                    }
+                    let mutable = *kind == AssignKind::Assign;
+                    self.scope_mut().declare_local(name.clone(), mutable);
+                }
+            }
+            AstExprKind::Sequence(exprs) => {
+                for e in exprs {
+                    self.prescan_expr_id(arena, *e);
+                }
+            }
+            AstExprKind::Paren(inner) => self.prescan_expr_id(arena, *inner),
+            AstExprKind::Cascade { messages, .. } => {
+                for msg in messages {
+                    self.prescan_expr_id(arena, *msg);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn analyze_captures_ids(
+        &mut self,
+        arena: &AstArena,
+        body: &[ExprId],
+        shadows: &[HashSet<String>],
+    ) {
+        for expr_id in body {
+            self.analyze_capture_expr_id(arena, *expr_id, shadows);
+        }
+    }
+
+    fn mark_captures_in_block_ids(
+        &mut self,
+        arena: &AstArena,
+        body: &[ExprId],
+        shadow: &HashSet<String>,
+    ) {
+        for expr_id in body {
+            self.mark_captures_in_block_expr_id(arena, *expr_id, shadow);
+        }
+    }
+
+    fn mark_captures_in_block_expr_id(
+        &mut self,
+        arena: &AstArena,
+        expr_id: ExprId,
+        shadow: &HashSet<String>,
+    ) {
+        match &arena.get(expr_id).kind {
+            AstExprKind::Ident(name) => {
+                if !shadow.contains(name.as_str()) {
+                    self.mark_captured_if_found(name);
+                }
+            }
+            AstExprKind::Assignment { value, .. } => {
+                self.mark_captures_in_block_expr_id(arena, *value, shadow);
+            }
+            AstExprKind::Sequence(exprs) => {
+                for e in exprs {
+                    self.mark_captures_in_block_expr_id(arena, *e, shadow);
+                }
+            }
+            AstExprKind::Paren(inner) => {
+                self.mark_captures_in_block_expr_id(arena, *inner, shadow);
+            }
+            AstExprKind::UnaryMessage { receiver, .. } => {
+                self.mark_captures_in_block_expr_id(arena, *receiver, shadow);
+            }
+            AstExprKind::BinaryMessage {
+                receiver, argument, ..
+            } => {
+                self.mark_captures_in_block_expr_id(arena, *receiver, shadow);
+                self.mark_captures_in_block_expr_id(arena, *argument, shadow);
+            }
+            AstExprKind::KeywordMessage { receiver, pairs } => {
+                self.mark_captures_in_block_expr_id(arena, *receiver, shadow);
+                for pair in pairs {
+                    self.mark_captures_in_block_expr_id(
+                        arena,
+                        pair.argument,
+                        shadow,
+                    );
+                }
+            }
+            AstExprKind::Cascade { receiver, messages } => {
+                self.mark_captures_in_block_expr_id(arena, *receiver, shadow);
+                for msg in messages {
+                    self.mark_captures_in_block_expr_id(arena, *msg, shadow);
+                }
+            }
+            AstExprKind::Block { args, body } => {
+                let mut nested = HashSet::new();
+                for arg in args {
+                    nested.insert(arg.clone());
+                }
+                self.collect_assignment_names_filtered_ids(
+                    arena,
+                    body,
+                    &mut nested,
+                );
+                for expr in body {
+                    self.mark_captures_in_block_expr_id(arena, *expr, &nested);
+                }
+            }
+            AstExprKind::Object { .. } => {}
+            _ => {}
+        }
+    }
+
+    fn analyze_capture_expr_id(
+        &mut self,
+        arena: &AstArena,
+        expr_id: ExprId,
+        shadows: &[HashSet<String>],
+    ) {
+        match &arena.get(expr_id).kind {
+            AstExprKind::Ident(name) => {
+                if shadows.is_empty() {
+                    return;
+                }
+                if shadows.last().is_some_and(|s| s.contains(name.as_str())) {
+                    return;
+                }
+                self.mark_captured_if_found(name);
+            }
+            AstExprKind::Block { args, body } => {
+                let mut shadow = HashSet::new();
+                for arg in args {
+                    shadow.insert(arg.clone());
+                }
+                self.collect_assignment_names_filtered_ids(
+                    arena,
+                    body,
+                    &mut shadow,
+                );
+                let mut new_shadows = shadows.to_vec();
+                new_shadows.push(shadow);
+                self.mark_captures_in_block_ids(
+                    arena,
+                    body,
+                    new_shadows.last().unwrap(),
+                );
+                self.analyze_captures_ids(arena, body, &new_shadows);
+            }
+            AstExprKind::Object { slots, body }
+                if !body.is_empty()
+                    || slots.iter().any(|s| !s.params.is_empty()) =>
+            {
+                let mut shadow = HashSet::new();
+                for slot in slots {
+                    shadow.insert(slot_selector_name_from_selector(
+                        &slot.selector,
+                    ));
+                    for param in &slot.params {
+                        shadow.insert(param.clone());
+                    }
+                }
+                Self::collect_assignment_names_ids(arena, body, &mut shadow);
+                let mut new_shadows = shadows.to_vec();
+                new_shadows.push(shadow);
+                self.analyze_captures_ids(arena, body, &new_shadows);
+                for slot in slots {
+                    if slot.shorthand {
+                        let mut slot_shadows = new_shadows.clone();
+                        if let Some(last) = slot_shadows.last_mut() {
+                            last.remove(&slot_selector_name_from_selector(
+                                &slot.selector,
+                            ));
+                        }
+                        self.analyze_capture_expr_id(
+                            arena,
+                            slot.value,
+                            &slot_shadows,
+                        );
+                    } else {
+                        self.analyze_capture_expr_id(
+                            arena,
+                            slot.value,
+                            &new_shadows,
+                        );
+                    }
+                }
+            }
+            AstExprKind::Object { slots, .. } => {
+                for slot in slots {
+                    self.analyze_capture_expr_id(arena, slot.value, shadows);
+                }
+            }
+            AstExprKind::UnaryMessage { receiver, .. } => {
+                self.analyze_capture_expr_id(arena, *receiver, shadows);
+            }
+            AstExprKind::BinaryMessage {
+                receiver, argument, ..
+            } => {
+                self.analyze_capture_expr_id(arena, *receiver, shadows);
+                self.analyze_capture_expr_id(arena, *argument, shadows);
+            }
+            AstExprKind::KeywordMessage { receiver, pairs } => {
+                self.analyze_capture_expr_id(arena, *receiver, shadows);
+                for pair in pairs {
+                    self.analyze_capture_expr_id(arena, pair.argument, shadows);
+                }
+            }
+            AstExprKind::Assignment {
+                target,
+                kind,
+                value,
+            } => {
+                if *kind == AssignKind::Assign {
+                    if let AstExprKind::Ident(name) = &arena.get(*target).kind {
+                        if shadows
+                            .last()
+                            .is_none_or(|s| !s.contains(name.as_str()))
+                        {
+                            self.mark_captured_if_found(name);
+                        }
+                    }
+                }
+                self.analyze_capture_expr_id(arena, *value, shadows);
+            }
+            AstExprKind::Return(inner) | AstExprKind::Paren(inner) => {
+                self.analyze_capture_expr_id(arena, *inner, shadows);
+            }
+            AstExprKind::Sequence(exprs) => {
+                self.analyze_captures_ids(arena, exprs, shadows);
+            }
+            AstExprKind::Cascade { receiver, messages } => {
+                self.analyze_capture_expr_id(arena, *receiver, shadows);
+                for msg in messages {
+                    self.analyze_capture_expr_id(arena, *msg, shadows);
+                }
+            }
+            AstExprKind::Resend { message }
+            | AstExprKind::DirectedResend { message, .. } => {
+                self.analyze_capture_expr_id(arena, *message, shadows);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_assignment_names_ids(
+        arena: &AstArena,
+        body: &[ExprId],
         out: &mut HashSet<String>,
     ) {
-        for expr in body {
-            match &expr.kind {
-                ExprKind::Assignment { target, .. } => {
-                    if let ExprKind::Ident(name) = &target.kind {
+        for expr_id in body {
+            match &arena.get(*expr_id).kind {
+                AstExprKind::Assignment { target, .. } => {
+                    if let AstExprKind::Ident(name) = &arena.get(*target).kind {
+                        out.insert(name.clone());
+                    }
+                }
+                AstExprKind::Sequence(exprs) => {
+                    Self::collect_assignment_names_ids(arena, exprs, out);
+                }
+                AstExprKind::Paren(inner) => {
+                    Self::collect_assignment_names_ids(
+                        arena,
+                        std::slice::from_ref(inner),
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_assignment_names_filtered_ids(
+        &self,
+        arena: &AstArena,
+        body: &[ExprId],
+        out: &mut HashSet<String>,
+    ) {
+        for expr_id in body {
+            match &arena.get(*expr_id).kind {
+                AstExprKind::Assignment { target, .. } => {
+                    if let AstExprKind::Ident(name) = &arena.get(*target).kind {
                         if !self.has_local_in_any_scope(name) {
                             out.insert(name.clone());
                         }
                     }
                 }
-                ExprKind::Sequence(exprs) => {
-                    self.collect_assignment_names_filtered(exprs, out);
+                AstExprKind::Sequence(exprs) => {
+                    self.collect_assignment_names_filtered_ids(
+                        arena, exprs, out,
+                    );
                 }
-                ExprKind::Paren(inner) => {
-                    self.collect_assignment_names_filtered(
-                        std::slice::from_ref(inner.as_ref()),
+                AstExprKind::Paren(inner) => {
+                    self.collect_assignment_names_filtered_ids(
+                        arena,
+                        std::slice::from_ref(inner),
                         out,
                     );
                 }
@@ -1095,123 +2082,6 @@ impl Compiler {
         depth
     }
 
-    // ── Body compilation ────────────────────────────────────────
-
-    fn compile_body(&mut self, body: &[Expr]) -> Result<(), CompileError> {
-        let non_comment: Vec<&Expr> = body
-            .iter()
-            .filter(|e| !matches!(e.kind, ExprKind::Comment(_)))
-            .collect();
-
-        if non_comment.is_empty() {
-            // Empty body — load self as default return
-            self.builder().load_local(0);
-            return Ok(());
-        }
-
-        for (i, expr) in non_comment.iter().enumerate() {
-            let mark = self.scope().reg_mark();
-            self.compile_expr(expr)?;
-            // Reset temp registers after each statement (except the last,
-            // whose value stays in the accumulator)
-            if i < non_comment.len() - 1 {
-                self.scope_mut().restore_regs(mark);
-            }
-        }
-        Ok(())
-    }
-
-    // ── Expression compilation ──────────────────────────────────
-
-    fn compile_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
-        self.note(expr.span);
-        match &expr.kind {
-            ExprKind::Integer(v) => {
-                if let Ok(v32) = i32::try_from(*v) {
-                    self.builder().load_smi(v32);
-                } else {
-                    let idx = self.add_constant(Self::int_const_entry(*v));
-                    self.builder().load_constant(idx);
-                }
-            }
-            ExprKind::Float(v) => {
-                let idx = self.add_constant(ConstEntry::Float(*v));
-                self.builder().load_constant(idx);
-            }
-            ExprKind::String(s) => {
-                let idx = self.add_string_const(s);
-                self.builder().load_constant(idx);
-            }
-            ExprKind::Symbol(s) => {
-                let idx = self.add_symbol(s);
-                self.builder().load_constant(idx);
-            }
-            ExprKind::SelfRef => {
-                self.builder().load_local(0);
-            }
-            ExprKind::Ident(name) => {
-                self.compile_ident(name, expr.span)?;
-            }
-            ExprKind::UnaryMessage {
-                receiver, selector, ..
-            } => {
-                self.compile_unary_message(receiver, selector, expr.span)?;
-            }
-            ExprKind::BinaryMessage {
-                receiver,
-                operator,
-                argument,
-                ..
-            } => {
-                self.compile_binary_message(
-                    receiver, operator, argument, expr.span,
-                )?;
-            }
-            ExprKind::KeywordMessage { receiver, pairs } => {
-                self.compile_keyword_message(receiver, pairs, expr.span)?;
-            }
-            ExprKind::Assignment {
-                target,
-                kind,
-                value,
-            } => {
-                self.compile_assignment(target, *kind, value)?;
-            }
-            ExprKind::Return(inner) => {
-                self.compile_expr(inner)?;
-                self.builder().return_();
-            }
-            ExprKind::Paren(inner) => {
-                self.compile_expr(inner)?;
-            }
-            ExprKind::Sequence(exprs) => {
-                self.compile_body(exprs)?;
-            }
-            ExprKind::Object { slots, body } => {
-                self.compile_object(slots, body, &[])?;
-            }
-            ExprKind::Block { args, body } => {
-                self.compile_block(args, body)?;
-            }
-            ExprKind::Cascade { receiver, messages } => {
-                self.compile_cascade(receiver, messages)?;
-            }
-            ExprKind::Resend { message } => {
-                self.compile_resend(message, None, expr.span)?;
-            }
-            ExprKind::DirectedResend { delegate, message } => {
-                self.compile_resend(message, Some(delegate), expr.span)?;
-            }
-            ExprKind::Comment(_) => {
-                // Skip
-            }
-            ExprKind::Error(msg) => {
-                return Err(CompileError::new(msg.as_str(), expr.span));
-            }
-        }
-        Ok(())
-    }
-
     fn compile_ident(
         &mut self,
         name: &str,
@@ -1246,870 +2116,6 @@ impl Compiler {
             self.builder().load_assoc(none_idx);
         }
         Ok(())
-    }
-
-    // ── Message compilation ─────────────────────────────────────
-
-    fn compile_unary_message(
-        &mut self,
-        receiver: &Expr,
-        selector: &str,
-        msg_span: Span,
-    ) -> Result<(), CompileError> {
-        self.compile_expr(receiver)?;
-        let sel_idx = self.add_symbol(selector);
-        let fb = self.scope_mut().next_feedback();
-        self.note(msg_span);
-        self.builder().send(sel_idx, 0, 0, fb);
-        Ok(())
-    }
-
-    fn compile_binary_message(
-        &mut self,
-        receiver: &Expr,
-        operator: &str,
-        argument: &Expr,
-        msg_span: Span,
-    ) -> Result<(), CompileError> {
-        self.compile_expr(receiver)?;
-        let tmp_recv = self.scope_mut().alloc_temp();
-        self.builder().store_local(tmp_recv);
-
-        self.compile_expr(argument)?;
-        let tmp_arg = self.scope_mut().alloc_temp();
-        self.builder().store_local(tmp_arg);
-
-        self.builder().load_local(tmp_recv);
-        let op_idx = self.add_symbol(operator);
-        let fb = self.scope_mut().next_feedback();
-        self.note(msg_span);
-        self.builder().send(op_idx, tmp_arg, 1, fb);
-        Ok(())
-    }
-
-    fn compile_keyword_message(
-        &mut self,
-        receiver: &Expr,
-        pairs: &[KeywordPair],
-        msg_span: Span,
-    ) -> Result<(), CompileError> {
-        self.compile_expr(receiver)?;
-        let tmp_recv = self.scope_mut().alloc_temp();
-        self.builder().store_local(tmp_recv);
-
-        let mut arg_regs = Vec::with_capacity(pairs.len());
-        for _ in pairs {
-            arg_regs.push(self.scope_mut().alloc_temp());
-        }
-        for (pair, &arg_reg) in pairs.iter().zip(arg_regs.iter()) {
-            self.compile_expr(&pair.argument)?;
-            self.builder().store_local(arg_reg);
-        }
-
-        self.builder().load_local(tmp_recv);
-        let selector: String =
-            pairs.iter().map(|p| p.keyword.as_str()).collect();
-        let sel_idx = self.add_symbol(&selector);
-        let fb = self.scope_mut().next_feedback();
-        let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
-        self.note(msg_span);
-        self.builder()
-            .send(sel_idx, first_arg_reg, pairs.len() as u8, fb);
-        Ok(())
-    }
-
-    /// Compile just the message-send portion of a message expression,
-    /// assuming the receiver is already in the accumulator.
-    fn compile_message_tail(&mut self, msg: &Expr) -> Result<(), CompileError> {
-        match &msg.kind {
-            ExprKind::UnaryMessage { selector, .. } => {
-                let sel_idx = self.add_symbol(selector);
-                let fb = self.scope_mut().next_feedback();
-                self.note(msg.span);
-                self.builder().send(sel_idx, 0, 0, fb);
-            }
-            ExprKind::BinaryMessage {
-                argument, operator, ..
-            } => {
-                let tmp_recv = self.scope_mut().alloc_temp();
-                self.builder().store_local(tmp_recv);
-
-                self.compile_expr(argument)?;
-                let tmp_arg = self.scope_mut().alloc_temp();
-                self.builder().store_local(tmp_arg);
-
-                self.builder().load_local(tmp_recv);
-                let op_idx = self.add_symbol(operator);
-                let fb = self.scope_mut().next_feedback();
-                self.note(msg.span);
-                self.builder().send(op_idx, tmp_arg, 1, fb);
-            }
-            ExprKind::KeywordMessage { pairs, .. } => {
-                let tmp_recv = self.scope_mut().alloc_temp();
-                self.builder().store_local(tmp_recv);
-
-                let mut arg_regs = Vec::with_capacity(pairs.len());
-                for _ in pairs {
-                    arg_regs.push(self.scope_mut().alloc_temp());
-                }
-                for (pair, &arg_reg) in pairs.iter().zip(arg_regs.iter()) {
-                    self.compile_expr(&pair.argument)?;
-                    self.builder().store_local(arg_reg);
-                }
-
-                self.builder().load_local(tmp_recv);
-                let selector: String =
-                    pairs.iter().map(|p| p.keyword.as_str()).collect();
-                let sel_idx = self.add_symbol(&selector);
-                let fb = self.scope_mut().next_feedback();
-                let first_arg_reg = arg_regs.first().copied().unwrap_or(0);
-                self.note(msg.span);
-                self.builder().send(
-                    sel_idx,
-                    first_arg_reg,
-                    pairs.len() as u8,
-                    fb,
-                );
-            }
-            _ => {
-                // Shouldn't happen in a well-formed cascade
-                self.compile_expr(msg)?;
-            }
-        }
-        Ok(())
-    }
-
-    // ── Assignment ──────────────────────────────────────────────
-
-    fn compile_assignment(
-        &mut self,
-        target: &Expr,
-        kind: AssignKind,
-        value: &Expr,
-    ) -> Result<(), CompileError> {
-        self.compile_expr(value)?;
-        match &target.kind {
-            ExprKind::Ident(name) => {
-                let loc = self.resolve_for_store(name, kind, target.span)?;
-                match loc {
-                    VarLoc::Local(reg) => self.builder().store_local(reg),
-                    VarLoc::Temp(arr, idx) => {
-                        self.builder().store_temp(arr, idx)
-                    }
-                    VarLoc::Global(const_idx) => {
-                        self.builder().store_assoc(const_idx)
-                    }
-                }
-            }
-            _ => {
-                return Err(CompileError::new(
-                    "assignment target must be an identifier",
-                    target.span,
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    // ── Cascade ─────────────────────────────────────────────────
-
-    fn compile_cascade(
-        &mut self,
-        receiver: &Expr,
-        messages: &[Expr],
-    ) -> Result<(), CompileError> {
-        self.compile_expr(receiver)?;
-        let tmp_recv = self.scope_mut().alloc_temp();
-        self.builder().store_local(tmp_recv);
-
-        for msg in messages {
-            self.builder().load_local(tmp_recv);
-            self.compile_message_tail(msg)?;
-        }
-        Ok(())
-    }
-
-    // ── Resend ──────────────────────────────────────────────────
-
-    fn compile_resend(
-        &mut self,
-        message: &Expr,
-        delegate: Option<&String>,
-        resend_span: Span,
-    ) -> Result<(), CompileError> {
-        match &message.kind {
-            ExprKind::UnaryMessage { selector, .. } => {
-                let sel_idx = self.add_symbol(selector);
-                let fb = self.scope_mut().next_feedback();
-                self.note(resend_span);
-                if let Some(del) = delegate {
-                    let del_idx = self.add_symbol(del);
-                    self.builder().directed_resend(sel_idx, 0, 0, fb, del_idx);
-                } else {
-                    self.builder().resend(sel_idx, 0, 0, fb);
-                }
-            }
-            ExprKind::BinaryMessage {
-                argument, operator, ..
-            } => {
-                self.compile_expr(argument)?;
-                let arg_reg = self.scope_mut().alloc_temp();
-                self.builder().store_local(arg_reg);
-
-                let sel_idx = self.add_symbol(operator);
-                let fb = self.scope_mut().next_feedback();
-                self.note(resend_span);
-                if let Some(del) = delegate {
-                    let del_idx = self.add_symbol(del);
-                    self.builder()
-                        .directed_resend(sel_idx, arg_reg, 1, fb, del_idx);
-                } else {
-                    self.builder().resend(sel_idx, arg_reg, 1, fb);
-                }
-            }
-            ExprKind::KeywordMessage { pairs, .. } => {
-                let first_arg_reg = self.scope().next_reg;
-                for pair in pairs {
-                    self.compile_expr(&pair.argument)?;
-                    let tmp = self.scope_mut().alloc_temp();
-                    self.builder().store_local(tmp);
-                }
-
-                let selector: String =
-                    pairs.iter().map(|p| p.keyword.as_str()).collect();
-                let sel_idx = self.add_symbol(&selector);
-                let fb = self.scope_mut().next_feedback();
-                let argc = pairs.len() as u8;
-                self.note(resend_span);
-                if let Some(del) = delegate {
-                    let del_idx = self.add_symbol(del);
-                    self.builder().directed_resend(
-                        sel_idx,
-                        first_arg_reg,
-                        argc,
-                        fb,
-                        del_idx,
-                    );
-                } else {
-                    self.builder().resend(sel_idx, first_arg_reg, argc, fb);
-                }
-            }
-            _ => {
-                return Err(CompileError::new(
-                    "resend requires a message expression",
-                    message.span,
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn unwrap_ensure_tail_call<'a>(&self, expr: &'a Expr) -> (&'a Expr, bool) {
-        if let ExprKind::UnaryMessage {
-            receiver, selector, ..
-        } = &expr.kind
-        {
-            if selector == "_EnsureTailCall" {
-                return (receiver.as_ref(), true);
-            }
-        }
-        (expr, false)
-    }
-
-    fn method_tail_call_eligible(
-        &self,
-        body: &[Expr],
-        method_selector: &str,
-    ) -> bool {
-        let Some(last) = Self::last_meaningful_expr(body) else {
-            return false;
-        };
-        self.expr_contains_tail_self_call(last, method_selector)
-    }
-
-    fn last_meaningful_expr(exprs: &[Expr]) -> Option<&Expr> {
-        exprs
-            .iter()
-            .rev()
-            .find(|e| !matches!(e.kind, ExprKind::Comment(_)))
-    }
-
-    fn expr_contains_tail_self_call(
-        &self,
-        expr: &Expr,
-        method_selector: &str,
-    ) -> bool {
-        match &expr.kind {
-            ExprKind::UnaryMessage {
-                receiver, selector, ..
-            } => {
-                (selector == method_selector
-                    && matches!(receiver.kind, ExprKind::SelfRef))
-                    || self
-                        .expr_contains_tail_self_call(receiver, method_selector)
-            }
-            ExprKind::BinaryMessage {
-                receiver,
-                operator,
-                argument,
-                ..
-            } => {
-                (operator == method_selector
-                    && matches!(receiver.kind, ExprKind::SelfRef))
-                    || self
-                        .expr_contains_tail_self_call(receiver, method_selector)
-                    || self
-                        .expr_contains_tail_self_call(argument, method_selector)
-            }
-            ExprKind::KeywordMessage { receiver, pairs } => {
-                let selector: String =
-                    pairs.iter().map(|p| p.keyword.as_str()).collect();
-                (selector == method_selector
-                    && matches!(receiver.kind, ExprKind::SelfRef))
-                    || self
-                        .expr_contains_tail_self_call(receiver, method_selector)
-                    || pairs.iter().any(|p| {
-                        self.expr_contains_tail_self_call(
-                            &p.argument,
-                            method_selector,
-                        )
-                    })
-            }
-            ExprKind::Paren(inner) | ExprKind::Return(inner) => {
-                self.expr_contains_tail_self_call(inner, method_selector)
-            }
-            ExprKind::Sequence(exprs)
-            | ExprKind::Block { body: exprs, .. }
-            | ExprKind::Object { body: exprs, .. } => {
-                let Some(last) = Self::last_meaningful_expr(exprs) else {
-                    return false;
-                };
-                self.expr_contains_tail_self_call(last, method_selector)
-            }
-            _ => false,
-        }
-    }
-
-    // ── Object compilation ──────────────────────────────────────
-
-    fn compile_object(
-        &mut self,
-        slots: &[SlotDescriptor],
-        body: &[Expr],
-        parent_params: &[String],
-    ) -> Result<(), CompileError> {
-        let is_method = !body.is_empty() || !parent_params.is_empty();
-
-        if is_method {
-            self.compile_method_object(slots, body, parent_params)
-        } else {
-            self.compile_data_object(slots)
-        }
-    }
-
-    fn compile_data_object(
-        &mut self,
-        slots: &[SlotDescriptor],
-    ) -> Result<(), CompileError> {
-        // Count assignable (mutable) slots for value_count
-        let mut value_count: u32 = 0;
-        let mut slot_descs = Vec::new();
-        let mut value_regs = Vec::new();
-
-        // Byte offset for assignable values
-        // Values start at offset 16 (after Header + map pointer)
-        let values_base_offset: u32 = 16;
-
-        for slot in slots {
-            let name = slot_selector_name(slot);
-            let is_parent = slot.is_parent;
-            let base_flags =
-                SLOT_ENUMERABLE | if is_parent { SLOT_PARENT } else { 0 };
-
-            if slot.mutable {
-                // Mutable slot: ASSIGNABLE reader + ASSIGNMENT writer
-                let offset = values_base_offset + value_count * 8;
-
-                // Compile the value expression → temp register
-                if slot.shorthand {
-                    self.compile_shorthand_value(&name, false, slot.span)?;
-                } else {
-                    self.compile_expr(&slot.value)?;
-                }
-                let tmp = self.scope_mut().alloc_temp();
-                self.builder().store_local(tmp);
-                value_regs.push(tmp);
-
-                // Reader slot
-                slot_descs.push(SlotDesc {
-                    flags: base_flags | SLOT_ASSIGNABLE,
-                    name: name.clone(),
-                    value: SlotValue::Offset(offset),
-                });
-
-                // Writer slot (name: appended)
-                slot_descs.push(SlotDesc {
-                    flags: base_flags | SLOT_ASSIGNMENT,
-                    name: format!("{}:", name),
-                    value: SlotValue::Offset(offset),
-                });
-
-                value_count += 1;
-            } else {
-                // Immutable slot: check if value is a nested method object
-                let has_params = !slot.params.is_empty();
-                let is_method_value = has_params
-                    || matches!(&slot.value.kind, ExprKind::Object { body, .. } if !body.is_empty());
-
-                if is_method_value {
-                    // This slot's value is a method — compile as nested CodeDesc
-                    let nested = self.compile_nested_method(slot)?;
-                    slot_descs.push(SlotDesc {
-                        flags: base_flags | SLOT_CONSTANT,
-                        name,
-                        value: SlotValue::Constant(ConstEntry::Method {
-                            code: nested.code,
-                            tail_call: nested.tail_call,
-                        }),
-                    });
-                } else {
-                    if self.slot_value_requires_runtime(&slot.value) {
-                        let offset = values_base_offset + value_count * 8;
-                        if slot.shorthand {
-                            self.compile_shorthand_value(
-                                &name, false, slot.span,
-                            )?;
-                        } else {
-                            self.compile_expr(&slot.value)?;
-                        }
-                        let tmp = self.scope_mut().alloc_temp();
-                        self.builder().store_local(tmp);
-                        value_regs.push(tmp);
-
-                        // Read-only runtime value slot: assignable reader without writer.
-                        slot_descs.push(SlotDesc {
-                            flags: base_flags | SLOT_ASSIGNABLE,
-                            name,
-                            value: SlotValue::Offset(offset),
-                        });
-                        value_count += 1;
-                    } else {
-                        // Constant slot: value goes directly in the map.
-                        let const_entry =
-                            self.expr_to_const_entry(&slot.value)?;
-                        slot_descs.push(SlotDesc {
-                            flags: base_flags | SLOT_CONSTANT,
-                            name,
-                            value: SlotValue::Constant(const_entry),
-                        });
-                    }
-                }
-            }
-        }
-
-        let map_desc = MapDesc {
-            slots: slot_descs,
-            value_count,
-            code: None,
-            tail_call: false,
-        };
-        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
-
-        let first_value_reg = if value_regs.is_empty() {
-            0
-        } else {
-            let mut contiguous = true;
-            for w in value_regs.windows(2) {
-                if w[1] != w[0] + 1 {
-                    contiguous = false;
-                    break;
-                }
-            }
-
-            if contiguous {
-                value_regs[0]
-            } else {
-                let mut dst_regs = Vec::with_capacity(value_regs.len());
-                for _ in 0..value_regs.len() {
-                    dst_regs.push(self.scope_mut().alloc_temp());
-                }
-
-                for (&src, &dst) in value_regs.iter().zip(dst_regs.iter()) {
-                    if src == dst {
-                        continue;
-                    }
-                    self.builder().load_local(src);
-                    self.builder().store_local(dst);
-                }
-
-                dst_regs[0]
-            }
-        };
-        self.builder().create_object(map_idx, first_value_reg);
-
-        Ok(())
-    }
-
-    fn compile_method_object(
-        &mut self,
-        slots: &[SlotDescriptor],
-        body: &[Expr],
-        parent_params: &[String],
-    ) -> Result<(), CompileError> {
-        // Enter a new scope for the method
-        self.push_frame(ScopeKind::Object);
-
-        // Register params
-        for param in parent_params {
-            self.scope_mut().declare_param(param.clone());
-        }
-
-        // Register slot names as locals
-        for slot in slots {
-            let name = slot_selector_name(slot);
-            let mutable = slot.mutable;
-            self.scope_mut().declare_local(name, mutable);
-        }
-
-        // Prescan body for additional locals
-        self.prescan_locals(body);
-
-        // Analyze captures (walks into nested scopes)
-        self.analyze_captures(body, &[]);
-
-        // Also analyze captures in slot values before initializing captured params.
-        let mut shadow = HashSet::new();
-        for slot in slots {
-            shadow.insert(slot_selector_name(slot));
-            for param in &slot.params {
-                shadow.insert(param.clone());
-            }
-        }
-
-        self.emit_captured_param_inits(parent_params);
-        for param in parent_params {
-            shadow.insert(param.clone());
-        }
-        let mut new_shadows = Vec::new();
-        new_shadows.push(shadow);
-        for slot in slots {
-            if slot.shorthand {
-                let mut slot_shadows = new_shadows.clone();
-                if let Some(last) = slot_shadows.last_mut() {
-                    last.remove(&slot_selector_name(slot));
-                }
-                self.analyze_capture_expr(&slot.value, &slot_shadows);
-            } else {
-                self.analyze_capture_expr(&slot.value, &new_shadows);
-            }
-        }
-
-        // Compile slot initializers
-        for slot in slots {
-            let name = slot_selector_name(slot);
-            if slot.shorthand {
-                self.compile_shorthand_value(&name, true, slot.span)?;
-            } else {
-                self.compile_expr(&slot.value)?;
-            }
-            let (captured, reg, temp_idx) = {
-                let var = self.scope().find_local(&name).expect("slot local");
-                (var.captured, var.reg, var.temp_idx)
-            };
-            if captured {
-                self.builder().store_temp(0, temp_idx.unwrap());
-            } else {
-                self.builder().store_local(reg);
-            }
-        }
-
-        // Compile body
-        self.compile_body(body)?;
-        self.builder().local_return();
-
-        let code_desc = self.pop_frame();
-
-        // Build MapDesc for the method object
-        let code_idx = self.add_constant(ConstEntry::Code(code_desc));
-        let mut slot_descs = Vec::new();
-
-        for slot in slots {
-            let name = slot_selector_name(slot);
-            let is_parent = slot.is_parent;
-            let base_flags =
-                SLOT_ENUMERABLE | if is_parent { SLOT_PARENT } else { 0 };
-
-            // All slots in a method object are constant (stored in map)
-            slot_descs.push(SlotDesc {
-                flags: base_flags | SLOT_CONSTANT,
-                name,
-                value: SlotValue::Constant(ConstEntry::Symbol(
-                    "slot".to_string(),
-                )),
-            });
-        }
-
-        let map_desc = MapDesc {
-            slots: slot_descs,
-            value_count: 0,
-            code: Some(code_idx as usize),
-            tail_call: false,
-        };
-        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
-        self.builder().create_object(map_idx, 0);
-
-        Ok(())
-    }
-
-    fn compile_nested_method(
-        &mut self,
-        slot: &SlotDescriptor,
-    ) -> Result<NestedMethodDesc, CompileError> {
-        let method_selector = slot_selector_name(slot);
-        let (method_expr, ensure_tail_call) =
-            self.unwrap_ensure_tail_call(&slot.value);
-        match &method_expr.kind {
-            ExprKind::Object {
-                slots: inner_slots,
-                body,
-            } => {
-                self.push_frame(ScopeKind::Object);
-
-                for param in &slot.params {
-                    self.scope_mut().declare_param(param.clone());
-                }
-
-                for inner_slot in inner_slots {
-                    let name = slot_selector_name(inner_slot);
-                    self.scope_mut().declare_local(name, inner_slot.mutable);
-                }
-
-                self.prescan_locals(body);
-                self.analyze_captures(body, &[]);
-
-                // Analyze captures in slot values before initializing
-                // captured params.
-                let mut shadow = HashSet::new();
-                for inner_slot in inner_slots {
-                    shadow.insert(slot_selector_name(inner_slot));
-                    for param in &inner_slot.params {
-                        shadow.insert(param.clone());
-                    }
-                }
-                for param in &slot.params {
-                    shadow.insert(param.clone());
-                }
-                let mut new_shadows = Vec::new();
-                new_shadows.push(shadow);
-                for inner_slot in inner_slots {
-                    if inner_slot.shorthand {
-                        let mut slot_shadows = new_shadows.clone();
-                        if let Some(last) = slot_shadows.last_mut() {
-                            last.remove(&slot_selector_name(inner_slot));
-                        }
-                        self.analyze_capture_expr(
-                            &inner_slot.value,
-                            &slot_shadows,
-                        );
-                    } else {
-                        self.analyze_capture_expr(
-                            &inner_slot.value,
-                            &new_shadows,
-                        );
-                    }
-                }
-
-                self.emit_captured_param_inits(&slot.params);
-
-                for inner_slot in inner_slots {
-                    let name = slot_selector_name(inner_slot);
-                    if inner_slot.shorthand {
-                        self.compile_shorthand_value(
-                            &name,
-                            true,
-                            inner_slot.span,
-                        )?;
-                    } else {
-                        self.compile_expr(&inner_slot.value)?;
-                    }
-                    let (captured, reg, temp_idx) = {
-                        let var =
-                            self.scope().find_local(&name).expect("slot local");
-                        (var.captured, var.reg, var.temp_idx)
-                    };
-                    if captured {
-                        self.builder().store_temp(0, temp_idx.unwrap());
-                    } else {
-                        self.builder().store_local(reg);
-                    }
-                }
-
-                self.compile_body(body)?;
-                self.builder().local_return();
-
-                let tail_call =
-                    self.method_tail_call_eligible(body, &method_selector);
-                if ensure_tail_call && !tail_call {
-                    return Err(CompileError::new(
-                        "method is not tail-call eligible",
-                        method_expr.span,
-                    ));
-                }
-
-                Ok(NestedMethodDesc {
-                    code: self.pop_frame(),
-                    tail_call,
-                })
-            }
-            _ => {
-                // Slot value is not an Object — compile as a simple method
-                // that returns the expression result
-                self.push_frame(ScopeKind::Object);
-
-                for param in &slot.params {
-                    self.scope_mut().declare_param(param.clone());
-                }
-
-                self.compile_expr(method_expr)?;
-                self.builder().local_return();
-
-                let tail_call = self.expr_contains_tail_self_call(
-                    method_expr,
-                    &method_selector,
-                );
-                if ensure_tail_call && !tail_call {
-                    return Err(CompileError::new(
-                        "method is not tail-call eligible",
-                        method_expr.span,
-                    ));
-                }
-
-                Ok(NestedMethodDesc {
-                    code: self.pop_frame(),
-                    tail_call,
-                })
-            }
-        }
-    }
-
-    /// Try to produce a ConstEntry from a simple expression (literals only).
-    fn expr_to_const_entry(
-        &mut self,
-        expr: &Expr,
-    ) -> Result<ConstEntry, CompileError> {
-        match &expr.kind {
-            ExprKind::Integer(v) => Ok(Self::int_const_entry(*v)),
-            ExprKind::Float(v) => Ok(ConstEntry::Float(*v)),
-            ExprKind::String(s) => Ok(ConstEntry::String(s.clone())),
-            ExprKind::Symbol(s) => Ok(ConstEntry::Symbol(s.clone())),
-            ExprKind::Ident(name) => {
-                let (module, export_name) = if self.module_env.is_some() {
-                    self.resolve_module_global(name, false, expr.span)?
-                } else {
-                    (USER_MODULE.to_string(), name.clone())
-                };
-                Ok(ConstEntry::ModuleAssocValue {
-                    module,
-                    name: export_name,
-                })
-            }
-            ExprKind::Object { slots, body } if body.is_empty() => {
-                // Nested data object as a constant — build a MapDesc
-                let mut slot_descs = Vec::new();
-                for slot in slots {
-                    let name = slot_selector_name(slot);
-                    let const_val = self.expr_to_const_entry(&slot.value)?;
-                    slot_descs.push(SlotDesc {
-                        flags: SLOT_CONSTANT | SLOT_ENUMERABLE,
-                        name,
-                        value: SlotValue::Constant(const_val),
-                    });
-                }
-                Ok(ConstEntry::Map(MapDesc {
-                    slots: slot_descs,
-                    value_count: 0,
-                    code: None,
-                    tail_call: false,
-                }))
-            }
-            ExprKind::Block { args, body } => {
-                // A block as a constant slot value
-                let code = self.compile_block_inner(args, body)?;
-                Ok(ConstEntry::Code(code))
-            }
-            _ => {
-                // Non-trivial expression: compile it as a mini method that
-                // evaluates the expression and returns it
-                self.push_frame(ScopeKind::Object);
-                self.compile_expr(expr)?;
-                self.builder().local_return();
-                Ok(ConstEntry::Code(self.pop_frame()))
-            }
-        }
-    }
-
-    fn slot_value_requires_runtime(&mut self, expr: &Expr) -> bool {
-        match &expr.kind {
-            ExprKind::Integer(_) | ExprKind::Float(_) | ExprKind::String(_) => {
-                false
-            }
-            ExprKind::Ident(_) => true,
-            ExprKind::Object { slots, body } => {
-                if !body.is_empty() {
-                    return true;
-                }
-                slots.iter().any(|s| {
-                    !s.params.is_empty()
-                        || self.slot_value_requires_runtime(&s.value)
-                })
-            }
-            ExprKind::Block { .. } => false,
-            _ => true,
-        }
-    }
-
-    // ── Block compilation ───────────────────────────────────────
-
-    fn compile_block(
-        &mut self,
-        args: &[String],
-        body: &[Expr],
-    ) -> Result<(), CompileError> {
-        let code_desc = self.compile_block_inner(args, body)?;
-
-        let code_idx = self.add_constant(ConstEntry::Code(code_desc));
-        let map_desc = MapDesc {
-            slots: Vec::new(),
-            value_count: 0,
-            code: Some(code_idx as usize),
-            tail_call: false,
-        };
-        let map_idx = self.add_constant(ConstEntry::Map(map_desc));
-        self.builder().create_block(map_idx);
-
-        Ok(())
-    }
-
-    fn compile_block_inner(
-        &mut self,
-        args: &[String],
-        body: &[Expr],
-    ) -> Result<CodeDesc, CompileError> {
-        self.push_frame(ScopeKind::Block);
-
-        for arg in args {
-            self.scope_mut().declare_param(arg.clone());
-        }
-
-        self.prescan_locals(body);
-        self.analyze_captures(body, &[]);
-
-        self.emit_captured_param_inits(args);
-
-        self.compile_body(body)?;
-        self.builder().local_return();
-
-        Ok(self.pop_frame())
     }
 }
 
@@ -2146,9 +2152,10 @@ struct PendingUse {
     span: Span,
 }
 
-fn build_compile_module_env(
+fn build_compile_module_env_ids(
     vm: &VM,
-    exprs: &[Expr],
+    arena: &AstArena,
+    exprs: &[ExprId],
 ) -> Result<CompileModuleEnv, CompileError> {
     let mut modules: HashMap<String, ModuleCompileState> = HashMap::new();
     vm.with_modules(|loaded| {
@@ -2170,13 +2177,14 @@ fn build_compile_module_env(
     let mut current_module = vm.current_module.clone();
     let mut pending_uses = Vec::new();
 
-    for expr in exprs {
-        if matches!(expr.kind, ExprKind::Comment(_)) {
+    for expr_id in exprs {
+        let expr = arena.get(*expr_id);
+        if matches!(expr.kind, parser::ExprKind::Comment(_)) {
             continue;
         }
         expr_modules.push(current_module.clone());
 
-        if let Some(name) = top_level_assignment_name(expr) {
+        if let Some(name) = top_level_assignment_name_id(arena, *expr_id) {
             let Some(module) = &current_module else {
                 return Err(CompileError::new(
                     "top-level assignment requires an open module",
@@ -2190,7 +2198,7 @@ fn build_compile_module_env(
             state.assignment_decls.insert(name.to_string());
         }
 
-        if let Some(directive) = parse_module_directive(expr) {
+        if let Some(directive) = parse_module_directive_id(arena, *expr_id) {
             match directive {
                 ModuleDirective::Open { path } => {
                     modules
@@ -2289,35 +2297,8 @@ fn build_compile_module_env(
         }
     }
 
-    for use_dir in pending_uses {
-        apply_compile_use(&mut modules, &use_dir)?;
-    }
-
-    for module in modules.values_mut() {
-        let import_names: Vec<String> =
-            module.imports.keys().cloned().collect();
-        for name in import_names {
-            if module.assignment_decls.contains(&name) {
-                module.bindings.remove(&name);
-            }
-        }
-    }
-
-    for (module_name, module) in &modules {
-        for export in &module.exports {
-            if module.bindings.contains(export)
-                || module.imports.contains_key(export)
-            {
-                continue;
-            }
-            return Err(CompileError::new(
-                format!(
-                    "module '{}' exports '{}' but it is not defined or imported",
-                    module_name, export
-                ),
-                Span::point(Pos::origin()),
-            ));
-        }
+    for pending in pending_uses {
+        apply_compile_use(&mut modules, &pending)?;
     }
 
     Ok(CompileModuleEnv {
@@ -2422,50 +2403,60 @@ fn apply_compile_use_inner(
     Ok(())
 }
 
-fn top_level_assignment_name(expr: &Expr) -> Option<&str> {
+fn top_level_assignment_name_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> Option<String> {
+    let expr = arena.get(expr_id);
     match &expr.kind {
-        ExprKind::Assignment { target, .. } => {
-            if let ExprKind::Ident(name) = &target.kind {
-                Some(name)
-            } else {
-                None
+        parser::ExprKind::Assignment { target, .. } => {
+            match &arena.get(*target).kind {
+                parser::ExprKind::Ident(name) => Some(name.clone()),
+                _ => None,
             }
         }
         _ => None,
     }
 }
 
-fn parse_module_directive(expr: &Expr) -> Option<ModuleDirective> {
-    let ExprKind::KeywordMessage { receiver, pairs } = &expr.kind else {
+fn parse_module_directive_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> Option<ModuleDirective> {
+    let expr = arena.get(expr_id);
+    let parser::ExprKind::KeywordMessage { receiver, pairs } = &expr.kind
+    else {
         return None;
     };
-    let ExprKind::Ident(receiver_name) = &receiver.kind else {
+    let parser::ExprKind::Ident(receiver_name) = &arena.get(*receiver).kind
+    else {
         return None;
     };
 
     if receiver_name == "Module" {
-        return parse_module_directive_pairs(pairs);
+        return parse_module_directive_pairs_id(arena, pairs);
     }
     if receiver_name == "VM" {
-        return parse_vm_module_directive_pairs(pairs);
+        return parse_vm_module_directive_pairs_id(arena, pairs);
     }
-
     None
 }
 
-fn parse_module_directive_pairs(
-    pairs: &[KeywordPair],
+fn parse_module_directive_pairs_id(
+    arena: &AstArena,
+    pairs: &[parser::KeywordPair],
 ) -> Option<ModuleDirective> {
     if pairs.len() == 1 && pairs[0].keyword == "open:" {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
             return Some(ModuleDirective::Open { path });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "use:" {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
             return Some(ModuleDirective::Use { path });
         }
-        if let Some(paths) = parse_symbol_list_expr(&pairs[0].argument) {
+        if let Some(paths) = parse_symbol_list_expr_id(arena, pairs[0].argument)
+        {
             return Some(ModuleDirective::UseMany { paths });
         }
     }
@@ -2473,8 +2464,8 @@ fn parse_module_directive_pairs(
         && pairs[0].keyword == "use:"
         && pairs[1].keyword == "As:"
     {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
-            let aliases = parse_alias_object(&pairs[1].argument)?;
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
+            let aliases = parse_alias_object_id(arena, pairs[1].argument)?;
             return Some(ModuleDirective::UseAs { path, aliases });
         }
     }
@@ -2482,32 +2473,34 @@ fn parse_module_directive_pairs(
         && pairs[0].keyword == "use:"
         && pairs[1].keyword == "Only:"
     {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
-            let names = parse_symbol_set_expr(&pairs[1].argument)?;
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
+            let names = parse_symbol_set_expr_id(arena, pairs[1].argument)?;
             return Some(ModuleDirective::UseOnly { path, names });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "export:" {
-        if let Some(name) = parse_symbol_arg(&pairs[0].argument) {
+        if let Some(name) = parse_symbol_arg_id(arena, pairs[0].argument) {
             return Some(ModuleDirective::Export { name });
         }
     }
     None
 }
 
-fn parse_vm_module_directive_pairs(
-    pairs: &[KeywordPair],
+fn parse_vm_module_directive_pairs_id(
+    arena: &AstArena,
+    pairs: &[parser::KeywordPair],
 ) -> Option<ModuleDirective> {
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleOpen:" {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
             return Some(ModuleDirective::Open { path });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleUse:" {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
             return Some(ModuleDirective::Use { path });
         }
-        if let Some(paths) = parse_symbol_list_expr(&pairs[0].argument) {
+        if let Some(paths) = parse_symbol_list_expr_id(arena, pairs[0].argument)
+        {
             return Some(ModuleDirective::UseMany { paths });
         }
     }
@@ -2515,8 +2508,8 @@ fn parse_vm_module_directive_pairs(
         && pairs[0].keyword == "_ModuleUse:"
         && pairs[1].keyword == "As:"
     {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
-            let aliases = parse_alias_object(&pairs[1].argument)?;
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
+            let aliases = parse_alias_object_id(arena, pairs[1].argument)?;
             return Some(ModuleDirective::UseAs { path, aliases });
         }
     }
@@ -2524,33 +2517,36 @@ fn parse_vm_module_directive_pairs(
         && pairs[0].keyword == "_ModuleUseOnly:"
         && pairs[1].keyword == "Names:"
     {
-        if let Some(path) = parse_symbol_arg(&pairs[0].argument) {
-            let names = parse_symbol_set_expr(&pairs[1].argument)?;
+        if let Some(path) = parse_symbol_arg_id(arena, pairs[0].argument) {
+            let names = parse_symbol_set_expr_id(arena, pairs[1].argument)?;
             return Some(ModuleDirective::UseOnly { path, names });
         }
     }
     if pairs.len() == 1 && pairs[0].keyword == "_ModuleExport:" {
-        if let Some(name) = parse_symbol_arg(&pairs[0].argument) {
+        if let Some(name) = parse_symbol_arg_id(arena, pairs[0].argument) {
             return Some(ModuleDirective::Export { name });
         }
     }
     None
 }
 
-fn parse_alias_object(expr: &Expr) -> Option<HashMap<String, String>> {
-    let ExprKind::Object { slots, body } = &expr.kind else {
+fn parse_alias_object_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> Option<HashMap<String, String>> {
+    let parser::ExprKind::Object { slots, body } = &arena.get(expr_id).kind
+    else {
         return None;
     };
     if !body.is_empty() {
         return None;
     }
-
     let mut aliases = HashMap::new();
     for slot in slots {
         let SlotSelector::Unary(from) = &slot.selector else {
             return None;
         };
-        let ExprKind::Symbol(to) = &slot.value.kind else {
+        let parser::ExprKind::Symbol(to) = &arena.get(slot.value).kind else {
             return None;
         };
         aliases.insert(from.clone(), to.clone());
@@ -2558,65 +2554,91 @@ fn parse_alias_object(expr: &Expr) -> Option<HashMap<String, String>> {
     Some(aliases)
 }
 
-fn parse_symbol_arg(expr: &Expr) -> Option<String> {
-    match &expr.kind {
-        ExprKind::Symbol(name) => Some(name.clone()),
-        ExprKind::Paren(inner) => parse_symbol_arg(inner),
+fn parse_symbol_arg_id(arena: &AstArena, expr_id: ExprId) -> Option<String> {
+    match &arena.get(expr_id).kind {
+        parser::ExprKind::Symbol(name) => Some(name.clone()),
+        parser::ExprKind::Paren(inner) => parse_symbol_arg_id(arena, *inner),
         _ => None,
     }
 }
 
-fn parse_symbol_set_expr(expr: &Expr) -> Option<HashSet<String>> {
+fn parse_symbol_set_expr_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> Option<HashSet<String>> {
     let mut out = HashSet::new();
-    collect_symbol_expr(expr, &mut out)?;
+    collect_symbol_expr_id(arena, expr_id, &mut out)?;
     Some(out)
 }
 
-fn parse_symbol_list_expr(expr: &Expr) -> Option<Vec<String>> {
+fn parse_symbol_list_expr_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+) -> Option<Vec<String>> {
     let mut out = Vec::new();
-    collect_symbol_list_expr(expr, &mut out)?;
+    collect_symbol_list_expr_id(arena, expr_id, &mut out)?;
     Some(out)
 }
 
-fn collect_symbol_list_expr(expr: &Expr, out: &mut Vec<String>) -> Option<()> {
-    match &expr.kind {
-        ExprKind::Symbol(name) => {
+fn collect_symbol_list_expr_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+    out: &mut Vec<String>,
+) -> Option<()> {
+    match &arena.get(expr_id).kind {
+        parser::ExprKind::Symbol(name) => {
             out.push(name.clone());
             Some(())
         }
-        ExprKind::Paren(inner) => collect_symbol_list_expr(inner, out),
-        ExprKind::BinaryMessage {
+        parser::ExprKind::Paren(inner) => {
+            collect_symbol_list_expr_id(arena, *inner, out)
+        }
+        parser::ExprKind::BinaryMessage {
             receiver,
             operator,
             argument,
             ..
         } if operator == "&" => {
-            collect_symbol_list_expr(receiver, out)?;
-            collect_symbol_list_expr(argument, out)?;
+            collect_symbol_list_expr_id(arena, *receiver, out)?;
+            collect_symbol_list_expr_id(arena, *argument, out)?;
             Some(())
         }
         _ => None,
     }
 }
 
-fn collect_symbol_expr(expr: &Expr, out: &mut HashSet<String>) -> Option<()> {
-    match &expr.kind {
-        ExprKind::Symbol(name) => {
+fn collect_symbol_expr_id(
+    arena: &AstArena,
+    expr_id: ExprId,
+    out: &mut HashSet<String>,
+) -> Option<()> {
+    match &arena.get(expr_id).kind {
+        parser::ExprKind::Symbol(name) => {
             out.insert(name.clone());
             Some(())
         }
-        ExprKind::Paren(inner) => collect_symbol_expr(inner, out),
-        ExprKind::BinaryMessage {
+        parser::ExprKind::Paren(inner) => {
+            collect_symbol_expr_id(arena, *inner, out)
+        }
+        parser::ExprKind::BinaryMessage {
             receiver,
             operator,
             argument,
             ..
         } if operator == "&" => {
-            collect_symbol_expr(receiver, out)?;
-            collect_symbol_expr(argument, out)?;
+            collect_symbol_expr_id(arena, *receiver, out)?;
+            collect_symbol_expr_id(arena, *argument, out)?;
             Some(())
         }
         _ => None,
+    }
+}
+
+fn slot_selector_name_from_selector(selector: &SlotSelector) -> String {
+    match selector {
+        SlotSelector::Unary(s)
+        | SlotSelector::Binary(s)
+        | SlotSelector::Keyword(s) => s.clone(),
     }
 }
 
@@ -2628,16 +2650,21 @@ mod tests {
     use bytecode::{BytecodeDecoder, Instruction};
     use parser::{Lexer, Parser};
 
-    fn parse_source(src: &str) -> Vec<Expr> {
+    fn parse_source(src: &str) -> (AstArena, Vec<ExprId>) {
         let lexer = Lexer::from_str(src);
-        Parser::new(lexer)
+        let mut parser = Parser::new(lexer);
+        let parsed: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
+        let exprs = parsed
+            .into_iter()
             .map(|r| r.expect("parse error"))
-            .collect()
+            .collect();
+        (arena, exprs)
     }
 
     fn compile_source(src: &str) -> CodeDesc {
-        let exprs = parse_source(src);
-        Compiler::compile(&exprs).expect("compile error")
+        let (arena, exprs) = parse_source(src);
+        Compiler::compile_ids(&arena, &exprs).expect("compile error")
     }
 
     fn decode(code: &CodeDesc) -> Vec<Instruction> {
@@ -3162,8 +3189,9 @@ mod tests {
 
     #[test]
     fn compile_assignment_to_constant_is_error() {
-        let exprs = parse_source("[ x = 1. x := 2 ]");
-        let err = Compiler::compile(&exprs).expect_err("expected error");
+        let (arena, exprs) = parse_source("[ x = 1. x := 2 ]");
+        let err =
+            Compiler::compile_ids(&arena, &exprs).expect_err("expected error");
         assert!(err.message.contains("cannot assign to constant"));
     }
 

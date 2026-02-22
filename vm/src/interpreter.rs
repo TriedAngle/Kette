@@ -2983,19 +2983,24 @@ mod tests {
         }
     }
 
-    fn parse_source(src: &str) -> Vec<parser::ast::Expr> {
+    fn parse_source(src: &str) -> (parser::AstArena, Vec<parser::ExprId>) {
         let lexer = Lexer::from_str(src);
-        Parser::new(lexer)
+        let mut parser = Parser::new(lexer);
+        let parsed: Vec<_> = parser.by_ref().collect();
+        let arena = parser.into_arena();
+        let exprs = parsed
+            .into_iter()
             .map(|r| r.expect("parse error"))
-            .collect()
+            .collect();
+        (arena, exprs)
     }
 
     fn run_source(src: &str) -> Result<Value, LocatedRuntimeError> {
-        let exprs = parse_source(src);
+        let (arena, exprs) = parse_source(src);
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let code_desc =
-            Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
+        let code_desc = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+            .expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         interpret(&mut vm, code_val)
     }
@@ -3003,11 +3008,11 @@ mod tests {
     fn run_source_with_vm(
         src: &str,
     ) -> Result<(VM, Value), LocatedRuntimeError> {
-        let exprs = parse_source(src);
+        let (arena, exprs) = parse_source(src);
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let code_desc =
-            Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
+        let code_desc = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+            .expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         let value = interpret(&mut vm, code_val)?;
         Ok((vm, value))
@@ -3017,11 +3022,11 @@ mod tests {
         src: &str,
         receiver: Value,
     ) -> Result<Value, LocatedRuntimeError> {
-        let exprs = parse_source(src);
+        let (arena, exprs) = parse_source(src);
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let code_desc =
-            Compiler::compile_for_vm(&vm, &exprs).expect("compile error");
+        let code_desc = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+            .expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         interpret_with_receiver(&mut vm, code_val, receiver)
     }
@@ -4445,11 +4450,11 @@ mod tests {
 
     #[test]
     fn compile_error_location_undefined_global() {
-        let exprs = parse_source("NoSuchGlobal");
+        let (arena, exprs) = parse_source("NoSuchGlobal");
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let err =
-            Compiler::compile_for_vm(&vm, &exprs).expect_err("expected error");
+        let err = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+            .expect_err("expected error");
         let span = err.span.expect("error should have source span");
         assert_eq!(span.start.offset, 0);
         assert_eq!(span.end.offset, 12);

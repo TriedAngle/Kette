@@ -24,19 +24,25 @@ fn test_settings() -> HeapSettings {
     }
 }
 
-fn parse_source(src: &str) -> Vec<parser::ast::Expr> {
+fn parse_source(src: &str) -> (parser::AstArena, Vec<parser::ExprId>) {
     let lexer = Lexer::from_str(src);
-    Parser::new(lexer)
+    let mut parser = Parser::new(lexer);
+    let parsed: Vec<_> = parser.by_ref().collect();
+    let arena = parser.into_arena();
+    let exprs = parsed
+        .into_iter()
         .map(|r| r.expect("parse error"))
-        .collect()
+        .collect();
+    (arena, exprs)
 }
 
 fn build_code_pair(src: &str) -> VM {
     let mut vm = bootstrap(test_settings());
     vm.open_module(USER_MODULE);
 
-    let exprs = parse_source(src);
-    let code_desc = Compiler::compile_for_vm(&vm, &exprs).expect("compile");
+    let (arena, exprs) = parse_source(src);
+    let code_desc =
+        Compiler::compile_for_vm_ids(&vm, &arena, &exprs).expect("compile");
 
     let code_with_ic = materialize(&mut vm, &code_desc);
     let code_without_ic = materialize(&mut vm, &code_desc);
