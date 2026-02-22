@@ -4237,6 +4237,16 @@ mod tests {
     }
 
     #[test]
+    fn ctype_field_index_primitives_expose_struct_layout() {
+        let value = run_source(
+            "CType := { parent* = Object. scalarTag: tag Size: s Align: a = { { parent* = self. impl = tag. size = s. align = a } } }. CUInt8 := CType scalarTag: 3 Size: 1 Align: 1. CUInt32 := CType scalarTag: 7 Size: 4 Align: 4. CTiny := CType _CTypeBuildStruct: { a = CUInt8. b = CUInt32. c = CUInt8 }. count := CTiny _CTypeFieldCount. nameLen := ((CTiny _CTypeFieldNameAt: 1) _SymbolLength). offset := CTiny _CTypeFieldOffsetAt: 1. tag := ((CTiny _CTypeFieldTypeAt: 1) _CTypeScalarTag). (((count _FixnumAdd: nameLen) _FixnumAdd: offset) _FixnumAdd: tag)",
+        )
+        .expect("interpret error");
+        assert!(value.is_fixnum());
+        assert_eq!(unsafe { value.to_i64() }, 15);
+    }
+
+    #[test]
     fn proxy_generic_field_access_uses_ctype_layout() {
         let value = run_source(
             "Object _Extend: True With: { ifTrue: t IfFalse: f = { t call } }. Object _Extend: False With: { ifTrue: t IfFalse: f = { f call } }. CType := { parent* = Object. scalarTag: tag Size: s Align: a = { { parent* = self. impl = tag. size = s. align = a } }. struct: d = { self _CTypeBuildStruct: d } }. CUInt8 := CType scalarTag: 3 Size: 1 Align: 1. CUInt32 := CType scalarTag: 7 Size: 4 Align: 4. CTiny := CType struct: { a = CUInt8. b = CUInt32. c = CUInt8 }. Proxy := { parent* = Object. fromCType: t = { { parent* = Proxy. ctype = t. backing = ByteArray _CloneWithSize: (t size) } }. u8At: i = { (self backing) _ByteArrayU8At: i }. u32At: i = { (self backing) _ByteArrayU32At: i }. u8At: i Put: v = { (self backing) _ByteArrayU8At: i Put: v }. u32At: i Put: v = { (self backing) _ByteArrayU32At: i Put: v }. readCType: t At: offset = { ((t _CTypeScalarTag) _FixnumEq: 3) ifTrue: [ self u8At: offset ] IfFalse: [ self u32At: offset ] }. writeCType: t At: offset Value: value = { ((t _CTypeScalarTag) _FixnumEq: 3) ifTrue: [ self u8At: offset Put: value ] IfFalse: [ self u32At: offset Put: value ] }. atField: name = { info := (self ctype) _CTypeFieldInfoAt: name. self readCType: (info type) At: (info offset) }. atField: name Put: value = { info := (self ctype) _CTypeFieldInfoAt: name. self writeCType: (info type) At: (info offset) Value: value. value } }. p := Proxy fromCType: CTiny. p atField: \"a\" Put: 7. p atField: \"b\" Put: 1234. p atField: \"c\" Put: 9. ((p atField: \"a\") _FixnumAdd: (p atField: \"b\")) _FixnumAdd: (p atField: \"c\")",

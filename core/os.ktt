@@ -1,5 +1,6 @@
 Module open: 'OS.
 Module use: 'System.
+Module use: 'Alien.
 
 Disposable := {
     parent* = Clonable.
@@ -225,12 +226,12 @@ PosixSocket := {
     }.
 
     bindAnyPort: port = {
-        addr := ByteArray cloneWithSize: 16.
-        addr u16At: 0 Put: Posix AF_INET.
-        addr u16At: 2 Put: (Posix htons: port).
-        addr u32At: 4 Put: 0.
-        addr u64At: 8 Put: 0.
-        Posix bindFd: self fd Addr: addr Length: 16
+        addr := Proxy forCType: CSockAddrIn.
+        addr sin_family: Posix AF_INET.
+        addr sin_port: (Posix htons: port).
+        addr sin_addr: 0.
+        addr sin_zero: 0.
+        Posix bindFd: self fd Addr: addr backing Length: CSockAddrIn size
     }.
 
     listenBacklog: backlog = {

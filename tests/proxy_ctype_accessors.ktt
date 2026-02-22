@@ -1,0 +1,11 @@
+Module open: 'Test::ProxyCTypeAccessors.
+Module use: 'Alien & 'System.
+
+addr := Proxy forCType: CSockAddrIn.
+addr sin_family: Posix AF_INET.
+addr sin_port: 8080.
+addr sin_addr: 0.
+addr sin_zero: 0.
+
+ok := ((addr sin_family) _FixnumEq: (Posix AF_INET)) && ((addr sin_port) _FixnumEq: 8080).
+(ok ifTrue: [ "proxy-ctype-accessors: ok" ] IfFalse: [ "proxy-ctype-accessors: fail" ]) println.

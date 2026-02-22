@@ -1311,6 +1311,54 @@ pub fn bootstrap(settings: HeapSettings) -> VMProxy {
             &mut intern_table,
             "_CTypeFieldInfoAt:",
         );
+        let ctype_field_count_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_field_count",
+        )
+        .expect("ctype_field_count primitive missing")
+            as i64;
+        let ctype_field_count_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeFieldCount",
+        );
+        let ctype_field_name_at_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_field_name_at",
+        )
+        .expect("ctype_field_name_at primitive missing")
+            as i64;
+        let ctype_field_name_at_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeFieldNameAt:",
+        );
+        let ctype_field_offset_at_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_field_offset_at",
+        )
+        .expect("ctype_field_offset_at primitive missing")
+            as i64;
+        let ctype_field_offset_at_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeFieldOffsetAt:",
+        );
+        let ctype_field_type_at_idx = primitives::primitive_index_by_name(
+            &primitives,
+            "ctype_field_type_at",
+        )
+        .expect("ctype_field_type_at primitive missing")
+            as i64;
+        let ctype_field_type_at_name = intern_bootstrap(
+            &mut proxy,
+            &mut roots,
+            &mut intern_table,
+            "_CTypeFieldTypeAt:",
+        );
         let ctype_scalar_tag_idx = primitives::primitive_index_by_name(
             &primitives,
             "ctype_scalar_tag",
@@ -1996,6 +2044,139 @@ pub fn bootstrap(settings: HeapSettings) -> VMProxy {
             map_map_val,
             ctype_field_info_at_name,
             ctype_field_info_at_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_field_count_code = Value::from_i64(ctype_field_count_idx);
+        let ctype_field_count_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_field_count_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_field_count_map_val);
+
+        let ctype_field_count_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_field_count_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_field_count_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_field_count_name,
+            ctype_field_count_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_field_name_at_code = Value::from_i64(ctype_field_name_at_idx);
+        let ctype_field_name_at_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_field_name_at_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_field_name_at_map_val);
+
+        let ctype_field_name_at_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_field_name_at_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_field_name_at_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_field_name_at_name,
+            ctype_field_name_at_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_field_offset_at_code =
+            Value::from_i64(ctype_field_offset_at_idx);
+        let ctype_field_offset_at_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_field_offset_at_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_field_offset_at_map_val);
+
+        let ctype_field_offset_at_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_field_offset_at_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_field_offset_at_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_field_offset_at_name,
+            ctype_field_offset_at_method_val,
+        );
+        roots.push(new_object_map);
+        object_map_val = new_object_map;
+
+        let ctype_field_type_at_code = Value::from_i64(ctype_field_type_at_idx);
+        let ctype_field_type_at_map_val = alloc_map(
+            &mut proxy,
+            &mut roots,
+            map_map_val,
+            ctype_field_type_at_code,
+            MapFlags::HAS_CODE.with(MapFlags::PRIMITIVE),
+            &[],
+            0,
+        )
+        .value();
+        roots.push(ctype_field_type_at_map_val);
+
+        let ctype_field_type_at_method_val = alloc_slot_object(
+            &mut proxy,
+            &mut roots,
+            ctype_field_type_at_map_val,
+            &[],
+        )
+        .value();
+        roots.push(ctype_field_type_at_method_val);
+
+        let new_object_map = add_constant_slot(
+            &mut proxy,
+            &mut roots,
+            object_map_val,
+            map_map_val,
+            ctype_field_type_at_name,
+            ctype_field_type_at_method_val,
         );
         roots.push(new_object_map);
         object_map_val = new_object_map;

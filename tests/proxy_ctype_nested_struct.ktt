@@ -1,0 +1,26 @@
+Module open: 'Test::ProxyCTypeNestedStruct.
+Module use: 'Alien.
+
+CInner := CType struct: {
+    x = CUInt16.
+    y = CUInt16.
+}.
+
+COuter := CType struct: {
+    a = CUInt32.
+    inner = CInner.
+    b = CUInt16.
+}.
+
+p := Proxy forCType: COuter.
+p a: 9.
+p b: 33.
+
+inner := p inner.
+inner x: 11.
+inner y: 22.
+p inner: inner.
+
+back := p inner.
+ok := ((back x) _FixnumEq: 11) && ((back y) _FixnumEq: 22) && ((p a) _FixnumEq: 9) && ((p b) _FixnumEq: 33).
+(ok ifTrue: [ "proxy-ctype-nested-struct: ok" ] IfFalse: [ "proxy-ctype-nested-struct: fail" ]) println.

@@ -1302,6 +1302,149 @@ pub fn ctype_field_info_at(
     Ok(result)
 }
 
+pub fn ctype_field_count(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let mut scratch = vec![receiver];
+    let mut decode_stack = Vec::new();
+    let desc = decode_ctype_descriptor(
+        vm,
+        state,
+        receiver,
+        &mut scratch,
+        &mut decode_stack,
+    )?;
+    if !matches!(desc.kind, CTypeKind::Struct) {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field count only supported for struct descriptors",
+        });
+    }
+    Ok(Value::from_i64(desc.fields.len() as i64))
+}
+
+pub fn ctype_field_name_at(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let index_value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "field index",
+        got: Value::from_i64(0),
+    })?;
+    let index = expect_fixnum(index_value)?;
+    if index < 0 {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field index must be non-negative",
+        });
+    }
+
+    let mut scratch = vec![receiver, index_value];
+    let mut decode_stack = Vec::new();
+    let desc = decode_ctype_descriptor(
+        vm,
+        state,
+        receiver,
+        &mut scratch,
+        &mut decode_stack,
+    )?;
+    if !matches!(desc.kind, CTypeKind::Struct) {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field name only supported for struct descriptors",
+        });
+    }
+    let idx = index as usize;
+    if idx >= desc.fields.len() {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field index out of bounds",
+        });
+    }
+    Ok(desc.fields[idx].name)
+}
+
+pub fn ctype_field_offset_at(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let index_value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "field index",
+        got: Value::from_i64(0),
+    })?;
+    let index = expect_fixnum(index_value)?;
+    if index < 0 {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field index must be non-negative",
+        });
+    }
+
+    let mut scratch = vec![receiver, index_value];
+    let mut decode_stack = Vec::new();
+    let desc = decode_ctype_descriptor(
+        vm,
+        state,
+        receiver,
+        &mut scratch,
+        &mut decode_stack,
+    )?;
+    if !matches!(desc.kind, CTypeKind::Struct) {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field offset only supported for struct descriptors",
+        });
+    }
+    let idx = index as usize;
+    if idx >= desc.fields.len() {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field index out of bounds",
+        });
+    }
+    Ok(Value::from_i64(desc.fields[idx].offset as i64))
+}
+
+pub fn ctype_field_type_at(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let index_value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "field index",
+        got: Value::from_i64(0),
+    })?;
+    let index = expect_fixnum(index_value)?;
+    if index < 0 {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field index must be non-negative",
+        });
+    }
+
+    let mut scratch = vec![receiver, index_value];
+    let mut decode_stack = Vec::new();
+    let desc = decode_ctype_descriptor(
+        vm,
+        state,
+        receiver,
+        &mut scratch,
+        &mut decode_stack,
+    )?;
+    if !matches!(desc.kind, CTypeKind::Struct) {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field type only supported for struct descriptors",
+        });
+    }
+    let idx = index as usize;
+    if idx >= desc.fields.len() {
+        return Err(RuntimeError::Unimplemented {
+            message: "ctype field index out of bounds",
+        });
+    }
+    Ok(desc.fields[idx].descriptor)
+}
+
 pub fn ctype_scalar_tag(
     vm: &mut VM,
     state: &mut InterpreterState,

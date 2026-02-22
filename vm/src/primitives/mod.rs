@@ -358,6 +358,22 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
             1,
             alien::ctype_field_info_at,
         ),
+        PrimitiveDesc::new("ctype_field_count", 0, alien::ctype_field_count),
+        PrimitiveDesc::new(
+            "ctype_field_name_at",
+            1,
+            alien::ctype_field_name_at,
+        ),
+        PrimitiveDesc::new(
+            "ctype_field_offset_at",
+            1,
+            alien::ctype_field_offset_at,
+        ),
+        PrimitiveDesc::new(
+            "ctype_field_type_at",
+            1,
+            alien::ctype_field_type_at,
+        ),
         PrimitiveDesc::new("ctype_scalar_tag", 0, alien::ctype_scalar_tag),
         PrimitiveDesc::new("mirror_slot_count", 0, mirror::mirror_slot_count),
         PrimitiveDesc::new(

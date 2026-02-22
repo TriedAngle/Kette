@@ -13,16 +13,31 @@ CType := {
 
     scalarTag = { self _CTypeScalarTag }.
     struct: definition = { self _CTypeBuildStruct: definition }.
+    fieldCount = { self _CTypeFieldCount }.
+    fieldNameAt: index = { self _CTypeFieldNameAt: index }.
+    fieldOffsetAtIndex: index = { self _CTypeFieldOffsetAt: index }.
+    fieldTypeAtIndex: index = { self _CTypeFieldTypeAt: index }.
     fieldInfoAt: name = { self _CTypeFieldInfoAt: name }.
     fieldOffsetAt: name = { (self fieldInfoAt: name) offset }.
     fieldTypeAt: name = { (self fieldInfoAt: name) type }.
 
     proxyReadFrom: proxy At: offset = {
-        proxy _ProxyUnsupportedCTypeRead: self
+        out := Proxy forCType: self.
+        i := 0.
+        [ i < self size ] whileTrue: [
+            (out backing) u8At: i Put: ((proxy backing) u8At: (offset + i)).
+            i := i + 1
+        ].
+        out
     }.
 
     proxyWriteTo: proxy At: offset Value: value = {
-        proxy _ProxyUnsupportedCTypeWrite: self
+        i := 0.
+        [ i < self size ] whileTrue: [
+            (proxy backing) u8At: (offset + i) Put: ((value backing) u8At: i).
+            i := i + 1
+        ].
+        value
     }.
 }.
 
@@ -267,12 +282,77 @@ Proxy := {
     backing := None.
     ctype := None.
 
+    installAccessorName: fieldName FieldIndex: fieldIndex Offset: fieldOffset UsingMirror: proxyMirror = {
+        setterName := fieldName + ":".
+        fieldIndexStr := fieldIndex toString.
+        offsetStr := fieldOffset toString.
+        getterSource := "{ " + fieldName + " = { self readCType: (self ctype fieldTypeAtIndex: " + fieldIndexStr + ") At: " + offsetStr + " } }".
+        setterSource := "{ " + setterName + " value = { self writeCType: (self ctype fieldTypeAtIndex: " + fieldIndexStr + ") At: " + offsetStr + " Value: value. value } }".
+        getterHost := VM eval: getterSource.
+        setterHost := VM eval: setterSource.
+        getterMethod := ((Object reflect: getterHost) at: fieldName).
+        setterMethod := ((Object reflect: setterHost) at: setterName).
+        proxyMirror addSlot: fieldName Value: getterMethod.
+        proxyMirror addSlot: setterName Value: setterMethod.
+        self
+    }.
+
+    installCTypeAccessors = {
+        proxyMirror := Object reflect: self.
+        count := self ctype fieldCount.
+        i := 0.
+        [ i < count ] whileTrue: [
+            fieldNameSym := self ctype fieldNameAt: i.
+            fieldName := fieldNameSym toString.
+            fieldOffset := self ctype fieldOffsetAtIndex: i.
+            self installAccessorName: fieldName FieldIndex: i Offset: fieldOffset UsingMirror: proxyMirror.
+            i := i + 1
+        ].
+
+        self
+    }.
+
+    accessorPrototypeForCType: t = {
+        tMirror := Object reflect: t.
+        slotName := "__ProxyAccessorPrototype".
+        slotSymbol := slotName toSymbol.
+        existing := None.
+        i := 0.
+        [ i < tMirror slotCount ] whileTrue: [
+            name := tMirror slotNameAt: i.
+            (name _SymbolEq: slotSymbol)
+                ifTrue: [
+                    existing := tMirror at: slotName.
+                    i := tMirror slotCount
+                ]
+                IfFalse: [
+                    i := i + 1
+                ]
+        ].
+
+        (existing == None)
+            ifTrue: [
+                proto := self clone.
+                proto backing: None.
+                proto ctype: t.
+                proto installCTypeAccessors.
+                tMirror addSlot: slotName Value: proto.
+                proto
+            ]
+            IfFalse: [ existing ]
+    }.
+
     fromBacking: b = {
-        p := { parent* = Proxy. backing := b. ctype = None }.
+        p := self clone.
+        p backing: b.
+        p ctype: None.
         p
     }.
     fromCType: t Backing: b = {
-        p := { parent* = Proxy. backing := b. ctype = t }.
+        proto := self accessorPrototypeForCType: t.
+        p := proto clone.
+        p backing: b.
+        p ctype: t.
         p
     }.
     forAlienSize: s = { self fromBacking: (Alien new: s) }.
@@ -283,12 +363,13 @@ Proxy := {
     isNull = { self backing isNull }.
     free = { self backing free }.
     copyTo: dst From: srcOffset Length: len = {
-        self backing copyTo: dst From: srcOffset Length: len
+        (self backing) copyTo: dst From: srcOffset Length: len
     }.
     copyFrom: src Offset: srcOffset Length: len = {
-        self backing copyFrom: src Offset: srcOffset Length: len
+        (self backing) copyFrom: src Offset: srcOffset Length: len
     }.
     u8At: i = { self backing u8At: i }.
+    i8At: i = { self backing i8At: i }.
     u16At: i = { self backing u16At: i }.
     i16At: i = { self backing i16At: i }.
     u32At: i = { self backing u32At: i }.
@@ -298,19 +379,19 @@ Proxy := {
     f32At: i = { self backing f32At: i }.
     f64At: i = { self backing f64At: i }.
     pointerAt: i = { self backing pointerAt: i }.
-    u8At: i Put: v = { self backing u8At: i Put: v }.
-    i8At: i Put: v = { self backing i8At: i Put: v }.
-    u16At: i Put: v = { self backing u16At: i Put: v }.
-    i16At: i Put: v = { self backing i16At: i Put: v }.
-    u32At: i Put: v = { self backing u32At: i Put: v }.
-    i32At: i Put: v = { self backing i32At: i Put: v }.
-    u64At: i Put: v = { self backing u64At: i Put: v }.
-    i64At: i Put: v = { self backing i64At: i Put: v }.
-    f32At: i Put: v = { self backing f32At: i Put: v }.
-    f64At: i Put: v = { self backing f64At: i Put: v }.
-    pointerAt: i Put: v = { self backing pointerAt: i Put: v }.
+    u8At: i Put: v = { (self backing) u8At: i Put: v }.
+    i8At: i Put: v = { (self backing) i8At: i Put: v }.
+    u16At: i Put: v = { (self backing) u16At: i Put: v }.
+    i16At: i Put: v = { (self backing) i16At: i Put: v }.
+    u32At: i Put: v = { (self backing) u32At: i Put: v }.
+    i32At: i Put: v = { (self backing) i32At: i Put: v }.
+    u64At: i Put: v = { (self backing) u64At: i Put: v }.
+    i64At: i Put: v = { (self backing) i64At: i Put: v }.
+    f32At: i Put: v = { (self backing) f32At: i Put: v }.
+    f64At: i Put: v = { (self backing) f64At: i Put: v }.
+    pointerAt: i Put: v = { (self backing) pointerAt: i Put: v }.
     callWithTypes: types Args: values ReturnType: ret = {
-        self backing callWithTypes: types Args: values ReturnType: ret
+        (self backing) callWithTypes: types Args: values ReturnType: ret
     }.
 
     readCType: t At: offset = {
