@@ -1,11 +1,8 @@
 # Kette
 
-Kette is a message‑passing language with a compact object model and a custom
+Kette is a message-passing language with a prototype object model and a custom
 bytecode VM. The syntax is inspired by Self: everything is a message send,
 objects are dictionaries of slots, and delegation is explicit via parent slots.
-
-This README describes the current language shape and syntax as implemented in
-the parser and core library.
 
 ## Core Concepts
 
