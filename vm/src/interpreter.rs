@@ -590,9 +590,13 @@ fn process_control(
     }
 
     let frame_depth = state.frames.len();
-    state
+    while state
         .handlers
-        .retain(|scope| frame_depth > scope.scope_depth);
+        .last()
+        .is_some_and(|scope| frame_depth <= scope.scope_depth)
+    {
+        state.handlers.pop();
+    }
 
     if let Some(unwind) = state.unwind {
         if run_due_finalizer(vm, state, false)? {
@@ -623,15 +627,15 @@ fn run_due_finalizer(
     preserve_acc: bool,
 ) -> Result<bool, RuntimeError> {
     let frame_depth = state.frames.len();
-    let Some(idx) = state
+    if !state
         .finalizers
-        .iter()
-        .rposition(|scope| frame_depth <= scope.scope_depth)
-    else {
+        .last()
+        .is_some_and(|scope| frame_depth <= scope.scope_depth)
+    {
         return Ok(false);
-    };
+    }
 
-    let finalizer = state.finalizers.remove(idx);
+    let finalizer = state.finalizers.pop().expect("checked non-empty");
     if preserve_acc {
         state.pending_restores.push(PendingRestore {
             return_depth: frame_depth,
@@ -712,70 +716,6 @@ fn push_method_frame(
         reg_len,
         temp_array,
         is_block: false,
-        method_frame_idx,
-        holder,
-        holder_slot_index,
-        module_path,
-        module_dynamic,
-    });
-
-    Ok(())
-}
-
-fn push_block_frame(
-    vm: &mut VM,
-    state: &mut InterpreterState,
-    code_val: Value,
-    receiver: Value,
-    args_source: (usize, u16, u8),
-    parent_env: Value,
-    module_path: Option<String>,
-    module_dynamic: bool,
-) -> Result<(), RuntimeError> {
-    if state.frames.len() >= MAX_FRAMES {
-        return Err(RuntimeError::StackOverflow);
-    }
-
-    let code = unsafe { &*expect_code(code_val)? };
-    let arg_count = code.arg_count() as usize;
-    let provided = args_source.2 as usize;
-    if provided != arg_count {
-        return Err(RuntimeError::TypeError {
-            expected: "argument count",
-            got: Value::from_i64(provided as i64),
-        });
-    }
-
-    let reg_count = code.register_count() as usize;
-    let none = vm.special.none;
-    let (reg_base, reg_len) = alloc_frame_registers(state, reg_count, none);
-    unsafe { write_register_unchecked(state, reg_base, 0, receiver) };
-    copy_args_from_frame(
-        state,
-        args_source.0,
-        args_source.1,
-        args_source.2,
-        reg_base,
-        reg_len,
-    )?;
-
-    let method_frame_idx = find_enclosing_method_idx(&state.frames)
-        .unwrap_or_else(|| state.frames.len().saturating_sub(1));
-    let temp_array = if code.temp_count() > 0 {
-        state.acc = receiver;
-        alloc_temp_array(vm, state, code.temp_count(), parent_env)?
-    } else {
-        parent_env
-    };
-    let (holder, holder_slot_index) = find_enclosing_holder(vm, &state.frames);
-
-    state.frames.push(Frame {
-        code: code_val,
-        pc: 0,
-        reg_base,
-        reg_len,
-        temp_array,
-        is_block: true,
         method_frame_idx,
         holder,
         holder_slot_index,
@@ -1179,14 +1119,11 @@ fn update_send_feedback_entry(
 
     let slot_entry = array_entry_at(vector, feedback_idx as usize);
     if slot_entry.raw() == vm.special.none.raw() {
-        let mut scratch = new_entry_values.to_vec();
+        let mut scratch = Vec::new();
         let new_entry =
             with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-                let values_ptr = roots.scratch.as_ptr();
-                let values_len = roots.scratch.len();
-                let values =
-                    core::slice::from_raw_parts(values_ptr, values_len);
-                crate::alloc::alloc_array(proxy, roots, values).value()
+                crate::alloc::alloc_array(proxy, roots, &new_entry_values)
+                    .value()
             });
         array_set_entry(vm, feedback, feedback_idx as usize, new_entry);
         ic_count_update();
@@ -1227,9 +1164,9 @@ fn update_send_feedback_entry(
     }
 
     if entry_count >= MAX_POLYMORPHIC_FEEDBACK_ENTRIES {
-        let mut empty = Vec::new();
+        let mut scratch = Vec::new();
         let megamorphic_sentinel =
-            with_roots(vm, state, &mut empty, |proxy, roots| unsafe {
+            with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
                 crate::alloc::alloc_array(proxy, roots, &[]).value()
             });
         array_set_entry(
@@ -1252,15 +1189,30 @@ fn update_send_feedback_entry(
         return Ok(());
     }
 
-    let mut values = unsafe { (&*entries).elements() }.to_vec();
-    values.extend_from_slice(&new_entry_values);
-    let mut scratch = values;
+    let mut scratch = Vec::new();
     let new_entry =
         with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
-            let values_ptr = roots.scratch.as_ptr();
-            let values_len = roots.scratch.len();
-            let values = core::slice::from_raw_parts(values_ptr, values_len);
-            crate::alloc::alloc_array(proxy, roots, values).value()
+            let old_values = (&*entries).elements();
+            let new_len = old_values.len() + FEEDBACK_ENTRY_STRIDE;
+            let size = size_of::<Array>() + new_len * size_of::<Value>();
+            let layout = Layout::from_size_align(size, 8).unwrap();
+            let ptr = proxy.allocate(layout, roots);
+
+            let arr_ptr = ptr.as_ptr() as *mut Array;
+            init_array(arr_ptr, new_len as u64);
+            let elems_dst = arr_ptr.add(1) as *mut Value;
+            ptr::copy_nonoverlapping(
+                old_values.as_ptr(),
+                elems_dst,
+                old_values.len(),
+            );
+            ptr::copy_nonoverlapping(
+                new_entry_values.as_ptr(),
+                elems_dst.add(old_values.len()),
+                FEEDBACK_ENTRY_STRIDE,
+            );
+
+            Value::from_ptr(arr_ptr)
         });
     array_set_entry(vm, feedback, feedback_idx as usize, new_entry);
     ic_count_update();
@@ -1303,24 +1255,6 @@ pub(crate) fn dispatch_send(
             }
         }
     }
-    if is_block_value(receiver)? && is_block_call_selector(message, argc) {
-        let block_code = block_code(receiver, vm.special.none)?;
-        let block_env = block_env(receiver, vm.special.none)?;
-        let receiver_self = block_self(receiver)?;
-        let module_path = state.frames[frame_idx].module_path.clone();
-        let module_dynamic = state.frames[frame_idx].module_dynamic;
-        return push_block_frame(
-            vm,
-            state,
-            block_code,
-            receiver_self,
-            (frame_idx, reg, argc),
-            block_env,
-            module_path,
-            module_dynamic,
-        );
-    }
-
     let mut receiver_feedback_map = vm.special.none;
     let mut megamorphic_key = MegamorphicKey {
         message_raw: 0,
@@ -1468,44 +1402,6 @@ pub(crate) fn request_unwind(
         value,
     });
     Ok(())
-}
-
-fn is_block_call_selector(message: Value, argc: u8) -> bool {
-    let name = match message_name(message) {
-        Some(name) => name,
-        None => return false,
-    };
-    if argc == 0 {
-        return name == "call";
-    }
-    if argc > 8 {
-        return false;
-    }
-    let expected = block_call_selector(argc as usize);
-    name == expected
-}
-
-fn message_name(message: Value) -> Option<String> {
-    if !message.is_ref() {
-        return None;
-    }
-    let header: &Header = unsafe { message.as_ref() };
-    if header.object_type() != ObjectType::Symbol {
-        return None;
-    }
-    let s: &VMSymbol = unsafe { message.as_ref() };
-    Some(unsafe { s.as_str() }.to_string())
-}
-
-fn block_call_selector(argc: usize) -> String {
-    if argc == 0 {
-        return "call".to_string();
-    }
-    let mut out = String::from("call:");
-    for _ in 1..argc {
-        out.push_str("With:");
-    }
-    out
 }
 
 fn dispatch_resend(
@@ -2518,20 +2414,6 @@ fn write_holder_value(
     Ok(())
 }
 
-fn find_enclosing_method_idx(frames: &[Frame]) -> Option<usize> {
-    frames.iter().rposition(|f| !f.is_block)
-}
-
-fn find_enclosing_holder(vm: &VM, frames: &[Frame]) -> (Value, u32) {
-    let none = vm.special.none;
-    for frame in frames.iter().rev() {
-        if frame.holder.raw() != none.raw() {
-            return (frame.holder, frame.holder_slot_index);
-        }
-    }
-    (none, 0)
-}
-
 fn current_frame_index(state: &InterpreterState) -> Option<usize> {
     if state.frames.is_empty() {
         None
@@ -2571,6 +2453,7 @@ fn truncate_frames(state: &mut InterpreterState, len: usize) {
         .last()
         .map(|f| f.reg_base + f.reg_len)
         .unwrap_or(0);
+    prune_handlers(state, len);
 }
 
 fn pop_frame(state: &mut InterpreterState) {
@@ -2580,6 +2463,18 @@ fn pop_frame(state: &mut InterpreterState) {
             .last()
             .map(|f| f.reg_base + f.reg_len)
             .unwrap_or(0);
+        prune_handlers(state, state.frames.len());
+    }
+}
+
+#[inline(always)]
+fn prune_handlers(state: &mut InterpreterState, frame_depth: usize) {
+    while state
+        .handlers
+        .last()
+        .is_some_and(|scope| scope.scope_depth >= frame_depth)
+    {
+        state.handlers.pop();
     }
 }
 
