@@ -1,0 +1,142 @@
+Module open: 'GLFW.
+Module use: 'Alien.
+
+NoArgs := Array cloneWithSize: 0.
+TInit := NoArgs.
+TTerminate := NoArgs.
+TPollEvents := NoArgs.
+TSwapBuffers := (CPointer) asArray.
+TCreateWindow := (CInt32 & CInt32 & CPointer & CPointer & CPointer) asArray.
+TWindowShouldClose := (CPointer) asArray.
+TSetWindowShouldClose := (CPointer & CInt32) asArray.
+TDestroyWindow := (CPointer) asArray.
+TMakeContextCurrent := (CPointer) asArray.
+TSetKeyCallback := (CPointer & CPointer) asArray.
+TKeyCallback := (CPointer & CInt32 & CInt32 & CInt32 & CInt32) asArray.
+
+glfw := {
+    parent* = Oddball.
+    loaded := False.
+    lib := None.
+    keyCallback := None.
+    KEY_ESCAPE = 256.
+    ACTION_PRESS = 1.
+    calls := {
+        init := None.
+        terminate := None.
+        pollEvents := None.
+        swapBuffers := None.
+        createWindow := None.
+        windowShouldClose := None.
+        setWindowShouldClose := None.
+        destroyWindow := None.
+        makeContextCurrent := None.
+        setKeyCallback := None
+    }.
+
+    defaultLibraryPath = {
+        os := (VM platformOS) toSymbol.
+        (os _SymbolEq: 'linux)
+            ifTrue: [ "libglfw.so.3" ]
+            IfFalse: [
+                (os _SymbolEq: 'macos)
+                    ifTrue: [ "libglfw.3.dylib" ]
+                    IfFalse: [ "glfw3.dll" ]
+            ]
+    }.
+
+    ensureLoaded = {
+        self synchronized: [
+            self loaded
+                ifTrue: [ self ]
+                IfFalse: [
+                    libHandle := Alien libraryOpen: self defaultLibraryPath.
+                    c := self calls.
+                    c init: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwInit") Types: TInit ReturnType: CInt32).
+                    c terminate: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwTerminate") Types: TTerminate ReturnType: CVoid).
+                    c pollEvents: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwPollEvents") Types: TPollEvents ReturnType: CVoid).
+                    c swapBuffers: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwSwapBuffers") Types: TSwapBuffers ReturnType: CVoid).
+                    c createWindow: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwCreateWindow") Types: TCreateWindow ReturnType: CPointer).
+                    c windowShouldClose: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwWindowShouldClose") Types: TWindowShouldClose ReturnType: CInt32).
+                    c setWindowShouldClose: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwSetWindowShouldClose") Types: TSetWindowShouldClose ReturnType: CVoid).
+                    c destroyWindow: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwDestroyWindow") Types: TDestroyWindow ReturnType: CVoid).
+                    c makeContextCurrent: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwMakeContextCurrent") Types: TMakeContextCurrent ReturnType: CVoid).
+                    c setKeyCallback: (PreparedAlienCall fromFn: (libHandle librarySym: "glfwSetKeyCallback") Types: TSetKeyCallback ReturnType: CPointer).
+                    self lib: libHandle.
+                    self loaded: True.
+                    self
+                ]
+        ]
+    }.
+
+    init = {
+        api := self ensureLoaded.
+        api calls init call
+    }.
+
+    createWindowWidth: width Height: height Title: title = {
+        api := self ensureLoaded.
+        api calls createWindow call: width With: height With: title With: 0 With: 0
+    }.
+
+    makeContextCurrent: window = {
+        api := self ensureLoaded.
+        api calls makeContextCurrent call: window
+    }.
+
+    swapBuffers: window = {
+        api := self ensureLoaded.
+        api calls swapBuffers call: window
+    }.
+
+    pollEvents = {
+        api := self ensureLoaded.
+        api calls pollEvents call
+    }.
+
+    windowShouldClose: window = {
+        api := self ensureLoaded.
+        api calls windowShouldClose call: window
+    }.
+
+    setWindowShouldClose: window Value: value = {
+        api := self ensureLoaded.
+        api calls setWindowShouldClose call: window With: value
+    }.
+
+    setKeyCallbackForWindow: window Do: block = {
+        api := self ensureLoaded.
+        self keyCallback == None ifFalse: [ self keyCallback callbackFree ].
+        cb := Alien callbackFromBlock: block Types: TKeyCallback ReturnType: CVoid.
+        api calls setKeyCallback call: window With: cb.
+        self keyCallback: cb.
+        cb
+    }.
+
+    destroyWindow: window = {
+        api := self ensureLoaded.
+        api calls destroyWindow call: window
+    }.
+
+    terminate = {
+        self synchronized: [
+            self loaded
+                ifTrue: [
+                    self keyCallback == None ifFalse: [
+                        self keyCallback callbackFree.
+                        self keyCallback: None
+                    ].
+                    self calls terminate call.
+                    self lib libraryClose.
+                    self lib: None.
+                    self loaded: False.
+                    self
+                ]
+                IfFalse: [ self ]
+        ]
+    }.
+}.
+
+GLFW := glfw.
+
+Module export: 'glfw & 'GLFW.

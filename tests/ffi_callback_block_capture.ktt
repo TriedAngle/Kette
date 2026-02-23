@@ -1,0 +1,12 @@
+// expect:
+// 47
+
+sumOffset := 5.
+cb := Alien callbackFromBlock: [ | a b |
+    (a + b) + sumOffset
+] Types: (CInt32 & CInt32) ReturnType: CInt32.
+
+call := PreparedAlienCall fromFn: cb Types: (CInt32 & CInt32) ReturnType: CInt32.
+out := call call: 20 With: 22.
+cb callbackFree.
+(out toString) println.

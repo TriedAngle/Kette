@@ -307,6 +307,7 @@ pub fn load_image(path: &Path) -> io::Result<VMProxy> {
         modules: Mutex::new(modules),
         next_thread_id: AtomicU64::new(next_thread_id),
         platform_threads: Mutex::new(HashMap::new()),
+        ffi_callback_blocks: Mutex::new(HashMap::new()),
         lock_records: Mutex::new(HashMap::<u64, Arc<LockRecord>>::new()),
     });
 

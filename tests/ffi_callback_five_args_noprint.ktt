@@ -1,0 +1,14 @@
+// expect:
+// ok
+
+TKeyCallback := (CPointer & CInt32 & CInt32 & CInt32 & CInt32) asArray.
+
+cb := Alien callbackFromBlock: [ | w key scancode action mods |
+    key + action.
+    None
+] Types: TKeyCallback ReturnType: CVoid.
+
+invoke := PreparedAlienCall fromFn: cb Types: TKeyCallback ReturnType: CVoid.
+invoke call: 0 With: 256 With: 0 With: 1 With: 0.
+cb callbackFree.
+"ok" println.

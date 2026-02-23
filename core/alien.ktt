@@ -165,6 +165,13 @@ Object extend: Alien With: {
         ].
         self _AlienCallWithTypes: typeArray Args: lowered ReturnType: ret
     }.
+    callbackFromBlock: block Types: sigTypes ReturnType: ret = {
+        self
+            _AlienCallbackFromBlock: block
+            Types: sigTypes asArray
+            ReturnType: ret
+    }.
+    callbackFree = { self _AlienCallbackFree }.
 }.
 
 PreparedAlienCall := {

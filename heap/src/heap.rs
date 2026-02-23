@@ -1523,6 +1523,7 @@ pub struct HeapProxy {
     pub bump: *mut u8,
     /// Limit of the current free window (hole end or block end).
     pub end: *mut u8,
+    owns_thread_registration: bool,
 }
 
 // SAFETY: HeapProxy contains only Send/Sync types and raw pointers used with proper synchronization.
@@ -1545,6 +1546,23 @@ impl HeapProxy {
             block_status: BLOCK_FREE,
             bump: ptr::null_mut(),
             end: ptr::null_mut(),
+            owns_thread_registration: true,
+        }
+    }
+
+    #[must_use]
+    pub fn new_unregistered(heap: Heap) -> Self {
+        let epoch = heap.epoch();
+        Self {
+            heap,
+            remember: Vec::with_capacity(32),
+            minor_allocated: 0,
+            epoch,
+            block: NO_BLOCK,
+            block_status: BLOCK_FREE,
+            bump: ptr::null_mut(),
+            end: ptr::null_mut(),
+            owns_thread_registration: false,
         }
     }
 
@@ -2037,6 +2055,9 @@ impl HeapProxy {
 
 impl Drop for HeapProxy {
     fn drop(&mut self) {
+        if !self.owns_thread_registration {
+            return;
+        }
         use std::sync::atomic::Ordering::Acquire;
 
         // If GC active, we MUST join as a "ghost" participant (empty roots),

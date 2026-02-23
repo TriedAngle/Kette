@@ -324,6 +324,30 @@ pub fn interpret_with_receiver(
     run(vm, &mut state).map_err(|e| locate_error(e, &state))
 }
 
+pub fn invoke_block_now(
+    vm: &mut VM,
+    block: Value,
+    args: &[Value],
+) -> Result<Value, LocatedRuntimeError> {
+    let mut state = InterpreterState {
+        acc: vm.special.none,
+        frames: Vec::new(),
+        register_stack: Vec::new(),
+        register_top: 0,
+        handlers: Vec::new(),
+        finalizers: Vec::new(),
+        pending_restores: Vec::new(),
+        unwind_cleanup_depths: Vec::new(),
+        unwind: None,
+        last_pc: 0,
+        last_code: vm.special.none,
+    };
+
+    call_block(vm, &mut state, block, args)
+        .map_err(|e| locate_error(e, &state))?;
+    run(vm, &mut state).map_err(|e| locate_error(e, &state))
+}
+
 fn locate_error(
     error: RuntimeError,
     state: &InterpreterState,

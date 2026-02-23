@@ -1,0 +1,37 @@
+// expect:
+// 1,2,3,4,5
+
+TQsort := (CPointer & CSize & CSize & CPointer) asArray.
+TCompare := (CPointer & CPointer) asArray.
+
+buf := ByteArray cloneWithSize: 20.
+buf i32At: 0 Put: 3.
+buf i32At: 4 Put: 1.
+buf i32At: 8 Put: 5.
+buf i32At: 12 Put: 2.
+buf i32At: 16 Put: 4.
+
+cmp := Alien callbackFromBlock: [ | pa pb |
+    a := (Alien fromAddress: pa Size: 4) i32At: 0.
+    b := (Alien fromAddress: pb Size: 4) i32At: 0.
+    a - b
+] Types: TCompare ReturnType: CInt32.
+
+lib := Alien libraryOpen: "libc.so.6".
+qsort := PreparedAlienCall fromFn: (lib librarySym: "qsort") Types: TQsort ReturnType: CVoid.
+qsort call: buf With: 5 With: 4 With: cmp.
+
+out :=
+    ((buf i32At: 0) toString)
+        + ","
+        + ((buf i32At: 4) toString)
+        + ","
+        + ((buf i32At: 8) toString)
+        + ","
+        + ((buf i32At: 12) toString)
+        + ","
+        + ((buf i32At: 16) toString).
+out println.
+
+cmp callbackFree.
+lib libraryClose.

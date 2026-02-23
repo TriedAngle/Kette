@@ -1,0 +1,10 @@
+// expect:
+// ok
+
+TNoArgs := Array cloneWithSize: 0.
+
+cb := Alien callbackFromBlock: [ None ] Types: TNoArgs ReturnType: CVoid.
+invoke := PreparedAlienCall fromFn: cb Types: TNoArgs ReturnType: CVoid.
+invoke call.
+cb callbackFree.
+"ok" println.

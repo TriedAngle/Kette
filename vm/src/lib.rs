@@ -57,6 +57,8 @@ pub struct SharedVMData {
     pub next_thread_id: AtomicU64,
     /// Join handles for spawned platform threads.
     pub platform_threads: Mutex<HashMap<u64, PlatformThreadEntry>>,
+    /// Blocks captured by active libffi callbacks keyed by callback code ptr.
+    pub ffi_callback_blocks: Mutex<HashMap<u64, Value>>,
     /// Object lock records keyed by raw object pointer bits.
     pub lock_records: Mutex<HashMap<u64, Arc<LockRecord>>>,
 }
@@ -142,6 +144,16 @@ impl RootProvider for VMProxy {
             }
         }
         {
+            let mut callbacks = self
+                .shared
+                .ffi_callback_blocks
+                .lock()
+                .expect("ffi callbacks poisoned");
+            for value in callbacks.values_mut() {
+                visitor(value);
+            }
+        }
+        {
             let mut table = self
                 .shared
                 .intern_table
@@ -157,6 +169,18 @@ impl RootProvider for VMProxy {
 impl VMProxy {
     pub fn new(shared: Arc<SharedVMData>) -> Self {
         let heap_proxy = HeapProxy::new(shared.heap.clone());
+        Self::with_heap_proxy(shared, heap_proxy)
+    }
+
+    pub fn new_unregistered(shared: Arc<SharedVMData>) -> Self {
+        let heap_proxy = HeapProxy::new_unregistered(shared.heap.clone());
+        Self::with_heap_proxy(shared, heap_proxy)
+    }
+
+    fn with_heap_proxy(
+        shared: Arc<SharedVMData>,
+        heap_proxy: HeapProxy,
+    ) -> Self {
         Self {
             heap_proxy,
             special: shared.special,
@@ -209,6 +233,18 @@ impl VMProxy {
             .lock()
             .expect("platform threads poisoned");
         f(&mut threads)
+    }
+
+    pub fn with_ffi_callback_blocks<R>(
+        &self,
+        f: impl FnOnce(&mut HashMap<u64, Value>) -> R,
+    ) -> R {
+        let mut callbacks = self
+            .shared
+            .ffi_callback_blocks
+            .lock()
+            .expect("ffi callbacks poisoned");
+        f(&mut callbacks)
     }
 }
 

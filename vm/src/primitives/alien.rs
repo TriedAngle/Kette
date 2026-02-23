@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::mem::{align_of, size_of};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 use libffi::raw;
@@ -14,7 +15,9 @@ use crate::alloc::{
     alloc_alien, alloc_bignum_from_i128, alloc_byte_array, alloc_float,
     alloc_map, alloc_slot_object,
 };
-use crate::interpreter::{with_roots, InterpreterState, RuntimeError};
+use crate::interpreter::{
+    invoke_block_now, with_roots, InterpreterState, RuntimeError,
+};
 use crate::primitives::string::intern_symbol;
 use crate::primitives::{
     expect_alien, expect_array, expect_bignum, expect_bytearray, expect_fixnum,
@@ -23,7 +26,7 @@ use crate::primitives::{
 use crate::VM;
 
 thread_local! {
-    static TLS_CIF_CACHE: RefCell<HashMap<CifCacheKey, Cif>> = RefCell::new(HashMap::new());
+    static TLS_CIF_CACHE: RefCell<HashMap<CifCacheKey, Arc<Cif>>> = RefCell::new(HashMap::new());
 }
 
 fn with_thread_local_cif<R, FBuild, FUse>(
@@ -36,9 +39,11 @@ where
     FUse: FnOnce(&Cif) -> R,
 {
     TLS_CIF_CACHE.with(|cache| {
-        let mut map = cache.borrow_mut();
-        let cif = map.entry(key).or_insert_with(build);
-        use_cif(cif)
+        let cif = {
+            let mut map = cache.borrow_mut();
+            map.entry(key).or_insert_with(|| Arc::new(build())).clone()
+        };
+        use_cif(cif.as_ref())
     })
 }
 
@@ -742,6 +747,286 @@ enum FfiArgValue {
     Pointer(usize),
     Size(usize),
     Struct(Vec<u8>),
+}
+
+#[derive(Clone, Copy)]
+struct CallbackTypeDesc {
+    kind: CTypeKind,
+    size: usize,
+}
+
+struct CallbackUserData {
+    shared: std::sync::Arc<crate::SharedVMData>,
+    code_ptr: u64,
+    module_path: Option<String>,
+    param_types: Vec<CallbackTypeDesc>,
+    return_type: CallbackTypeDesc,
+}
+
+struct CallbackRuntime {
+    closure: *mut raw::ffi_closure,
+    code_ptr: u64,
+    cif: Box<raw::ffi_cif>,
+    arg_types: Vec<Type>,
+    ffi_arg_ptrs: Vec<*mut raw::ffi_type>,
+    return_type: Type,
+    user_data: Box<CallbackUserData>,
+}
+
+impl Drop for CallbackRuntime {
+    fn drop(&mut self) {
+        let _ = self.code_ptr;
+        let _ = &self.cif;
+        let _ = &self.arg_types;
+        let _ = &self.ffi_arg_ptrs;
+        let _ = &self.return_type;
+        let _ = &self.user_data;
+        if !self.closure.is_null() {
+            unsafe { raw::ffi_closure_free(self.closure as *mut libc::c_void) };
+        }
+    }
+}
+
+static CALLBACK_REGISTRY: OnceLock<Mutex<HashMap<u64, usize>>> =
+    OnceLock::new();
+
+fn callback_registry() -> &'static Mutex<HashMap<u64, usize>> {
+    CALLBACK_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn callback_return_default(desc: CallbackTypeDesc, result: *mut libc::c_void) {
+    if matches!(desc.kind, CTypeKind::Void) || result.is_null() {
+        return;
+    }
+    unsafe {
+        std::ptr::write_bytes(result as *mut u8, 0, desc.size.max(1));
+    }
+}
+
+fn callback_read_value(
+    arg: *mut libc::c_void,
+    desc: CallbackTypeDesc,
+) -> Result<Value, &'static str> {
+    if arg.is_null() {
+        return Err("ffi callback argument pointer is null");
+    }
+    unsafe {
+        match desc.kind {
+            CTypeKind::Void => Err("void is not valid callback parameter type"),
+            CTypeKind::I8 => Ok(Value::from_i64(*(arg as *const i8) as i64)),
+            CTypeKind::U8 => Ok(Value::from_i64(*(arg as *const u8) as i64)),
+            CTypeKind::I16 => Ok(Value::from_i64(*(arg as *const i16) as i64)),
+            CTypeKind::U16 => Ok(Value::from_i64(*(arg as *const u16) as i64)),
+            CTypeKind::I32 => Ok(Value::from_i64(*(arg as *const i32) as i64)),
+            CTypeKind::U32 => Ok(Value::from_i64(*(arg as *const u32) as i64)),
+            CTypeKind::I64 => {
+                let raw = *(arg as *const i64);
+                if (-((1_i64) << 62)..=((1_i64 << 62) - 1)).contains(&raw) {
+                    Ok(Value::from_i64(raw))
+                } else {
+                    Err("i64 callback argument does not fit fixnum")
+                }
+            }
+            CTypeKind::U64 => {
+                let raw = *(arg as *const u64);
+                if raw <= BigNum::FIXNUM_MAX as u64 {
+                    Ok(Value::from_i64(raw as i64))
+                } else {
+                    Err("u64 callback argument does not fit fixnum")
+                }
+            }
+            CTypeKind::Pointer => {
+                let raw = *(arg as *const usize) as u64;
+                if raw <= BigNum::FIXNUM_MAX as u64 {
+                    Ok(Value::from_i64(raw as i64))
+                } else {
+                    Err("pointer callback argument does not fit fixnum")
+                }
+            }
+            CTypeKind::Size => {
+                let raw = *(arg as *const usize) as u64;
+                if raw <= BigNum::FIXNUM_MAX as u64 {
+                    Ok(Value::from_i64(raw as i64))
+                } else {
+                    Err("size callback argument does not fit fixnum")
+                }
+            }
+            CTypeKind::F32 | CTypeKind::F64 => {
+                Err("float callback arguments are not supported yet")
+            }
+            CTypeKind::Struct => {
+                Err("struct callback arguments are not supported yet")
+            }
+        }
+    }
+}
+
+fn callback_write_value(
+    value: Value,
+    desc: CallbackTypeDesc,
+    result: *mut libc::c_void,
+) -> Result<(), RuntimeError> {
+    if matches!(desc.kind, CTypeKind::Void) {
+        return Ok(());
+    }
+    if result.is_null() {
+        return Err(RuntimeError::Unimplemented {
+            message: "ffi callback result pointer is null",
+        });
+    }
+
+    unsafe {
+        match desc.kind {
+            CTypeKind::Void => Ok(()),
+            CTypeKind::I8 => {
+                *(result as *mut i8) = i8::try_from(value_to_i64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of i8 range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::U8 => {
+                *(result as *mut u8) = u8::try_from(value_to_u64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of u8 range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::I16 => {
+                *(result as *mut i16) = i16::try_from(value_to_i64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of i16 range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::U16 => {
+                *(result as *mut u16) = u16::try_from(value_to_u64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of u16 range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::I32 => {
+                *(result as *mut i32) = i32::try_from(value_to_i64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of i32 range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::U32 => {
+                *(result as *mut u32) = u32::try_from(value_to_u64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of u32 range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::I64 => {
+                *(result as *mut i64) = value_to_i64(value)?;
+                Ok(())
+            }
+            CTypeKind::U64 => {
+                *(result as *mut u64) = value_to_u64(value)?;
+                Ok(())
+            }
+            CTypeKind::F32 => {
+                *(result as *mut f32) = if value.is_fixnum() {
+                    expect_fixnum(value)? as f32
+                } else {
+                    (*expect_float(value)?).value as f32
+                };
+                Ok(())
+            }
+            CTypeKind::F64 => {
+                *(result as *mut f64) = if value.is_fixnum() {
+                    expect_fixnum(value)? as f64
+                } else {
+                    (*expect_float(value)?).value
+                };
+                Ok(())
+            }
+            CTypeKind::Pointer => {
+                *(result as *mut usize) =
+                    value_to_pointer_bits(value)? as usize;
+                Ok(())
+            }
+            CTypeKind::Size => {
+                *(result as *mut usize) = usize::try_from(value_to_u64(value)?)
+                    .map_err(|_| RuntimeError::Unimplemented {
+                        message: "callback return value out of size_t range",
+                    })?;
+                Ok(())
+            }
+            CTypeKind::Struct => Err(RuntimeError::Unimplemented {
+                message: "struct callback return values are not supported yet",
+            }),
+        }
+    }
+}
+
+unsafe extern "C" fn ffi_callback_entry(
+    _cif: *mut raw::ffi_cif,
+    result: *mut libc::c_void,
+    args: *mut *mut libc::c_void,
+    user_data: *mut libc::c_void,
+) {
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if user_data.is_null() {
+            return;
+        }
+
+        let data = unsafe { &*(user_data as *const CallbackUserData) };
+        let block = {
+            let callbacks = data
+                .shared
+                .ffi_callback_blocks
+                .lock()
+                .expect("ffi callbacks poisoned");
+            callbacks.get(&data.code_ptr).copied()
+        };
+
+        let Some(block) = block else {
+            callback_return_default(data.return_type, result);
+            return;
+        };
+
+        let mut vm = VM::new_unregistered(data.shared.clone());
+        vm.current_module = data.module_path.clone();
+        let mut vm_args = Vec::with_capacity(data.param_types.len());
+        for (idx, desc) in data.param_types.iter().copied().enumerate() {
+            let arg_ptr = if args.is_null() {
+                std::ptr::null_mut()
+            } else {
+                unsafe { *args.add(idx) }
+            };
+            let Ok(value) = callback_read_value(arg_ptr, desc) else {
+                callback_return_default(data.return_type, result);
+                return;
+            };
+            vm_args.push(value);
+        }
+
+        match invoke_block_now(&mut vm, block, &vm_args) {
+            Ok(value) => {
+                if callback_write_value(value, data.return_type, result)
+                    .is_err()
+                {
+                    callback_return_default(data.return_type, result);
+                }
+            }
+            Err(err) => {
+                eprintln!("ffi callback raised runtime error: {:?}", err.error);
+                callback_return_default(data.return_type, result);
+            }
+        }
+    }));
+
+    if run.is_err() {
+        if !user_data.is_null() {
+            let data = unsafe { &*(user_data as *const CallbackUserData) };
+            callback_return_default(data.return_type, result);
+        }
+        eprintln!("ffi callback panicked; returning default value");
+    }
 }
 fn slot_name(slot: &object::Slot) -> Result<&str, RuntimeError> {
     if !slot.name.is_ref() {
@@ -1893,6 +2178,206 @@ pub fn alien_call_with_types(
     );
 
     Ok(result)
+}
+
+pub fn alien_callback_from_block(
+    vm: &mut VM,
+    state: &mut InterpreterState,
+    _receiver: Value,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let block = args.get(0).copied().ok_or(RuntimeError::TypeError {
+        expected: "block",
+        got: Value::from_i64(0),
+    })?;
+    let param_types_v =
+        args.get(1).copied().ok_or(RuntimeError::TypeError {
+            expected: "Array of callback parameter CTypes",
+            got: Value::from_i64(0),
+        })?;
+    let return_type_v =
+        args.get(2).copied().ok_or(RuntimeError::TypeError {
+            expected: "callback return CType",
+            got: Value::from_i64(0),
+        })?;
+
+    let type_arr = expect_array(param_types_v)?;
+    let types = unsafe { (*type_arr).elements() };
+
+    let mut decode_stack = Vec::new();
+    let mut decode_roots = vec![block, param_types_v, return_type_v];
+    let mut param_descs = Vec::with_capacity(types.len());
+    for &type_value in types {
+        let desc = decode_ctype_descriptor(
+            vm,
+            state,
+            type_value,
+            &mut decode_roots,
+            &mut decode_stack,
+        )?;
+        if matches!(desc.kind, CTypeKind::Void) {
+            return Err(RuntimeError::Unimplemented {
+                message: "void callback parameters are not supported",
+            });
+        }
+        if matches!(desc.kind, CTypeKind::F32 | CTypeKind::F64) {
+            return Err(RuntimeError::Unimplemented {
+                message: "float callback parameters are not supported yet",
+            });
+        }
+        if matches!(desc.kind, CTypeKind::Struct) {
+            return Err(RuntimeError::Unimplemented {
+                message: "struct callback parameters are not supported yet",
+            });
+        }
+        param_descs.push(desc);
+    }
+
+    let return_desc = decode_ctype_descriptor(
+        vm,
+        state,
+        return_type_v,
+        &mut decode_roots,
+        &mut decode_stack,
+    )?;
+    if matches!(return_desc.kind, CTypeKind::Struct) {
+        return Err(RuntimeError::Unimplemented {
+            message: "struct callback return values are not supported yet",
+        });
+    }
+
+    let mut arg_types = Vec::with_capacity(param_descs.len());
+    let mut callback_param_types = Vec::with_capacity(param_descs.len());
+    for desc in &param_descs {
+        arg_types.push(desc.ffi_type.clone());
+        callback_param_types.push(CallbackTypeDesc {
+            kind: desc.kind,
+            size: desc.size,
+        });
+    }
+    let return_type = return_desc.ffi_type.clone();
+    let callback_return_type = CallbackTypeDesc {
+        kind: return_desc.kind,
+        size: return_desc.size,
+    };
+
+    let mut cif = Box::new(unsafe { std::mem::zeroed::<raw::ffi_cif>() });
+    let mut ffi_arg_ptrs: Vec<*mut raw::ffi_type> =
+        arg_types.iter().map(|ty| ty.as_raw_ptr()).collect();
+    let prep_cif = unsafe {
+        raw::ffi_prep_cif(
+            cif.as_mut(),
+            raw::ffi_abi_FFI_DEFAULT_ABI,
+            ffi_arg_ptrs.len() as u32,
+            return_type.as_raw_ptr(),
+            ffi_arg_ptrs.as_mut_ptr(),
+        )
+    };
+    if prep_cif != raw::ffi_status_FFI_OK {
+        return Err(RuntimeError::Unimplemented {
+            message: "failed to prepare ffi callback signature",
+        });
+    }
+
+    let mut code_loc: *mut libc::c_void = std::ptr::null_mut();
+    let closure = unsafe {
+        raw::ffi_closure_alloc(
+            size_of::<raw::ffi_closure>(),
+            &mut code_loc as *mut *mut libc::c_void,
+        ) as *mut raw::ffi_closure
+    };
+    if closure.is_null() || code_loc.is_null() {
+        return Err(RuntimeError::Unimplemented {
+            message: "ffi callback closure allocation failed",
+        });
+    }
+    let code_ptr = code_loc as u64;
+
+    let mut user_data = Box::new(CallbackUserData {
+        shared: vm.shared.clone(),
+        code_ptr,
+        module_path: vm.current_module.clone(),
+        param_types: callback_param_types,
+        return_type: callback_return_type,
+    });
+    let prep_closure = unsafe {
+        raw::ffi_prep_closure_loc(
+            closure,
+            cif.as_mut(),
+            Some(ffi_callback_entry),
+            (&mut *user_data) as *mut CallbackUserData as *mut libc::c_void,
+            code_loc,
+        )
+    };
+    if prep_closure != raw::ffi_status_FFI_OK {
+        unsafe { raw::ffi_closure_free(closure as *mut libc::c_void) };
+        return Err(RuntimeError::Unimplemented {
+            message: "failed to prepare ffi callback closure",
+        });
+    }
+
+    let runtime = Box::new(CallbackRuntime {
+        closure,
+        code_ptr,
+        cif,
+        arg_types,
+        ffi_arg_ptrs,
+        return_type,
+        user_data,
+    });
+    let runtime_ptr = Box::into_raw(runtime) as usize;
+
+    {
+        let mut registry = callback_registry()
+            .lock()
+            .expect("ffi callback registry poisoned");
+        if let Some(old_ptr) = registry.insert(code_ptr, runtime_ptr) {
+            drop(unsafe { Box::from_raw(old_ptr as *mut CallbackRuntime) });
+        }
+    }
+    vm.with_ffi_callback_blocks(|callbacks| {
+        callbacks.insert(code_ptr, block);
+    });
+
+    let mut scratch = vec![block, param_types_v, return_type_v];
+    let callback_ptr =
+        with_roots(vm, state, &mut scratch, |proxy, roots| unsafe {
+            alloc_alien(proxy, roots, code_ptr, 0).value()
+        });
+    Ok(callback_ptr)
+}
+
+pub fn alien_callback_free(
+    vm: &mut VM,
+    _state: &mut InterpreterState,
+    receiver: Value,
+    _args: &[Value],
+) -> Result<Value, RuntimeError> {
+    let ptr = expect_alien(receiver)? as *mut Alien;
+    let code_ptr = unsafe { (*ptr).ptr };
+    if code_ptr == 0 {
+        return Ok(receiver);
+    }
+
+    let runtime_ptr = {
+        let mut registry = callback_registry()
+            .lock()
+            .expect("ffi callback registry poisoned");
+        registry.remove(&code_ptr)
+    }
+    .ok_or(RuntimeError::Unimplemented {
+        message: "alien pointer is not an active ffi callback",
+    })?;
+
+    drop(unsafe { Box::from_raw(runtime_ptr as *mut CallbackRuntime) });
+    vm.with_ffi_callback_blocks(|callbacks| {
+        callbacks.remove(&code_ptr);
+    });
+
+    unsafe {
+        (*ptr).ptr = 0;
+    }
+    Ok(receiver)
 }
 
 // ── Bulk copy ────────────────────────────────────────────────────────

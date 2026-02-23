@@ -1009,6 +1009,11 @@ pub fn bootstrap(settings: HeapSettings) -> VMProxy {
                 "alien_call_with_types",
                 "_AlienCallWithTypes:Args:ReturnType:",
             ),
+            (
+                "alien_callback_from_block",
+                "_AlienCallbackFromBlock:Types:ReturnType:",
+            ),
+            ("alien_callback_free", "_AlienCallbackFree"),
         ];
 
         for (prim_name, slot_name) in alien_primitives {
@@ -3306,6 +3311,7 @@ pub fn bootstrap(settings: HeapSettings) -> VMProxy {
             modules: Mutex::new(HashMap::new()),
             next_thread_id: AtomicU64::new(1),
             platform_threads: Mutex::new(HashMap::new()),
+            ffi_callback_blocks: Mutex::new(HashMap::new()),
             lock_records: Mutex::new(HashMap::new()),
         });
         let mut vm = VMProxy {

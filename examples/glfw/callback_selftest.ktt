@@ -1,0 +1,34 @@
+Module open: 'GLFWCallbackSelftest.
+Module use: 'GLFW.
+Module use: 'Alien.
+
+ok := glfw init.
+ok == 0 ifTrue: [
+    "glfwInit failed" println.
+    ^ None
+].
+
+window := glfw createWindowWidth: 320 Height: 200 Title: "GLFW callback selftest".
+window == 0 ifTrue: [
+    "glfwCreateWindow failed" println.
+    glfw terminate.
+    ^ None
+].
+
+cb := glfw setKeyCallbackForWindow: window Do: [ | w key scancode action mods |
+    action != 0 ifTrue: [
+        key == glfw KEY_ESCAPE ifTrue: [
+            glfw setWindowShouldClose: w Value: 1
+        ] IfFalse: [ None ]
+    ] IfFalse: [ None ].
+    None
+].
+
+TKeyCallback := (CPointer & CInt32 & CInt32 & CInt32 & CInt32) asArray.
+invoke := PreparedAlienCall fromFn: cb Types: TKeyCallback ReturnType: CVoid.
+invoke call: window With: glfw KEY_ESCAPE With: 0 With: glfw ACTION_PRESS With: 0.
+
+((glfw windowShouldClose: window) toString) println.
+
+glfw destroyWindow: window.
+glfw terminate.

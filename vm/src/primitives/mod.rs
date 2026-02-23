@@ -335,6 +335,16 @@ pub fn default_primitives() -> Vec<PrimitiveDesc> {
             3,
             alien::alien_call_with_types,
         ),
+        PrimitiveDesc::new(
+            "alien_callback_from_block",
+            3,
+            alien::alien_callback_from_block,
+        ),
+        PrimitiveDesc::new(
+            "alien_callback_free",
+            0,
+            alien::alien_callback_free,
+        ),
         PrimitiveDesc::new("object_pin", 1, pin::object_pin),
         PrimitiveDesc::new("object_unpin", 1, pin::object_unpin),
         PrimitiveDesc::new("object_is_pinned", 1, pin::object_is_pinned),

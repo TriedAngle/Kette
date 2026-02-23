@@ -1,0 +1,14 @@
+// expect:
+// ok
+
+TOne := (CInt32) asArray.
+
+cb := Alien callbackFromBlock: [ | x |
+    x + 1.
+    None
+] Types: TOne ReturnType: CVoid.
+
+invoke := PreparedAlienCall fromFn: cb Types: TOne ReturnType: CVoid.
+invoke call: 41.
+cb callbackFree.
+"ok" println.

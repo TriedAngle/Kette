@@ -1,0 +1,34 @@
+Module open: 'GLFWExampleMin.
+Module use: 'GLFW.
+
+ok := glfw init.
+ok == 0 ifTrue: [
+    "glfwInit failed" println.
+    ^ None
+].
+
+window := glfw createWindowWidth: 640 Height: 360 Title: "Kette GLFW callback".
+window == 0 ifTrue: [
+    "glfwCreateWindow failed" println.
+    glfw terminate.
+    ^ None
+].
+
+glfw makeContextCurrent: window.
+glfw setKeyCallbackForWindow: window Do: [ | w key scancode action mods |
+    "hello from C" println.
+    action == glfw ACTION_PRESS ifTrue: [
+        key == glfw KEY_ESCAPE ifTrue: [
+            glfw setWindowShouldClose: w Value: 1
+        ] IfFalse: [ None ]
+    ].
+    None
+].
+
+[ (glfw windowShouldClose: window) == 0 ] whileTrue: [
+    glfw pollEvents.
+    glfw swapBuffers: window
+].
+
+glfw destroyWindow: window.
+glfw terminate.
