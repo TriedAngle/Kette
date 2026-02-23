@@ -1,3 +1,6 @@
+// expect:
+// proxy-ctype-accessors: ok
+
 Module open: 'Test::ProxyCTypeAccessors.
 Module use: 'Alien & 'System.
 

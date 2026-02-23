@@ -1,3 +1,9 @@
+// expect:
+// 9326
+// 9326
+// 56
+// file-disposable: ok
+
 Module open: 'Test::FileDisposable.
 Module use: 'System & 'OS.
 

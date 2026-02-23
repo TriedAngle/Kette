@@ -1,3 +1,6 @@
+// expect:
+// proxy-ctype-nested-struct: ok
+
 Module open: 'Test::ProxyCTypeNestedStruct.
 Module use: 'Alien.
 

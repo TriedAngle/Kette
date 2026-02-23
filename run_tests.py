@@ -16,13 +16,13 @@ ALIEN_INIT = "core/alien.ktt"
 SYSTEM_INIT = "core/system.ktt"
 OS_INIT = "core/os.ktt"
 def build_command(debug: bool) -> list[str]:
-    cmd = ["cargo", "build", "--bin", "kette"]
+    cmd = ["cargo", "build", "--bin", "vm"]
     if not debug:
         cmd.append("--release")
     return cmd
 
 def run_command(debug: bool) -> list[str]:
-    cmd = ["cargo", "run", "--bin", "kette"]
+    cmd = ["cargo", "run", "--bin", "vm"]
     if not debug:
         cmd.append("--release")
     cmd.extend([
