@@ -3,6 +3,7 @@ pub mod compiler0;
 pub mod image;
 pub mod interpreter;
 pub mod materialize;
+pub mod handles;
 pub mod primitives;
 pub mod special;
 pub mod threading;
@@ -77,6 +78,7 @@ pub struct VMProxy {
     #[cfg(debug_assertions)]
     pub trace_send_name: Option<String>,
     pub shared: Arc<SharedVMData>,
+    pub handle_roots_head: *mut handles::HandleSet,
 }
 
 pub type VM = VMProxy;
@@ -163,6 +165,14 @@ impl RootProvider for VMProxy {
                 visitor(v);
             }
         }
+
+        unsafe {
+            let mut cursor = self.handle_roots_head;
+            while let Some(handleset) = cursor.as_mut() {
+                handleset.visit_roots(visitor);
+                cursor = handleset.next;
+            }
+        }
     }
 }
 
@@ -192,6 +202,7 @@ impl VMProxy {
             #[cfg(debug_assertions)]
             trace_send_name: None,
             shared,
+            handle_roots_head: core::ptr::null_mut(),
         }
     }
 
@@ -245,6 +256,10 @@ impl VMProxy {
             .lock()
             .expect("ffi callbacks poisoned");
         f(&mut callbacks)
+    }
+
+    pub fn new_handleset(&mut self) -> handles::HandleSet {
+        handles::HandleSet::new_root(self)
     }
 }
 
