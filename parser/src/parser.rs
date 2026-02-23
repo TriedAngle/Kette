@@ -359,14 +359,8 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         mut left: ExprId,
         min_prec: u8,
     ) -> Result<ExprId, ParseError> {
-        loop {
-            let (op, prec) = match self.peek_kind().clone() {
-                TokenKind::Operator(op) => {
-                    let prec = self.operator_precedence(&op);
-                    (op, prec)
-                }
-                _ => break,
-            };
+        while let TokenKind::Operator(op) = self.peek_kind().clone() {
+            let prec = self.operator_precedence(&op);
             if prec < min_prec {
                 break;
             }
@@ -396,25 +390,21 @@ impl<I: Iterator<Item = Token>> Parser<I> {
     }
 
     fn parse_unary_tail(&mut self, mut expr: ExprId) -> ExprId {
-        loop {
-            if let TokenKind::Identifier(_) = self.peek_kind() {
-                let tok = self.advance();
-                let sel = match tok.kind {
-                    TokenKind::Identifier(s) => s,
-                    _ => unreachable!(),
-                };
-                let span = self.span_of(expr).merge(tok.span);
-                expr = self.alloc_expr(
-                    ExprKind::UnaryMessage {
-                        receiver: expr,
-                        selector: sel,
-                        selector_span: tok.span,
-                    },
-                    span,
-                );
-            } else {
-                break;
-            }
+        while let TokenKind::Identifier(_) = self.peek_kind().clone() {
+            let tok = self.advance();
+            let sel = match tok.kind {
+                TokenKind::Identifier(s) => s,
+                _ => unreachable!(),
+            };
+            let span = self.span_of(expr).merge(tok.span);
+            expr = self.alloc_expr(
+                ExprKind::UnaryMessage {
+                    receiver: expr,
+                    selector: sel,
+                    selector_span: tok.span,
+                },
+                span,
+            );
         }
         expr
     }

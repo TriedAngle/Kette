@@ -19,7 +19,7 @@ pub fn object_pin(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let value = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "value",
         got: Value::from_i64(0),
     })?;
@@ -34,7 +34,7 @@ pub fn object_unpin(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let value = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "value",
         got: Value::from_i64(0),
     })?;
@@ -49,7 +49,7 @@ pub fn object_is_pinned(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let value = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "value",
         got: Value::from_i64(0),
     })?;

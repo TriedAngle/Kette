@@ -21,7 +21,7 @@ pub fn array_clone_with_size(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let size_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let size_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "size",
         got: Value::from_i64(0),
     })?;
@@ -47,7 +47,7 @@ pub fn array_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let index_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let index_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -58,7 +58,7 @@ pub fn array_at(
         });
     }
 
-    let ptr = expect_array(receiver)? as *const Array;
+    let ptr = expect_array(receiver)?;
     let len = unsafe { (*ptr).len() } as i64;
     if index >= len {
         return Err(RuntimeError::Unimplemented {
@@ -76,7 +76,7 @@ pub fn array_at_put(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let index_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let index_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;

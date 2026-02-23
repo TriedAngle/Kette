@@ -1,9 +1,9 @@
-/// Source location and span tracking.
-///
-/// Every token and AST node carries a [`Span`] that records exactly where
-/// it appeared in the source text — byte offset, line, and column for both
-/// the start and end positions.
-
+//! Source location and span tracking.
+//!
+//! Every token and AST node carries a [`Span`] that records exactly where
+//! it appeared in the source text -- byte offset, line, and column for both
+//! the start and end positions.
+//!
 /// A single position in source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pos {

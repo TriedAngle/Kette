@@ -14,7 +14,7 @@ pub fn object_reflect(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let reflectee = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let reflectee = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "reflectee",
         got: Value::from_i64(0),
     })?;
@@ -56,7 +56,7 @@ pub fn mirror_slot_name_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -92,7 +92,7 @@ pub fn mirror_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "slot name",
         got: Value::from_i64(0),
     })?;
@@ -130,7 +130,7 @@ pub fn mirror_at_put(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "slot name",
         got: Value::from_i64(0),
     })?;
@@ -176,7 +176,7 @@ pub fn mirror_is_parent_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "slot name",
         got: Value::from_i64(0),
     })?;
@@ -205,7 +205,7 @@ pub fn mirror_is_assignable_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "slot name",
         got: Value::from_i64(0),
     })?;
@@ -234,7 +234,7 @@ pub fn mirror_add_slot_value(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "slot name",
         got: Value::from_i64(0),
     })?;
@@ -274,7 +274,7 @@ pub fn mirror_remove_slot(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "slot name",
         got: Value::from_i64(0),
     })?;

@@ -555,7 +555,9 @@ impl HeapInner {
     /// Block index for any pointer inside the heap.
     #[inline(always)]
     pub fn block_index_for(&self, ptr: *const u8) -> usize {
-        let offset = unsafe { ptr.offset_from(self.heap_start) } as usize;
+        let offset = (ptr as usize)
+            .checked_sub(self.heap_start as usize)
+            .expect("pointer must be within heap");
         offset / self.settings.block_size
     }
 
@@ -563,10 +565,10 @@ impl HeapInner {
     #[inline]
     pub fn mark_object_lines(&self, ptr: *const u8, size: usize, epoch: u8) {
         let line_size = self.settings.line_size;
-        let lines = (size + line_size - 1) / line_size;
+        let lines = size.div_ceil(line_size);
         for i in 0..lines {
-            // SAFETY: ptr is within the heap and size is valid for this object
-            self.mark_object_line(unsafe { ptr.add(i * line_size) }, epoch);
+            let line_ptr = (ptr as usize + i * line_size) as *const u8;
+            self.mark_object_line(line_ptr, epoch);
         }
     }
 

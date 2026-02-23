@@ -116,17 +116,13 @@ fn make_ratio_from_bigvalues(
         denom = d_div;
     }
 
-    if allow_demote {
-        if denom.sign == 1 && denom.limbs.len() == 1 && denom.limbs[0] == 1 {
-            let mut scratch = Vec::new();
-            return bignum_value_to_value(
-                vm,
-                state,
-                &numer,
-                &mut scratch,
-                true,
-            );
-        }
+    if allow_demote
+        && denom.sign == 1
+        && denom.limbs.len() == 1
+        && denom.limbs[0] == 1
+    {
+        let mut scratch = Vec::new();
+        return bignum_value_to_value(vm, state, &numer, &mut scratch, true);
     }
 
     let mut scratch = Vec::new();
@@ -207,7 +203,7 @@ pub fn ratio_add(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -226,7 +222,7 @@ pub fn ratio_sub(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -245,7 +241,7 @@ pub fn ratio_mul(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -264,7 +260,7 @@ pub fn ratio_div(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -403,7 +399,7 @@ pub fn ratio_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -425,7 +421,7 @@ pub fn ratio_ne(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -447,7 +443,7 @@ pub fn ratio_lt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -469,7 +465,7 @@ pub fn ratio_le(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -492,7 +488,7 @@ pub fn ratio_gt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;
@@ -514,7 +510,7 @@ pub fn ratio_ge(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ratio",
         got: Value::from_i64(0),
     })?;

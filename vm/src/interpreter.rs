@@ -621,10 +621,10 @@ fn run_due_finalizer(
     preserve_acc: bool,
 ) -> Result<bool, RuntimeError> {
     let frame_depth = state.frames.len();
-    if !state
+    if state
         .finalizers
         .last()
-        .is_some_and(|scope| frame_depth <= scope.scope_depth)
+        .is_none_or(|scope| frame_depth > scope.scope_depth)
     {
         return Ok(false);
     }
@@ -661,6 +661,7 @@ fn push_entry_frame(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_method_frame(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -720,6 +721,7 @@ fn push_method_frame(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_block_frame_with_args(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -820,7 +822,7 @@ fn decode_feedback_entries(entry: Value) -> Option<(*const Array, usize)> {
     if len == 0 {
         return Some((array as *const Array, 0));
     }
-    if len % FEEDBACK_ENTRY_STRIDE != 0 {
+    if !len.is_multiple_of(FEEDBACK_ENTRY_STRIDE) {
         return None;
     }
     let count = len / FEEDBACK_ENTRY_STRIDE;
@@ -933,6 +935,7 @@ fn megamorphic_cache_put(vm: &VM, entry: MegamorphicEntry) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_dispatch_cached_handler(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -980,6 +983,7 @@ fn try_dispatch_cached_handler(
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_dispatch_feedback_entry(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -1075,6 +1079,7 @@ fn try_dispatch_feedback_entry(
     Ok(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_send_feedback_entry(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -1214,6 +1219,7 @@ fn update_send_feedback_entry(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_send(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -1398,6 +1404,7 @@ pub(crate) fn request_unwind(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_resend(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -1482,6 +1489,7 @@ fn dispatch_resend(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_slot(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -1597,6 +1605,7 @@ fn next_instruction_is_local_return(
     matches!(instr, Instruction::LocalReturn)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_tail_recursive_self_call(
     vm: &mut VM,
     state: &mut InterpreterState,
@@ -2022,7 +2031,7 @@ fn temp_array_parent(
     none: Value,
 ) -> Result<Value, RuntimeError> {
     let array = unsafe { &*expect_array(array_val)? };
-    if array.len() == 0 {
+    if array.is_empty() {
         return Err(RuntimeError::TypeError {
             expected: "temp array parent",
             got: array_val,
@@ -2663,8 +2672,8 @@ pub(crate) fn primitive_extend_with(
         });
     }
     let mut append_slots: Vec<(u32, bool)> = Vec::new();
-    let mut idx: u32 = 0;
-    for slot in unsafe { source_map.slots() } {
+    for (idx, slot) in unsafe { source_map.slots() }.iter().enumerate() {
+        let idx = idx as u32;
         if slot.is_assignment() {
             return Err(RuntimeError::Unimplemented {
                 message: "extend: assignable slot",
@@ -2679,7 +2688,6 @@ pub(crate) fn primitive_extend_with(
                 message: "extend: unsupported slot kind",
             });
         }
-        idx += 1;
     }
 
     let mut scratch = vec![target, source, source_map_val];

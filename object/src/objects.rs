@@ -321,6 +321,7 @@ pub const fn code_allocation_size(
 /// `code_allocation_size(constant_count, bytecode_len, source_map_len)`
 /// bytes of writable memory. The caller must then write the constants,
 /// bytecode, and source map into the inline areas.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn init_code(
     ptr: *mut Code,
     constant_count: u32,
@@ -418,6 +419,11 @@ impl BigNum {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len as usize
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     #[inline(always)]
@@ -633,6 +639,11 @@ pub struct Ratio {
 
 const _: () = assert!(size_of::<Ratio>() == 24);
 
+/// Initialize a ratio object at a raw allocation.
+///
+/// # Safety
+///
+/// `ptr` must point to at least `size_of::<Ratio>()` bytes of writable memory.
 pub unsafe fn init_ratio(
     ptr: *mut Ratio,
     numerator: Value,

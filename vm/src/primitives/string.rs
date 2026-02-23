@@ -89,7 +89,7 @@ pub fn symbol_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "symbol rhs",
         got: Value::from_i64(0),
     })?;

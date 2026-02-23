@@ -312,11 +312,11 @@ impl LanguageServer for Backend {
         } else {
             let fresh = Self::semantic_tokens_from_text(&doc.text);
             let mut docs = self.documents.write().await;
-            if let Some(current) = docs.get_mut(&uri) {
-                if current.version == doc.version {
-                    current.semantic_tokens = fresh.clone();
-                    current.analyzed_version = current.version;
-                }
+            if let Some(current) = docs.get_mut(&uri)
+                && current.version == doc.version
+            {
+                current.semantic_tokens = fresh.clone();
+                current.analyzed_version = current.version;
             }
             fresh
         };

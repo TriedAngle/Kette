@@ -130,12 +130,12 @@ fn mul_mag(a: &[u64], b: &[u64]) -> Vec<u64> {
         return Vec::new();
     }
     let mut out = vec![0u64; a.len() + b.len()];
-    for i in 0..a.len() {
+    for (i, &a_limb) in a.iter().enumerate() {
         let mut carry = 0u128;
-        let av = a[i] as u128;
-        for j in 0..b.len() {
+        let av = a_limb as u128;
+        for (j, &b_limb) in b.iter().enumerate() {
             let idx = i + j;
-            let acc = out[idx] as u128 + av * (b[j] as u128) + carry;
+            let acc = out[idx] as u128 + av * (b_limb as u128) + carry;
             out[idx] = acc as u64;
             carry = acc >> 64;
         }
@@ -461,7 +461,7 @@ pub fn bignum_add(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -478,7 +478,7 @@ pub fn bignum_sub(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -495,7 +495,7 @@ pub fn bignum_mul(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -512,7 +512,7 @@ pub fn bignum_div(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -534,7 +534,7 @@ pub fn bignum_mod(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -627,7 +627,7 @@ pub fn bignum_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -642,7 +642,7 @@ pub fn bignum_ne(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -657,7 +657,7 @@ pub fn bignum_lt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -672,7 +672,7 @@ pub fn bignum_le(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -691,7 +691,7 @@ pub fn bignum_gt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;
@@ -706,7 +706,7 @@ pub fn bignum_ge(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "bignum",
         got: Value::from_i64(0),
     })?;

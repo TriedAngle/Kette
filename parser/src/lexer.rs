@@ -250,6 +250,7 @@ impl<R: Read> Lexer<R> {
 /// Convenience: create a lexer directly from a `&str`.
 impl<'a> Lexer<&'a [u8]> {
     /// Create a new lexer from a source string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(source: &'a str) -> Self {
         Self::new(source.as_bytes())
     }
@@ -541,18 +542,16 @@ impl<R: Read> Lexer<R> {
                 );
             }
 
-            if let Some(b) = self.peek() {
-                if (b as char).is_ascii_alphanumeric() {
-                    raw.push(b as char);
-                    self.advance();
-                    return Token::new(
-                        TokenKind::Error(
-                            "invalid digit for radix literal".into(),
-                        ),
-                        Span::new(start, self.pos()),
-                        raw,
-                    );
-                }
+            if let Some(b) = self.peek()
+                && (b as char).is_ascii_alphanumeric()
+            {
+                raw.push(b as char);
+                self.advance();
+                return Token::new(
+                    TokenKind::Error("invalid digit for radix literal".into()),
+                    Span::new(start, self.pos()),
+                    raw,
+                );
             }
 
             let mut value: i128 = 0;
@@ -771,10 +770,11 @@ impl<R: Read> Lexer<R> {
         while let Some(b) = self.peek() {
             if is_op_char(b) {
                 // Guard: don't swallow a `/` that starts a comment.
-                if b == b'/' && !raw.is_empty() {
-                    if matches!(self.peek_ahead(1), Some(b'/') | Some(b'*')) {
-                        break;
-                    }
+                if b == b'/'
+                    && !raw.is_empty()
+                    && matches!(self.peek_ahead(1), Some(b'/') | Some(b'*'))
+                {
+                    break;
                 }
                 raw.push(b as char);
                 self.advance();
@@ -853,20 +853,19 @@ impl<R: Read> Lexer<R> {
                 }
             }
 
-            if self.peek() == Some(b'.') {
-                if let Some(next) = self.peek_ahead(1) {
-                    if next == b'_' || (next as char).is_ascii_alphabetic() {
-                        let span = Span::new(start, self.pos());
-                        return Token::new(
-                            TokenKind::Error(
-                                "dot-separated symbol paths are not supported; use `::`"
-                                    .into(),
-                            ),
-                            span,
-                            raw,
-                        );
-                    }
-                }
+            if self.peek() == Some(b'.')
+                && let Some(next) = self.peek_ahead(1)
+                && (next == b'_' || (next as char).is_ascii_alphabetic())
+            {
+                let span = Span::new(start, self.pos());
+                return Token::new(
+                    TokenKind::Error(
+                        "dot-separated symbol paths are not supported; use `::`"
+                            .into(),
+                    ),
+                    span,
+                    raw,
+                );
             }
             expect_segment = false;
         }
@@ -933,7 +932,7 @@ impl<R: Read> Lexer<R> {
                 Token::new(TokenKind::RBrace, Span::new(start, self.pos()), "}")
             }
             b'|' => {
-                if self.peek_ahead(1).map_or(false, is_op_char) {
+                if self.peek_ahead(1).is_some_and(is_op_char) {
                     self.lex_operator()
                 } else {
                     self.advance();
@@ -962,7 +961,7 @@ impl<R: Read> Lexer<R> {
             b'^' => {
                 if self
                     .peek_ahead(1)
-                    .map_or(false, |c| is_op_char(c) && c != b'^')
+                    .is_some_and(|c| is_op_char(c) && c != b'^')
                 {
                     self.lex_operator()
                 } else {
@@ -1020,7 +1019,7 @@ impl<R: Read> Lexer<R> {
             }
 
             b'=' => {
-                if self.peek_ahead(1).map_or(false, is_op_char) {
+                if self.peek_ahead(1).is_some_and(is_op_char) {
                     self.lex_operator()
                 } else {
                     self.advance();

@@ -11,7 +11,7 @@ pub fn extend_with(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let target = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let target = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "target object",
         got: Value::from_i64(0),
     })?;

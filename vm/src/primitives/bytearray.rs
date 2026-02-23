@@ -29,7 +29,7 @@ pub fn bytearray_clone_with_size(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let size_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let size_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "size",
         got: Value::from_i64(0),
     })?;
@@ -95,7 +95,7 @@ fn memcopy(
     args: &[Value],
     allow_overlap: bool,
 ) -> Result<Value, RuntimeError> {
-    let src = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let src = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "source",
         got: Value::from_i64(0),
     })?;
@@ -123,7 +123,7 @@ fn memcopy(
         });
     }
 
-    let src_ptr = expect_bytearray(src)? as *const ByteArray;
+    let src_ptr = expect_bytearray(src)?;
     let dst_ptr = expect_bytearray(receiver)? as *mut ByteArray;
     let src_len = unsafe { (*src_ptr).len() } as i64;
     let dst_len = unsafe { (*dst_ptr).len() } as i64;
@@ -144,12 +144,10 @@ fn memcopy(
     if src.raw() == receiver.raw() {
         let src_end = src_off + count;
         let dst_end = dst_off + count;
-        if src_off < dst_end && dst_off < src_end {
-            if !allow_overlap {
-                return Err(RuntimeError::Unimplemented {
-                    message: "bytearray copy overlap",
-                });
-            }
+        if src_off < dst_end && dst_off < src_end && !allow_overlap {
+            return Err(RuntimeError::Unimplemented {
+                message: "bytearray copy overlap",
+            });
         }
     }
 
@@ -307,7 +305,7 @@ pub fn bytearray_read_u64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -324,7 +322,7 @@ pub fn bytearray_read_i64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -341,7 +339,7 @@ pub fn bytearray_read_f32(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -360,7 +358,7 @@ pub fn bytearray_read_f64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -379,7 +377,7 @@ pub fn bytearray_read_pointer(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -432,7 +430,7 @@ pub fn bytearray_write_u64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -453,7 +451,7 @@ pub fn bytearray_write_i64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -474,7 +472,7 @@ pub fn bytearray_write_f32(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -499,7 +497,7 @@ pub fn bytearray_write_f64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;
@@ -524,7 +522,7 @@ pub fn bytearray_write_pointer(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let idx_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let idx_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "index",
         got: Value::from_i64(0),
     })?;

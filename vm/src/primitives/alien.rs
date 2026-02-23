@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::mem::{align_of, size_of};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::rc::Rc;
+use std::sync::{Mutex, OnceLock};
 
 use libffi::middle::{Arg, Cif, CodePtr, Type};
 use libffi::raw;
@@ -26,7 +27,7 @@ use crate::primitives::{
 use crate::VM;
 
 thread_local! {
-    static TLS_CIF_CACHE: RefCell<HashMap<CifCacheKey, Arc<Cif>>> = RefCell::new(HashMap::new());
+    static TLS_CIF_CACHE: RefCell<HashMap<CifCacheKey, Rc<Cif>>> = RefCell::new(HashMap::new());
 }
 
 fn with_thread_local_cif<R, FBuild, FUse>(
@@ -41,7 +42,7 @@ where
     TLS_CIF_CACHE.with(|cache| {
         let cif = {
             let mut map = cache.borrow_mut();
-            map.entry(key).or_insert_with(|| Arc::new(build())).clone()
+            map.entry(key).or_insert_with(|| Rc::new(build())).clone()
         };
         use_cif(cif.as_ref())
     })
@@ -208,23 +209,21 @@ fn value_to_pointer_bits(value: Value) -> Result<u64, RuntimeError> {
             }
             ObjectType::ByteArray => {
                 let ba = expect_bytearray(value)?;
-                let p = unsafe { (ba as *const ByteArray).add(1) as *const u8 };
+                let p = unsafe { ba.add(1) as *const u8 };
                 return Ok(p as u64);
             }
             ObjectType::Str => {
                 let s = expect_string(value)?;
                 let ba_val = unsafe { (*s).data };
                 let ba_ptr = expect_bytearray(ba_val)?;
-                let p =
-                    unsafe { (ba_ptr as *const ByteArray).add(1) as *const u8 };
+                let p = unsafe { ba_ptr.add(1) as *const u8 };
                 return Ok(p as u64);
             }
             ObjectType::Symbol => {
                 let s = expect_symbol(value)?;
                 let ba_val = unsafe { (*s).data };
                 let ba_ptr = expect_bytearray(ba_val)?;
-                let p =
-                    unsafe { (ba_ptr as *const ByteArray).add(1) as *const u8 };
+                let p = unsafe { ba_ptr.add(1) as *const u8 };
                 return Ok(p as u64);
             }
             _ => {}
@@ -245,7 +244,7 @@ pub fn alien_new(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let size_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let size_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "size",
         got: Value::from_i64(0),
     })?;
@@ -280,7 +279,7 @@ pub fn alien_from_address(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let addr_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let addr_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "address",
         got: Value::from_i64(0),
     })?;
@@ -493,7 +492,7 @@ pub fn alien_write_u64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let off_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let off_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "offset",
         got: Value::from_i64(0),
     })?;
@@ -515,7 +514,7 @@ pub fn alien_write_i64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let off_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let off_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "offset",
         got: Value::from_i64(0),
     })?;
@@ -537,7 +536,7 @@ pub fn alien_write_f32(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let off_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let off_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "offset",
         got: Value::from_i64(0),
     })?;
@@ -560,7 +559,7 @@ pub fn alien_write_f64(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let off_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let off_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "offset",
         got: Value::from_i64(0),
     })?;
@@ -582,7 +581,7 @@ pub fn alien_write_pointer(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let off_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let off_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "offset",
         got: Value::from_i64(0),
     })?;
@@ -1103,7 +1102,7 @@ fn bytearray_cache_ptr(value: Value) -> Option<*const CTypeCache> {
         return None;
     }
     let data = unsafe { (ba as *const u8).add(size_of::<ByteArray>()) };
-    if (data as usize) % align_of::<CTypeCache>() != 0 {
+    if !(data as usize).is_multiple_of(align_of::<CTypeCache>()) {
         return None;
     }
     Some(data as *const CTypeCache)
@@ -1160,7 +1159,7 @@ fn alloc_ctype_cache_value(
     });
     let ba_ptr = expect_bytearray(cache_ba)? as *mut ByteArray;
     let data = unsafe { (ba_ptr as *mut u8).add(size_of::<ByteArray>()) };
-    if (data as usize) % align_of::<CTypeCache>() != 0 {
+    if !(data as usize).is_multiple_of(align_of::<CTypeCache>()) {
         return Err(RuntimeError::Unimplemented {
             message: "bytearray cache alignment too small for CTypeCache",
         });
@@ -1401,7 +1400,7 @@ pub fn ctype_build_struct(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let definition = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let definition = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ctype struct field definition",
         got: Value::from_i64(0),
     })?;
@@ -1530,7 +1529,7 @@ pub fn ctype_field_info_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let field_name = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let field_name = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "field name",
         got: Value::from_i64(0),
     })?;
@@ -1616,7 +1615,7 @@ pub fn ctype_field_name_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let index_value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let index_value = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "field index",
         got: Value::from_i64(0),
     })?;
@@ -1656,7 +1655,7 @@ pub fn ctype_field_offset_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let index_value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let index_value = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "field index",
         got: Value::from_i64(0),
     })?;
@@ -1696,7 +1695,7 @@ pub fn ctype_field_type_at(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let index_value = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let index_value = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "field index",
         got: Value::from_i64(0),
     })?;
@@ -1907,9 +1906,7 @@ fn marshal_arg(
                             message: "struct argument bytearray too small",
                         });
                     }
-                    let src = unsafe {
-                        (ba_ptr as *const ByteArray).add(1) as *const u8
-                    };
+                    let src = unsafe { ba_ptr.add(1) as *const u8 };
                     let mut bytes = vec![0u8; desc.size];
                     unsafe {
                         std::ptr::copy_nonoverlapping(
@@ -1960,7 +1957,7 @@ pub fn alien_call_with_types(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     let param_types_v =
-        args.get(0).copied().ok_or(RuntimeError::TypeError {
+        args.first().copied().ok_or(RuntimeError::TypeError {
             expected: "Array of CTypes",
             got: Value::from_i64(0),
         })?;
@@ -2186,7 +2183,7 @@ pub fn alien_callback_from_block(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let block = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let block = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "block",
         got: Value::from_i64(0),
     })?;
@@ -2390,7 +2387,7 @@ pub fn alien_copy_to_bytearray(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let dst_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let dst_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ByteArray",
         got: Value::from_i64(0),
     })?;
@@ -2433,7 +2430,7 @@ pub fn alien_copy_from_bytearray(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let src_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let src_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "ByteArray",
         got: Value::from_i64(0),
     })?;
@@ -2449,7 +2446,7 @@ pub fn alien_copy_from_bytearray(
         });
     }
 
-    let src_ptr = expect_bytearray(src_v)? as *const ByteArray;
+    let src_ptr = expect_bytearray(src_v)?;
     let src_len = unsafe { (*src_ptr).len() } as i64;
     if src_off + len > src_len {
         return Err(RuntimeError::Unimplemented {
@@ -2481,7 +2478,7 @@ pub fn alien_library_open(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let path_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let path_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "string path",
         got: Value::from_i64(0),
     })?;
@@ -2568,7 +2565,7 @@ pub fn alien_library_sym(
             message: "library handle is null",
         });
     }
-    let name_v = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let name_v = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "string symbol name",
         got: Value::from_i64(0),
     })?;

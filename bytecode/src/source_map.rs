@@ -1,10 +1,10 @@
-/// Delta-encoded VLQ source map: maps bytecode PCs to source character ranges.
-///
-/// Each entry is 3 VLQ values:
-/// - `delta_pc` (unsigned VLQ)
-/// - `delta_start` (signed, zigzag + VLQ)
-/// - `delta_end` (signed, zigzag + VLQ)
-
+//! Delta-encoded VLQ source map: maps bytecode PCs to source character ranges.
+//!
+//! Each entry is 3 VLQ values:
+//! - `delta_pc` (unsigned VLQ)
+//! - `delta_start` (signed, zigzag + VLQ)
+//! - `delta_end` (signed, zigzag + VLQ)
+//!
 /// Accumulates source map entries during compilation.
 pub struct SourceMapBuilder {
     entries: Vec<(u32, u32, u32)>, // (pc, start, end)

@@ -359,17 +359,17 @@ fn classify_slot_params_for_slot(
     let mut remaining: HashSet<&str> =
         slot.params.iter().map(String::as_str).collect();
     for tok in &tokens[start_idx..end_idx] {
-        if let TokenKind::Identifier(name) = &tok.kind {
-            if remaining.contains(name.as_str()) {
-                out.add(
-                    tok.span.start.offset,
-                    tok.span.end.offset,
-                    SemanticKind::Parameter,
-                );
-                remaining.remove(name.as_str());
-                if remaining.is_empty() {
-                    break;
-                }
+        if let TokenKind::Identifier(name) = &tok.kind
+            && remaining.contains(name.as_str())
+        {
+            out.add(
+                tok.span.start.offset,
+                tok.span.end.offset,
+                SemanticKind::Parameter,
+            );
+            remaining.remove(name.as_str());
+            if remaining.is_empty() {
+                break;
             }
         }
     }
@@ -473,16 +473,14 @@ fn collect_strict_issues(
         } => {
             match &arena.get(*target).kind {
                 ExprKind::Ident(name) => {
-                    if *kind == AssignKind::Assign {
-                        if let Some(info) = lookup_binding(name, scopes) {
-                            if !info.mutable {
-                                out.push(SemanticIssue {
-                                    message: "cannot assign to constant"
-                                        .to_string(),
-                                    span: arena.get(*target).span,
-                                });
-                            }
-                        }
+                    if *kind == AssignKind::Assign
+                        && let Some(info) = lookup_binding(name, scopes)
+                        && !info.mutable
+                    {
+                        out.push(SemanticIssue {
+                            message: "cannot assign to constant".to_string(),
+                            span: arena.get(*target).span,
+                        });
                     }
                 }
                 _ => out.push(SemanticIssue {

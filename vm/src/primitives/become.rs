@@ -9,7 +9,7 @@ pub fn object_become_with(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let a = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let a = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "first object",
         got: Value::from_i64(0),
     })?;

@@ -98,7 +98,7 @@ pub fn float_to_string_digits(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let digits_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let digits_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "digits",
         got: Value::from_i64(0),
     })?;
@@ -109,7 +109,7 @@ pub fn float_to_string_digits(
         });
     }
     let digits = unsafe { digits_val.to_i64() };
-    if digits < 0 || digits > 50 {
+    if !(0..=50).contains(&digits) {
         return Err(RuntimeError::Unimplemented {
             message: "digits out of range",
         });
@@ -126,7 +126,7 @@ pub fn float_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -141,7 +141,7 @@ pub fn float_ne(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -156,7 +156,7 @@ pub fn float_lt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -171,7 +171,7 @@ pub fn float_le(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -186,7 +186,7 @@ pub fn float_gt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -201,7 +201,7 @@ pub fn float_ge(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -216,7 +216,7 @@ pub fn float_approx_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -236,7 +236,7 @@ pub fn float_add(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -255,7 +255,7 @@ pub fn float_sub(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -274,7 +274,7 @@ pub fn float_mul(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -293,7 +293,7 @@ pub fn float_div(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;
@@ -312,7 +312,7 @@ pub fn float_mod(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "float",
         got: Value::from_i64(0),
     })?;

@@ -394,7 +394,6 @@ impl VM {
             self.with_modules(|modules| {
                 if let Some(module) = modules.get_mut(&owner_path) {
                     module.bindings.insert(owner_name.clone(), value);
-                    return;
                 }
             });
             return true;

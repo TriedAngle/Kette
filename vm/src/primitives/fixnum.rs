@@ -35,7 +35,7 @@ pub fn fixnum_add(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -52,7 +52,7 @@ pub fn fixnum_sub(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -69,7 +69,7 @@ pub fn fixnum_mul(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -86,7 +86,7 @@ pub fn fixnum_div(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -112,7 +112,7 @@ pub fn fixnum_mod(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -198,12 +198,12 @@ pub fn fixnum_to_string_radix(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let radix_val = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let radix_val = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum radix",
         got: Value::from_i64(0),
     })?;
     let radix = expect_fixnum(radix_val)? as u32;
-    if radix < 2 || radix > 36 {
+    if !(2..=36).contains(&radix) {
         return Err(RuntimeError::Unimplemented {
             message: "radix out of range",
         });
@@ -223,7 +223,7 @@ pub fn fixnum_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -238,7 +238,7 @@ pub fn fixnum_ne(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -253,7 +253,7 @@ pub fn fixnum_lt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -268,7 +268,7 @@ pub fn fixnum_le(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -283,7 +283,7 @@ pub fn fixnum_gt(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;
@@ -298,7 +298,7 @@ pub fn fixnum_ge(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "fixnum",
         got: Value::from_i64(0),
     })?;

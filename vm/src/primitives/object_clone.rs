@@ -14,7 +14,7 @@ pub fn object_eq(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "rhs object",
         got: Value::from_i64(0),
     })?;
@@ -27,7 +27,7 @@ pub fn object_ne(
     receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let rhs = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let rhs = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "rhs object",
         got: Value::from_i64(0),
     })?;
@@ -40,7 +40,7 @@ pub fn object_clone(
     _receiver: Value,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
-    let target = args.get(0).copied().ok_or(RuntimeError::TypeError {
+    let target = args.first().copied().ok_or(RuntimeError::TypeError {
         expected: "object",
         got: Value::from_i64(0),
     })?;

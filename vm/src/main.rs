@@ -347,11 +347,7 @@ fn should_print_last_expr(source: &str) -> bool {
         last_kind = Some(token.kind.clone());
     }
 
-    match last_kind {
-        None => false,
-        Some(TokenKind::Dot) => false,
-        _ => true,
-    }
+    !matches!(last_kind, None | Some(TokenKind::Dot))
 }
 
 fn dump_code_desc(desc: &compiler0::CodeDesc) {
@@ -394,21 +390,13 @@ fn dump_code_desc_inner(desc: &compiler0::CodeDesc, indent: usize) {
                         value = value
                     );
 
-                    if let compiler0::SlotValue::Constant(c) = &slot.value {
-                        match c {
-                            compiler0::ConstEntry::Code(code)
-                            | compiler0::ConstEntry::Method {
-                                code,
-                                tail_call: _,
-                            } => {
-                                println!(
-                                    "{pad}      >> slot code {}",
-                                    slot.name
-                                );
-                                dump_code_desc_inner(code, indent + 8);
-                            }
-                            _ => {}
-                        }
+                    if let compiler0::SlotValue::Constant(
+                        compiler0::ConstEntry::Code(code)
+                        | compiler0::ConstEntry::Method { code, tail_call: _ },
+                    ) = &slot.value
+                    {
+                        println!("{pad}      >> slot code {}", slot.name);
+                        dump_code_desc_inner(code, indent + 8);
                     }
                 }
             }

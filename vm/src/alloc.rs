@@ -87,7 +87,7 @@ pub unsafe fn alloc_array(
     elements: &[Value],
 ) -> Tagged<Array> {
     let len = elements.len();
-    let size = size_of::<Array>() + len * size_of::<Value>();
+    let size = size_of::<Array>() + std::mem::size_of_val(elements);
     let layout = Layout::from_size_align(size, 8).unwrap();
     let ptr = proxy.allocate(layout, roots);
 
@@ -103,6 +103,10 @@ pub unsafe fn alloc_array(
 }
 
 /// Allocate a [`ByteArray`] with the given bytes.
+///
+/// # Safety
+///
+/// Caller must ensure all GC-reachable values are rooted before allocation.
 pub unsafe fn alloc_byte_array(
     proxy: &mut HeapProxy,
     roots: &mut dyn RootProvider,
@@ -129,6 +133,7 @@ pub unsafe fn alloc_byte_array(
 /// # Safety
 ///
 /// `constants` must contain valid [`Value`]s.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn alloc_code(
     proxy: &mut HeapProxy,
     roots: &mut dyn RootProvider,
