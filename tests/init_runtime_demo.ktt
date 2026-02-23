@@ -1,3 +1,17 @@
+// expect:
+// Reading: core/init.ktt (Size: 9326):
+// VM _ModuleOpen: 'Core.
+// 
+// 54
+// incredible
+// Module demo start
+// 45
+// 42
+// 3
+// 42
+// Module demo end
+// App
+
 Module open: 'Test::RuntimeDemo.
 Module use: 'System.
 Module use: 'OS.
@@ -8,7 +22,7 @@ Module use: 'OS.
         eachLine: [ | line |
             line println
         ]
-        First: 3
+        First: 2
 ].
 
 NewGlobal := None.

@@ -1,3 +1,6 @@
+// expect:
+// disposable-using: ok
+
 Module open: 'Test::DisposableUsing.
 Module use: 'OS.
 

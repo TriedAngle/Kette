@@ -89,6 +89,7 @@ Object extend: Fixnum With: {
     sqrt = { (self _FixnumToFloat) sqrt }.
     sin = { MathFFI sin: (self _FixnumToFloat) }.
     cos = { MathFFI cos: (self _FixnumToFloat) }.
+    asComplex = { Complex clone setRe: self Im: 0 }.
 
     toString = { self _FixnumToString }.
     toStringRadix: r = { self _FixnumToStringRadix: r }.
@@ -164,6 +165,7 @@ Object extend: Bignum With: {
 
     neg = { self _BignumNeg }.
     sqrt = { (self _BignumToFloat) sqrt }.
+    asComplex = { Complex clone setRe: self Im: 0 }.
 
     eqFixnum: lhs = { (lhs _FixnumToBignum) _BignumEq: self }.
     neFixnum: lhs = { (lhs _FixnumToBignum) _BignumNe: self }.
@@ -234,6 +236,7 @@ Object extend: Ratio With: {
 
     neg = { self _RatioNeg }.
     sqrt = { (self _RatioToFloat) sqrt }.
+    asComplex = { Complex clone setRe: self Im: 0 }.
 
     eqFixnum: lhs = { (lhs _FixnumToRatio) _RatioEq: self }.
     neFixnum: lhs = { (lhs _FixnumToRatio) _RatioNe: self }.
@@ -339,6 +342,7 @@ Object extend: Float With: {
     geFloat: lhs = { lhs _FloatGe: self }.
 
     neg = { self _FloatNeg }.
+    asComplex = { Complex clone setRe: self Im: 0 }.
     sin = { MathFFI sin: self }.
     cos = { MathFFI cos: self }.
     toString = { self _FloatToString }.
