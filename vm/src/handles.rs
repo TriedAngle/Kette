@@ -8,7 +8,10 @@ pub const HANDLESET_CAPACITY: usize = 20;
 const HEAP_PTR_TAG: usize = 1;
 
 struct OverflowChunk {
-    next: *mut OverflowChunk,
+    // Tagged link:
+    // - tag=1 => next OverflowChunk
+    // - tag=0 => next HandleSet in VM chain (or null)
+    next: *mut HandleSet,
     len: usize,
     slots: [Value; HANDLESET_CAPACITY],
 }
@@ -35,11 +38,14 @@ fn untag_heap_ptr<T>(ptr: *mut T) -> *mut T {
 /// `VMProxy::visit_roots` can trace all active handle slots.
 pub struct HandleSet {
     vm: *mut VMProxy,
+    /// Tagged link:
+    /// - tag=0 => next HandleSet in VM chain (or null)
+    /// - tag=1 => head OverflowChunk (which itself eventually links to the
+    ///            next HandleSet with tag=0)
     pub next: *mut HandleSet,
     linked: bool,
     len: usize,
     slots: [Value; HANDLESET_CAPACITY],
-    overflow_head: *mut OverflowChunk,
 }
 
 /// A copyable, scope-bounded rooted handle.
@@ -69,7 +75,6 @@ impl HandleSet {
             linked: false,
             len: 0,
             slots: [Value::from_i64(0); HANDLESET_CAPACITY],
-            overflow_head: core::ptr::null_mut(),
         }
     }
 
@@ -82,7 +87,6 @@ impl HandleSet {
             linked: false,
             len: 0,
             slots: [Value::from_i64(0); HANDLESET_CAPACITY],
-            overflow_head: core::ptr::null_mut(),
         }
     }
 
@@ -127,37 +131,51 @@ impl HandleSet {
     }
 
     fn push_overflow_slot(&mut self) -> &mut Value {
-        if self.overflow_head.is_null() {
+        // First overflow chunk steals `self.next`, preserving VM linkage in
+        // chunk.next. This merges overflow and normal link state into `next`.
+        if !is_heap_tagged(self.next) {
             let chunk = Box::new(OverflowChunk {
-                next: core::ptr::null_mut(),
+                next: self.next,
                 len: 0,
                 slots: [Value::from_i64(0); HANDLESET_CAPACITY],
             });
-            let leaked = Box::into_raw(chunk);
-            self.overflow_head = tag_heap_ptr(leaked);
+            self.next = tag_heap_ptr(Box::into_raw(chunk) as *mut HandleSet);
         }
 
-        let mut tagged = self.overflow_head;
+        let mut tagged = self.next;
         loop {
             debug_assert!(is_heap_tagged(tagged));
-            let chunk_ptr = untag_heap_ptr(tagged);
+            let chunk_ptr =
+                untag_heap_ptr(tagged as *mut OverflowChunk) as *mut OverflowChunk;
             let chunk = unsafe { &mut *chunk_ptr };
+
             if chunk.len < HANDLESET_CAPACITY {
                 let idx = chunk.len;
                 chunk.len += 1;
                 return &mut chunk.slots[idx];
             }
 
-            if chunk.next.is_null() {
+            if !is_heap_tagged(chunk.next) {
                 let next = Box::new(OverflowChunk {
-                    next: core::ptr::null_mut(),
+                    next: chunk.next,
                     len: 0,
                     slots: [Value::from_i64(0); HANDLESET_CAPACITY],
                 });
-                chunk.next = tag_heap_ptr(Box::into_raw(next));
+                chunk.next = tag_heap_ptr(Box::into_raw(next) as *mut HandleSet);
             }
             tagged = chunk.next;
         }
+    }
+
+    /// Return the VM chain successor for this handleset.
+    pub fn vm_next(&self) -> *mut HandleSet {
+        let mut link = self.next;
+        while is_heap_tagged(link) {
+            let chunk_ptr =
+                untag_heap_ptr(link as *mut OverflowChunk) as *mut OverflowChunk;
+            link = unsafe { (*chunk_ptr).next };
+        }
+        link
     }
 
     #[inline(always)]
@@ -169,10 +187,10 @@ impl HandleSet {
             visitor(slot);
         }
 
-        let mut tagged = self.overflow_head;
-        while !tagged.is_null() {
-            debug_assert!(is_heap_tagged(tagged));
-            let chunk_ptr = untag_heap_ptr(tagged);
+        let mut tagged = self.next;
+        while is_heap_tagged(tagged) {
+            let chunk_ptr =
+                untag_heap_ptr(tagged as *mut OverflowChunk) as *mut OverflowChunk;
             let chunk = unsafe { &mut *chunk_ptr };
             for slot in &mut chunk.slots[..chunk.len] {
                 visitor(slot);
@@ -181,24 +199,32 @@ impl HandleSet {
         }
     }
 
-    fn drop_overflow_chain(&mut self) {
-        let mut tagged = self.overflow_head;
-        self.overflow_head = core::ptr::null_mut();
-        while !tagged.is_null() {
-            debug_assert!(is_heap_tagged(tagged));
-            let chunk_ptr = untag_heap_ptr(tagged);
+    fn drop_overflow_chain_and_restore_next(&mut self) {
+        let mut tagged = self.next;
+        if !is_heap_tagged(tagged) {
+            return;
+        }
+
+        let mut vm_next = core::ptr::null_mut();
+        while is_heap_tagged(tagged) {
+            let chunk_ptr =
+                untag_heap_ptr(tagged as *mut OverflowChunk) as *mut OverflowChunk;
             let next = unsafe { (*chunk_ptr).next };
+            if !is_heap_tagged(next) {
+                vm_next = next;
+            }
             unsafe {
                 drop(Box::from_raw(chunk_ptr));
             }
             tagged = next;
         }
+        self.next = vm_next;
     }
 }
 
 impl Drop for HandleSet {
     fn drop(&mut self) {
-        self.drop_overflow_chain();
+        self.drop_overflow_chain_and_restore_next();
 
         if !self.linked {
             return;

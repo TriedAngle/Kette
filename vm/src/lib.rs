@@ -170,7 +170,7 @@ impl RootProvider for VMProxy {
             let mut cursor = self.handle_roots_head;
             while let Some(handleset) = cursor.as_mut() {
                 handleset.visit_roots(visitor);
-                cursor = handleset.next;
+                cursor = handleset.vm_next();
             }
         }
     }
