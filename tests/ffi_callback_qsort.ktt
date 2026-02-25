@@ -17,7 +17,15 @@ cmp := Alien callbackFromBlock: [ | pa pb |
     a - b
 ] Types: TCompare ReturnType: CInt32.
 
-lib := Alien libraryOpen: "libc.so.6".
+os := (VM platformOS) toSymbol.
+libName := (os _SymbolEq: 'windows)
+    ifTrue: [ "ucrtbase.dll" ]
+    IfFalse: [
+        (os _SymbolEq: 'macos)
+            ifTrue: [ "libSystem.B.dylib" ]
+            IfFalse: [ "libc.so.6" ]
+    ].
+lib := Alien libraryOpen: libName.
 qsort := PreparedAlienCall fromFn: (lib librarySym: "qsort") Types: TQsort ReturnType: CVoid.
 qsort call: buf With: 5 With: 4 With: cmp.
 

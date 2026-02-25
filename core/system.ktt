@@ -37,7 +37,7 @@ CSockAddrIn := CType struct: {
 }.
 
 TPosixOpen := (CPointer & CInt32 & CInt32) asArray.
-TPosixLseek := (CInt32 & CInt32 & CInt64) asArray.
+TPosixLseek := (CInt32 & CInt64 & CInt32) asArray.
 TPosixClose := (CInt32) asArray.
 TPosixFstat := (CInt32 & CPointer) asArray.
 TPosixRead := (CInt32 & CPointer & CSize) asArray.
@@ -85,12 +85,23 @@ Posix := {
         div := None
     }.
 
+    defaultCLibraryPath = {
+        os := (VM platformOS) toSymbol.
+        (os _SymbolEq: 'linux)
+            ifTrue: [ "libc.so.6" ]
+            IfFalse: [
+                (os _SymbolEq: 'macos)
+                    ifTrue: [ "libSystem.B.dylib" ]
+                    IfFalse: [ "libc.so.6" ]
+            ]
+    }.
+
     ensureLoaded = {
         self synchronized: [
             self loaded
                 ifTrue: [ self ]
                 IfFalse: [
-                    libHandle := Alien libraryOpen: "libc.so.6".
+                    libHandle := Alien libraryOpen: self defaultCLibraryPath.
                     c := self calls.
                     c open: (PreparedAlienCall fromFn: (libHandle librarySym: "open") Types: TPosixOpen ReturnType: CInt32).
                     c lseek: (PreparedAlienCall fromFn: (libHandle librarySym: "lseek") Types: TPosixLseek ReturnType: CInt64).

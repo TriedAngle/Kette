@@ -156,16 +156,20 @@ PosixFile := {
     statSize = {
         self isOpen
             ifTrue: [
-                statType := CStatLinuxX64.
-                statBuf := ByteArray cloneWithSize: statType size.
-                rc := Posix fstatFd: self fd Into: statBuf.
-                rc == 0
-                    ifTrue: [
-                        statInfo := statType _CTypeFieldInfoAt: "st_size".
-                        statOffset := statInfo offset.
-                        statBuf i64At: statOffset
+                current := Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_CUR.
+                current < 0
+                    ifTrue: [ self _FstatFailed: current ]
+                    IfFalse: [
+                        end := Posix seekFd: self fd Offset: 0 Whence: Posix SEEK_END.
+                        end < 0
+                            ifTrue: [ self _FstatFailed: end ]
+                            IfFalse: [
+                                restore := Posix seekFd: self fd Offset: current Whence: Posix SEEK_SET.
+                                restore < 0
+                                    ifTrue: [ self _FstatFailed: restore ]
+                                    IfFalse: [ end ]
+                            ]
                     ]
-                    IfFalse: [ self _FstatFailed: rc ]
             ]
             IfFalse: [ self _FileClosed ]
     }.

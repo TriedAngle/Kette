@@ -40,7 +40,7 @@ TDrawLine3D := (CVector3 & CVector3 & CUInt32) asArray.
 Raylib := {
     parent* = Oddball.
 
-    libraryPath := "libraylib.so".
+    libraryPath := None.
     lib := None.
     loaded := False.
     CAMERA_PERSPECTIVE = 0.
@@ -66,12 +66,24 @@ Raylib := {
         drawLine3D := None
     }.
 
+    defaultLibraryPath = {
+        os := (VM platformOS) toSymbol.
+        (os _SymbolEq: 'linux)
+            ifTrue: [ "libraylib.so" ]
+            IfFalse: [
+                (os _SymbolEq: 'macos)
+                    ifTrue: [ "/opt/homebrew/opt/raylib/lib/libraylib.dylib" ]
+                    IfFalse: [ "raylib.dll" ]
+            ]
+    }.
+
     ensureLoaded = {
         self synchronized: [
             self loaded
                 ifTrue: [ self ]
                 IfFalse: [
-                    libHandle := Alien libraryOpen: self libraryPath.
+                    path := self libraryPath == None ifTrue: [ self defaultLibraryPath ] IfFalse: [ self libraryPath ].
+                    libHandle := Alien libraryOpen: path.
                     c := self calls.
                     c initWindow: (PreparedAlienCall fromFn: (libHandle librarySym: "InitWindow") Types: TInitWindow ReturnType: CVoid).
                     c setTargetFPS: (PreparedAlienCall fromFn: (libHandle librarySym: "SetTargetFPS") Types: TSetTargetFPS ReturnType: CVoid).

@@ -12,13 +12,24 @@ MathFFI := {
     cosfFn := None.
     floatType := None.
 
+    defaultMathLibraryPath = {
+        os := (VM platformOS) toSymbol.
+        (os _SymbolEq: 'linux)
+            ifTrue: [ "libm.so.6" ]
+            IfFalse: [
+                (os _SymbolEq: 'macos)
+                    ifTrue: [ "libSystem.B.dylib" ]
+                    IfFalse: [ "ucrtbase.dll" ]
+            ]
+    }.
+
     ensureLoaded = {
         self synchronized: [
             self lib == None
                 ifTrue: [
                     alien := Module at: 'Alien.
                     cfloat := alien CFloat32.
-                    libHandle := Alien libraryOpen: "libm.so.6".
+                    libHandle := Alien libraryOpen: self defaultMathLibraryPath.
                     self lib: libHandle.
                     self sinfFn: (libHandle librarySym: "sinf").
                     self cosfFn: (libHandle librarySym: "cosf").

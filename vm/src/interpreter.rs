@@ -11,7 +11,7 @@ use heap::{HeapProxy, RootProvider};
 use object::{
     init_array, init_map, map_allocation_size, slot_object_allocation_size,
     Array, Block, Code, Header, Map, ObjectType, Slot, SlotFlags, SlotObject,
-    VMSymbol, Value,
+    Value,
 };
 
 use crate::VM;
@@ -1879,6 +1879,7 @@ fn store_assoc(
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 fn symbol_to_string(sym: Value) -> Option<String> {
     if !sym.is_ref() {
         return None;
@@ -1889,7 +1890,7 @@ fn symbol_to_string(sym: Value) -> Option<String> {
         return None;
     }
 
-    let s: &VMSymbol = unsafe { sym.as_ref() };
+    let s: &object::VMSymbol = unsafe { sym.as_ref() };
     Some(unsafe { s.as_str() }.to_string())
 }
 
@@ -3001,6 +3002,13 @@ mod tests {
     extern "C" fn ffi_make_pair(a: i32, b: i32) -> TestPair {
         TestPair { a, b }
     }
+
+    #[cfg(target_os = "linux")]
+    const TEST_LIBC_PATH: &str = "libc.so.6";
+    #[cfg(target_os = "macos")]
+    const TEST_LIBC_PATH: &str = "libSystem.B.dylib";
+    #[cfg(target_os = "windows")]
+    const TEST_LIBC_PATH: &str = "ucrtbase.dll";
 
     fn test_settings() -> HeapSettings {
         HeapSettings {
@@ -4339,20 +4347,18 @@ mod tests {
 
     #[test]
     fn alien_dynamic_call_strlen() {
-        let value = run_source(
-            "CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"libc.so.6\". fn := lib _LibrarySym: \"strlen\". s := \"hello\" _StringToByteArray. n := \"hello\" _StringLength. bytes := n _FixnumAdd: 1. a := Alien _AlienNew: bytes. a _AlienCopyFrom: s Offset: 0 Length: bytes. ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: CPointer. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: a. r := fn _AlienCallWithTypes: ts Args: av ReturnType: CSize. lib _LibraryClose. a _AlienFree. r",
-        )
-        .expect("interpret error");
+        let src = "CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"__TEST_LIBC__\". fn := lib _LibrarySym: \"strlen\". s := \"hello\" _StringToByteArray. n := \"hello\" _StringLength. bytes := n _FixnumAdd: 1. a := Alien _AlienNew: bytes. a _AlienCopyFrom: s Offset: 0 Length: bytes. ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: CPointer. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: a. r := fn _AlienCallWithTypes: ts Args: av ReturnType: CSize. lib _LibraryClose. a _AlienFree. r"
+            .replace("__TEST_LIBC__", TEST_LIBC_PATH);
+        let value = run_source(&src).expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 5);
     }
 
     #[test]
     fn alien_dynamic_call_length_mismatch_is_error() {
-        let err = run_source(
-            "CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"libc.so.6\". fn := lib _LibrarySym: \"strlen\". ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: CPointer. av := Array _ArrayCloneWithSize: 0. fn _AlienCallWithTypes: ts Args: av ReturnType: CSize",
-        )
-        .expect_err("expected error");
+        let src = "CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"__TEST_LIBC__\". fn := lib _LibrarySym: \"strlen\". ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: CPointer. av := Array _ArrayCloneWithSize: 0. fn _AlienCallWithTypes: ts Args: av ReturnType: CSize"
+            .replace("__TEST_LIBC__", TEST_LIBC_PATH);
+        let err = run_source(&src).expect_err("expected error");
         assert!(matches!(
             err.error,
             RuntimeError::Unimplemented {
@@ -4385,10 +4391,9 @@ mod tests {
 
     #[test]
     fn ffi_proxy_argument_lowering_in_user_space() {
-        let value = run_source(
-            "Object _Extend: Object With: { cArgValue = { self } }. Object _Extend: Alien With: { callWithOneType: t Arg: v ReturnType: r = { ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: t. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: (v cArgValue). self _AlienCallWithTypes: ts Args: av ReturnType: r } }. CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"libc.so.6\". fn := lib _LibrarySym: \"strlen\". p := { backing = \"hello\". cArgValue = { self backing } }. r := fn callWithOneType: CPointer Arg: p ReturnType: CSize. lib _LibraryClose. r",
-        )
-        .expect("interpret error");
+        let src = "Object _Extend: Object With: { cArgValue = { self } }. Object _Extend: Alien With: { callWithOneType: t Arg: v ReturnType: r = { ts := Array _ArrayCloneWithSize: 1. ts _ArrayAt: 0 Put: t. av := Array _ArrayCloneWithSize: 1. av _ArrayAt: 0 Put: (v cArgValue). self _AlienCallWithTypes: ts Args: av ReturnType: r } }. CPointer := { impl := 12. size = 8. align = 8 }. CSize := { impl := 13. size = 8. align = 8 }. lib := Alien _LibraryOpen: \"__TEST_LIBC__\". fn := lib _LibrarySym: \"strlen\". p := { backing = \"hello\". cArgValue = { self backing } }. r := fn callWithOneType: CPointer Arg: p ReturnType: CSize. lib _LibraryClose. r"
+            .replace("__TEST_LIBC__", TEST_LIBC_PATH);
+        let value = run_source(&src).expect("interpret error");
         assert!(value.is_fixnum());
         assert_eq!(unsafe { value.to_i64() }, 5);
     }

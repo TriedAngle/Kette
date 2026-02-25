@@ -11,7 +11,14 @@ Module use: 'Lib::Nested.
 fromImport := answer.
 fromModuleAt := (Module at: 'Lib::Nested) answer.
 
-msg := ((fromImport == 42) && (fromModuleAt == 42))
-    ifTrue: [ "module-paths-colon-colon: ok" ]
+importOk := fromImport == 42.
+moduleAtOk := fromModuleAt == 42.
+
+msg := importOk
+    ifTrue: [
+        moduleAtOk
+            ifTrue: [ "module-paths-colon-colon: ok" ]
+            IfFalse: [ "module-paths-colon-colon: fail" ]
+    ]
     IfFalse: [ "module-paths-colon-colon: fail" ].
 msg println.
