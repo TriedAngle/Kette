@@ -37,6 +37,8 @@ mod unix {
         ) -> *mut c_void;
 
         pub fn munmap(addr: *mut c_void, length: usize) -> i32;
+
+        pub fn mprotect(addr: *mut c_void, len: usize, prot: i32) -> i32;
     }
 
     /// posix memory allocation using mmap
@@ -87,6 +89,16 @@ mod unix {
             p as *mut u8
         }
     }
+
+    #[inline]
+    pub unsafe fn protect_read_write(ptr: *mut u8, len: usize) -> bool {
+        unsafe { mprotect(ptr.cast(), len, PROT_READ | PROT_WRITE) == 0 }
+    }
+
+    #[inline]
+    pub unsafe fn protect_read_exec(ptr: *mut u8, len: usize) -> bool {
+        unsafe { mprotect(ptr.cast(), len, PROT_READ | PROT_EXEC) == 0 }
+    }
 }
 
 #[cfg(windows)]
@@ -97,6 +109,7 @@ mod windows {
     pub const MEM_RESERVE: u32 = 0x2000;
     pub const MEM_RELEASE: u32 = 0x8000;
     pub const PAGE_READWRITE: u32 = 0x04;
+    pub const PAGE_EXECUTE_READ: u32 = 0x20;
 
     unsafe extern "system" {
         fn VirtualAlloc(
@@ -110,6 +123,13 @@ mod windows {
             lpAddress: *mut c_void,
             dwSize: usize,
             dwFreeType: u32,
+        ) -> i32;
+
+        fn VirtualProtect(
+            lpAddress: *mut c_void,
+            dwSize: usize,
+            flNewProtect: u32,
+            lpflOldProtect: *mut u32,
         ) -> i32;
     }
 
@@ -144,6 +164,32 @@ mod windows {
     pub unsafe fn release(ptr: *mut u8) {
         // SAFETY: safe if contract holds
         let _ = unsafe { VirtualFree(ptr.cast(), 0, MEM_RELEASE) };
+    }
+
+    #[inline]
+    pub unsafe fn protect_read_write(ptr: *mut u8, len: usize) -> bool {
+        let mut old = 0u32;
+        unsafe {
+            VirtualProtect(
+                ptr.cast(),
+                len,
+                PAGE_READWRITE,
+                &mut old as *mut u32,
+            ) != 0
+        }
+    }
+
+    #[inline]
+    pub unsafe fn protect_read_exec(ptr: *mut u8, len: usize) -> bool {
+        let mut old = 0u32;
+        unsafe {
+            VirtualProtect(
+                ptr.cast(),
+                len,
+                PAGE_EXECUTE_READ,
+                &mut old as *mut u32,
+            ) != 0
+        }
     }
 }
 
@@ -186,5 +232,33 @@ pub fn unmap_memory(ptr: NonNull<u8>, size: usize) {
         let _ = size;
         // SAFETY: ptr must be from VirtualAlloc allocation
         unsafe { windows::release(ptr.as_ptr()) };
+    }
+}
+
+#[must_use]
+pub fn protect_memory_read_write(ptr: NonNull<u8>, size: usize) -> bool {
+    #[cfg(unix)]
+    // SAFETY: ptr and size must describe a valid mapped range.
+    unsafe {
+        unix::protect_read_write(ptr.as_ptr(), size)
+    }
+    #[cfg(windows)]
+    // SAFETY: ptr and size must describe a valid mapped range.
+    unsafe {
+        windows::protect_read_write(ptr.as_ptr(), size)
+    }
+}
+
+#[must_use]
+pub fn protect_memory_read_exec(ptr: NonNull<u8>, size: usize) -> bool {
+    #[cfg(unix)]
+    // SAFETY: ptr and size must describe a valid mapped range.
+    unsafe {
+        unix::protect_read_exec(ptr.as_ptr(), size)
+    }
+    #[cfg(windows)]
+    // SAFETY: ptr and size must describe a valid mapped range.
+    unsafe {
+        windows::protect_read_exec(ptr.as_ptr(), size)
     }
 }
