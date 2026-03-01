@@ -610,9 +610,8 @@ mod tests {
 
         let exprs: Vec<parser::ExprId> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        let code_desc =
-            crate::compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
-                .map_err(|e| format!("Compile error: {e}"))?;
+        let code_desc = crate::compile::compile_for_vm_ids(vm, &arena, &exprs)
+            .map_err(|e| format!("Compile error: {e}"))?;
         let code = crate::materialize::materialize(vm, &code_desc);
         crate::interpreter::interpret(vm, code)
             .map_err(|e| format!("Runtime error: {:?}", e.error))

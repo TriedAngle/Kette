@@ -14,10 +14,8 @@ use crate::alloc::{
     add_constant_slot, alloc_array, alloc_bignum_from_i128, alloc_byte_array,
     alloc_float, alloc_map, alloc_slot_object,
 };
-use crate::compiler0::{CodeDesc, ConstEntry, MapDesc, SlotValue};
 use crate::{SharedVMData, VM};
-
-// ── Root management ─────────────────────────────────────────────────
+use compiler0::{CodeDesc, ConstEntry, MapDesc, SlotValue};
 
 struct MaterializeRoots<'a> {
     scratch: Vec<Value>,
@@ -34,8 +32,6 @@ impl RootProvider for MaterializeRoots<'_> {
         }
     }
 }
-
-// ── Environment ─────────────────────────────────────────────────────
 
 struct MaterializeEnv<'a, 'b> {
     proxy: &'a mut HeapProxy,
@@ -64,8 +60,6 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
     fn dictionary(&self) -> Value {
         self.roots.scratch[self.dictionary_idx]
     }
-
-    // ── Materialization entry point ──────────────────────────────
 
     fn materialize_code(&mut self, desc: &CodeDesc) -> Value {
         // Materialize each constant, storing the result in scratch.
@@ -268,8 +262,6 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         }
     }
 
-    // ── Assoc resolution ─────────────────────────────────────────
-
     fn resolve_assoc(&mut self, name: &str) -> Value {
         // Look up the name in the dictionary's map slots
         let sym = self.intern(name);
@@ -382,8 +374,6 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         }
     }
 
-    // ── Symbol interning ─────────────────────────────────────────
-
     fn intern(&mut self, name: &str) -> Value {
         if let Some(&val) = self.roots.intern_table.get(name) {
             return val;
@@ -450,8 +440,6 @@ impl<'a, 'b> MaterializeEnv<'a, 'b> {
         }
     }
 }
-
-// ── Public API ──────────────────────────────────────────────────────
 
 /// Materialize a [`CodeDesc`] into a live heap [`Code`] object, resolving
 /// all constants (symbols, assocs, nested code/maps) against the VM's
@@ -533,13 +521,11 @@ pub fn materialize(vm: &mut VM, desc: &CodeDesc) -> Value {
     result
 }
 
-// ── Tests ───────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler0::SlotDesc;
     use crate::special::bootstrap;
+    use compiler0::SlotDesc;
     use heap::HeapSettings;
     use object::{Array, Float, Header, ObjectType};
 

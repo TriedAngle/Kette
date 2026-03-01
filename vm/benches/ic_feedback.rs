@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use heap::HeapSettings;
 use object::Code;
 use parser::{Lexer, Parser};
-use vm::compiler0::Compiler;
+use vm::compile;
 use vm::interpreter::interpret;
 use vm::materialize::materialize;
 use vm::special::bootstrap;
@@ -42,7 +42,7 @@ fn build_code_pair(src: &str) -> VM {
 
     let (arena, exprs) = parse_source(src);
     let code_desc =
-        Compiler::compile_for_vm_ids(&vm, &arena, &exprs).expect("compile");
+        compile::compile_for_vm_ids(&vm, &arena, &exprs).expect("compile");
 
     let code_with_ic = materialize(&mut vm, &code_desc);
     let code_without_ic = materialize(&mut vm, &code_desc);

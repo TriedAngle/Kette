@@ -12,6 +12,7 @@ object = { path = "../object" }
 heap = { path = "../heap" }
 bytecode = { path = "../bytecode" }
 parser = { path = "../parser" }
+compiler0 = { path = "../compiler0" }
 clap = { version = "4.5.53", features = ["derive"] }
 libffi = "5.1.0"
 libc = "0.2"

@@ -10,7 +10,7 @@ use object::{
 };
 use parser::{Lexer, Parser};
 
-use crate::compiler0;
+use crate::compile;
 use crate::interpreter::{
     self, call_block, install_finalizer, install_handler, request_unwind,
     signal_condition, with_roots, InterpreterState, RuntimeError,
@@ -54,14 +54,13 @@ pub fn vm_eval(
     let exprs: Vec<parser::ExprId> =
         parse_results.into_iter().map(|r| r.unwrap()).collect();
 
-    let code_desc =
-        match compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs) {
-            Ok(code_desc) => code_desc,
-            Err(err) => {
-                let msg = format!("Compile error: {err}");
-                return alloc_vm_string(vm, state, msg.as_bytes());
-            }
-        };
+    let code_desc = match compile::compile_for_vm_ids(vm, &arena, &exprs) {
+        Ok(code_desc) => code_desc,
+        Err(err) => {
+            let msg = format!("Compile error: {err}");
+            return alloc_vm_string(vm, state, msg.as_bytes());
+        }
+    };
 
     let code = materialize::materialize(vm, &code_desc);
     match interpreter::interpret(vm, code) {
@@ -1020,9 +1019,8 @@ mod tests {
 
         let exprs: Vec<parser::ExprId> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        let code_desc =
-            compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
-                .map_err(|e| format!("Compile error: {e}"))?;
+        let code_desc = compile::compile_for_vm_ids(vm, &arena, &exprs)
+            .map_err(|e| format!("Compile error: {e}"))?;
         let code = materialize::materialize(vm, &code_desc);
         interpreter::interpret(vm, code)
             .map(|v| v)
@@ -1063,7 +1061,7 @@ mod tests {
 
         let exprs: Vec<parser::ExprId> =
             parse_results.into_iter().map(|r| r.unwrap()).collect();
-        compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
+        compile::compile_for_vm_ids(vm, &arena, &exprs)
             .map_err(|e| format!("Compile error: {e}"))
     }
 

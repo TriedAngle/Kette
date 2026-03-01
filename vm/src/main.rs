@@ -14,9 +14,7 @@ use heap::HeapSettings;
 use parser::token::TokenKind;
 use parser::{Lexer, Parser};
 
-use vm::{
-    compiler0, image, interpreter, materialize, special, USER_MODULE, VM,
-};
+use vm::{compile, image, interpreter, materialize, special, USER_MODULE, VM};
 
 const SLOT_PRINT_LIMIT: usize = 30;
 
@@ -331,7 +329,7 @@ fn compile_source(
     let exprs: Vec<parser::ExprId> =
         results.into_iter().map(|r| r.unwrap()).collect();
 
-    compiler0::Compiler::compile_for_vm_ids(vm, &arena, &exprs)
+    compile::compile_for_vm_ids(vm, &arena, &exprs)
         .map_err(|e| format_compile_error(source, &e))
 }
 

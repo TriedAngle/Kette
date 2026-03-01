@@ -2981,7 +2981,7 @@ fn read_reg(bytes: &[u8], pos: &mut usize, wide: bool) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler0::Compiler;
+    use crate::compile;
     use crate::materialize::materialize;
     use crate::special::bootstrap;
     use crate::USER_MODULE;
@@ -3039,7 +3039,7 @@ mod tests {
         let (arena, exprs) = parse_source(src);
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let code_desc = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+        let code_desc = compile::compile_for_vm_ids(&vm, &arena, &exprs)
             .expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         interpret(&mut vm, code_val)
@@ -3051,7 +3051,7 @@ mod tests {
         let (arena, exprs) = parse_source(src);
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let code_desc = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+        let code_desc = compile::compile_for_vm_ids(&vm, &arena, &exprs)
             .expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         let value = interpret(&mut vm, code_val)?;
@@ -3065,7 +3065,7 @@ mod tests {
         let (arena, exprs) = parse_source(src);
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let code_desc = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+        let code_desc = compile::compile_for_vm_ids(&vm, &arena, &exprs)
             .expect("compile error");
         let code_val = materialize(&mut vm, &code_desc);
         interpret_with_receiver(&mut vm, code_val, receiver)
@@ -3106,7 +3106,7 @@ mod tests {
     #[test]
     fn send_populates_feedback_vector_entry() {
         let mut vm = bootstrap(test_settings());
-        let code_desc = crate::compiler0::CodeDesc {
+        let code_desc = compiler0::CodeDesc {
             bytecode: vec![Op::LocalReturn as u8],
             constants: vec![],
             register_count: 1,
@@ -4500,7 +4500,7 @@ mod tests {
         let (arena, exprs) = parse_source("NoSuchGlobal");
         let mut vm = bootstrap(test_settings());
         vm.open_module(USER_MODULE);
-        let err = Compiler::compile_for_vm_ids(&vm, &arena, &exprs)
+        let err = compile::compile_for_vm_ids(&vm, &arena, &exprs)
             .expect_err("expected error");
         let span = err.span.expect("error should have source span");
         assert_eq!(span.start.offset, 0);

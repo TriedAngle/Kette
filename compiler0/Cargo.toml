@@ -1,0 +1,9 @@
+[package]
+name = "compiler0"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytecode = { path = "../bytecode" }
+object = { path = "../object" }
+parser = { path = "../parser" }

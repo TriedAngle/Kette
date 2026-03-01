@@ -9,7 +9,21 @@ use parser::ast::{
 use parser::semantic::{analyze_semantics_with_mode_ids, AnalysisMode};
 use parser::span::Span;
 
-use crate::{CORE_MODULE, USER_MODULE, VM};
+pub const USER_MODULE: &str = "User";
+pub const CORE_MODULE: &str = "Core";
+
+#[derive(Debug, Clone, Default)]
+pub struct ModuleSnapshotState {
+    pub bindings: HashSet<String>,
+    pub imports: HashMap<String, (String, String)>,
+    pub exports: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModuleSnapshot {
+    pub current_module: Option<String>,
+    pub modules: HashMap<String, ModuleSnapshotState>,
+}
 
 #[derive(Debug, Clone)]
 struct ModuleCompileState {
@@ -364,12 +378,12 @@ impl Compiler {
         c.compile_program_ids(arena, exprs).map_err(|err| vec![err])
     }
 
-    pub fn compile_for_vm_ids(
-        vm: &VM,
+    pub fn compile_with_module_snapshot_ids(
+        snapshot: &ModuleSnapshot,
         arena: &AstArena,
         exprs: &[ExprId],
     ) -> Result<CodeDesc, CompileError> {
-        let module_env = build_compile_module_env_ids(vm, arena, exprs)?;
+        let module_env = build_compile_module_env_ids(snapshot, arena, exprs)?;
         let mut c = Compiler::with_module_env(module_env);
         c.compile_program_ids(arena, exprs)
     }
@@ -2153,28 +2167,21 @@ struct PendingUse {
 }
 
 fn build_compile_module_env_ids(
-    vm: &VM,
+    snapshot: &ModuleSnapshot,
     arena: &AstArena,
     exprs: &[ExprId],
 ) -> Result<CompileModuleEnv, CompileError> {
     let mut modules: HashMap<String, ModuleCompileState> = HashMap::new();
-    vm.with_modules(|loaded| {
-        for (path, module) in loaded.iter() {
-            let mut state = ModuleCompileState::empty();
-            state.bindings.extend(module.bindings.keys().cloned());
-            state.exports.extend(module.exports.iter().cloned());
-            for (local, import) in &module.imports {
-                state.imports.insert(
-                    local.clone(),
-                    (import.module_path.clone(), import.export_name.clone()),
-                );
-            }
-            modules.insert(path.clone(), state);
-        }
-    });
+    for (path, module) in &snapshot.modules {
+        let mut state = ModuleCompileState::empty();
+        state.bindings.extend(module.bindings.iter().cloned());
+        state.exports.extend(module.exports.iter().cloned());
+        state.imports.extend(module.imports.clone());
+        modules.insert(path.clone(), state);
+    }
 
     let mut expr_modules = Vec::new();
-    let mut current_module = vm.current_module.clone();
+    let mut current_module = snapshot.current_module.clone();
     let mut pending_uses = Vec::new();
 
     for expr_id in exprs {
@@ -2302,7 +2309,7 @@ fn build_compile_module_env_ids(
     }
 
     Ok(CompileModuleEnv {
-        initial_module: vm.current_module.clone(),
+        initial_module: snapshot.current_module.clone(),
         expr_modules,
         modules,
     })
