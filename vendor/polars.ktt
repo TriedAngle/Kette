@@ -1,0 +1,399 @@
+Module open: 'Polars.
+Module use: 'Alien.
+Module use: 'OS.
+
+NoArgs := Array cloneWithSize: 0.
+
+TVersionMajor := NoArgs.
+TVersionMinor := NoArgs.
+TSmokeTest := NoArgs.
+TDfFromCsv := (CPointer & CPointer) asArray.
+TDfSelectCsv := (CPointer & CPointer & CPointer) asArray.
+TDfFilterEqI64 := (CPointer & CPointer & CInt64 & CPointer) asArray.
+TDfGroupBySum := (CPointer & CPointer & CPointer & CPointer) asArray.
+TDfHead := (CPointer & CSize & CPointer) asArray.
+TDfToPrettyString := (CPointer & CPointer) asArray.
+TDfForEachI64 := (CPointer & CPointer & CPointer & CPointer & CPointer) asArray.
+TDfFree := (CPointer) asArray.
+TLastErrorMessage := (CPointer) asArray.
+TStringFree := (CPointer & CInt32) asArray.
+TRowI64Callback := (CInt64 & CInt64 & CPointer) asArray.
+
+CKpString := CType struct: {
+    ptr = CPointer.
+    len = CInt32.
+}.
+
+CHandleOut := CType struct: {
+    value = CPointer.
+}.
+
+CCountOut := CType struct: {
+    value = CInt64.
+}.
+
+PolarsDataFrame := {
+    parent* = Disposable.
+    owner := None.
+    handle := 0.
+
+    disposed = { self handle == 0 }.
+
+    dispose = {
+        self disposed
+            ifTrue: [ self ]
+            IfFalse: [
+                self owner freeDataFrame: self handle.
+                self handle: 0.
+                self
+            ]
+    }.
+
+    selectColumnsCSV: columns = {
+        self owner wrapHandle: (self owner dfSelectCSVHandle: self handle Columns: columns)
+    }.
+
+    select: columns = { self selectColumnsCSV: columns }.
+
+    filterEqI64Column: column Value: value = {
+        self owner wrapHandle: (self owner dfFilterEqI64Handle: self handle Column: column Value: value)
+    }.
+
+    filterEqI64: column Value: value = {
+        self filterEqI64Column: column Value: value
+    }.
+
+    groupByColumn: key SumColumn: valueColumn = {
+        self owner wrapHandle: (self owner dfGroupBySumHandle: self handle Key: key Value: valueColumn)
+    }.
+
+    groupBy: key Sum: valueColumn = {
+        self groupByColumn: key SumColumn: valueColumn
+    }.
+
+    head: n = {
+        self owner wrapHandle: (self owner dfHeadHandle: self handle Count: n)
+    }.
+
+    toPrettyString = {
+        self owner dfToPrettyStringHandle: self handle
+    }.
+
+    prettyPrint = {
+        (self toPrettyString) println.
+        self
+    }.
+
+    eachI64Column: column Do: block = {
+        self owner dfForEachI64Handle: self handle Column: column Do: block
+    }.
+
+    rawHandle = { self handle }.
+}.
+
+PolarsQuery := {
+    parent* = Clonable.
+    owner := None.
+    sourcePath := "".
+    steps := NoArgs.
+
+    appendStep: step = {
+        old := self steps.
+        n := old size.
+        out := old cloneWithSize: n + 1.
+        i := 0.
+        [ i < n ] whileTrue: [
+            out at: i Put: (old at: i).
+            i := i + 1
+        ].
+        out at: n Put: step.
+        self steps: out.
+        self
+    }.
+
+    select: columns = {
+        self appendStep: {
+            kind = 'select.
+            columns = columns
+        }
+    }.
+
+    filterEqI64: column Value: value = {
+        self appendStep: {
+            kind = 'filterEqI64.
+            column = column.
+            value = value
+        }
+    }.
+
+    groupBy: key Sum: valueColumn = {
+        self appendStep: {
+            kind = 'groupBySum.
+            key = key.
+            valueColumn = valueColumn
+        }
+    }.
+
+    head: n = {
+        self appendStep: {
+            kind = 'head.
+            count = n
+        }
+    }.
+
+    applyStep: step To: df = {
+        kind := step kind.
+        out := None.
+        (kind == 'select)
+            ifTrue: [ out := df select: (step columns) ]
+            IfFalse: [ None ].
+        (kind == 'filterEqI64)
+            ifTrue: [ out := df filterEqI64: (step column) Value: (step value) ]
+            IfFalse: [ None ].
+        (kind == 'groupBySum)
+            ifTrue: [ out := df groupBy: (step key) Sum: (step valueColumn) ]
+            IfFalse: [ None ].
+        (kind == 'head)
+            ifTrue: [ out := df head: (step count) ]
+            IfFalse: [ None ].
+        out == None
+            ifTrue: [ VM signal: "unknown Polars query step" ]
+            IfFalse: [ out ]
+    }.
+
+    run = {
+        current := self owner readCSV: self sourcePath.
+        steps := self steps.
+        n := steps size.
+        i := 0.
+        [ i < n ] whileTrue: [
+            step := steps at: i.
+            next := self applyStep: step To: current.
+            current dispose.
+            current := next.
+            i := i + 1
+        ].
+        current
+    }.
+
+    runUsing: block = {
+        (self run) using: block
+    }.
+}.
+
+polars := {
+    parent* = Oddball.
+    loaded := False.
+    lib := None.
+    libraryPath := None.
+    calls := {
+        versionMajor := None.
+        versionMinor := None.
+        smokeTest := None.
+        dfFromCsv := None.
+        dfSelectCsv := None.
+        dfFilterEqI64 := None.
+        dfGroupBySum := None.
+        dfHead := None.
+        dfToPrettyString := None.
+        dfForEachI64 := None.
+        dfFree := None.
+        lastErrorMessage := None.
+        stringFree := None
+    }.
+
+    defaultLibraryPath = {
+        os := (VM platformOS) toSymbol.
+        (os _SymbolEq: 'linux)
+            ifTrue: [ "target/debug/libpolars_bridge.so" ]
+            IfFalse: [
+                (os _SymbolEq: 'macos)
+                    ifTrue: [ "target/debug/libpolars_bridge.dylib" ]
+                    IfFalse: [ "target/debug/polars_bridge.dll" ]
+            ]
+    }.
+
+    libraryPath: path = {
+        self synchronized: [
+            self loaded
+                ifTrue: [ VM signal: "Polars is already loaded; set libraryPath before first call" ]
+                IfFalse: [ self libraryPath: path ]
+        ]
+    }.
+
+    ensureLoaded = {
+        self synchronized: [
+            self loaded
+                ifTrue: [ self ]
+                IfFalse: [
+                    path := self libraryPath == None ifTrue: [ self defaultLibraryPath ] IfFalse: [ self libraryPath ].
+                    libHandle := Alien libraryOpen: path.
+                    c := self calls.
+                    c versionMajor: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_version_major") Types: TVersionMajor ReturnType: CInt32).
+                    c versionMinor: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_version_minor") Types: TVersionMinor ReturnType: CInt32).
+                    c smokeTest: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_runtime_smoke_test") Types: TSmokeTest ReturnType: CInt32).
+                    c dfFromCsv: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_from_csv") Types: TDfFromCsv ReturnType: CInt32).
+                    c dfSelectCsv: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_select_csv") Types: TDfSelectCsv ReturnType: CInt32).
+                    c dfFilterEqI64: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_filter_eq_i64") Types: TDfFilterEqI64 ReturnType: CInt32).
+                    c dfGroupBySum: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_groupby_sum") Types: TDfGroupBySum ReturnType: CInt32).
+                    c dfHead: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_head") Types: TDfHead ReturnType: CInt32).
+                    c dfToPrettyString: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_to_pretty_string") Types: TDfToPrettyString ReturnType: CInt32).
+                    c dfForEachI64: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_for_each_i64") Types: TDfForEachI64 ReturnType: CInt32).
+                    c dfFree: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_df_free") Types: TDfFree ReturnType: CVoid).
+                    c lastErrorMessage: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_last_error_message") Types: TLastErrorMessage ReturnType: CInt32).
+                    c stringFree: (PreparedAlienCall fromFn: (libHandle librarySym: "kp_string_free") Types: TStringFree ReturnType: CVoid).
+
+                    self lib: libHandle.
+                    self loaded: True.
+                    self
+                ]
+        ]
+    }.
+
+    version = {
+        api := self ensureLoaded.
+        major := api calls versionMajor call.
+        minor := api calls versionMinor call.
+        major toString + "." + (minor toString)
+    }.
+
+    smokeTest = {
+        api := self ensureLoaded.
+        code := api calls smokeTest call.
+        self checkCode: code Context: "smoke test failed"
+    }.
+
+    newHandleOut = { Proxy forCType: CHandleOut }.
+    newStringOut = { Proxy forCType: CKpString }.
+    newCountOut = { Proxy forCType: CCountOut }.
+
+    checkCode: code Context: context = {
+        code == 0
+            ifTrue: [ self ]
+            IfFalse: [ VM signal: context + ": " + self lastErrorString ]
+    }.
+
+    stringFromOut: out = {
+        ptr := out ptr.
+        len := out len.
+        ptr isNull
+            ifTrue: [ "" ]
+            IfFalse: [
+                dst := ByteArray cloneWithSize: len + 1.
+                ptr copyTo: dst From: 0 Length: len.
+                self calls stringFree call: ptr With: len.
+                dst toString
+            ]
+    }.
+
+    lastErrorString = {
+        api := self ensureLoaded.
+        out := self newStringOut.
+        code := api calls lastErrorMessage call: out.
+        code == 0
+            ifTrue: [ self stringFromOut: out ]
+            IfFalse: [ "unknown polars bridge error" ]
+    }.
+
+    dfFromCSVHandle: path = {
+        api := self ensureLoaded.
+        out := self newHandleOut.
+        code := api calls dfFromCsv call: path With: out.
+        self checkCode: code Context: "dfFromCSV failed".
+        out value
+    }.
+
+    dfSelectCSVHandle: handle Columns: columnsCsv = {
+        api := self ensureLoaded.
+        out := self newHandleOut.
+        code := api calls dfSelectCsv call: handle With: columnsCsv With: out.
+        self checkCode: code Context: "dfSelectCSV failed".
+        out value
+    }.
+
+    dfFilterEqI64Handle: handle Column: column Value: value = {
+        api := self ensureLoaded.
+        out := self newHandleOut.
+        code := api calls dfFilterEqI64 call: handle With: column With: value With: out.
+        self checkCode: code Context: "dfFilterEqI64 failed".
+        out value
+    }.
+
+    dfGroupBySumHandle: handle Key: key Value: valueColumn = {
+        api := self ensureLoaded.
+        out := self newHandleOut.
+        code := api calls dfGroupBySum call: handle With: key With: valueColumn With: out.
+        self checkCode: code Context: "dfGroupBySum failed".
+        out value
+    }.
+
+    dfHeadHandle: handle Count: count = {
+        api := self ensureLoaded.
+        out := self newHandleOut.
+        code := api calls dfHead call: handle With: count With: out.
+        self checkCode: code Context: "dfHead failed".
+        out value
+    }.
+
+    dfToPrettyStringHandle: handle = {
+        api := self ensureLoaded.
+        out := self newStringOut.
+        code := api calls dfToPrettyString call: handle With: out.
+        self checkCode: code Context: "dfToPrettyString failed".
+        self stringFromOut: out
+    }.
+
+    dfForEachI64Handle: handle Column: column Do: block = {
+        api := self ensureLoaded.
+        out := self newCountOut.
+        cb := Alien callbackFromBlock: block Types: TRowI64Callback ReturnType: CInt32.
+
+        [
+            code := api calls dfForEachI64 call: handle With: column With: cb With: 0 With: out.
+            self checkCode: code Context: "dfForEachI64 failed".
+            out value
+        ] then: [ cb callbackFree ]
+    }.
+
+    freeDataFrame: handle = {
+        handle == 0
+            ifTrue: [ self ]
+            IfFalse: [
+                api := self ensureLoaded.
+                api calls dfFree call: handle.
+                self
+            ]
+    }.
+
+    wrapHandle: handle = {
+        {
+            parent* = PolarsDataFrame.
+            owner := self.
+            handle := handle
+        }
+    }.
+
+    fromCSV: path = {
+        self wrapHandle: (self dfFromCSVHandle: path)
+    }.
+
+    readCSV: path = { self fromCSV: path }.
+
+    queryFromCSV: path = {
+        {
+            parent* = PolarsQuery.
+            owner := self.
+            sourcePath := path.
+            steps := NoArgs
+        }
+    }.
+
+    close = {
+        self
+    }.
+}.
+
+Polars := polars.
+
+Module export: 'polars & 'Polars & 'PolarsDataFrame.
+Module export: 'PolarsQuery.

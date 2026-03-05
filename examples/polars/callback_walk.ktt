@@ -1,0 +1,23 @@
+Module open: 'PolarsExampleCallback.
+Module use: 'Polars.
+
+"parallel callback demo (best-effort stop)" println.
+
+sum := 0.
+seen := 0.
+stopAfter := 3.
+
+(Polars readCSV: "examples/data/sales.csv") using: [ | df |
+    visited := df eachI64Column: "amount" Do: [ | rowIdx value userData |
+        sum := sum + value.
+        seen := seen + 1.
+
+        seen == stopAfter
+            ifTrue: [ 1 ]
+            IfFalse: [ 0 ]
+    ].
+
+    ("callback visited rows: " + (visited toString)) println.
+    ("callback valid rows: " + (seen toString)) println.
+    ("callback partial sum: " + (sum toString)) println
+].

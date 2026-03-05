@@ -15,8 +15,18 @@ COLLECTIONS_INIT = "core/collections.ktt"
 ALIEN_INIT = "core/alien.ktt"
 SYSTEM_INIT = "core/system.ktt"
 OS_INIT = "core/os.ktt"
+POLARS_VENDOR = "vendor/polars.ktt"
+
+
 def build_command(debug: bool) -> list[str]:
     cmd = ["cargo", "build", "--bin", "vm"]
+    if not debug:
+        cmd.append("--release")
+    return cmd
+
+
+def build_polars_bridge_command(debug: bool) -> list[str]:
+    cmd = ["cargo", "build", "-p", "polars_bridge"]
     if not debug:
         cmd.append("--release")
     return cmd
@@ -34,6 +44,7 @@ def run_command(debug: bool) -> list[str]:
         ALIEN_INIT,
         SYSTEM_INIT,
         OS_INIT,
+        POLARS_VENDOR,
     ])
     return cmd
 
@@ -64,8 +75,11 @@ def build_project(build_cmd: list[str], debug: bool) -> bool:
     mode = "debug" if debug else "release"
     print(f"{Color.HEADER}Compiling project ({mode} mode)...{Color.ENDC}")
     try:
-        result = subprocess.run(build_cmd, check=False)
-        if result.returncode == 0:
+        vm_result = subprocess.run(build_cmd, check=False)
+        bridge_result = subprocess.run(
+            build_polars_bridge_command(debug), check=False
+        )
+        if vm_result.returncode == 0 and bridge_result.returncode == 0:
             print(f"{Color.OKGREEN}Build successful.{Color.ENDC}\n")
             return True
         else:

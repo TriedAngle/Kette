@@ -1,0 +1,15 @@
+Module open: 'PolarsExampleCSV.
+Module use: 'Polars.
+
+("Polars bridge version " + (Polars version)) println.
+
+q := Polars queryFromCSV: "examples/data/sales.csv".
+q select: "city,amount";
+  filterEqI64: "amount" Value: 100;
+  groupBy: "city" Sum: "amount";
+  head: 10.
+
+q runUsing: [ | preview |
+    "city totals for amount == 100" println.
+    preview prettyPrint
+].

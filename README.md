@@ -264,6 +264,50 @@ i := 1.
 ].
 ```
 
+## Polars FFI Example
+
+A userspace Polars wrapper and examples are available under:
+
+- `vendor/polars.ktt`
+- `examples/polars/`
+
+Build the Rust bridge first:
+
+```bash
+cargo build -p polars_bridge
+```
+
+Then run the DataFrame pipeline example:
+
+```bash
+cargo run -p vm -- vendor/polars.ktt examples/polars/csv_groupby.ktt
+```
+
+The default ergonomic API is a mutable query builder that works with cascades:
+
+```kette
+q := Polars queryFromCSV: "examples/data/sales.csv".
+q select: "city,amount";
+  filterEqI64: "amount" Value: 100;
+  groupBy: "city" Sum: "amount";
+  head: 10.
+
+q runUsing: [ | preview | preview prettyPrint ].
+```
+
+Run the callback walkthrough example:
+
+```bash
+cargo run -p vm -- vendor/polars.ktt examples/polars/callback_walk.ktt
+```
+
+Callback notes:
+
+- `eachI64Column:Do:` runs callbacks in parallel by default.
+- Callback invocation order is not deterministic.
+- Returning `1` from the callback requests best-effort stop; in-flight callbacks may still run.
+- Callback code is user-responsible for thread safety.
+
 ## Where to Look Next
 
 - VM design doc: `DESIGN.md`

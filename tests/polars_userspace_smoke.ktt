@@ -1,0 +1,32 @@
+// expect:
+// polars-userspace-smoke: ok
+
+Module open: 'Test::PolarsUserspaceSmoke.
+Module use: 'Polars.
+
+os := (VM platformOS) toSymbol.
+libPath := (os _SymbolEq: 'linux)
+    ifTrue: [ "target/release/libpolars_bridge.so" ]
+    IfFalse: [
+        (os _SymbolEq: 'macos)
+            ifTrue: [ "target/release/libpolars_bridge.dylib" ]
+            IfFalse: [ "target/release/polars_bridge.dll" ]
+    ].
+
+Polars libraryPath: libPath.
+Polars smokeTest.
+
+versionOk := (Polars version) length > 0.
+previewLen := 0.
+
+q := Polars queryFromCSV: "examples/data/sales.csv".
+q select: "city,amount";
+  filterEqI64: "amount" Value: 100;
+  head: 2.
+
+q runUsing: [ | preview |
+    previewLen := (preview toPrettyString) length
+].
+
+ok := versionOk && (previewLen > 0).
+(ok ifTrue: [ "polars-userspace-smoke: ok" ] IfFalse: [ "polars-userspace-smoke: fail" ]) println.

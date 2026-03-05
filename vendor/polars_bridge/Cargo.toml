@@ -1,0 +1,11 @@
+[package]
+name = "polars_bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+polars = { version = "0.53.0", features = ["csv", "fmt", "lazy"] }
+rayon = "1.11"
