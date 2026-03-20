@@ -1,0 +1,458 @@
+Module open: 'HTML.
+Module use: 'Collections.
+
+Html := {
+    parent* = Oddball.
+
+    isNone: value = { None == value }.
+    isFalse: value = { False == value }.
+    isTrue: value = { True == value }.
+    isFalsy: value = { (self isNone: value) || (self isFalse: value) }.
+
+    joinStrings: parts = {
+        out := "".
+        parts each: [ | part |
+            out := out + part toString
+        ].
+        out
+    }.
+
+    byteToString: byte = {
+        out := ByteArray cloneWithSize: 2.
+        out u8At: 0 Put: byte.
+        out toString
+    }.
+
+    escapeText: value = {
+        source := value toString.
+        bytes := source toByteArray.
+        n := source length.
+        out := "".
+        i := 0.
+        [ i < n ] whileTrue: [
+            b := bytes u8At: i.
+            b == 38
+                ifTrue: [ out := out + "&amp;" ]
+                IfFalse: [
+                    b == 60
+                        ifTrue: [ out := out + "&lt;" ]
+                        IfFalse: [
+                            b == 62
+                                ifTrue: [ out := out + "&gt;" ]
+                                IfFalse: [
+                                    b == 34
+                                        ifTrue: [ out := out + "&quot;" ]
+                                        IfFalse: [
+                                            b == 39
+                                                ifTrue: [ out := out + "&#39;" ]
+                                                IfFalse: [ out := out + (self byteToString: b) ]
+                                        ]
+                                ]
+                        ]
+                ].
+            i := i + 1
+        ].
+        out
+    }.
+}.
+
+HtmlBuffer = {
+    parent* = Clonable.
+    chunks := None.
+
+    init = {
+        self chunks: (Collector clone init).
+        self
+    }.
+
+    new = { self clone init }.
+
+    append: value = {
+        self chunks add: value toString.
+        self
+    }.
+
+    appendEscaped: value = {
+        self append: (Html escapeText: value)
+    }.
+
+    toString = {
+        Html joinStrings: (self chunks asArray)
+    }.
+}.
+
+HtmlAttr = {
+    parent* = Clonable.
+    name = "".
+    value = None.
+
+    withName: attrName Value: attrValue = {
+        {
+            parent* = HtmlAttr.
+            name = attrName toString.
+            value = attrValue
+        }
+    }.
+}.
+
+HtmlAttrs = {
+    parent* = Clonable.
+    entries := None.
+
+    init = {
+        self entries: (Collector clone init).
+        self
+    }.
+
+    new = { self clone init }.
+
+    add: name Value: value = {
+        self entries add: (HtmlAttr withName: name Value: value).
+        self
+    }.
+
+    each: body = {
+        self entries asArray each: body.
+        self
+    }.
+}.
+
+HtmlCanvas = {
+    parent* = Clonable.
+    buffer := None.
+
+    initOn: htmlBuffer = {
+        self buffer: htmlBuffer.
+        self
+    }.
+
+    on: htmlBuffer = { self clone initOn: htmlBuffer }.
+
+    raw: value = {
+        self buffer append: value.
+        self
+    }.
+
+    text: value = {
+        self raw: (Html escapeText: value)
+    }.
+
+    component: renderable = {
+        renderable renderOn: self.
+        self
+    }.
+
+    attrsFromBuilder: attrsBuilder = {
+        attrs := HtmlAttrs new.
+        attrsBuilder call: attrs.
+        attrs
+    }.
+
+    renderAttrName: name Value: value = {
+        (Html isFalsy: value)
+            ifTrue: [ None ]
+            IfFalse: [
+                self raw: " ".
+                self raw: name.
+                (Html isTrue: value)
+                    ifTrue: [ None ]
+                    IfFalse: [
+                        self raw: "=\"".
+                        self text: value.
+                        self raw: "\""
+                    ]
+            ].
+        self
+    }.
+
+    renderAttrs: attrs = {
+        (Html isNone: attrs)
+            ifTrue: [ None ]
+            IfFalse: [
+                attrs each: [ | attr |
+                    self renderAttrName: (attr name) Value: (attr value)
+                ]
+            ].
+        self
+    }.
+
+    openTag: name Attrs: attrs = {
+        self raw: "<".
+        self raw: name.
+        self renderAttrs: attrs.
+        self raw: ">".
+        self
+    }.
+
+    closeTag: name = {
+        self raw: "</".
+        self raw: name.
+        self raw: ">".
+        self
+    }.
+
+    tag: name Attrs: attrs With: body = {
+        self openTag: name Attrs: attrs.
+        body call.
+        self closeTag: name.
+        self
+    }.
+
+    tag: name AttrsDo: attrsBuilder With: body = {
+        self tag: name Attrs: (self attrsFromBuilder: attrsBuilder) With: body
+    }.
+
+    tag: name With: body = {
+        self openTag: name Attrs: None.
+        body call.
+        self closeTag: name.
+        self
+    }.
+
+    tag: name Attrs: attrs Text: text = {
+        self openTag: name Attrs: attrs.
+        self text: text.
+        self closeTag: name.
+        self
+    }.
+
+    tag: name AttrsDo: attrsBuilder Text: text = {
+        self tag: name Attrs: (self attrsFromBuilder: attrsBuilder) Text: text
+    }.
+
+    tag: name Text: text = {
+        self openTag: name Attrs: None.
+        self text: text.
+        self closeTag: name.
+        self
+    }.
+
+    tag: name Attrs: attrs Raw: rawText = {
+        self openTag: name Attrs: attrs.
+        self raw: rawText.
+        self closeTag: name.
+        self
+    }.
+
+    tag: name AttrsDo: attrsBuilder Raw: rawText = {
+        self tag: name Attrs: (self attrsFromBuilder: attrsBuilder) Raw: rawText
+    }.
+
+    tag: name Raw: rawText = {
+        self openTag: name Attrs: None.
+        self raw: rawText.
+        self closeTag: name.
+        self
+    }.
+
+    voidTag: name Attrs: attrs = {
+        self raw: "<".
+        self raw: name.
+        self renderAttrs: attrs.
+        self raw: ">".
+        self
+    }.
+
+    voidTag: name AttrsDo: attrsBuilder = {
+        self voidTag: name Attrs: (self attrsFromBuilder: attrsBuilder)
+    }.
+
+    voidTag: name = {
+        self raw: "<".
+        self raw: name.
+        self raw: ">".
+        self
+    }.
+
+    html: block = { self tag: "html" With: block }.
+    head: block = { self tag: "head" With: block }.
+    body: block = { self tag: "body" With: block }.
+    main: block = { self tag: "main" With: block }.
+    main: attrs With: block = { self tag: "main" Attrs: attrs With: block }.
+    div: block = { self tag: "div" With: block }.
+    div: attrs With: block = { self tag: "div" Attrs: attrs With: block }.
+    section: block = { self tag: "section" With: block }.
+    pText: text = { self tag: "p" Text: text }.
+    h1Text: text = { self tag: "h1" Text: text }.
+    h2Text: text = { self tag: "h2" Text: text }.
+    h3Text: text = { self tag: "h3" Text: text }.
+    ul: block = { self tag: "ul" With: block }.
+    liText: text = { self tag: "li" Text: text }.
+}.
+
+HtmlPage = {
+    parent* = Clonable.
+    lang := "en".
+    titleText := None.
+    headBlocks := None.
+    bodyBlock := None.
+
+    init = {
+        self lang: "en".
+        self titleText: None.
+        self headBlocks: (Collector clone init).
+        self bodyBlock: None.
+        self
+    }.
+
+    new = { self clone init }.
+
+    title: text = {
+        self titleText: text.
+        self
+    }.
+
+    head: block = {
+        self headBlocks add: block.
+        self
+    }.
+
+    body: block = {
+        self bodyBlock: block.
+        self
+    }.
+
+    stylesheetHref: href = {
+        self head: [ | h |
+            h voidTag: "link" AttrsDo: [ | attrs |
+                attrs add: "rel" Value: "stylesheet".
+                attrs add: "href" Value: href
+            ]
+        ].
+        self
+    }.
+
+    style: cssText = {
+        self head: [ | h |
+            h tag: "style" Raw: cssText
+        ].
+        self
+    }.
+
+    scriptSrc: src = { self scriptSrc: src Defer: True }.
+
+    scriptSrc: src Defer: shouldDefer = {
+        self head: [ | h |
+            h tag: "script" AttrsDo: [ | attrs |
+                attrs add: "src" Value: src.
+                attrs add: "defer" Value: shouldDefer
+            ] Raw: ""
+        ].
+        self
+    }.
+
+    script: scriptText = {
+        self head: [ | h |
+            h tag: "script" Raw: scriptText
+        ].
+        self
+    }.
+
+    scriptModule: scriptText = {
+        self head: [ | h |
+            h tag: "script" AttrsDo: [ | attrs |
+                attrs add: "type" Value: "module"
+            ] Raw: scriptText
+        ].
+        self
+    }.
+
+    renderOn: canvas = {
+        canvas raw: "<!doctype html>".
+        canvas tag: "html" AttrsDo: [ | attrs |
+            attrs add: "lang" Value: self lang
+        ] With: [
+            canvas tag: "head" With: [
+                canvas voidTag: "meta" AttrsDo: [ | attrs |
+                    attrs add: "charset" Value: "utf-8"
+                ].
+                canvas voidTag: "meta" AttrsDo: [ | attrs |
+                    attrs add: "name" Value: "viewport".
+                    attrs add: "content" Value: "width=device-width, initial-scale=1"
+                ].
+                (Html isNone: self titleText)
+                    ifTrue: [ None ]
+                    IfFalse: [ canvas tag: "title" Text: self titleText ].
+                self headBlocks asArray each: [ | block |
+                    block call: canvas
+                ]
+            ].
+            canvas tag: "body" With: [
+                (Html isNone: self bodyBlock)
+                    ifTrue: [ None ]
+                    IfFalse: [ self bodyBlock call: canvas ]
+            ]
+        ].
+        canvas
+    }.
+
+    render = {
+        buffer := HtmlBuffer new.
+        canvas := HtmlCanvas on: buffer.
+        self renderOn: canvas.
+        buffer toString
+    }.
+}.
+
+HttpResponse = {
+    parent* = Clonable.
+    statusCode := 200.
+    reasonPhrase := "OK".
+    headers := None.
+    bodyText := "".
+
+    initStatus: code Reason: reason = {
+        self statusCode: code.
+        self reasonPhrase: reason.
+        self headers: (Collector clone init).
+        self bodyText: "".
+        self
+    }.
+
+    newStatus: code Reason: reason = {
+        self clone initStatus: code Reason: reason
+    }.
+
+    header: name Value: value = {
+        self headers add: {
+            name = name toString.
+            value = value toString
+        }.
+        self
+    }.
+
+    body: text = {
+        self bodyText: text toString.
+        self
+    }.
+
+    okHtml: html = {
+        (self newStatus: 200 Reason: "OK")
+            header: "Content-Type" Value: "text/html; charset=utf-8";
+            body: html
+    }.
+
+    okText: text = {
+        (self newStatus: 200 Reason: "OK")
+            header: "Content-Type" Value: "text/plain; charset=utf-8";
+            body: text
+    }.
+
+    toWireString = {
+        body := self bodyText.
+        out := "HTTP/1.1 " + self statusCode toString + " " + self reasonPhrase + "\r\n".
+        self headers asArray each: [ | header |
+            out := out + header name + ": " + header value + "\r\n"
+        ].
+        out := out + "Content-Length: " + body length toString + "\r\n".
+        out := out + "Connection: close\r\n\r\n".
+        out + body
+    }.
+}.
+
+Module export:
+    'Html
+    & 'HtmlBuffer
+    & 'HtmlCanvas
+    & 'HtmlPage
+    & 'HttpResponse.

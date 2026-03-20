@@ -1,0 +1,68 @@
+Module open: 'Examples::HtmlPageDemo.
+Module use: 'HTML.
+
+demoCSS := "body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: radial-gradient(circle at top left, #ecf7ff 0%, #f7f4ec 50%, #f6f8ff 100%);
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+}
+.card {
+    width: min(680px, calc(100% - 40px));
+    background: white;
+    border-radius: 18px;
+    padding: 28px;
+    box-shadow: 0 18px 40px rgba(20, 28, 42, 0.15);
+}
+.muted {
+    color: #445;
+}
+.accent {
+    color: #0f5cad;
+    font-weight: 700;
+}
+".
+
+demoModuleScript := "const state = { clicks: 0 };
+const btn = document.getElementById('demoBtn');
+const out = document.getElementById('demoOut');
+if (btn && out) {
+    btn.addEventListener('click', () => {
+        state.clicks = state.clicks + 1;
+        out.textContent = 'Clicks: ' + state.clicks;
+    });
+}
+".
+
+page := HtmlPage new
+    title: "Kette HTML DSL demo";
+    stylesheetHref: "/assets/demo.css";
+    scriptSrc: "/assets/demo.js" Defer: True;
+    style: demoCSS;
+    scriptModule: demoModuleScript;
+    body: [ | h |
+        h tag: "div" AttrsDo: [ | attrs |
+            attrs add: "class" Value: "card"
+        ] With: [
+            h h1Text: "Hello from HtmlPage".
+            h pText: "This page is generated with a Smalltalk-style canvas abstraction.".
+            h tag: "p" AttrsDo: [ | attrs |
+                attrs add: "class" Value: "muted"
+            ] Text: "By default text is escaped, so unsafe markup is rendered literally.".
+            h tag: "p" AttrsDo: [ | attrs |
+                attrs add: "class" Value: "accent"
+            ] Text: "<strong>this text is safe, not raw</strong>".
+            h tag: "button" AttrsDo: [ | attrs |
+                attrs add: "id" Value: "demoBtn".
+                attrs add: "type" Value: "button"
+            ] Text: "Increment".
+            h tag: "p" AttrsDo: [ | attrs |
+                attrs add: "id" Value: "demoOut".
+                attrs add: "class" Value: "muted"
+            ] Text: "Clicks: 0"
+        ]
+    ].
+
+(page render) println.

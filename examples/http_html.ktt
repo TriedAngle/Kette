@@ -1,0 +1,412 @@
+Module open: 'Examples::HttpHtml.
+Module use: 'OS.
+Module use: 'HTML.
+
+appCSS := "body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: linear-gradient(160deg, #f7f4ee 0%, #e7f0ff 100%);
+    min-height: 100vh;
+}
+.hero {
+    max-width: 720px;
+    margin: 64px auto;
+    background: white;
+    border-radius: 18px;
+    padding: 28px;
+    box-shadow: 0 16px 48px rgba(20, 25, 40, 0.14);
+}
+.hero h1 {
+    margin-top: 0;
+}
+.muted {
+    color: #445;
+}
+button {
+    border: 0;
+    border-radius: 999px;
+    background: #1f6feb;
+    color: white;
+    padding: 10px 18px;
+    cursor: pointer;
+}
+button:hover {
+    background: #1558b0;
+}
+
+.statusRow {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin: 16px 0 10px;
+}
+
+.badge {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.badgeOn {
+    color: #0f5132;
+    background: #d1f4e0;
+}
+
+.badgeOff {
+    color: #7a1313;
+    background: #ffe1de;
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+button.ghost {
+    background: #eef2ff;
+    color: #17366b;
+}
+
+button.ghost:hover {
+    background: #dfe8ff;
+}
+
+button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.tiny {
+    margin-top: 16px;
+    font-size: 12px;
+    color: #566;
+}
+
+@media (max-width: 780px) {
+    .hero {
+        margin: 26px 14px;
+        padding: 20px;
+    }
+}
+".
+
+appScript := "const countBtn = document.getElementById('countBtn');
+const toggleBtn = document.getElementById('toggleBtn');
+const countLabel = document.getElementById('countLabel');
+const statusLabel = document.getElementById('statusLabel');
+const hintLabel = document.getElementById('hintLabel');
+
+const applyState = (state) => {
+    if (countLabel) {
+        countLabel.textContent = 'Count: ' + state.count;
+    }
+    if (statusLabel) {
+        statusLabel.textContent = state.enabled ? 'Enabled' : 'Disabled';
+        statusLabel.className = state.enabled ? 'badge badgeOn' : 'badge badgeOff';
+    }
+    if (hintLabel) {
+        hintLabel.textContent = state.enabled
+            ? 'Click callback is active.'
+            : 'Click callback is disabled on the server.';
+    }
+    if (countBtn) {
+        countBtn.disabled = !state.enabled;
+    }
+    if (toggleBtn) {
+        toggleBtn.textContent = state.enabled ? 'Disable counter' : 'Enable counter';
+    }
+};
+
+const post = async (path) => {
+    const res = await fetch(path, { method: 'POST' });
+    if (!res.ok) {
+        return;
+    }
+    const state = await res.json();
+    applyState(state);
+};
+
+if (countBtn) {
+    countBtn.addEventListener('click', async () => {
+        await post('/cb/click');
+    });
+}
+
+if (toggleBtn) {
+    toggleBtn.addEventListener('click', async () => {
+        await post('/cb/toggle');
+    });
+}
+
+fetch('/state')
+    .then((res) => res.ok ? res.json() : null)
+    .then((state) => {
+        if (state) {
+            applyState(state);
+        }
+    });
+".
+
+HttpHtmlApp := {
+    parent* = Clonable.
+
+    buttonEnabled := True.
+    clickCount := 0.
+
+    cssText = appCSS.
+    scriptText = appScript.
+
+    getRootPrefix = "GET / ".
+    getCssPrefix = "GET /app.css ".
+    getScriptPrefix = "GET /app.js ".
+    getStatePrefix = "GET /state ".
+    postClickPrefix = "POST /cb/click ".
+    postTogglePrefix = "POST /cb/toggle ".
+
+    boolToJson: value = {
+        value ifTrue: [ "true" ] IfFalse: [ "false" ]
+    }.
+
+    stateJSON = {
+        "{\"enabled\": " + (self boolToJson: self buttonEnabled) + ", \"count\": " + self clickCount toString + "}"
+    }.
+
+    startsWith: requestBytes Length: requestLen Prefix: prefixText = {
+        prefixBytes := prefixText toByteArray.
+        prefixLen := prefixText length.
+        matches := True.
+
+        requestLen < prefixLen
+            ifTrue: [ matches := False ]
+            IfFalse: [
+                i := 0.
+                [ i < prefixLen ] whileTrue: [
+                    same := ((requestBytes u8At: i) == (prefixBytes u8At: i)).
+                    same
+                        ifTrue: [ None ]
+                        IfFalse: [
+                            matches := False.
+                            i := prefixLen
+                        ].
+                    i := i + 1
+                ]
+            ].
+
+        matches
+    }.
+
+    routeFor: requestBytes Length: requestLen = {
+        route := 'unknown.
+
+        (self startsWith: requestBytes Length: requestLen Prefix: self getRootPrefix)
+            ifTrue: [ route := 'root ]
+            IfFalse: [
+                (self startsWith: requestBytes Length: requestLen Prefix: self getCssPrefix)
+                    ifTrue: [ route := 'asset_css ]
+                    IfFalse: [
+                        (self startsWith: requestBytes Length: requestLen Prefix: self getScriptPrefix)
+                            ifTrue: [ route := 'asset_js ]
+                            IfFalse: [
+                                (self startsWith: requestBytes Length: requestLen Prefix: self getStatePrefix)
+                                    ifTrue: [ route := 'state ]
+                                    IfFalse: [
+                                        (self startsWith: requestBytes Length: requestLen Prefix: self postClickPrefix)
+                                            ifTrue: [ route := 'cb_click ]
+                                            IfFalse: [
+                                                (self startsWith: requestBytes Length: requestLen Prefix: self postTogglePrefix)
+                                                    ifTrue: [ route := 'cb_toggle ]
+                                                    IfFalse: [ None ]
+                                            ]
+                                    ]
+                            ]
+                    ]
+            ].
+
+        route
+    }.
+
+    response200Type: contentType Body: bodyText = {
+        (HttpResponse newStatus: 200 Reason: "OK")
+            header: "Content-Type" Value: contentType;
+            body: bodyText
+    }.
+
+    logRoute: route = {
+        ("route call: " + route toString) println.
+        self
+    }.
+
+    stateResponse = {
+        self response200Type: "application/json; charset=utf-8" Body: self stateJSON
+    }.
+
+    notFoundResponse = {
+        (HttpResponse newStatus: 404 Reason: "Not Found")
+            header: "Content-Type" Value: "text/plain; charset=utf-8";
+            body: "not found"
+    }.
+
+    badRequestResponse = {
+        (HttpResponse newStatus: 400 Reason: "Bad Request")
+            header: "Content-Type" Value: "text/plain; charset=utf-8";
+            body: "bad request"
+    }.
+
+    renderPage = {
+        statusText := self buttonEnabled ifTrue: [ "Enabled" ] IfFalse: [ "Disabled" ].
+        statusClass := self buttonEnabled ifTrue: [ "badge badgeOn" ] IfFalse: [ "badge badgeOff" ].
+        toggleText := self buttonEnabled ifTrue: [ "Disable counter" ] IfFalse: [ "Enable counter" ].
+        countDisabled := self buttonEnabled ifTrue: [ False ] IfFalse: [ True ].
+
+        page := HtmlPage new
+            title: "Kette callback demo";
+            stylesheetHref: "/app.css";
+            scriptSrc: "/app.js" Defer: True;
+            body: [ | h |
+                h tag: "main" AttrsDo: [ | attrs |
+                    attrs add: "class" Value: "hero"
+                ] With: [
+                    h h1Text: "Kette callback routes".
+                    h pText: "Explicit endpoints drive UI behavior: /cb/click and /cb/toggle.".
+
+                    h tag: "div" AttrsDo: [ | attrs |
+                        attrs add: "class" Value: "statusRow"
+                    ] With: [
+                        h tag: "span" AttrsDo: [ | attrs |
+                            attrs add: "id" Value: "statusLabel".
+                            attrs add: "class" Value: statusClass
+                        ] Text: statusText.
+                        h tag: "p" AttrsDo: [ | attrs |
+                            attrs add: "id" Value: "countLabel".
+                            attrs add: "class" Value: "muted"
+                        ] Text: ("Count: " + self clickCount toString)
+                    ].
+
+                    self buttonEnabled
+                        ifTrue: [
+                            h tag: "p" AttrsDo: [ | attrs |
+                                attrs add: "id" Value: "hintLabel".
+                                attrs add: "class" Value: "muted"
+                            ] Text: "Click callback is active."
+                        ]
+                        IfFalse: [
+                            h tag: "p" AttrsDo: [ | attrs |
+                                attrs add: "id" Value: "hintLabel".
+                                attrs add: "class" Value: "muted"
+                            ] Text: "Click callback is disabled on the server."
+                        ].
+
+                    h tag: "div" AttrsDo: [ | attrs |
+                        attrs add: "class" Value: "actions"
+                    ] With: [
+                        h tag: "button" AttrsDo: [ | attrs |
+                            attrs add: "id" Value: "countBtn".
+                            attrs add: "type" Value: "button".
+                            attrs add: "disabled" Value: countDisabled
+                        ] Text: "Click callback".
+
+                        h tag: "button" AttrsDo: [ | attrs |
+                            attrs add: "id" Value: "toggleBtn".
+                            attrs add: "type" Value: "button".
+                            attrs add: "class" Value: "ghost"
+                        ] Text: toggleText
+                    ].
+
+                    h tag: "p" AttrsDo: [ | attrs |
+                        attrs add: "class" Value: "tiny"
+                    ] Text: "State endpoint: GET /state"
+                ]
+            ].
+
+        page render
+    }.
+
+    handleClick = {
+        self buttonEnabled
+            ifTrue: [
+                self clickCount: self clickCount + 1.
+                ("callback click: count=" + self clickCount toString) println
+            ]
+            IfFalse: [
+                "callback click ignored: disabled" println
+            ].
+        self stateResponse
+    }.
+
+    handleToggle = {
+        self buttonEnabled
+            ifTrue: [ self buttonEnabled: False ]
+            IfFalse: [ self buttonEnabled: True ].
+        ("callback toggle: enabled=" + (self boolToJson: self buttonEnabled)) println.
+        self stateResponse
+    }.
+
+    responseForRoute: route = {
+        self logRoute: route.
+        route == 'root
+            ifTrue: [ self response200Type: "text/html; charset=utf-8" Body: self renderPage ]
+            IfFalse: [
+                route == 'asset_css
+                    ifTrue: [ self response200Type: "text/css; charset=utf-8" Body: self cssText ]
+                    IfFalse: [
+                        route == 'asset_js
+                            ifTrue: [ self response200Type: "application/javascript; charset=utf-8" Body: self scriptText ]
+                            IfFalse: [
+                                route == 'state
+                                    ifTrue: [ self stateResponse ]
+                                    IfFalse: [
+                                        route == 'cb_click
+                                            ifTrue: [ self handleClick ]
+                                            IfFalse: [
+                                                route == 'cb_toggle
+                                                    ifTrue: [ self handleToggle ]
+                                                    IfFalse: [ self notFoundResponse ]
+                                            ]
+                                    ]
+                            ]
+                    ]
+            ]
+    }.
+}.
+
+app := HttpHtmlApp clone.
+
+PosixSocket openStreamIPv4 using: [ | server |
+    server setReuseAddr.
+    bindRc := server bindAnyPort: 8080.
+    listenRc := server listenBacklog: 16.
+
+    ready := (bindRc == 0) && (listenRc == 0).
+    ready
+        ifTrue: [
+            "Listening on http://127.0.0.1:8080" println.
+            [ True ] whileTrue: [
+                client := server accept.
+                client == None
+                    ifTrue: [ "accept failed" println ]
+                    IfFalse: [
+                        client using: [ | conn |
+                            reqBuf := ByteArray cloneWithSize: 2048.
+                            bytesRead := conn readInto: reqBuf Length: 2048.
+
+                            bytesRead <= 0
+                                ifTrue: [
+                                    conn writeString: ((app badRequestResponse) toWireString)
+                                ]
+                                IfFalse: [
+                                    route := app routeFor: reqBuf Length: bytesRead.
+                                    response := app responseForRoute: route.
+                                    conn writeString: (response toWireString)
+                                ]
+                        ]
+                    ]
+            ]
+        ]
+        IfFalse: [
+            ("socket setup failed: bind=" + bindRc toString + ", listen=" + listenRc toString) println
+        ]
+].

@@ -204,6 +204,36 @@ Extra output/file-loading demo previously in init lives in:
 
 - `tests/init_runtime_demo.ktt`
 
+## HTML DSL + HTTP Response Example
+
+A Smalltalk-style HTML canvas abstraction and HTTP response builder are available
+in core:
+
+- `core/html.ktt`
+- `examples/html_page_demo.ktt`
+- `examples/http_html.ktt`
+
+Render a full HTML document from a script:
+
+```bash
+cargo run -p vm -- core/init.ktt core/math.ktt core/collections.ktt core/alien.ktt core/system.ktt core/os.ktt core/html.ktt examples/html_page_demo.ktt
+```
+
+Run an HTTP server that responds with HTML built by the DSL:
+
+```bash
+cargo run -p vm -- core/init.ktt core/math.ktt core/collections.ktt core/alien.ktt core/system.ktt core/os.ktt core/html.ktt examples/http_html.ktt
+```
+
+The HTTP demo now includes explicit callback-style routes for interactive UI state:
+
+- `GET /` renders the page
+- `GET /app.css` serves styles
+- `GET /app.js` serves client callback logic
+- `GET /state` returns current `{ enabled, count }` JSON
+- `POST /cb/click` increments count when enabled
+- `POST /cb/toggle` toggles callback availability
+
 ## Raylib FFI Example
 
 A userspace raylib wrapper and examples are available under:
@@ -311,7 +341,7 @@ Callback notes:
 ## Where to Look Next
 
 - VM design doc: `DESIGN.md`
-- Core modules: `core/init.ktt`, `core/math.ktt`, `core/collections.ktt`, `core/alien.ktt`, `core/system.ktt`, `core/os.ktt`
+- Core modules: `core/init.ktt`, `core/math.ktt`, `core/collections.ktt`, `core/alien.ktt`, `core/system.ktt`, `core/os.ktt`, `core/html.ktt`
 - Parser and AST: `parser/`
 - Bytecode + interpreter: `bytecode/`, `vm/`
 - Object model + lookup: `object/`
