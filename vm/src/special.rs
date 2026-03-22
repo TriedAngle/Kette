@@ -3325,6 +3325,7 @@ pub fn bootstrap(settings: HeapSettings) -> VMProxy {
             #[cfg(debug_assertions)]
             trace_send_name: None,
             shared,
+            handle_roots_head: core::ptr::null_mut(),
         };
         vm.seed_user_module_from_dictionary();
         vm
